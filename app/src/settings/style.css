@@ -1,0 +1,24 @@
+.settings-label { font-size: 20px; margin-bottom: 6px; color: var(--green); }
+.settings-row { display: flex; align-items: center; gap: 8px; }
+.settings-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.progress-track {
+  height: 8px;
+  border: 1px solid var(--line);
+  margin-top: 10px;
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--green);
+}
+
+.launcher-update-available { color: oklch(80% 0.15 90); }
+#launcher-notes { margin-top: 6px; line-height: 1.5; }

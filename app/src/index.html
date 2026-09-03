@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recharge</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/mods/style.css" />
+    <link rel="stylesheet" href="/maps/style.css" />
+    <link rel="stylesheet" href="/settings/style.css" />
+    <script type="module" src="/app.js" defer></script>
+  </head>
+  <body>
+    <div id="bg-grid"></div>
+
+    <div class="crumb-bar" id="crumb-bar" hidden>
+      <button class="crumb-back" onclick="goHome()">
+        Main Menu
+      </button>
+    </div>
+
+    <div class="view v-on" id="view-home">
+      <div class="home-page">
+        <div class="home-header">
+          <span class="home-title">Recharge</span>
+          <div id="wave-banner">
+            <svg height="44" class="wave-trace">
+              <polyline fill="none" />
+            </svg>
+          </div>
+        </div>
+
+        <div class="home-grid">
+          <div class="home-panel">
+            <div class="home-panel-title">Installation</div>
+            <div class="home-install-row">
+              <div>
+                <div class="home-install-label" id="home-install-label">Detecting…</div>
+                <div class="home-install-sub" id="home-install-sub"></div>
+              </div>
+            </div>
+            <button class="btn" onclick="navigate('settings')">Manage</button>
+          </div>
+
+          <div class="home-menu-col">
+            <div class="home-launch-row">
+              <button class="home-tile" onclick="window.__homeLaunch('vanilla')">
+                <span>&gt; Vanilla</span>
+              </button>
+              <button class="home-tile home-tile-featured" onclick="window.__homeLaunch('modded')">
+                <span>&gt; Modded</span>
+              </button>
+            </div>
+            <div class="home-play-status" id="home-play-status"></div>
+
+            <button class="home-menu-row" onclick="navigate('mods')">
+              <span>&gt; Mods</span>
+            </button>
+            <button class="home-menu-row" onclick="navigate('maps')">
+              <span>&gt; Maps</span>
+            </button>
+            <button class="home-menu-row" onclick="navigate('settings')">
+              <span>&gt; Settings</span>
+            </button>
+          </div>
+
+          <div class="home-panel home-log-panel">
+            <div class="home-panel-title">Activity</div>
+            <div class="home-log" id="home-log"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="view-mods"></div>
+    <div class="view" id="view-maps"></div>
+    <div class="view" id="view-settings"></div>
+
+    <div id="toast-container"></div>
+  </body>
+</html>
