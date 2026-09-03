@@ -1,0 +1,9 @@
+{
+  "id": "recharge.multiplayer",
+  "displayName": "DOTnet",
+  "version": "1.0.0",
+  "author": "Flipped",
+  "entryAssembly": "RechargeMultiplayer.dll",
+  "minLoaderVersion": "1.0.0",
+  "enabled": true
+}

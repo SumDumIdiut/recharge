@@ -1,0 +1,14 @@
+<main class="page">
+  <div class="page-header">Maps</div>
+
+  <div class="browser-toolbar">
+    <div class="browser-subtabs">
+      <button class="subtab-btn active" data-subtab="installed" onclick="window.__mapsSubtab('installed')">Installed</button>
+      <button class="subtab-btn" data-subtab="browse" onclick="window.__mapsSubtab('browse')">Browse</button>
+    </div>
+    <input class="browser-search" id="maps-search" type="text" placeholder="Search maps…" oninput="window.__mapsSearch(this.value)" />
+  </div>
+
+  <div id="maps-installed-view" class="browser-grid"></div>
+  <div id="maps-browse-view" class="browser-grid" style="display:none;"></div>
+</main>

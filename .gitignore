@@ -1,0 +1,22 @@
+# Rust / Tauri
+/app/src-tauri/target/
+/app/src-tauri/gen/schemas/
+
+# Node
+/app/node_modules/
+*.log
+
+# .NET mod projects
+**/bin/
+**/obj/
+
+# Third-party toolchains staged locally, not part of the repo - see
+# loader/README.md for how to re-acquire them.
+/loader/.dotnet-sdk/
+/loader/tools/ilspycmd/
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
