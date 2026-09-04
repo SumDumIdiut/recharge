@@ -1,9 +1,0 @@
-{
-  "id": "recharge.fpscounter",
-  "displayName": "FPS Counter",
-  "version": "1.0.0",
-  "author": "Flipped",
-  "entryAssembly": "RechargeFpsCounter.dll",
-  "minLoaderVersion": "1.0.0",
-  "enabled": true
-}
