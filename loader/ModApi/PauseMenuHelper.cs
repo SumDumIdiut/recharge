@@ -340,12 +340,26 @@ namespace Recharge.ModApi
             var settingsScript = clone.GetComponent<SettingsScript>();
             if (settingsScript != null) UnityEngine.Object.Destroy(settingsScript);
 
+            // The title bar isn't reliably sibling index 0 (confirmed live -
+            // assuming "first child" left both the title text and Back
+            // button destroyed, since some other child occupied that slot
+            // instead) - match by the source panel's own real name instead,
+            // same as recharge-multiplayer/MpMenuBuilder.cs's hand-rolled
+            // equivalent already does. Falls back to "first child" only if
+            // that name is ever missing, rather than failing outright.
             Transform title = null;
+            foreach (Transform child in clone.transform)
+            {
+                if (child.name != "Settings") continue;
+                title = child;
+                break;
+            }
+            if (title == null && clone.transform.childCount > 0) title = clone.transform.GetChild(0);
+
             var toDestroy = new List<GameObject>();
             foreach (Transform child in clone.transform)
             {
-                if (title == null) { title = child; continue; } // first child is the title bar (name varies - "Settings" in the source panel)
-                toDestroy.Add(child.gameObject);
+                if (child != title) toDestroy.Add(child.gameObject);
             }
             foreach (var go in toDestroy) UnityEngine.Object.Destroy(go);
 

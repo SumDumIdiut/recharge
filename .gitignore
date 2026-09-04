@@ -15,6 +15,9 @@
 /loader/.dotnet-sdk/
 /loader/tools/ilspycmd/
 
+# Ad-hoc verification screenshots from tools/game-input.ps1
+/tools/shot-*.png
+
 # Editor
 .vscode/*
 !.vscode/extensions.json
