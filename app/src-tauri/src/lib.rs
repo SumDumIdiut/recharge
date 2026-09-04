@@ -19,6 +19,7 @@ pub fn run() {
             mods::list_installed_mods,
             mods::set_mod_enabled,
             mods::uninstall_mod,
+            hub::install_from_hub_cmd,
             maps::list_maps,
             maps::get_map,
             maps::save_map,

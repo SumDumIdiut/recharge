@@ -150,6 +150,14 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
     Ok(meta.name)
 }
 
+// The app's own Mods/Maps > Browse tabs call this directly via invoke() -
+// same underlying logic the local beam HTTP endpoint below exposes to the
+// external web viewer, just reached the normal way for in-app JS.
+#[tauri::command]
+pub fn install_from_hub_cmd(app: AppHandle, kind: String, id: String) -> Result<String, String> {
+    install_from_hub(&app, &kind, &id)
+}
+
 pub fn start_beam_server(app: AppHandle) {
     std::thread::spawn(move || {
         let server = match tiny_http::Server::http(("127.0.0.1", BEAM_PORT)) {
