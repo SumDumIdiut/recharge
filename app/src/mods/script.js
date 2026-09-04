@@ -1,4 +1,8 @@
-import { MOD_CATALOG } from './catalog.js';
+// The catalog used to be a hardcoded local file - now it's fetched from
+// Recharge Hub, so a new mod shows up here the moment it's approved there,
+// with no app update needed. See app/src-tauri/src/commands/hub.rs for the
+// actual download+install this tab's Install button triggers.
+const HUB_BASE = 'https://codecade.co.za/recharge';
 
 // recharge.maps is infrastructure the Map Editor/Maps tabs always need, not an
 // optional feature a user picks - it stays fully installed and running, just
@@ -8,6 +12,8 @@ const HIDDEN_MOD_IDS = new Set(['recharge.maps']);
 let currentSubtab = 'installed';
 let searchTerm = '';
 let installedCache = [];
+let catalog = [];
+let catalogError = false;
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -42,6 +48,27 @@ function isNewerVersion(a, b) {
   return false;
 }
 
+async function loadCatalog() {
+  try {
+    const res = await fetch(`${HUB_BASE}/api/mods`);
+    const rows = await res.json();
+    catalog = rows.map((row) => ({
+      id: row.id,
+      modId: row.modId || null,
+      name: row.name,
+      author: row.author,
+      version: row.version || '1.0.0',
+      description: row.description,
+      image: row.gallery?.length ? `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
+      dependencies: [],
+    }));
+    catalogError = false;
+  } catch (err) {
+    catalog = [];
+    catalogError = true;
+  }
+}
+
 function renderInstalled() {
   const list = document.getElementById('mods-installed-view');
   const filtered = installedCache.filter((m) => matchesSearch(m.displayName + ' ' + (m.author || '')));
@@ -53,11 +80,11 @@ function renderInstalled() {
   }
   list.innerHTML = filtered
     .map((m) => {
-      const entry = MOD_CATALOG.find((c) => c.id === m.id);
+      const entry = catalog.find((c) => c.modId === m.id);
       const hasUpdate = entry && isNewerVersion(entry.version, m.version);
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
-      ${thumb(entry, hasUpdate ? `<button class="browse-card-badge browse-card-badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(m.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
+      ${thumb(entry, hasUpdate ? `<button class="browse-card-badge browse-card-badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(m.displayName)}</div>
         <div class="browse-card-meta">${m.author ? escapeHtml(m.author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="mod-update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
@@ -76,7 +103,11 @@ function renderInstalled() {
 
 function renderBrowse() {
   const list = document.getElementById('mods-browse-view');
-  const filtered = MOD_CATALOG.filter((m) => matchesSearch(m.name + ' ' + m.description + ' ' + m.author));
+  if (catalogError) {
+    list.innerHTML = '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>';
+    return;
+  }
+  const filtered = catalog.filter((m) => matchesSearch(m.name + ' ' + m.description + ' ' + m.author));
   if (!filtered.length) {
     list.innerHTML = '<div class="empty-state">No mods match your search.</div>';
     return;
@@ -151,7 +182,7 @@ function resolveMissingDependencies(entry) {
 
     if (installedCache.some((m) => m.id === depId)) continue;
 
-    const depEntry = MOD_CATALOG.find((c) => c.id === depId);
+    const depEntry = catalog.find((c) => c.id === depId);
     if (!depEntry) {
       unavailable.push(depId);
       continue;
@@ -167,7 +198,7 @@ function closeDepModal() {
 }
 
 window.__modInstall = async function (id, btn) {
-  const entry = MOD_CATALOG.find((c) => c.id === id);
+  const entry = catalog.find((c) => c.id === id);
   const { missing, unavailable } = resolveMissingDependencies(entry);
 
   if (unavailable.length) {
@@ -208,12 +239,12 @@ async function doInstall(ids, btn) {
     btn.textContent = ids.length > 1 ? `Installing (${ids.length})…` : 'Installing…';
   }
   try {
-    // One real build+deploy pass installs every local mod at once (see
-    // build-loader.ps1) - there's no per-mod selective install yet, so this
-    // single call covers the whole batch regardless of how many ids were
-    // resolved above. Structured as a batch call anyway so this keeps
-    // working unchanged if/when a real per-mod install path exists.
-    await invoke('install_or_update_loader');
+    // Each id is downloaded and dropped into place individually - a real
+    // per-mod install (not a full local rebuild), so this works without the
+    // mod's source ever being bundled with the app.
+    for (const id of ids) {
+      await invoke('install_from_hub_cmd', { kind: 'mods', id });
+    }
     await refresh();
     const openId = ids[ids.length - 1];
     if (document.getElementById('mods-detail').style.display !== 'none') window.__modOpenDetail(openId);
@@ -224,14 +255,22 @@ async function doInstall(ids, btn) {
 }
 
 window.__modOpenDetail = function (id) {
-  const entry = MOD_CATALOG.find((c) => c.id === id);
-  const installedMod = installedCache.find((m) => m.id === id);
+  // "id" may be a hub catalog id (opened from Browse) or a real installed
+  // mod id (opened from Installed) - those are different id spaces now that
+  // a hub submission carries its own arbitrary UUID separate from the mod's
+  // own mod.json id (see loadCatalog's "modId").
+  let entry = catalog.find((c) => c.id === id);
+  let installedMod = installedCache.find((m) => m.id === id);
+  if (!entry && installedMod) entry = catalog.find((c) => c.modId === installedMod.id);
+  if (!installedMod && entry?.modId) installedMod = installedCache.find((m) => m.id === entry.modId);
   // A mod can be installed without being in the catalog at all (built and
   // dropped in locally, ahead of ever being published) - fall back to
   // whatever the real manifest itself has rather than refusing to show
   // anything, so it's still reachable to disable/uninstall.
   if (!entry && !installedMod) return;
   const installed = !!installedMod;
+  const hubId = entry?.id;
+  const realId = installedMod?.id;
   const name = entry ? entry.name : installedMod.displayName;
   const author = entry ? entry.author : installedMod.author;
   const version = entry ? entry.version : installedMod.version;
@@ -251,11 +290,11 @@ window.__modOpenDetail = function (id) {
         installed
           ? `<div class="settings-row">
                <span class="browse-card-meta">${installedMod.enabled ? 'Enabled' : 'Disabled'}</span>
-               <div class="mod-toggle ${installedMod.enabled ? 'on' : ''}" id="mods-detail-toggle" data-id="${escapeHtml(id)}" onclick="window.__modToggle(this)"></div>
+               <div class="mod-toggle ${installedMod.enabled ? 'on' : ''}" id="mods-detail-toggle" data-id="${escapeHtml(realId)}" onclick="window.__modToggle(this)"></div>
              </div>
-             <button class="btn mod-detail-uninstall" onclick="window.__modConfirmUninstall('${escapeHtml(id)}', '${escapeHtml(name).replace(/'/g, "\\'")}')">Uninstall</button>`
+             <button class="btn mod-detail-uninstall" onclick="window.__modConfirmUninstall('${escapeHtml(realId)}', '${escapeHtml(name).replace(/'/g, "\\'")}')">Uninstall</button>`
           : entry
-            ? `<button class="btn btn-primary" onclick="window.__modInstall('${escapeHtml(id)}', this)">Install</button>`
+            ? `<button class="btn btn-primary" onclick="window.__modInstall('${escapeHtml(hubId)}', this)">Install</button>`
             : ''
       }
     </div>
@@ -303,5 +342,7 @@ async function refresh() {
 
 export async function init() {
   document.getElementById('mods-dep-cancel').addEventListener('click', closeDepModal);
-  refresh();
+  render();
+  await Promise.all([loadCatalog(), refresh()]);
+  render();
 }
