@@ -14,4 +14,15 @@ export const MOD_CATALOG = [
     // to load in-game later - see __modInstall in script.js.
     dependencies: [],
   },
+  {
+    id: 'recharge.tas',
+    name: 'TAS Tool',
+    author: 'Flipped',
+    version: '1.0.0',
+    description:
+      'A practice and tool-assisted-speedrun toolkit. Press Tab in-game to open it: pause/frame-advance/slow-motion time controls, an always-on rewind buffer with step back/forward, full-state record and replay (position, velocity, facing, dash/air-jump state) with automatic trimming of failed retries, clipboard and file-based save/load for sharing recordings, a single-slot quicksave, and Z/X/R checkpoints that also override death so you respawn exactly where you left off. Includes a hitbox viewer with an optional fading trail.',
+    image: '/mods/assets/recharge-tas/01-menu.png',
+    icon: '<path d="M14 2v2h2v2h-2v2h-2V6H8V4h2V2h2v2zM4 12h16v2H4v-2zm2 4h2v4H6v-4zm10 0h2v4h-2v-4zm-6 0h4v4h-4v-4z"/>',
+    dependencies: [],
+  },
 ];
