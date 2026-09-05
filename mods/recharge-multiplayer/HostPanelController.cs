@@ -715,6 +715,15 @@ internal class HostPanelController : MonoBehaviour
 		RestoreAbilities();
 		RestoreWattsAndClones();
 		ExitSpectate();
+		if (reason == "everyone was found") ReturnToLobbyMenu();
+	}
+
+	private void ReturnToLobbyMenu()
+	{
+		if (_menu == null || _menu.menuOpen) return;
+		_menu.menuButtonPressed();
+		if (MpNetworkManager.LatestMainBit != null) MpNetworkManager.LatestMainBit.SetActive(false);
+		if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(true);
 	}
 
 	private void OnReadyClicked()
