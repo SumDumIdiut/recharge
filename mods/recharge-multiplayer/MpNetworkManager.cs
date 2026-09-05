@@ -25,13 +25,8 @@ public class MpNetworkManager : MonoBehaviour
 	public string PendingMapName;
 	public volatile bool MapDownloading;
 	public string MapDownloadError;
-	// The host's own chosen map - already local, no download needed, but loading it
-	// still means leaving the menu (PlayMap falls back to changeScene() when no
-	// Player exists yet). Deferred here instead of loaded synchronously from
-	// HostLobby so picking a map lands back on the normal in-lobby panel first,
-	// same as a joiner's own PendingMapHubId prompt - the host loads it on their
-	// own terms via the same "map ready" button, not as a surprise side effect.
 	public string PendingLocalMapId;
+	public bool? PendingBaseGameHard;
 	public readonly List<string> ChatLines = new List<string>();
 	private const int MaxChatLines = 50;
 
@@ -40,12 +35,10 @@ public class MpNetworkManager : MonoBehaviour
 	private List<SpriteRenderer> _localSpriteRenderers;
 	private List<Color> _localSpriteOriginalColors;
 	private string _lastAppliedDotColorHex;
-	private int _frameCounter;
-	// retried from Update() until the Controls row's InputActionReference resolves
+	private float _stateSendAccumulator;
+	private const float StateSendInterval = 1f / 60f;
 	private bool _chatRowEnsured;
 
-	// Test-only: mp-test.flag under persistentDataPath drives this without touching the real menu.
-	// "<host>:<port>:<lobbyName>" connects then hosts; "open_panel"/"close_panel" toggle the panel directly.
 	private static readonly string FlagPath = System.IO.Path.Combine(Application.persistentDataPath, "mp-test.flag");
 	private float _flagCheckAccumulator;
 	private string _pendingHostName;
@@ -154,14 +147,11 @@ public class MpNetworkManager : MonoBehaviour
 
 		var container = template.transform.parent;
 		if (container == null) return true;
-		// the clone destroys its own KeybindSetterItemScript, so check the container children directly rather than re-scanning
 		for (int i = 0; i < container.childCount; i++)
 		{
 			if (container.GetChild(i).GetComponent<MpChatKeybindRow>() != null) return true;
 		}
 
-		// rows are positioned by Transform, not layout-grouped, so anchor off the two known
-		// bottom rows by action name rather than array order
 		Transform quickRestartTf = null;
 		Transform swapHudTf = null;
 		foreach (var item in items)
@@ -212,14 +202,13 @@ public class MpNetworkManager : MonoBehaviour
 		return true;
 	}
 
-	// SteamManager owns SteamAPI Init/Shutdown/RunCallbacks; this only reads from it
 	internal static string GetDisplayName()
 	{
 		try
 		{
 			if (SteamManager.Initialized) return SteamFriends.GetPersonaName();
 		}
-		catch { /* Steam not available for some reason - fall through */ }
+		catch { }
 		return PlayerPrefs.GetString("MpDisplayName", "Player");
 	}
 
@@ -274,8 +263,9 @@ public class MpNetworkManager : MonoBehaviour
 		ApplyLocalDotColor();
 		if (_localPlayer == null || CurrentLobbyId == 0) return;
 
-		_frameCounter++;
-		if (_frameCounter % 2 != 0) return;
+		_stateSendAccumulator += Time.unscaledDeltaTime;
+		if (_stateSendAccumulator < StateSendInterval) return;
+		_stateSendAccumulator = 0f;
 		SendLocalState();
 	}
 
@@ -285,8 +275,7 @@ public class MpNetworkManager : MonoBehaviour
 		var anim = _localPlayer.animator;
 		int animState = anim != null ? anim.GetInteger("Animation") : 0;
 		float animSpeed = anim != null ? anim.speed : 1f;
-		bool isPaused = (LatestMainBit != null && LatestMainBit.activeInHierarchy)
-			|| (LatestMpPanel != null && LatestMpPanel.activeInHierarchy);
+		bool isPaused = Time.timeScale <= 0f;
 
 		var msg = new MpStateMsg
 		{
@@ -329,7 +318,7 @@ public class MpNetworkManager : MonoBehaviour
 			case "hosted":
 				CurrentLobbyId = (int)obj["lobbyId"];
 				CurrentLobbyName = SanitizeForRichText((string)obj["name"]);
-				StatusText = "Connected"; // MpPanelUI's dedicated in-lobby row already names the lobby
+				StatusText = "Connected";
 				ChatLines.Clear();
 				break;
 			case "joined":
@@ -338,8 +327,6 @@ public class MpNetworkManager : MonoBehaviour
 				CurrentLobbyName = SanitizeForRichText((string)obj["name"]);
 				StatusText = "Connected";
 				ChatLines.Clear();
-				// backfill whatever the lobby's members already said before this
-				// client joined, instead of starting mid-conversation with nothing
 				var history = obj["history"]?.ToObject<List<MpChatHistoryEntry>>();
 				if (history != null)
 					foreach (var h in history)
@@ -352,11 +339,6 @@ public class MpNetworkManager : MonoBehaviour
 				if (!string.IsNullOrEmpty(mapHubId))
 				{
 					var mapName = (string)obj["mapName"];
-					// Same reasoning as HostLobby's own PendingLocalMapId: never auto-load
-					// synchronously here either, even when the map's already downloaded -
-					// that can still mean an unannounced changeScene() if no Player exists
-					// yet. Land on the normal in-lobby panel first; the "Map ready" prompt
-					// is what actually triggers entering gameplay, on the player's own click.
 					if (MpMapLibrary.IsDownloaded(mapHubId)) { PendingLocalMapId = mapHubId; PendingMapName = mapName; }
 					else { PendingMapHubId = mapHubId; PendingMapName = mapName; }
 				}
@@ -395,11 +377,6 @@ public class MpNetworkManager : MonoBehaviour
 		return $"{namePart}: {safeText}";
 	}
 
-	// Chat text, lobby names, and display names are all player-controlled and
-	// end up in TMP_Text components with rich text parsing on - replacing the
-	// angle brackets (rather than wrapping in <noparse>) means the string can
-	// never form a tag at all, even via a smuggled "</noparse>" trying to
-	// break back out early.
 	internal static string SanitizeForRichText(string s)
 		=> string.IsNullOrEmpty(s) ? (s ?? "") : s.Replace('<', '＜').Replace('>', '＞');
 
@@ -462,7 +439,6 @@ public class MpNetworkManager : MonoBehaviour
 			var parts = content.Split(':');
 			if (parts.Length >= 3 && int.TryParse(parts[1], out var port))
 			{
-				// reconnecting clears any stale lobby id from a previous session
 				CurrentLobbyId = 0;
 				_pendingHostName = parts[2];
 				ConnectAsync(parts[0], port);
@@ -478,10 +454,6 @@ public class MpNetworkManager : MonoBehaviour
 
 	public void ConnectAsync(string host, int port)
 	{
-		// MpNetClient.Connect() isn't safe to call concurrently (it mutates a
-		// shared _ws field with no locking) - a stray double-click on Connect
-		// while a slow attempt is still in flight would otherwise race two
-		// threads through it at once.
 		if (_connecting) return;
 		_connecting = true;
 		StatusText = "Connecting...";
@@ -551,6 +523,7 @@ public class MpNetworkManager : MonoBehaviour
 		PendingMapHubId = null;
 		PendingMapName = null;
 		PendingLocalMapId = null;
+		PendingBaseGameHard = null;
 		MapDownloadError = null;
 	}
 

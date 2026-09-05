@@ -193,8 +193,7 @@ internal class MpInGameChatHud : MonoBehaviour
 
 		var mgr = MpNetworkManager.Instance;
 		bool inLobby = mgr != null && mgr.InLobby;
-		bool pauseMenuOpen = (MpNetworkManager.LatestMainBit != null && MpNetworkManager.LatestMainBit.activeInHierarchy)
-			|| (MpNetworkManager.LatestMpPanel != null && MpNetworkManager.LatestMpPanel.activeInHierarchy);
+		bool pauseMenuOpen = Time.timeScale <= 0f;
 		bool inMainMenu = SceneManager.GetActiveScene().name == "MainMenu";
 		bool shouldShow = inLobby && !inMainMenu && (!pauseMenuOpen || ForceShow);
 

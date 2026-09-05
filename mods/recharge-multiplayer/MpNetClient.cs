@@ -11,10 +11,12 @@ internal class MpNetClient : IDisposable
 
 	private ClientWebSocket _ws;
 	private Thread _readThread;
+	private Thread _writeThread;
 	private volatile bool _running;
 	private readonly ConcurrentQueue<string> _incoming = new ConcurrentQueue<string>();
+	private readonly ConcurrentQueue<string> _outgoing = new ConcurrentQueue<string>();
+	private readonly SemaphoreSlim _outgoingSignal = new SemaphoreSlim(0);
 
-	// Blocking - call from a background thread, never from Update().
 	public void Connect(string host, int port)
 	{
 		Disconnect();
@@ -26,6 +28,8 @@ internal class MpNetClient : IDisposable
 			_running = true;
 			_readThread = new Thread(ReadLoop) { IsBackground = true };
 			_readThread.Start();
+			_writeThread = new Thread(WriteLoop) { IsBackground = true };
+			_writeThread.Start();
 			LastError = null;
 		}
 		catch (Exception e)
@@ -35,10 +39,6 @@ internal class MpNetClient : IDisposable
 		}
 	}
 
-	// Port 443 means "the public relay behind codecade.co.za" - routed through
-	// its existing Cloudflare Tunnel at wss://<host>/dotnet, same as how the
-	// Tag game's relay rides that tunnel. Anything else is a plain self-hosted
-	// ws:// relay on whatever host/port someone's running server.js on.
 	private static Uri BuildUri(string host, int port)
 		=> port == 443 ? new Uri($"wss://{host}/dotnet") : new Uri($"ws://{host}:{port}/");
 
@@ -67,21 +67,34 @@ internal class MpNetClient : IDisposable
 		_running = false;
 	}
 
-	public bool TryDequeue(out string line) => _incoming.TryDequeue(out line);
-
-	public void Send(string json)
+	private void WriteLoop()
 	{
-		if (!IsConnected) return;
 		try
 		{
-			var bytes = Encoding.UTF8.GetBytes(json);
-			_ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).GetAwaiter().GetResult();
+			while (_running)
+			{
+				_outgoingSignal.Wait(200);
+				while (_running && _outgoing.TryDequeue(out var json))
+				{
+					var bytes = Encoding.UTF8.GetBytes(json);
+					_ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).GetAwaiter().GetResult();
+				}
+			}
 		}
 		catch (Exception e)
 		{
 			LastError = e.Message;
 			_running = false;
 		}
+	}
+
+	public bool TryDequeue(out string line) => _incoming.TryDequeue(out line);
+
+	public void Send(string json)
+	{
+		if (!IsConnected) return;
+		_outgoing.Enqueue(json);
+		_outgoingSignal.Release();
 	}
 
 	public void Disconnect()
@@ -91,7 +104,9 @@ internal class MpNetClient : IDisposable
 		try { _ws?.Dispose(); } catch { }
 		_ws = null;
 		_readThread = null;
+		_writeThread = null;
 		while (_incoming.TryDequeue(out _)) { }
+		while (_outgoing.TryDequeue(out _)) { }
 	}
 
 	public void Dispose() => Disconnect();
