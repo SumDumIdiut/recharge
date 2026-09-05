@@ -1,6 +1,6 @@
 [package]
 name = "recharge"
-version = "1.0.7"
+version = "1.0.8"
 description = "Recharge - IGTAP mod manager"
 authors = ["SumDumIdiut"]
 edition = "2021"
