@@ -34,6 +34,11 @@ function thumb(entry, badge) {
 const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
 const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>';
+const ICON_SPINNER = '<svg class="mod-spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="42 14"/></svg>';
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // Numeric-segment compare ("1.10.0" > "1.9.0", unlike a plain string compare)
 // - good enough for the plain "major.minor.patch" versions this project
@@ -234,9 +239,19 @@ window.__modInstall = async function (id, btn) {
 
 async function doInstall(ids, btn) {
   const { invoke } = window.__TAURI__.core;
+  // The circular card badge gets the spinner->tick treatment; the plain
+  // rectangular "Install" button on the detail page just swaps its text -
+  // there's no "dot" there for a circle to live inside.
+  const isBadge = btn && btn.classList.contains('browse-card-badge');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = ids.length > 1 ? `Installing (${ids.length})…` : 'Installing…';
+    if (isBadge) {
+      btn.classList.remove('browse-card-badge-install', 'browse-card-badge-update');
+      btn.classList.add('is-installing');
+      btn.innerHTML = ICON_SPINNER;
+    } else {
+      btn.textContent = ids.length > 1 ? `Installing (${ids.length})…` : 'Installing…';
+    }
   }
   try {
     // Each id is downloaded and dropped into place individually - a real
@@ -245,11 +260,26 @@ async function doInstall(ids, btn) {
     for (const id of ids) {
       await invoke('install_from_hub_cmd', { kind: 'mods', id });
     }
+    if (btn && isBadge) {
+      btn.classList.remove('is-installing');
+      btn.classList.add('is-done');
+      btn.innerHTML = ICON_CHECK;
+      await sleep(450); // let the tick actually be seen before the list re-renders out from under it
+    }
     await refresh();
     const openId = ids[ids.length - 1];
     if (document.getElementById('mods-detail').style.display !== 'none') window.__modOpenDetail(openId);
   } catch (err) {
-    if (btn) { btn.disabled = false; btn.textContent = 'Install'; }
+    if (btn) {
+      btn.disabled = false;
+      if (isBadge) {
+        btn.classList.remove('is-installing', 'is-done');
+        btn.classList.add('browse-card-badge-install');
+        btn.innerHTML = ICON_DOWNLOAD;
+      } else {
+        btn.textContent = 'Install';
+      }
+    }
     alert(String(err));
   }
 }
