@@ -46,6 +46,7 @@ internal class MpPanelUI : MonoBehaviour
 	private GameObject _appearanceSection;
 	private bool _showingAppearance;
 	private Image _colourSwatch;
+	private TMP_InputField _nameField;
 	private Slider _rSlider, _gSlider, _bSlider;
 	private Color _pendingColor = Color.white;
 
@@ -130,7 +131,12 @@ internal class MpPanelUI : MonoBehaviour
 		_gSlider.onValueChanged.AddListener(_ => OnSliderChanged());
 		_bSlider.onValueChanged.AddListener(_ => OnSliderChanged());
 
-		var doneGo = CloneButton(_appearanceSection.transform, "Done", new Vector2(0, -195), new Vector2(280, 60));
+		var nameLabel = CreateLabel(_appearanceSection.transform, "NameLabel", new Vector2(-150, -195), new Vector2(120, 34), "Name");
+		nameLabel.fontSize = 18;
+		nameLabel.color = new Color(1f, 1f, 1f, 0.65f);
+		_nameField = CreateInputField(_appearanceSection.transform, new Vector2(40, -195), new Vector2(300, 44), "Display name");
+
+		var doneGo = CloneButton(_appearanceSection.transform, "Done", new Vector2(0, -255), new Vector2(280, 60));
 		doneGo.GetComponent<Button>().onClick.AddListener(OnAppearanceDoneClicked);
 
 		_appearanceSection.SetActive(false);
@@ -223,12 +229,14 @@ internal class MpPanelUI : MonoBehaviour
 		_pendingColor = ParseHexOrDefault(MpNetworkManager.GetNameColorHex(), Color.white);
 		RefreshSwatchPreview();
 		SyncSlidersToColor();
+		_nameField.text = MpNetworkManager.GetDisplayName();
 	}
 
 	public void TestOpenAppearance() => OnAppearanceClicked();
 
 	private void OnAppearanceDoneClicked()
 	{
+		MpNetworkManager.SetDisplayNameOverride(_nameField.text);
 		_showingAppearance = false;
 	}
 
