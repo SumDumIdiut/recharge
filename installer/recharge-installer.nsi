@@ -12,7 +12,7 @@
 !endif
 
 !define PRODUCT_NAME "Recharge"
-!define PRODUCT_VERSION "1.0.3"
+!define PRODUCT_VERSION "1.0.4"
 !define PRODUCT_PUBLISHER "SumDumIdiut"
 !define PRODUCT_WEBSITE "https://codecade.co.za/recharge"
 !define MAIN_EXE "recharge.exe"
@@ -73,13 +73,13 @@ Section "Install"
   File "${RELEASE_DIR}\${MAIN_EXE}"
 
   SetOutPath "$INSTDIR\content"
-  File /r "${RELEASE_DIR}\content\*.*"
+  File /nonfatal /r "${RELEASE_DIR}\content\*.*"
 
   SetOutPath "$INSTDIR\loader"
-  File /r "${RELEASE_DIR}\loader\*.*"
+  File /nonfatal /r "${RELEASE_DIR}\loader\*.*"
 
   SetOutPath "$INSTDIR\mods"
-  File /r "${RELEASE_DIR}\mods\*.*"
+  File /nonfatal /r "${RELEASE_DIR}\mods\*.*"
 
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
