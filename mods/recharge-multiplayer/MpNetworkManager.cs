@@ -196,15 +196,7 @@ internal class MpNetworkManager : MonoBehaviour
 		return true;
 	}
 
-	private const string DisplayNamePrefsKey = "MpDisplayName";
-	private const string DefaultDisplayName = "Player";
-
-	// SteamManager owns SteamAPI Init/Shutdown/RunCallbacks; this only reads from it.
-	// Steam can fail to init for reasons that have nothing to do with this mod
-	// (confirmed live: "[Steamworks.NET] SteamAPI_Init() failed" in Player.log
-	// with no obvious cause) - when it does, everyone falls back to the same
-	// literal "Player" with no way to tell players apart, so the fallback is
-	// user-settable via the Appearance panel's Name field instead of a dead end.
+	// SteamManager owns SteamAPI Init/Shutdown/RunCallbacks; this only reads from it
 	internal static string GetDisplayName()
 	{
 		try
@@ -212,13 +204,7 @@ internal class MpNetworkManager : MonoBehaviour
 			if (SteamManager.Initialized) return SteamFriends.GetPersonaName();
 		}
 		catch { /* Steam not available for some reason - fall through */ }
-		return PlayerPrefs.GetString(DisplayNamePrefsKey, DefaultDisplayName);
-	}
-
-	internal static void SetDisplayNameOverride(string name)
-	{
-		PlayerPrefs.SetString(DisplayNamePrefsKey, string.IsNullOrWhiteSpace(name) ? DefaultDisplayName : name.Trim());
-		PlayerPrefs.Save();
+		return PlayerPrefs.GetString("MpDisplayName", "Player");
 	}
 
 	private const string NameColorPrefsKey = "MpNameColor";
