@@ -55,7 +55,17 @@ function Set-Status([string]$text) {
 # fail to be written (permissions, disk, AV) or just not survive on whatever
 # machine hit the failure, leaving nothing to go on but "see logfile.log".
 # The log file is still written too, best-effort, for the full picture.
-function Invoke-LoggedBuild([string]$LogPath, [string]$Exe, [object[]]$ExeArgs) {
+#
+# $ExeArgs is deliberately untyped (not [object[]]) - it must accept either an
+# array (for a plain exe like dotnet.exe, whose own argv parsing doesn't care)
+# or a hashtable (required for another *.ps1 script with [CmdletBinding()],
+# confirmed live: splatting a same-order array of "-Name"/"value" strings at
+# dotnet-install.ps1 silently bound values to the WRONG parameters - Channel's
+# value ended up in Quality, Quality's in InstallDir's sibling Architecture -
+# while an equivalent hashtable splat bound everything correctly. Forcing
+# [object[]] here would coerce an incoming hashtable into an array and
+# reintroduce the exact same bug.
+function Invoke-LoggedBuild([string]$LogPath, [string]$Exe, $ExeArgs) {
     $output = & $Exe @ExeArgs 2>&1 | Out-String
     try { Set-Content -Path $LogPath -Value $output -Force -ErrorAction Stop } catch { }
     return [PSCustomObject]@{ Output = $output; ExitCode = $LASTEXITCODE; LogPath = $LogPath }
@@ -123,8 +133,16 @@ try {
         New-Item -ItemType Directory -Force -Path $localSdkDir | Out-Null
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $installScript = Join-Path $env:TEMP 'dotnet-install.ps1'
-        Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installScript -UseBasicParsing
-        $installResult = Invoke-LoggedBuild (Join-Path $env:TEMP 'dotnet-sdk-install.log') $installScript @("-Channel", "$RequiredSdkMajor.0", "-InstallDir", $localSdkDir, "-NoPath")
+        # Pinned to a tagged release rather than always fetching whatever
+        # https://dot.net/v1/dotnet-install.ps1 currently redirects to (that
+        # URL is a moving target - confirmed live, it served content ahead of
+        # any tagged release at all) - reproducible behavior matters more here
+        # than always being on the newest revision.
+        Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/dotnet/install-scripts/v2026.07.21/src/dotnet-install.ps1' -OutFile $installScript -UseBasicParsing
+        if (-not (Test-Path $installScript) -or (Get-Item $installScript).Length -lt 1000) {
+            throw "Downloading dotnet-install.ps1 failed or returned an unexpectedly small file - check your internet connection."
+        }
+        $installResult = Invoke-LoggedBuild (Join-Path $env:TEMP 'dotnet-sdk-install.log') $installScript @{ Channel = "$RequiredSdkMajor.0"; Quality = "ga"; InstallDir = $localSdkDir; NoPath = $true }
 
         if ((Test-Path $localDotnetExe) -and (Test-SdkCompatible $localDotnetExe)) { return $localDotnetExe }
         throw (Format-BuildFailure "Could not obtain a .NET $RequiredSdkMajor+ SDK (check your internet connection)" $installResult)
