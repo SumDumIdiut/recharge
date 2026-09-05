@@ -71,7 +71,10 @@ try {
     }
 
     function Test-SdkCompatible([string]$dotnetExePath) {
-        $sdks = & $dotnetExePath --list-sdks 2>$null
+        try {
+            $sdks = & $dotnetExePath --list-sdks 2>$null
+        }
+        catch { return $false }
         if ($LASTEXITCODE -ne 0 -or -not $sdks) { return $false }
         foreach ($line in $sdks) {
             if ($line -match '^(\d+)\.' -and [int]$Matches[1] -ge $RequiredSdkMajor) { return $true }
