@@ -133,7 +133,7 @@ pub fn detect() -> Option<InstallInfo> {
 // Builds an InstallInfo directly from a known folder (a manually browsed-to
 // path isn't necessarily found by the steamapps/common scan `detect()` does -
 // e.g. a non-standard Steam library location, or the game moved).
-fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
+pub fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
     find_assembly_csharp(game_dir)?;
     let name = game_dir.file_name()?.to_string_lossy().to_string();
     let variant = if name.to_lowercase().contains("demo") { "Demo" } else { "Playtest" };
