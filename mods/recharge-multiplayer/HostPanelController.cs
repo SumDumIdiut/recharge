@@ -435,6 +435,10 @@ internal class HostPanelController : MonoBehaviour
 	private int _spectateIndex;
 	private readonly List<int> _spectateTargets = new List<int>();
 
+	private bool _returnToLobbyPending;
+	private float _returnToLobbyFadeStart = -1f;
+	private const float ReturnToLobbyFadeDuration = 0.35f;
+
 	private void Update()
 	{
 		RefreshMenu();
@@ -449,6 +453,12 @@ internal class HostPanelController : MonoBehaviour
 		{
 			var playerGo = GameObject.FindGameObjectWithTag("Player");
 			if (playerGo != null) _localMovement = playerGo.GetComponent<Movement>();
+		}
+
+		if (_returnToLobbyPending && Time.unscaledTime - _returnToLobbyFadeStart >= ReturnToLobbyFadeDuration)
+		{
+			_returnToLobbyPending = false;
+			ReturnToLobbyMenu();
 		}
 
 		if (!mgr.InLobby) { EndRoundLocally("left the lobby"); return; }
@@ -470,6 +480,7 @@ internal class HostPanelController : MonoBehaviour
 		{
 			_seekerReleased = true;
 			EnsureMapLoaded(_roundMapHubId);
+			CloseMenuIfOpen();
 		}
 
 		if (!hiding && IsLocalSeeking() && _localMovement != null)
@@ -575,7 +586,11 @@ internal class HostPanelController : MonoBehaviour
 			ApplyAbilityRestrictions(payload["abilities"] as JObject);
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
 			_statusMessage = _mode == Mode.Normal ? "Playing!" : "Round started!";
-			if (!IsLocalSeeking()) EnsureMapLoaded(_roundMapHubId);
+			if (!IsLocalSeeking())
+			{
+				EnsureMapLoaded(_roundMapHubId);
+				CloseMenuIfOpen();
+			}
 		}
 		else if (kind == "stop")
 		{
@@ -715,7 +730,12 @@ internal class HostPanelController : MonoBehaviour
 		RestoreAbilities();
 		RestoreWattsAndClones();
 		ExitSpectate();
-		if (reason == "everyone was found") ReturnToLobbyMenu();
+		if (reason == "everyone was found") { _returnToLobbyPending = true; _returnToLobbyFadeStart = Time.unscaledTime; }
+	}
+
+	private void CloseMenuIfOpen()
+	{
+		if (_menu != null && _menu.menuOpen) _menu.menuButtonPressed();
 	}
 
 	private void ReturnToLobbyMenu()
@@ -815,6 +835,17 @@ internal class HostPanelController : MonoBehaviour
 	{
 		DrawHud();
 		DrawSpectateHud();
+		DrawReturnToLobbyFade();
+	}
+
+	private void DrawReturnToLobbyFade()
+	{
+		if (!_returnToLobbyPending) return;
+		var t = Mathf.Clamp01((Time.unscaledTime - _returnToLobbyFadeStart) / ReturnToLobbyFadeDuration);
+		var prevColor = GUI.color;
+		GUI.color = new Color(0f, 0f, 0f, t);
+		GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
+		GUI.color = prevColor;
 	}
 
 	private void DrawHud()
