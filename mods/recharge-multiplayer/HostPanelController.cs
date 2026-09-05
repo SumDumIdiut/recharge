@@ -5,6 +5,7 @@ using Newtonsoft.Json.Linq;
 using Recharge.ModApi;
 using TMPro;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 internal class HostPanelController : MonoBehaviour
@@ -14,6 +15,8 @@ internal class HostPanelController : MonoBehaviour
 	private GameObject _hostPanel;
 	private Button _toggleButton;
 	private bool _autoReadyTried;
+	private int _lastKnownPlayerId;
+	private bool _localReadyIntent;
 
 	private Button _modeButton;
 	private Button _mapButton;
@@ -307,11 +310,25 @@ internal class HostPanelController : MonoBehaviour
 		bool isHost = mgr != null && mgr.IsHost;
 		bool canConfigure = isHost && inLobby && !_roundActive;
 
-		if (!inLobby) _autoReadyTried = false;
+		if (!inLobby) { _autoReadyTried = false; _localReadyIntent = false; _lastKnownPlayerId = 0; }
 		else if (isHost && !_autoReadyTried)
 		{
 			_autoReadyTried = true;
 			mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = true });
+		}
+
+		// A silent auto-reconnect hands out a brand new connection id, which
+		// orphans this client's own entry in everyone's _readyStates - resend
+		// it under the new id so the roster doesn't stay stuck on "Waiting".
+		if (mgr != null && mgr.LocalPlayerId != 0 && mgr.LocalPlayerId != _lastKnownPlayerId)
+		{
+			bool resumed = _lastKnownPlayerId != 0 && inLobby;
+			_lastKnownPlayerId = mgr.LocalPlayerId;
+			if (resumed)
+			{
+				_autoReadyTried = true;
+				mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = isHost || _localReadyIntent });
+			}
 		}
 
 		if (_toggleButton != null)
@@ -414,6 +431,10 @@ internal class HostPanelController : MonoBehaviour
 
 	private Movement _localMovement;
 
+	private bool _spectating;
+	private int _spectateIndex;
+	private readonly List<int> _spectateTargets = new List<int>();
+
 	private void Update()
 	{
 		RefreshMenu();
@@ -465,7 +486,53 @@ internal class HostPanelController : MonoBehaviour
 			}
 		}
 
+		if (_spectating)
+		{
+			RefreshSpectateTargets();
+			var mouse = Mouse.current;
+			if (mouse != null)
+			{
+				if (mouse.leftButton.wasPressedThisFrame) { _spectateIndex--; ApplySpectateCamera(); }
+				else if (mouse.rightButton.wasPressedThisFrame) { _spectateIndex++; ApplySpectateCamera(); }
+			}
+		}
+
 		if (Time.time >= _roundEndTime) EndRoundLocally("time's up");
+	}
+
+	private void EnterSpectate()
+	{
+		if (_localMovement != null) { _localMovement.enabled = false; _movementFrozen = true; }
+		_spectating = true;
+		_spectateIndex = 0;
+		RefreshSpectateTargets();
+		ApplySpectateCamera();
+	}
+
+	private void ExitSpectate()
+	{
+		if (!_spectating) return;
+		_spectating = false;
+		if (_localMovement != null && _localMovement.cam != null)
+			_localMovement.cam.newTarget(_localMovement.gameObject, _localMovement.cam.defaultoffset, true, Vector2.zero);
+	}
+
+	private void RefreshSpectateTargets()
+	{
+		_spectateTargets.Clear();
+		var mgr = MpNetworkManager.Instance;
+		if (mgr == null) return;
+		foreach (var p in mgr.LastSnapshotPlayers)
+			if (p.id != _seekerId && !_found.Contains(p.id)) _spectateTargets.Add(p.id);
+	}
+
+	private void ApplySpectateCamera()
+	{
+		if (_localMovement == null || _localMovement.cam == null || _spectateTargets.Count == 0) return;
+		if (_spectateIndex < 0) _spectateIndex = _spectateTargets.Count - 1;
+		if (_spectateIndex >= _spectateTargets.Count) _spectateIndex = 0;
+		var root = MpGhostManager.GetGhostRoot(_spectateTargets[_spectateIndex]);
+		if (root != null) _localMovement.cam.newTarget(root, Vector3.zero, false, Vector2.zero);
 	}
 
 	private bool IsLocalSeeking()
@@ -521,7 +588,7 @@ internal class HostPanelController : MonoBehaviour
 			{
 				if (target != _seekerId && _found.Add(target))
 				{
-					if (target == MpNetworkManager.Instance.LocalPlayerId) _statusMessage = "You were found!";
+					if (target == MpNetworkManager.Instance.LocalPlayerId) { _statusMessage = "You were found!"; EnterSpectate(); }
 					var totalOthers = MpNetworkManager.Instance.LastSnapshotPlayers.Count;
 					if (_found.Count >= totalOthers) EndRoundLocally("everyone was found");
 				}
@@ -571,9 +638,10 @@ internal class HostPanelController : MonoBehaviour
 	private void ApplyAbility(JObject abilities, string key, System.Func<bool> get, System.Action<bool> set)
 	{
 		var allowed = abilities[key]?.Value<bool>() ?? true;
-		if (allowed) return; // leave the player's own progression untouched
-		_abilityRestore[key] = get();
-		set(false);
+		var current = get();
+		if (current == allowed) return;
+		_abilityRestore[key] = current;
+		set(allowed);
 	}
 
 	private void RestoreAbilities()
@@ -646,6 +714,7 @@ internal class HostPanelController : MonoBehaviour
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
 		RestoreAbilities();
 		RestoreWattsAndClones();
+		ExitSpectate();
 	}
 
 	private void OnReadyClicked()
@@ -653,6 +722,7 @@ internal class HostPanelController : MonoBehaviour
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null || !mgr.InLobby) return;
 		bool currentlyReady = _readyStates.TryGetValue(mgr.LocalPlayerId, out var r) && r;
+		_localReadyIntent = !currentlyReady;
 		mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = !currentlyReady });
 		if (!currentlyReady) TryConsumePendingMapLoad();
 	}
@@ -735,6 +805,7 @@ internal class HostPanelController : MonoBehaviour
 	private void OnGUI()
 	{
 		DrawHud();
+		DrawSpectateHud();
 	}
 
 	private void DrawHud()
@@ -758,5 +829,22 @@ internal class HostPanelController : MonoBehaviour
 		GUI.Box(rect, "");
 		var style = new GUIStyle(GUI.skin.label) { fontSize = 18, normal = { textColor = IsLocalSeeking() ? Color.red : Color.white } };
 		GUI.Label(rect, label, style);
+	}
+
+	private void DrawSpectateHud()
+	{
+		if (!_spectating) return;
+		var mgr = MpNetworkManager.Instance;
+		string name = "no one left";
+		if (_spectateTargets.Count > 0 && _spectateIndex >= 0 && _spectateIndex < _spectateTargets.Count)
+		{
+			var id = _spectateTargets[_spectateIndex];
+			var p = mgr?.LastSnapshotPlayers.FirstOrDefault(x => x.id == id);
+			name = p != null ? p.name : ("Player " + id);
+		}
+		var rect = new Rect(20, 60, 400, 30);
+		GUI.Box(rect, "");
+		var style = new GUIStyle(GUI.skin.label) { fontSize = 16, normal = { textColor = Color.white } };
+		GUI.Label(rect, "Spectating: " + name + "  (click: prev / right-click: next)", style);
 	}
 }

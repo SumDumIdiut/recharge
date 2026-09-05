@@ -18,6 +18,9 @@ internal class MpInGameChatHud : MonoBehaviour
 	private GameObject _inputRow;
 	private TMP_InputField _input;
 	private int _lastChatLineCount = -1;
+	private float _lastMessageAt = -999f;
+	private const float LogFadeDelay = 15f;
+	private const float LogFadeDuration = 0.5f;
 	private bool _chatOpen;
 	private int _openedFrame = -1;
 	private int _closedFrame = -1;
@@ -207,6 +210,7 @@ internal class MpInGameChatHud : MonoBehaviour
 		if (mgr.ChatLines.Count != _lastChatLineCount)
 		{
 			RefreshChatLog(mgr.ChatLines);
+			_lastMessageAt = Time.unscaledTime;
 		}
 
 		var kb = Keyboard.current;
@@ -232,7 +236,12 @@ internal class MpInGameChatHud : MonoBehaviour
 			CloseInput();
 		}
 
-		_logGroup.alpha = 1f;
+		// Opening/closing the input field never touches _lastMessageAt, only a
+		// real incoming chat line does - so interacting with the box doesn't
+		// postpone its own fade, only staying visible while it's open to type.
+		bool sinceMessageFresh = Time.unscaledTime - _lastMessageAt < LogFadeDelay;
+		float targetAlpha = (_chatOpen || sinceMessageFresh) ? 1f : 0f;
+		_logGroup.alpha = Mathf.MoveTowards(_logGroup.alpha, targetAlpha, Time.unscaledDeltaTime / LogFadeDuration);
 	}
 
 	private const float LogRowHeight = 22f;
