@@ -39,6 +39,13 @@
 .browse-card-badge-update:hover { color: oklch(85% 0.17 90); border-color: oklch(85% 0.17 90); }
 @keyframes mod-update-pulse { 50% { opacity: 0.55; } }
 
+.browse-card-badge.is-installing { color: var(--text-dim); cursor: default; }
+.browse-card-badge.is-done { color: var(--green); border-color: var(--green); cursor: default; }
+.mod-spinner { animation: mod-spin 0.8s linear infinite; transform-origin: 50% 50%; }
+@keyframes mod-spin { to { transform: rotate(360deg); } }
+.browse-card-badge.is-done svg { animation: mod-check-pop 0.35s ease-out; }
+@keyframes mod-check-pop { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
 .mod-update-available { color: oklch(80% 0.15 90); }
 
 .browse-card-icon-btn {
