@@ -50,9 +50,6 @@ internal class MpPanelUI : MonoBehaviour
 	private float _lobbyListPollAccumulator;
 
 	private GameObject _appearanceButton;
-	private TMP_Text _mapDownloadLabel;
-	private Button _mapDownloadButton;
-	private TMP_Text _mapDownloadButtonLabel;
 	private GameObject _appearanceSection;
 	private bool _showingAppearance;
 	private Image _colourSwatch;
@@ -84,21 +81,6 @@ internal class MpPanelUI : MonoBehaviour
 		_appearanceButton = CloneButton(root, "Colour", new Vector2(-190, 165), new Vector2(200, 54));
 		_appearanceButton.GetComponent<Button>().onClick.AddListener(OnAppearanceClicked);
 
-		_mapDownloadLabel = CreateLabel(root, "MapDownloadLabel", new Vector2(-100, 165), new Vector2(280, 34), "");
-		_mapDownloadLabel.alignment = TextAlignmentOptions.MidlineLeft;
-		_mapDownloadLabel.fontSize = 18;
-		_mapDownloadLabel.enableWordWrapping = false;
-		_mapDownloadLabel.overflowMode = TextOverflowModes.Ellipsis;
-		var downloadGo = CloneButton(root, "DownloadMap", new Vector2(180, 165), new Vector2(200, 54));
-		_mapDownloadButton = downloadGo.GetComponent<Button>();
-		_mapDownloadButtonLabel = downloadGo.GetComponentInChildren<TMP_Text>();
-		_mapDownloadButton.onClick.AddListener(() =>
-		{
-			var m = MpNetworkManager.GetOrCreate();
-			if (!string.IsNullOrEmpty(m.PendingLocalMapId)) m.LoadPendingLocalMap();
-			else m.DownloadPendingMap();
-		});
-
 		_hostRow = new GameObject("HostRow", typeof(RectTransform));
 		_hostRow.transform.SetParent(root, false);
 		_lobbyNameField = CreateInputField(_hostRow.transform, new Vector2(-90, 110), new Vector2(300, 44), "Lobby name");
@@ -118,14 +100,12 @@ internal class MpPanelUI : MonoBehaviour
 		_playersLabel.enableWordWrapping = false;
 		_playersLabel.overflowMode = TextOverflowModes.Ellipsis;
 		_playersLabel.color = new Color(1f, 1f, 1f, 0.75f);
+
 		BuildChatSection(_inLobbyRow.transform);
 		var leaveGo = CloneButton(_inLobbyRow.transform, "Leave Lobby", new Vector2(-150, -160), new Vector2(270, 60));
 		leaveGo.GetComponent<Button>().onClick.AddListener(OnLeaveClicked);
 
-		// Reserved slot (x=150, y=-160, ~270 wide) beside Leave Lobby - addon
-		// mods that depend on recharge.multiplayer (e.g. recharge.partygames)
-		// hook their own button in here via this row's exposed reference,
-		// rather than this mod needing to know they exist.
+		// HostPanelController hooks its own button into this row via LatestInLobbyRow.
 		MpNetworkManager.LatestInLobbyRow = _inLobbyRow;
 
 		BuildAppearanceSection(root);
@@ -508,13 +488,10 @@ internal class MpPanelUI : MonoBehaviour
 		}
 		else
 		{
-			// Base Game / B-Side aren't a recharge.maps pocket - they're the real
-			// game's own two difficulty variants, switched the exact same way its
-			// own Start Game screen does (pauseMenuScript.changeScene/changeSceneHard
-			// set globalStats.difficultyLevel then animate into a fresh MainMenu load).
 			bool hard = mapIndex == -2;
-			if (_menu != null) { if (hard) _menu.changeSceneHard(); else _menu.changeScene(); }
-			MpNetworkManager.GetOrCreate().HostLobby(name, null, null, null, hard);
+			var mgr = MpNetworkManager.GetOrCreate();
+			mgr.PendingBaseGameHard = hard;
+			mgr.HostLobby(name, null, null, null, hard);
 		}
 		_showingMapPicker = false;
 	}
@@ -579,25 +556,6 @@ internal class MpPanelUI : MonoBehaviour
 			_inLobbyLabel.text = "In lobby: " + mgr.CurrentLobbyName;
 			RefreshPlayersLabel(mgr.LastSnapshotPlayers);
 			RefreshChatLog(mgr.ChatLines);
-		}
-
-		bool showMapDownload = inLobby && !string.IsNullOrEmpty(mgr.PendingMapHubId);
-		bool showLocalMapLoad = inLobby && !showMapDownload && !string.IsNullOrEmpty(mgr.PendingLocalMapId);
-		_mapDownloadLabel.gameObject.SetActive((showMapDownload || showLocalMapLoad) && !showingOverlay);
-		_mapDownloadButton.gameObject.SetActive((showMapDownload || showLocalMapLoad) && !showingOverlay);
-		if (showMapDownload)
-		{
-			_mapDownloadLabel.text = !string.IsNullOrEmpty(mgr.MapDownloadError)
-				? "Map download failed: " + mgr.MapDownloadError
-				: "Map available: " + mgr.PendingMapName;
-			_mapDownloadButtonLabel.text = mgr.MapDownloading ? "Downloading..." : "Download";
-			_mapDownloadButton.interactable = !mgr.MapDownloading;
-		}
-		else if (showLocalMapLoad)
-		{
-			_mapDownloadLabel.text = "Map ready: " + mgr.PendingMapName;
-			_mapDownloadButtonLabel.text = "Load";
-			_mapDownloadButton.interactable = true;
 		}
 
 		if (connected && !inLobby) RefreshLobbyList(mgr.LastLobbyList);

@@ -143,7 +143,7 @@ internal static class MpGhostManager
 		}
 
 		var labelGo = new GameObject("Label");
-		labelGo.transform.SetParent(root.transform);
+		labelGo.transform.SetParent(root.transform, false);
 		// this game's world units run large (camera offsets elsewhere in Movement.cs
 		// are in the hundreds) - the original characterSize/offset (1.2, 40) were sized
 		// for a typical "1 unit ~= 1 metre" convention and rendered as a barely-visible
@@ -164,7 +164,7 @@ internal static class MpGhostManager
 		tm.color = nameColor;
 
 		var pausedGo = new GameObject("PausedIndicator");
-		pausedGo.transform.SetParent(root.transform);
+		pausedGo.transform.SetParent(root.transform, false);
 		pausedGo.transform.localPosition = new Vector3(0f, 105f, 0f); // above the name label
 		var pausedTm = pausedGo.AddComponent<TextMesh>();
 		pausedTm.text = "PAUSED";

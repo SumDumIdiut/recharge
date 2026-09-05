@@ -7,15 +7,16 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-internal class PartyGamesController : MonoBehaviour
+internal class HostPanelController : MonoBehaviour
 {
 	private IRechargeHost _host;
 	private pauseMenuScript _menu;
-	private GameObject _partyGamesPanel;
+	private GameObject _hostPanel;
+	private Button _toggleButton;
+	private bool _autoReadyTried;
 
 	private Button _modeButton;
 	private Button _mapButton;
-	private Button _readyButton;
 	private GameObject _rosterGo;
 	private Button _startButton;
 	private GameObject _statusGo;
@@ -23,11 +24,11 @@ internal class PartyGamesController : MonoBehaviour
 	private readonly (string Key, string Label)[] _abilityDefs =
 	{
 		("dash", "Dash"), ("wallJump", "Wall Jump"), ("doubleJump", "Double Jump"),
-		("blockSwap", "Block Swap"), ("omniDash", "Omni Dash"),
+		("blockSwap", "Block Swap"),
 	};
 	private readonly Dictionary<string, bool> _abilityEnabled = new Dictionary<string, bool>
 	{
-		["dash"] = true, ["wallJump"] = true, ["doubleJump"] = true, ["blockSwap"] = true, ["omniDash"] = true,
+		["dash"] = true, ["wallJump"] = true, ["doubleJump"] = true, ["blockSwap"] = true,
 	};
 	private readonly List<(string Key, Button Btn)> _abilityButtons = new List<(string, Button)>();
 	private readonly Dictionary<string, bool> _abilityRestore = new Dictionary<string, bool>();
@@ -37,6 +38,8 @@ internal class PartyGamesController : MonoBehaviour
 	private volatile bool _mapListLoading;
 
 	private readonly Dictionary<int, bool> _readyStates = new Dictionary<int, bool>();
+	private readonly Dictionary<int, float> _lastTagSentAt = new Dictionary<int, float>();
+	private const float TagResendInterval = 1f;
 
 	public void Init(IRechargeHost host)
 	{
@@ -48,25 +51,25 @@ internal class PartyGamesController : MonoBehaviour
 		_menu = menu;
 		if (MpNetworkManager.LatestInLobbyRow == null) return; // DOTnet's own panel hasn't built its in-lobby row yet this scene
 
-		if (MpNetworkManager.LatestInLobbyRow.transform.Find("PartyGamesToggle") == null)
+		if (MpNetworkManager.LatestInLobbyRow.transform.Find("HostPanelToggle") == null)
 		{
 			var toggleTemplate = menu.mainBitPublic.transform.Find("Settings")?.gameObject;
 			if (toggleTemplate != null)
 			{
 				var toggleGo = Object.Instantiate(toggleTemplate, MpNetworkManager.LatestInLobbyRow.transform);
-				toggleGo.name = "PartyGamesToggle";
+				toggleGo.name = "HostPanelToggle";
 				toggleGo.SetActive(true);
 				var toggleRt = (RectTransform)toggleGo.transform;
 				toggleRt.anchoredPosition = new Vector2(150, -160);
 				toggleRt.sizeDelta = new Vector2(270, 60);
-				PauseMenuHelper.SetButtonLabel(toggleGo, "Party Games");
-				var toggleBtn = toggleGo.GetComponent<Button>();
-				toggleBtn.onClick = new Button.ButtonClickedEvent();
-				toggleBtn.onClick.AddListener(OnTogglePartyGamesClicked);
+				PauseMenuHelper.SetButtonLabel(toggleGo, "Host Panel");
+				_toggleButton = toggleGo.GetComponent<Button>();
+				_toggleButton.onClick = new Button.ButtonClickedEvent();
+				_toggleButton.onClick.AddListener(OnToggleOrReadyClicked);
 			}
 		}
 
-		if (menu.settingsBitPublic.transform.parent.Find("PartyGamesBit") != null) return;
+		if (menu.settingsBitPublic.transform.parent.Find("HostPanelBit") != null) return;
 
 		var panel = BuildStandalonePanel(menu);
 		if (panel == null) return;
@@ -74,18 +77,39 @@ internal class PartyGamesController : MonoBehaviour
 		var template = menu.mainBitPublic.transform.Find("Settings")?.gameObject;
 		if (template == null) return;
 
-		_modeButton = BuildActionButton(panel.transform, template, "Mode: Hide & Seek", new Vector2(0, 160), OnCycleModeClicked, width: 380, height: 48, fontSize: 20f);
-		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 100), OnCycleMapClicked, width: 380, height: 48, fontSize: 20f);
+		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(0, 170), OnCycleModeClicked, width: 380, height: 48, fontSize: 20f);
+		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 115), OnCycleMapClicked, width: 380, height: 48, fontSize: 20f);
 
-		float[] xs = { -232, -116, 0, 116, 232 };
+		CreateDivider(panel.transform, new Vector2(0, 88), 420);
+
+		var abilityCaptionGo = Object.Instantiate(template, panel.transform);
+		abilityCaptionGo.name = "HostPanel_AbilityCaption";
+		abilityCaptionGo.SetActive(true);
+		var abilityCaptionBtn = abilityCaptionGo.GetComponent<Button>();
+		if (abilityCaptionBtn != null) abilityCaptionBtn.enabled = false;
+		var abilityCaptionRt = (RectTransform)abilityCaptionGo.transform;
+		abilityCaptionRt.anchoredPosition = new Vector2(0, 72);
+		abilityCaptionRt.sizeDelta = new Vector2(380, 26);
+		var abilityCaptionText = abilityCaptionGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		if (abilityCaptionText != null)
+		{
+			abilityCaptionText.enableAutoSizing = false;
+			abilityCaptionText.fontSize = 15;
+			abilityCaptionText.color = new Color(1f, 1f, 1f, 0.6f);
+			abilityCaptionText.textWrappingMode = TextWrappingModes.NoWrap;
+			abilityCaptionText.overflowMode = TextOverflowModes.Overflow;
+		}
+		PauseMenuHelper.SetButtonLabel(abilityCaptionGo, "Abilities (tap to toggle)");
+
+		float[] xs = { -174, -58, 58, 174 };
 		for (int i = 0; i < _abilityDefs.Length; i++)
 		{
 			var key = _abilityDefs[i].Key;
 			var go = Object.Instantiate(template, panel.transform);
-			go.name = "PartyGames_Ability_" + key;
+			go.name = "HostPanel_Ability_" + key;
 			go.SetActive(true);
 			var rt = (RectTransform)go.transform;
-			rt.anchoredPosition = new Vector2(xs[i], 50);
+			rt.anchoredPosition = new Vector2(xs[i], 35);
 			rt.sizeDelta = new Vector2(110, 44);
 			var abilityText = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 			if (abilityText != null)
@@ -97,7 +121,7 @@ internal class PartyGamesController : MonoBehaviour
 				textRt.offsetMax = new Vector2(-4, textRt.offsetMax.y);
 				abilityText.alignment = TextAlignmentOptions.Center;
 				abilityText.enableAutoSizing = true;
-				abilityText.fontSizeMin = 9f;
+				abilityText.fontSizeMin = 8f;
 				abilityText.fontSizeMax = 16f;
 				abilityText.textWrappingMode = TextWrappingModes.NoWrap;
 				abilityText.overflowMode = TextOverflowModes.Overflow;
@@ -108,36 +132,37 @@ internal class PartyGamesController : MonoBehaviour
 			_abilityButtons.Add((key, btn));
 		}
 
-		var readyGo = Object.Instantiate(template, panel.transform);
-		readyGo.name = "PartyGames_Ready";
-		readyGo.SetActive(true); // template may be inactive if mainBitPublic is hidden when this panel gets (re)built
-		var readyRt = (RectTransform)readyGo.transform;
-		readyRt.anchoredPosition = new Vector2(0, 0);
-		readyRt.sizeDelta = new Vector2(220, 44);
-		_readyButton = readyGo.GetComponent<Button>();
-		_readyButton.onClick = new Button.ButtonClickedEvent();
-		_readyButton.onClick.AddListener(OnReadyClicked);
+		CreateDivider(panel.transform, new Vector2(0, 9), 420);
+
+		var rosterBoxGo = new GameObject("HostPanelRosterBox", typeof(RectTransform), typeof(Image));
+		rosterBoxGo.transform.SetParent(panel.transform, false);
+		var rosterBoxRt = (RectTransform)rosterBoxGo.transform;
+		rosterBoxRt.anchoredPosition = new Vector2(0, -35);
+		rosterBoxRt.sizeDelta = new Vector2(420, 80);
+		rosterBoxGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.25f);
 
 		_rosterGo = Object.Instantiate(template, panel.transform);
-		_rosterGo.name = "PartyGamesRoster";
+		_rosterGo.name = "HostPanelRoster";
 		_rosterGo.SetActive(true);
 		var rosterBtn = _rosterGo.GetComponent<Button>();
 		if (rosterBtn != null) rosterBtn.enabled = false;
+		var rosterImg = _rosterGo.GetComponent<Image>();
+		if (rosterImg != null) rosterImg.color = new Color(0f, 0f, 0f, 0f);
 		var rosterRt = (RectTransform)_rosterGo.transform;
-		rosterRt.anchoredPosition = new Vector2(0, -55);
-		rosterRt.sizeDelta = new Vector2(560, 70);
+		rosterRt.anchoredPosition = new Vector2(0, -35);
+		rosterRt.sizeDelta = new Vector2(400, 72);
 		var rosterText = _rosterGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (rosterText != null) { rosterText.enableAutoSizing = false; rosterText.fontSize = 14; rosterText.textWrappingMode = TextWrappingModes.Normal; }
 
-		_startButton = BuildActionButton(panel.transform, template, "Start Game", new Vector2(0, -125), OnStartClicked);
+		_startButton = BuildActionButton(panel.transform, template, "Start Playing", new Vector2(0, -110), OnStartOrStopClicked);
 
 		_statusGo = Object.Instantiate(template, panel.transform);
-		_statusGo.name = "PartyGamesStatus";
+		_statusGo.name = "HostPanelStatus";
 		_statusGo.SetActive(true);
 		var statusBtn = _statusGo.GetComponent<Button>();
 		if (statusBtn != null) statusBtn.enabled = false;
 		var statusRt = (RectTransform)_statusGo.transform;
-		statusRt.anchoredPosition = new Vector2(0, -180);
+		statusRt.anchoredPosition = new Vector2(0, -170);
 		statusRt.sizeDelta = new Vector2(560, 40);
 		var statusText = _statusGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (statusText != null) { statusText.enableAutoSizing = false; statusText.fontSize = 16; statusText.textWrappingMode = TextWrappingModes.Normal; }
@@ -145,25 +170,28 @@ internal class PartyGamesController : MonoBehaviour
 		RefreshMapList();
 	}
 
-	private void OnTogglePartyGamesClicked()
+	// Host gets the full config panel; everyone else just gets a Ready toggle.
+	private void OnToggleOrReadyClicked()
 	{
-		if (_partyGamesPanel == null) return;
-		if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(false);
-		_partyGamesPanel.SetActive(true);
+		var mgr = MpNetworkManager.Instance;
+		if (mgr != null && mgr.IsHost) OnToggleHostPanelClicked();
+		else OnReadyClicked();
 	}
 
-	// Hand-rolled clone-and-strip - mirrors MpMenuBuilder.BuildPanel's own
-	// technique in recharge-multiplayer (deliberately not shared ModApi code,
-	// same as that mod doesn't use PauseMenuHelper.AddPanelRow for its own
-	// panel either) since Back here needs to return to DOTnet's panel, not
-	// the main pause menu.
+	private void OnToggleHostPanelClicked()
+	{
+		if (_hostPanel == null) return;
+		if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(false);
+		_hostPanel.SetActive(true);
+	}
+
 	private GameObject BuildStandalonePanel(pauseMenuScript menu)
 	{
-		var existing = menu.settingsBitPublic.transform.parent.Find("PartyGamesBit");
-		if (existing != null) { _partyGamesPanel = existing.gameObject; return _partyGamesPanel; }
+		var existing = menu.settingsBitPublic.transform.parent.Find("HostPanelBit");
+		if (existing != null) { _hostPanel = existing.gameObject; return _hostPanel; }
 
 		var clone = Object.Instantiate(menu.settingsBitPublic, menu.settingsBitPublic.transform.parent);
-		clone.name = "PartyGamesBit";
+		clone.name = "HostPanelBit";
 		clone.SetActive(false);
 
 		var settingsScript = clone.GetComponent<SettingsScript>();
@@ -186,7 +214,7 @@ internal class PartyGamesController : MonoBehaviour
 		if (title != null)
 		{
 			var titleTmp = title.GetComponent<TMP_Text>();
-			if (titleTmp != null) titleTmp.text = "Party Games";
+			if (titleTmp != null) titleTmp.text = "Host Panel";
 			var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
 			if (loc != null) Object.Destroy(loc);
 
@@ -204,13 +232,18 @@ internal class PartyGamesController : MonoBehaviour
 			}
 		}
 
-		_partyGamesPanel = clone;
+		_hostPanel = clone;
 		return clone;
 	}
 
 	private void OnCycleModeClicked()
 	{
-		_mode = _mode == Mode.HideAndSeek ? Mode.Infection : Mode.HideAndSeek;
+		_mode = _mode switch
+		{
+			Mode.Normal => Mode.HideAndSeek,
+			Mode.HideAndSeek => Mode.Infection,
+			_ => Mode.Normal,
+		};
 	}
 
 	private void OnCycleMapClicked()
@@ -219,10 +252,20 @@ internal class PartyGamesController : MonoBehaviour
 		if (_selectedMapIndex >= _hostableMaps.Count) _selectedMapIndex = -1;
 	}
 
+	private static void CreateDivider(Transform parent, Vector2 pos, float width)
+	{
+		var go = new GameObject("Divider", typeof(RectTransform));
+		go.transform.SetParent(parent, false);
+		var rt = (RectTransform)go.transform;
+		rt.anchoredPosition = pos;
+		rt.sizeDelta = new Vector2(width, 2);
+		go.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.15f);
+	}
+
 	private static Button BuildActionButton(Transform parent, GameObject template, string label, Vector2 pos, System.Action onClick, float width = 260, float height = 60, float fontSize = 24f)
 	{
 		var go = Object.Instantiate(template, parent);
-		go.name = "PartyGames_" + label;
+		go.name = "HostPanel_" + label;
 		go.SetActive(true);
 		var rt = (RectTransform)go.transform;
 		rt.anchoredPosition = pos;
@@ -264,10 +307,28 @@ internal class PartyGamesController : MonoBehaviour
 		bool isHost = mgr != null && mgr.IsHost;
 		bool canConfigure = isHost && inLobby && !_roundActive;
 
+		if (!inLobby) _autoReadyTried = false;
+		else if (isHost && !_autoReadyTried)
+		{
+			_autoReadyTried = true;
+			mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = true });
+		}
+
+		if (_toggleButton != null)
+		{
+			if (isHost) PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
+			else
+			{
+				bool ready = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var tr) && tr;
+				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, ready ? "Unready" : "Ready");
+			}
+		}
+
 		if (_modeButton != null)
 		{
 			_modeButton.interactable = canConfigure;
-			PauseMenuHelper.SetButtonLabel(_modeButton.gameObject, "Mode: " + (_mode == Mode.Infection ? "Infection" : "Hide & Seek"));
+			var modeLabel = _mode == Mode.Infection ? "Infection" : _mode == Mode.HideAndSeek ? "Hide & Seek" : "Normal";
+			PauseMenuHelper.SetButtonLabel(_modeButton.gameObject, "Mode: " + modeLabel);
 		}
 		if (_mapButton != null)
 		{
@@ -282,16 +343,9 @@ internal class PartyGamesController : MonoBehaviour
 			bool enabled = _abilityEnabled[key];
 			btn.interactable = canConfigure;
 			var label = _abilityDefs.First(d => d.Key == key).Label;
-			PauseMenuHelper.SetButtonLabel(btn.gameObject, label);
+			PauseMenuHelper.SetButtonLabel(btn.gameObject, label + "\n" + (enabled ? "On" : "Off"));
 			var img = btn.GetComponent<Image>();
-			if (img != null) img.color = enabled ? new Color(0.25f, 0.5f, 0.25f) : new Color(0.5f, 0.2f, 0.2f);
-		}
-
-		if (_readyButton != null)
-		{
-			_readyButton.interactable = inLobby && !_roundActive;
-			bool ready = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var r) && r;
-			PauseMenuHelper.SetButtonLabel(_readyButton.gameObject, ready ? "Ready!" : "Ready Up");
+			if (img != null) img.color = enabled ? new Color(0.2f, 0.55f, 0.28f) : new Color(0.55f, 0.22f, 0.2f);
 		}
 
 		if (_rosterGo != null)
@@ -311,19 +365,35 @@ internal class PartyGamesController : MonoBehaviour
 			}
 		}
 
-		if (_startButton != null) _startButton.interactable = mgr != null && inLobby && isHost && !_roundActive && AllReady(mgr);
+		bool normalActive = _roundActive && _mode == Mode.Normal;
+		if (_startButton != null)
+		{
+			if (normalActive && isHost)
+			{
+				_startButton.interactable = true;
+				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, "Stop Playing");
+			}
+			else
+			{
+				_startButton.interactable = mgr != null && inLobby && isHost && !_roundActive && AllReady(mgr);
+				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, _mode == Mode.Normal ? "Start Playing" : "Start Round");
+			}
+		}
 
 		if (_statusGo == null) return;
 		string statusText;
 		if (mgr == null || !inLobby) statusText = "Host or join a lobby to play.";
+		else if (normalActive) statusText = isHost ? "Playing - click Stop Playing to end." : "Playing.";
 		else if (_roundActive) statusText = "Round in progress.";
 		else if (!isHost) statusText = "Waiting for the host to start.";
-		else statusText = _statusMessage;
+		else if (!string.IsNullOrEmpty(_statusMessage)) statusText = _statusMessage;
+		else if (!AllReady(mgr)) statusText = "Waiting for everyone to ready up...";
+		else statusText = _mode == Mode.Normal ? "Everyone's ready - click Start Playing!" : "Everyone's ready - click Start Round!";
 		PauseMenuHelper.SetButtonLabel(_statusGo, statusText);
 	}
 
-	private enum Mode { HideAndSeek, Infection }
-	private Mode _mode = Mode.HideAndSeek;
+	private enum Mode { Normal, HideAndSeek, Infection }
+	private Mode _mode = Mode.Normal;
 	private bool _roundActive;
 	private float _hideEndTime;
 	private float _roundEndTime;
@@ -362,6 +432,7 @@ internal class PartyGamesController : MonoBehaviour
 
 		if (!mgr.InLobby) { EndRoundLocally("left the lobby"); return; }
 		if (!_roundActive) return;
+		if (_mode == Mode.Normal) return; // just playing - no seek/hide/tag mechanics to run
 
 		bool hiding = Time.time < _hideEndTime;
 		if (_localMovement != null)
@@ -386,7 +457,11 @@ internal class PartyGamesController : MonoBehaviour
 			{
 				if (IsOut(p.id)) continue;
 				var dist = Vector2.Distance(_localMovement.transform.position, new Vector2(p.x, p.y));
-				if (dist <= TagRadius) mgr.SendGameMessage(new JObject { ["k"] = "tag", ["target"] = p.id });
+				if (dist > TagRadius) continue;
+				// Throttled - unthrottled resends can trip the relay's per-connection rate limit.
+				if (_lastTagSentAt.TryGetValue(p.id, out var last) && Time.time - last < TagResendInterval) continue;
+				_lastTagSentAt[p.id] = Time.time;
+				mgr.SendGameMessage(new JObject { ["k"] = "tag", ["target"] = p.id });
 			}
 		}
 
@@ -396,12 +471,14 @@ internal class PartyGamesController : MonoBehaviour
 	private bool IsLocalSeeking()
 	{
 		var mgr = MpNetworkManager.Instance;
+		if (_mode == Mode.Normal) return false;
 		if (_mode == Mode.HideAndSeek) return mgr.LocalPlayerId == _seekerId;
 		return _infected.Contains(mgr.LocalPlayerId);
 	}
 
 	private bool IsOut(int playerId)
 	{
+		if (_mode == Mode.Normal) return false;
 		return _mode == Mode.HideAndSeek ? _found.Contains(playerId) || playerId == _seekerId : _infected.Contains(playerId);
 	}
 
@@ -414,21 +491,27 @@ internal class PartyGamesController : MonoBehaviour
 		}
 		else if (kind == "start")
 		{
-			_mode = (string)payload["mode"] == "infection" ? Mode.Infection : Mode.HideAndSeek;
+			var modeStr = (string)payload["mode"];
+			_mode = modeStr == "infection" ? Mode.Infection : modeStr == "normal" ? Mode.Normal : Mode.HideAndSeek;
 			_seekerId = (int)payload["seeker"];
 			_infected.Clear();
 			_found.Clear();
 			_readyStates.Clear();
+			_lastTagSentAt.Clear();
 			if (_mode == Mode.Infection) _infected.Add(_seekerId);
 			_hideEndTime = Time.time + (float)payload["hideSeconds"];
-			_roundEndTime = Time.time + (float)payload["roundSeconds"];
+			_roundEndTime = _mode == Mode.Normal ? float.MaxValue : Time.time + (float)payload["roundSeconds"];
 			_roundActive = true;
 			_seekerReleased = false;
 			_roundMapHubId = (string)payload["mapHubId"];
 			ApplyLocalAppearance();
 			ApplyAbilityRestrictions(payload["abilities"] as JObject);
-			_statusMessage = "Round started!";
+			_statusMessage = _mode == Mode.Normal ? "Playing!" : "Round started!";
 			if (!IsLocalSeeking()) EnsureMapLoaded(_roundMapHubId);
+		}
+		else if (kind == "stop")
+		{
+			EndRoundLocally("host ended the session");
 		}
 		else if (kind == "tag" && _roundActive)
 		{
@@ -482,7 +565,6 @@ internal class PartyGamesController : MonoBehaviour
 		ApplyAbility(abilities, "wallJump", () => _localMovement.wallJumpUnlocked, v => _localMovement.wallJumpUnlocked = v);
 		ApplyAbility(abilities, "doubleJump", () => _localMovement.doubleJumpUnlocked, v => _localMovement.doubleJumpUnlocked = v);
 		ApplyAbility(abilities, "blockSwap", () => _localMovement.blockSwapUnlocked, v => _localMovement.blockSwapUnlocked = v);
-		ApplyAbility(abilities, "omniDash", () => _localMovement.omniDashUnlocked, v => _localMovement.omniDashUnlocked = v);
 	}
 
 	private void ApplyAbility(JObject abilities, string key, System.Func<bool> get, System.Action<bool> set)
@@ -505,7 +587,6 @@ internal class PartyGamesController : MonoBehaviour
 					case "wallJump": _localMovement.wallJumpUnlocked = kv.Value; break;
 					case "doubleJump": _localMovement.doubleJumpUnlocked = kv.Value; break;
 					case "blockSwap": _localMovement.blockSwapUnlocked = kv.Value; break;
-					case "omniDash": _localMovement.omniDashUnlocked = kv.Value; break;
 				}
 			}
 		}
@@ -539,6 +620,40 @@ internal class PartyGamesController : MonoBehaviour
 		if (mgr == null || !mgr.InLobby) return;
 		bool currentlyReady = _readyStates.TryGetValue(mgr.LocalPlayerId, out var r) && r;
 		mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = !currentlyReady });
+		if (!currentlyReady) TryConsumePendingMapLoad();
+	}
+
+	private void TryConsumePendingMapLoad()
+	{
+		var m = MpNetworkManager.GetOrCreate();
+		if (!string.IsNullOrEmpty(m.PendingLocalMapId)) { m.LoadPendingLocalMap(); return; }
+		if (m.PendingBaseGameHard.HasValue)
+		{
+			bool hard = m.PendingBaseGameHard.Value;
+			m.PendingBaseGameHard = null;
+			if (_menu != null) { if (hard) _menu.changeSceneHard(); else _menu.changeScene(); }
+			return;
+		}
+		if (!string.IsNullOrEmpty(m.PendingMapHubId))
+		{
+			_statusMessage = "Downloading map...";
+			m.DownloadPendingMap();
+		}
+	}
+
+	private void OnStartOrStopClicked()
+	{
+		var mgr = MpNetworkManager.Instance;
+		if (mgr != null && _roundActive && _mode == Mode.Normal) OnStopClicked();
+		else OnStartClicked();
+	}
+
+	private void OnStopClicked()
+	{
+		var mgr = MpNetworkManager.Instance;
+		if (mgr == null || !mgr.InLobby || !mgr.IsHost) return;
+		mgr.SendGameMessage(new JObject { ["k"] = "stop" });
+		EndRoundLocally("host ended the session");
 	}
 
 	private void OnStartClicked()
@@ -547,10 +662,17 @@ internal class PartyGamesController : MonoBehaviour
 		if (mgr == null || !mgr.InLobby || !mgr.IsHost || _roundActive) return;
 		if (!AllReady(mgr)) { _statusMessage = "Waiting for everyone to be ready."; return; }
 
+		TryConsumePendingMapLoad();
+
 		var others = mgr.LastSnapshotPlayers.Select(p => p.id).ToList();
 		var everyone = new List<int>(others) { mgr.LocalPlayerId };
-		if (everyone.Count < 2) { _statusMessage = "Need at least 2 players."; return; }
-		var seeker = everyone[Random.Range(0, everyone.Count)];
+
+		int seeker = -1;
+		if (_mode != Mode.Normal)
+		{
+			if (everyone.Count < 2) { _statusMessage = "Need at least 2 players."; return; }
+			seeker = everyone[Random.Range(0, everyone.Count)];
+		}
 
 		string mapHubId = null, mapName = null;
 		if (_selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count)
@@ -566,9 +688,9 @@ internal class PartyGamesController : MonoBehaviour
 		mgr.SendGameMessage(new JObject
 		{
 			["k"] = "start",
-			["mode"] = _mode == Mode.Infection ? "infection" : "hideandseek",
+			["mode"] = _mode == Mode.Infection ? "infection" : _mode == Mode.HideAndSeek ? "hideandseek" : "normal",
 			["seeker"] = seeker,
-			["hideSeconds"] = HideSeconds,
+			["hideSeconds"] = _mode == Mode.Normal ? 0f : HideSeconds,
 			["roundSeconds"] = RoundSeconds,
 			["mapHubId"] = mapHubId,
 			["mapName"] = mapName,
@@ -583,7 +705,7 @@ internal class PartyGamesController : MonoBehaviour
 
 	private void DrawHud()
 	{
-		if (!_roundActive) return;
+		if (!_roundActive || _mode == Mode.Normal) return;
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null) return;
 		string label;
