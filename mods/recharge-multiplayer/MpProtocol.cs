@@ -41,6 +41,8 @@ internal class MpHostMsg
 	public string type = "host";
 	public string name;
 	public string playerName;
+	public string mapHubId;
+	public string mapName;
 }
 
 internal class MpJoinLobbyMsg
@@ -57,6 +59,8 @@ internal class MpLobbyInfo
 	public string hostName;
 	public string hostColor;
 	public int count;
+	public string mapHubId;
+	public string mapName;
 }
 
 internal class MpLobbyListMsg

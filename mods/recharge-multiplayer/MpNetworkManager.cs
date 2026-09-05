@@ -11,12 +11,17 @@ using UnityEngine.UI;
 internal class MpNetworkManager : MonoBehaviour
 {
 	public static MpNetworkManager Instance { get; private set; }
+	public static Recharge.ModApi.IRechargeHost Host;
 
 	public string StatusText = "Not connected";
 	public int CurrentLobbyId;
 	public string CurrentLobbyName;
 	public List<MpLobbyInfo> LastLobbyList = new List<MpLobbyInfo>();
 	public List<MpPlayerState> LastSnapshotPlayers = new List<MpPlayerState>();
+	public string PendingMapHubId;
+	public string PendingMapName;
+	public volatile bool MapDownloading;
+	public string MapDownloadError;
 	public readonly List<string> ChatLines = new List<string>();
 	private const int MaxChatLines = 50;
 
@@ -252,7 +257,7 @@ internal class MpNetworkManager : MonoBehaviour
 		{
 			var lobbyName = _pendingHostName;
 			_pendingHostName = null;
-			HostLobby(lobbyName);
+			HostLobby(lobbyName, null, null, null);
 		}
 
 		ApplyLocalDotColor();
@@ -324,6 +329,15 @@ internal class MpNetworkManager : MonoBehaviour
 				if (history != null)
 					foreach (var h in history)
 						ChatLines.Add(FormatChatLine(h.from, h.fromColor, h.text));
+
+				var mapHubId = (string)obj["mapHubId"];
+				PendingMapHubId = null;
+				PendingMapName = null;
+				if (!string.IsNullOrEmpty(mapHubId))
+				{
+					if (MpMapLibrary.IsDownloaded(mapHubId)) Host?.Events.Emit("recharge.maps.load_requested", mapHubId);
+					else { PendingMapHubId = mapHubId; PendingMapName = (string)obj["mapName"]; }
+				}
 				break;
 			}
 			case "join_failed":
@@ -471,9 +485,10 @@ internal class MpNetworkManager : MonoBehaviour
 		StatusText = "Not connected";
 	}
 
-	public void HostLobby(string lobbyName)
+	public void HostLobby(string lobbyName, string mapLocalId, string mapHubId, string mapName)
 	{
-		_net.Send(JsonConvert.SerializeObject(new MpHostMsg { name = lobbyName, playerName = GetDisplayName() }));
+		_net.Send(JsonConvert.SerializeObject(new MpHostMsg { name = lobbyName, playerName = GetDisplayName(), mapHubId = mapHubId, mapName = mapName }));
+		if (!string.IsNullOrEmpty(mapLocalId)) Host?.Events.Emit("recharge.maps.load_requested", mapLocalId);
 	}
 
 	public void RequestLobbyList()
@@ -494,6 +509,30 @@ internal class MpNetworkManager : MonoBehaviour
 		MpGhostManager.Clear();
 		LastSnapshotPlayers.Clear();
 		StatusText = "Connected";
+		PendingMapHubId = null;
+		PendingMapName = null;
+		MapDownloadError = null;
+	}
+
+	public void DownloadPendingMap()
+	{
+		if (MapDownloading || string.IsNullOrEmpty(PendingMapHubId)) return;
+		var hubId = PendingMapHubId;
+		MapDownloading = true;
+		MapDownloadError = null;
+		new Thread(() =>
+		{
+			try
+			{
+				MpMapLibrary.DownloadAndExtract(hubId);
+				PendingMapHubId = null;
+				PendingMapName = null;
+				Host?.Events.Emit("recharge.maps.load_requested", hubId);
+			}
+			catch (System.Exception e) { MapDownloadError = e.Message; }
+			finally { MapDownloading = false; }
+		})
+		{ IsBackground = true }.Start();
 	}
 
 	public void SendChat(string text)

@@ -23,6 +23,14 @@ public class RechargeMapsMod : IRechargeMod
             var menu = UnityEngine.Object.FindFirstObjectByType<pauseMenuScript>();
             if (menu != null) MapMenuBuilder.Install(menu);
         });
+
+        host.Events.On("recharge.maps.load_requested", payload =>
+        {
+            var mapId = payload as string;
+            if (string.IsNullOrEmpty(mapId)) return;
+            var menu = UnityEngine.Object.FindFirstObjectByType<pauseMenuScript>();
+            if (menu != null) MapManager.Instance.PlayMap(mapId, menu);
+        });
     }
 
     public void OnUnload() { }
