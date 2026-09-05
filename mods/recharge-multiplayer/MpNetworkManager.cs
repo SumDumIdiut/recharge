@@ -42,6 +42,19 @@ public class MpNetworkManager : MonoBehaviour
 	private static readonly string FlagPath = System.IO.Path.Combine(Application.persistentDataPath, "mp-test.flag");
 	private float _flagCheckAccumulator;
 	private string _pendingHostName;
+
+	private readonly string _sessionToken = System.Guid.NewGuid().ToString("N");
+	private bool _autoReconnect;
+	private string _lastConnectHost;
+	private int _lastConnectPort;
+	private float _reconnectAccumulator;
+	private const float ReconnectInterval = 3f;
+
+	private enum ResumeMode { None, Host, Join }
+	private ResumeMode _resumeMode = ResumeMode.None;
+	private string _resumeLobbyName, _resumeMapLocalId, _resumeMapHubId, _resumeMapName;
+	private bool _resumeHard;
+	private int _resumeJoinLobbyId;
 	public static GameObject LatestMainBit;
 	public static GameObject LatestMpPanel;
 	public static GameObject LatestPage1;
@@ -251,8 +264,20 @@ public class MpNetworkManager : MonoBehaviour
 		{
 			if (StatusText.StartsWith("Connected") || StatusText.StartsWith("In lobby"))
 				StatusText = "Disconnected: " + (_net.LastError ?? "connection lost");
+
+			if (_autoReconnect && !_connecting)
+			{
+				_reconnectAccumulator += Time.unscaledDeltaTime;
+				if (_reconnectAccumulator >= ReconnectInterval)
+				{
+					_reconnectAccumulator = 0f;
+					StatusText = "Reconnecting...";
+					ConnectAsync(_lastConnectHost, _lastConnectPort);
+				}
+			}
 			return;
 		}
+		_reconnectAccumulator = 0f;
 		if (_pendingHostName != null && CurrentLobbyId == 0)
 		{
 			var lobbyName = _pendingHostName;
@@ -304,6 +329,8 @@ public class MpNetworkManager : MonoBehaviour
 			case "welcome":
 				StatusText = "Connected";
 				LocalPlayerId = (int)obj["id"];
+				if (_resumeMode == ResumeMode.Host) HostLobby(_resumeLobbyName, _resumeMapLocalId, _resumeMapHubId, _resumeMapName, _resumeHard);
+				else if (_resumeMode == ResumeMode.Join) JoinLobby(_resumeJoinLobbyId);
 				break;
 			case "game_msg":
 				OnGameMessage?.Invoke((int)obj["from"], (JObject)obj["payload"]);
@@ -346,6 +373,11 @@ public class MpNetworkManager : MonoBehaviour
 			}
 			case "join_failed":
 				StatusText = "Join failed: " + (string)obj["reason"];
+				_resumeMode = ResumeMode.None;
+				CurrentLobbyId = 0;
+				CurrentLobbyName = null;
+				MpGhostManager.Clear();
+				LastSnapshotPlayers.Clear();
 				break;
 			case "left":
 				CurrentLobbyId = 0;
@@ -456,6 +488,9 @@ public class MpNetworkManager : MonoBehaviour
 	{
 		if (_connecting) return;
 		_connecting = true;
+		_lastConnectHost = host;
+		_lastConnectPort = port;
+		_autoReconnect = true;
 		StatusText = "Connecting...";
 		new Thread(() =>
 		{
@@ -471,6 +506,8 @@ public class MpNetworkManager : MonoBehaviour
 
 	public void Disconnect()
 	{
+		_autoReconnect = false;
+		_resumeMode = ResumeMode.None;
 		_net.Disconnect();
 		MpGhostManager.Clear();
 		LastSnapshotPlayers.Clear();
@@ -482,9 +519,15 @@ public class MpNetworkManager : MonoBehaviour
 
 	public void HostLobby(string lobbyName, string mapLocalId, string mapHubId, string mapName, bool hard)
 	{
-		_net.Send(JsonConvert.SerializeObject(new MpHostMsg { name = lobbyName, playerName = GetDisplayName(), mapHubId = mapHubId, mapName = mapName, hard = hard }));
+		_net.Send(JsonConvert.SerializeObject(new MpHostMsg { name = lobbyName, playerName = GetDisplayName(), mapHubId = mapHubId, mapName = mapName, hard = hard, token = _sessionToken }));
 		if (!string.IsNullOrEmpty(mapLocalId)) { PendingLocalMapId = mapLocalId; PendingMapName = mapName; }
 		IsHost = true;
+		_resumeMode = ResumeMode.Host;
+		_resumeLobbyName = lobbyName;
+		_resumeMapLocalId = mapLocalId;
+		_resumeMapHubId = mapHubId;
+		_resumeMapName = mapName;
+		_resumeHard = hard;
 	}
 
 	public void LoadPendingLocalMap()
@@ -504,6 +547,8 @@ public class MpNetworkManager : MonoBehaviour
 	{
 		_net.Send(JsonConvert.SerializeObject(new MpJoinLobbyMsg { lobbyId = lobbyId, playerName = GetDisplayName() }));
 		IsHost = false;
+		_resumeMode = ResumeMode.Join;
+		_resumeJoinLobbyId = lobbyId;
 	}
 
 	public void SendGameMessage(JObject payload)
@@ -514,6 +559,7 @@ public class MpNetworkManager : MonoBehaviour
 
 	public void LeaveLobby()
 	{
+		_resumeMode = ResumeMode.None;
 		_net.Send("{\"type\":\"leave_lobby\"}");
 		CurrentLobbyId = 0;
 		CurrentLobbyName = null;

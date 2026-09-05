@@ -44,6 +44,7 @@ internal class MpHostMsg
 	public string mapHubId;
 	public string mapName;
 	public bool hard;
+	public string token;
 }
 
 internal class MpJoinLobbyMsg
