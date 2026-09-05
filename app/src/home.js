@@ -144,11 +144,26 @@ export async function refreshInstallStatus(opts = {}) {
       sub.textContent = 'Set the path in Settings.';
       if (opts.log !== false) logLine('no installation detected');
     }
+    return install;
   } catch (err) {
     label.textContent = 'IGTAP not found';
     sub.textContent = String(err);
     if (opts.log !== false) logLine(`install detection failed: ${String(err)}`);
+    return null;
   }
+}
+
+function showOnboarding(html) {
+  const overlay = document.getElementById('onboard-overlay');
+  const body = document.getElementById('onboard-body');
+  if (!overlay || !body) return;
+  body.innerHTML = html;
+  overlay.hidden = false;
+  document.getElementById('onboard-dismiss').onclick = () => { overlay.hidden = true; };
+  document.getElementById('onboard-go').onclick = () => {
+    overlay.hidden = true;
+    window.navigate('settings');
+  };
 }
 
 export async function initHome() {
@@ -156,13 +171,27 @@ export async function initHome() {
 
   logLine('recharge started');
 
-  await refreshInstallStatus();
+  const install = await refreshInstallStatus();
 
+  let loaderInstalled = false;
   try {
     const loader = await invoke('loader_status');
+    loaderInstalled = loader.installed;
     logLine(loader.installed ? `loader: <b>installed</b> (v${loader.version})` : 'loader: not installed');
   } catch (err) {
     logLine(`loader status check failed: ${String(err)}`);
+  }
+
+  if (!install) {
+    showOnboarding(
+      `<p>Recharge couldn't find your IGTAP install automatically.</p>
+       <p>Head to Settings to check the detected path, or verify IGTAP is installed via Steam.</p>`
+    );
+  } else if (!loaderInstalled) {
+    showOnboarding(
+      `<p>Almost there - <b>RechargeLoader</b> isn't installed yet, and it's what lets mods actually run in-game.</p>
+       <p>Go to Settings and click <b>Install / Update</b> under RechargeLoader to finish setup.</p>`
+    );
   }
 
   try {
