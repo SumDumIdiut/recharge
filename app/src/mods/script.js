@@ -114,7 +114,7 @@ function renderBrowse() {
   }
   list.innerHTML = filtered
     .map((entry) => {
-      const installed = installedCache.some((m) => m.id === entry.id);
+      const installed = installedCache.some((m) => m.id === entry.modId);
       const badge = installed
         ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
