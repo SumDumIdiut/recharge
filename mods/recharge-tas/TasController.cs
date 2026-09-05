@@ -150,14 +150,6 @@ internal class TasController : MonoBehaviour
         if (_buffer.Count > _recordingSegmentStart) _buffer.RemoveRange(_recordingSegmentStart, _buffer.Count - _recordingSegmentStart);
     }
 
-    private void TeleportTo(Vector2 pos)
-    {
-        _playerT.position = pos;
-        _body.position = pos;
-        _body.linearVelocity = Vector2.zero;
-        _body.angularVelocity = 0f;
-    }
-
     // Polls Movement's own public cutsceneMode for the death transition and
     // cancels its pending Invoke("deathRespawn", 0.6f) so it doesn't fight
     // this teleport over where the player ends up.
@@ -165,12 +157,11 @@ internal class TasController : MonoBehaviour
     {
         if (!PlayerReady) return;
         var mode = _movement.cutsceneMode;
-        if (mode == Movement.cutsceneModes.deathFreeze && _lastCutsceneMode != Movement.cutsceneModes.deathFreeze)
+        if (mode == Movement.cutsceneModes.deathFreeze && _lastCutsceneMode != Movement.cutsceneModes.deathFreeze && _checkpoints.Count > 0)
         {
             _movement.CancelInvoke("deathRespawn");
             _movement.cutsceneMode = Movement.cutsceneModes.none;
-            if (_checkpoints.Count > 0) Apply(_checkpoints[_checkpoints.Count - 1]);
-            else TeleportTo(_movement.respawnPoint);
+            Apply(_checkpoints[_checkpoints.Count - 1]);
             TrimFailedRecordingSegment();
             Host.Log("TAS: death -> latest checkpoint");
         }

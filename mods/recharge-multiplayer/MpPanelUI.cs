@@ -61,6 +61,8 @@ internal class MpPanelUI : MonoBehaviour
 		_status = CreateLabel(root, "Status", new Vector2(0, 165), new Vector2(600, 34), "Not connected");
 		_status.alignment = TextAlignmentOptions.Center;
 		_status.fontSize = 22;
+		_status.enableWordWrapping = false;
+		_status.overflowMode = TextOverflowModes.Ellipsis;
 
 		var connectGo = CloneButton(root, "Connect", new Vector2(190, 165), new Vector2(200, 54));
 		_connectButton = connectGo.GetComponent<Button>();
