@@ -23,6 +23,8 @@ internal static class MpGhostManager
 		_spriteTemplate = playerSprite;
 	}
 
+	public static GameObject GetGhostRoot(int id) => _ghosts.TryGetValue(id, out var g) ? g.Root : null;
+
 	public static void ApplySnapshot(List<MpPlayerState> players)
 	{
 		var seen = new HashSet<int>();
