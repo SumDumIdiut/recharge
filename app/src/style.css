@@ -155,7 +155,6 @@ body {
 }
 .home-tile:hover:not(:disabled) { border-color: var(--line-hi); }
 .home-tile:disabled { opacity: 0.5; cursor: default; }
-.home-tile-featured { background: oklch(80% 0.19 150 / 0.14); border-color: var(--green); }
 
 .home-play-status { color: var(--text-dim); font-size: 15px; min-height: 20px; }
 
