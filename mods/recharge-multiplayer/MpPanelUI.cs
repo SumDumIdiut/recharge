@@ -55,6 +55,20 @@ internal class MpPanelUI : MonoBehaviour
 	private Image _colourSwatch;
 	private Slider _rSlider, _gSlider, _bSlider;
 	private Color _pendingColor = Color.white;
+
+	private readonly Color[] _colorPresets =
+	{
+		Color.white, new Color(1f, 0.3f, 0.3f), new Color(1f, 0.6f, 0.15f), new Color(1f, 0.9f, 0.2f),
+		new Color(0.3f, 0.9f, 0.4f), new Color(0.2f, 0.85f, 0.85f), new Color(0.3f, 0.5f, 1f), new Color(0.85f, 0.4f, 0.95f),
+		new Color(0.05f, 0.05f, 0.05f), new Color(0.4f, 0.4f, 0.4f), new Color(0.75f, 0.75f, 0.75f), new Color(0.55f, 0.35f, 0.2f),
+		new Color(1f, 0.75f, 0.8f), new Color(0.7f, 0.2f, 0.2f), new Color(0.6f, 0.3f, 0.05f), new Color(0.8f, 0.75f, 0.1f),
+		new Color(0.1f, 0.5f, 0.15f), new Color(0.05f, 0.35f, 0.35f), new Color(0.1f, 0.2f, 0.55f), new Color(0.4f, 0.1f, 0.5f),
+		new Color(1f, 0.5f, 0.7f), new Color(0.6f, 1f, 0.9f), new Color(0.9f, 0.9f, 0.6f), new Color(0.5f, 0.9f, 1f),
+	};
+	private const int PresetsPerPage = 8;
+	private readonly List<Image> _presetSwatches = new List<Image>();
+	private int _presetPage;
+	private TMP_Text _presetPageLabel;
 	private pauseMenuScript _menu;
 
 
@@ -123,20 +137,29 @@ internal class MpPanelUI : MonoBehaviour
 		_colourSwatch = CreateSwatchButton(_appearanceSection.transform, new Vector2(0, 110), new Vector2(160, 50));
 		ApplyRoundedBoxStyle(_colourSwatch, Color.white);
 
-		var presets = new[]
-		{
-			Color.white, new Color(1f, 0.3f, 0.3f), new Color(1f, 0.6f, 0.15f), new Color(1f, 0.9f, 0.2f),
-			new Color(0.3f, 0.9f, 0.4f), new Color(0.2f, 0.85f, 0.85f), new Color(0.3f, 0.5f, 1f), new Color(0.85f, 0.4f, 0.95f),
-		};
 		const float presetSize = 50f;
 		const float presetSpacing = 62f;
-		var startX = -(presets.Length - 1) * presetSpacing / 2f;
-		for (int i = 0; i < presets.Length; i++)
+		var startX = -(PresetsPerPage - 1) * presetSpacing / 2f;
+		for (int i = 0; i < _colorPresets.Length; i++)
 		{
-			var c = presets[i];
-			var x = startX + i * presetSpacing;
-			CreateSwatchButton(_appearanceSection.transform, new Vector2(x, 30), new Vector2(presetSize, presetSize), c, () => Apply(c));
+			var c = _colorPresets[i];
+			var slot = i % PresetsPerPage;
+			var x = startX + slot * presetSpacing;
+			var swatch = CreateSwatchButton(_appearanceSection.transform, new Vector2(x, 30), new Vector2(presetSize, presetSize), c, () => Apply(c));
+			ApplyRoundedBoxStyle(swatch, c);
+			_presetSwatches.Add(swatch);
 		}
+
+		var prevGo = CloneButton(_appearanceSection.transform, "<", new Vector2(-260, 30), new Vector2(40, 50));
+		prevGo.GetComponent<Button>().onClick.AddListener(() => ChangePresetPage(-1));
+		var nextGo = CloneButton(_appearanceSection.transform, ">", new Vector2(260, 30), new Vector2(40, 50));
+		nextGo.GetComponent<Button>().onClick.AddListener(() => ChangePresetPage(1));
+
+		_presetPageLabel = CreateLabel(_appearanceSection.transform, "PresetPage", new Vector2(0, -5), new Vector2(160, 20), "");
+		_presetPageLabel.alignment = TextAlignmentOptions.Center;
+		_presetPageLabel.fontSize = 13;
+		_presetPageLabel.color = new Color(1f, 1f, 1f, 0.6f);
+		RefreshPresetPage();
 
 		_rSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -35), "R", new Color(1f, 0.4f, 0.4f));
 		_gSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -85), "G", new Color(0.4f, 1f, 0.4f));
@@ -230,6 +253,21 @@ internal class MpPanelUI : MonoBehaviour
 		slider.wholeNumbers = true;
 		slider.value = 128;
 		return slider;
+	}
+
+	private void ChangePresetPage(int delta)
+	{
+		var totalPages = Mathf.CeilToInt(_colorPresets.Length / (float)PresetsPerPage);
+		_presetPage = ((_presetPage + delta) % totalPages + totalPages) % totalPages;
+		RefreshPresetPage();
+	}
+
+	private void RefreshPresetPage()
+	{
+		var totalPages = Mathf.CeilToInt(_colorPresets.Length / (float)PresetsPerPage);
+		for (int i = 0; i < _presetSwatches.Count; i++)
+			_presetSwatches[i].gameObject.SetActive(i / PresetsPerPage == _presetPage);
+		if (_presetPageLabel != null) _presetPageLabel.text = $"Page {_presetPage + 1}/{totalPages}";
 	}
 
 	private void OnAppearanceClicked()
