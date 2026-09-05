@@ -57,12 +57,9 @@ async function refreshStatus() {
   }
 }
 
-// Recharge's own version vs. a small local "latest" manifest (content/launcher.json) -
-// distinct from RechargeLoader above, which is the mod-framework contract mods
-// build against, not the app itself. There's no hosted release feed for this
-// project, so this only ever flags an update once someone (the developer)
-// bumps that manifest by hand for a real new build - same honest, no-fake-
-// server spirit as how mod "installs" are really just a local rebuild.
+// Recharge's own version vs. the real GitHub releases feed - distinct from
+// RechargeLoader above, which is the mod-framework contract mods build
+// against, not the app itself.
 async function refreshLauncherStatus() {
   const { invoke } = window.__TAURI__.core;
   const status = document.getElementById('launcher-status');
@@ -70,7 +67,12 @@ async function refreshLauncherStatus() {
   try {
     const info = await invoke('check_launcher_update');
     if (info.updateAvailable) {
-      status.innerHTML = `v${info.currentVersion} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span>`;
+      status.innerHTML = `v${info.currentVersion} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span> <a href="#" id="launcher-download-link">Download</a>`;
+      const link = document.getElementById('launcher-download-link');
+      link.onclick = (e) => {
+        e.preventDefault();
+        window.__TAURI__.opener.openUrl(info.url);
+      };
       if (info.notes) {
         notes.textContent = info.notes;
         notes.hidden = false;

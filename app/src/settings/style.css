@@ -21,4 +21,5 @@
 }
 
 .launcher-update-available { color: oklch(80% 0.15 90); }
+#launcher-download-link { color: var(--green); margin-left: 8px; text-decoration: underline; }
 #launcher-notes { margin-top: 6px; line-height: 1.5; }
