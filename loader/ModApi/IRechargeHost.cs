@@ -13,11 +13,14 @@ namespace Recharge.ModApi
     {
         /// <summary>
         /// The real, live pauseMenuScript instance whose Awake() triggered
-        /// loading. Its <c>mainBitPublic</c>/<c>settingsBitPublic</c>
+        /// loading. <see cref="PauseMenuHelper"/> uses it to add a row -
+        /// prefer that over hand-rolling the same UI hierarchy cloning
+        /// again. Its <c>mainBitPublic</c>/<c>settingsBitPublic</c>
         /// properties (added by RechargeLoader's own game patch, since the
-        /// real fields are private) are what <see cref="PauseMenuHelper"/>
-        /// uses to add a row - prefer that over hand-rolling the same UI
-        /// hierarchy cloning again.
+        /// real fields are private) are still there for your own mod code
+        /// to use directly if you need them - PauseMenuHelper itself reads
+        /// the underlying fields via reflection instead, since it builds as
+        /// part of Recharge.ModApi, before the patch that adds them runs.
         /// </summary>
         pauseMenuScript PauseMenu { get; }
 
