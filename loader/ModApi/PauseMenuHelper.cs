@@ -39,6 +39,20 @@ namespace Recharge.ModApi
         // earlier instance must never be left wired after a mod re-registers.
         private static readonly List<ModRowSpec> _rows = new List<ModRowSpec>();
 
+        // Reflection, not the native patch's mainBitPublic/settingsBitPublic
+        // properties - this class builds as part of Recharge.ModApi itself,
+        // which build-loader.ps1 compiles BEFORE the patch that adds those
+        // properties even runs (confirmed live: a never-before-patched game
+        // install fails ModApi's own build with CS1061 on both). Mods built
+        // later (after the patch) can and do use the real properties fine.
+        private static readonly System.Reflection.FieldInfo MainBitField =
+            typeof(pauseMenuScript).GetField("mainBit", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        private static readonly System.Reflection.FieldInfo SettingsBitField =
+            typeof(pauseMenuScript).GetField("settingsBit", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        private static GameObject MainBit(pauseMenuScript menu) => MainBitField?.GetValue(menu) as GameObject;
+        private static GameObject SettingsBit(pauseMenuScript menu) => SettingsBitField?.GetValue(menu) as GameObject;
+
         /// <summary>
         /// Registers a mod entry that runs <paramref name="onClick"/> when
         /// selected - no sub-panel of its own. Use this when you're managing
@@ -55,7 +69,7 @@ namespace Recharge.ModApi
         /// <returns>The shared pager row's GameObject, or null if the real menu's expected shape wasn't found (e.g. the game updated) - added defensively, log a warning and continue rather than throw.</returns>
         public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick)
         {
-            if (menu == null || menu.mainBitPublic == null || menu.settingsBitPublic == null) return null;
+            if (menu == null || MainBit(menu) == null || SettingsBit(menu) == null) return null;
             Upsert(rowName, label, onClick);
             return EnsurePager(menu);
         }
@@ -72,9 +86,9 @@ namespace Recharge.ModApi
         /// <returns>The (empty) sub-panel GameObject, inactive until selected, or null if the real menu's expected shape wasn't found.</returns>
         public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label)
         {
-            if (menu == null || menu.mainBitPublic == null || menu.settingsBitPublic == null) return null;
+            if (menu == null || MainBit(menu) == null || SettingsBit(menu) == null) return null;
 
-            var panel = BuildBlankPanel(menu, rowName, label, backTarget: menu.mainBitPublic);
+            var panel = BuildBlankPanel(menu, rowName, label, backTarget: MainBit(menu));
             Upsert(rowName, label, () => panel.SetActive(true));
             EnsurePager(menu);
             return panel;
@@ -105,7 +119,7 @@ namespace Recharge.ModApi
 
         private static GameObject EnsurePager(pauseMenuScript menu)
         {
-            var existing = menu.mainBitPublic.transform.Find("ModsPager");
+            var existing = MainBit(menu).transform.Find("ModsPager");
             if (existing != null)
             {
                 var rt = existing.GetComponent<PagerRuntime>();
@@ -117,10 +131,11 @@ namespace Recharge.ModApi
 
         private static GameObject BuildPager(pauseMenuScript menu)
         {
-            var startGame = menu.mainBitPublic.transform.Find("StartGame") as RectTransform;
-            var deleteSave = menu.mainBitPublic.transform.Find("DeleteSave") as RectTransform;
-            var settings = menu.mainBitPublic.transform.Find("Settings") as RectTransform;
-            var quit = menu.mainBitPublic.transform.Find("QuitToDesktop") as RectTransform;
+            var mainBitGo = MainBit(menu);
+            var startGame = mainBitGo.transform.Find("StartGame") as RectTransform;
+            var deleteSave = mainBitGo.transform.Find("DeleteSave") as RectTransform;
+            var settings = mainBitGo.transform.Find("Settings") as RectTransform;
+            var quit = mainBitGo.transform.Find("QuitToDesktop") as RectTransform;
             if (startGame == null || settings == null || quit == null) return null;
 
             float rowSpacing = settings.anchoredPosition.y - quit.anchoredPosition.y;
@@ -128,7 +143,7 @@ namespace Recharge.ModApi
             float topY = startGame.anchoredPosition.y;
             float originalQuitY = quit.anchoredPosition.y;
 
-            var background = menu.mainBitPublic.GetComponent<RectTransform>();
+            var background = mainBitGo.GetComponent<RectTransform>();
             float panelTopY = 0f, bottomMargin = 0f;
             if (background != null)
             {
@@ -148,7 +163,7 @@ namespace Recharge.ModApi
             float regionTop = topY - 0.01f;
             float regionBottom = originalQuitY + 0.01f;
             Transform dividerTemplate = null;
-            foreach (Transform child in menu.mainBitPublic.transform)
+            foreach (Transform child in mainBitGo.transform)
             {
                 if (!child.name.StartsWith("Line")) continue;
                 var lineRt = child as RectTransform;
@@ -333,7 +348,8 @@ namespace Recharge.ModApi
 
         private static GameObject BuildBlankPanel(pauseMenuScript menu, string rowName, string label, GameObject backTarget)
         {
-            var clone = UnityEngine.Object.Instantiate(menu.settingsBitPublic, menu.settingsBitPublic.transform.parent);
+            var settingsBitGo = SettingsBit(menu);
+            var clone = UnityEngine.Object.Instantiate(settingsBitGo, settingsBitGo.transform.parent);
             clone.name = rowName + "Bit";
             clone.SetActive(false);
 
