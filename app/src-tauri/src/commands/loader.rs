@@ -70,6 +70,11 @@ pub fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     let script = find_build_script(&app)?;
 
+    // Steam's own appid for the Demo vs. Playtest branches differs - read it
+    // from the real appmanifest rather than guessing, so steam_appid.txt (see
+    // build-loader.ps1) always matches whichever one is actually installed.
+    let appid = super::steam::info_for_path(std::path::Path::new(&game_path)).and_then(|i| i.appid);
+
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);
 
@@ -78,8 +83,11 @@ pub fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
         .arg(&script)
         .args(["-GameDir", &game_path])
         .args(["-StatusFile"])
-        .arg(&status_file)
-        .stdin(Stdio::null())
+        .arg(&status_file);
+    if let Some(appid) = &appid {
+        cmd.args(["-SteamAppId", appid]);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(windows)]

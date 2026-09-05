@@ -28,11 +28,18 @@
 .PARAMETER NoSdkDownload
     Fail instead of auto-downloading a portable .NET SDK when no compatible
     one is already on PATH.
+
+.PARAMETER SteamAppId
+    If given, written to steam_appid.txt next to the game's exe. Steam
+    normally sets this up itself, but has been observed to fail SteamAPI_Init()
+    outright without it (confirmed via Player.log) - harmless to write even
+    when Steam is already working fine.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$GameDir,
     [string]$StatusFile,
-    [switch]$NoSdkDownload
+    [switch]$NoSdkDownload,
+    [string]$SteamAppId
 )
 
 $ErrorActionPreference = 'Continue'
@@ -126,6 +133,11 @@ try {
     $dotnetExe = Get-DotnetExe
 
     $gameDir = $GameDir
+
+    if ($SteamAppId) {
+        Set-Content -Path (Join-Path $gameDir 'steam_appid.txt') -Value $SteamAppId -Force -NoNewline
+    }
+
     $managed = Join-Path $gameDir 'IGTAPsnfDemo_Data\Managed'
     $backup = Join-Path $managed 'Assembly-CSharp.ORIGINAL.dll'
     $deployed = Join-Path $managed 'Assembly-CSharp.dll'
