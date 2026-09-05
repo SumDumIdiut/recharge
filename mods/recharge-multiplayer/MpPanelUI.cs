@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -10,6 +11,10 @@ internal class MpPanelUI : MonoBehaviour
 
 	private GameObject _hostRow;
 	private TMP_InputField _lobbyNameField;
+	private TMP_Text _mapPickerLabel;
+	private List<MpMapLibrary.HostableMap> _hostableMaps = new List<MpMapLibrary.HostableMap>();
+	private int _selectedMapIndex = -1; // -1 = base game, no custom map
+	private volatile bool _mapListLoading;
 
 	private GameObject _listBox;
 	private GameObject _listContent;
@@ -43,6 +48,9 @@ internal class MpPanelUI : MonoBehaviour
 	private float _lobbyListPollAccumulator;
 
 	private GameObject _appearanceButton;
+	private TMP_Text _mapDownloadLabel;
+	private Button _mapDownloadButton;
+	private TMP_Text _mapDownloadButtonLabel;
 	private GameObject _appearanceSection;
 	private bool _showingAppearance;
 	private Image _colourSwatch;
@@ -72,10 +80,26 @@ internal class MpPanelUI : MonoBehaviour
 		_appearanceButton = CloneButton(root, "Colour", new Vector2(-190, 165), new Vector2(200, 54));
 		_appearanceButton.GetComponent<Button>().onClick.AddListener(OnAppearanceClicked);
 
+		_mapDownloadLabel = CreateLabel(root, "MapDownloadLabel", new Vector2(-100, 165), new Vector2(280, 34), "");
+		_mapDownloadLabel.alignment = TextAlignmentOptions.MidlineLeft;
+		_mapDownloadLabel.fontSize = 18;
+		_mapDownloadLabel.enableWordWrapping = false;
+		_mapDownloadLabel.overflowMode = TextOverflowModes.Ellipsis;
+		var downloadGo = CloneButton(root, "DownloadMap", new Vector2(180, 165), new Vector2(200, 54));
+		_mapDownloadButton = downloadGo.GetComponent<Button>();
+		_mapDownloadButtonLabel = downloadGo.GetComponentInChildren<TMP_Text>();
+		_mapDownloadButton.onClick.AddListener(() => MpNetworkManager.GetOrCreate().DownloadPendingMap());
+
 		_hostRow = new GameObject("HostRow", typeof(RectTransform));
 		_hostRow.transform.SetParent(root, false);
-		_lobbyNameField = CreateInputField(_hostRow.transform, new Vector2(-150, 110), new Vector2(260, 44), "Lobby name");
-		var hostGo = CloneButton(_hostRow.transform, "Host", new Vector2(140, 110), new Vector2(280, 60));
+		_lobbyNameField = CreateInputField(_hostRow.transform, new Vector2(-195, 110), new Vector2(170, 44), "Lobby name");
+
+		var mapGo = CloneButton(_hostRow.transform, "MapPicker", new Vector2(0, 110), new Vector2(150, 44));
+		_mapPickerLabel = mapGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		if (_mapPickerLabel != null) { _mapPickerLabel.fontSize = 16f; _mapPickerLabel.enableWordWrapping = false; _mapPickerLabel.text = "Base Game"; }
+		mapGo.GetComponent<Button>().onClick.AddListener(OnCycleMapClicked);
+
+		var hostGo = CloneButton(_hostRow.transform, "Host", new Vector2(195, 110), new Vector2(170, 60));
 		hostGo.GetComponent<Button>().onClick.AddListener(OnHostClicked);
 
 		BuildListBox(root);
@@ -390,6 +414,33 @@ internal class MpPanelUI : MonoBehaviour
 	{
 		_refreshAccumulator = 999f; // force an immediate refresh next Update
 		_lobbyListPollAccumulator = 999f;
+		RefreshMapPicker();
+	}
+
+	private void RefreshMapPicker()
+	{
+		if (_mapListLoading) return;
+		_mapListLoading = true;
+		new Thread(() =>
+		{
+			try { _hostableMaps = MpMapLibrary.GetHostableMaps(); }
+			finally { _mapListLoading = false; _selectedMapIndex = -1; }
+		})
+		{ IsBackground = true }.Start();
+	}
+
+	private void OnCycleMapClicked()
+	{
+		if (_hostableMaps.Count == 0) return;
+		_selectedMapIndex++;
+		if (_selectedMapIndex >= _hostableMaps.Count) _selectedMapIndex = -1;
+		UpdateMapPickerLabel();
+	}
+
+	private void UpdateMapPickerLabel()
+	{
+		if (_mapPickerLabel == null) return;
+		_mapPickerLabel.text = _selectedMapIndex < 0 ? "Base Game" : _hostableMaps[_selectedMapIndex].Name;
 	}
 
 	private void OnConnectClicked()
@@ -404,7 +455,15 @@ internal class MpPanelUI : MonoBehaviour
 	private void OnHostClicked()
 	{
 		var name = _lobbyNameField.text;
-		MpNetworkManager.GetOrCreate().HostLobby(name);
+		if (_selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count)
+		{
+			var map = _hostableMaps[_selectedMapIndex];
+			MpNetworkManager.GetOrCreate().HostLobby(name, map.LocalId, map.HubId, map.Name);
+		}
+		else
+		{
+			MpNetworkManager.GetOrCreate().HostLobby(name, null, null, null);
+		}
 	}
 
 	private void OnLeaveClicked()
@@ -465,6 +524,19 @@ internal class MpPanelUI : MonoBehaviour
 			_inLobbyLabel.text = "In lobby: " + mgr.CurrentLobbyName;
 			RefreshPlayersLabel(mgr.LastSnapshotPlayers);
 			RefreshChatLog(mgr.ChatLines);
+		}
+		if (!inLobby && !_mapListLoading) UpdateMapPickerLabel();
+
+		bool showMapDownload = inLobby && !string.IsNullOrEmpty(mgr.PendingMapHubId);
+		_mapDownloadLabel.gameObject.SetActive(showMapDownload && !_showingAppearance);
+		_mapDownloadButton.gameObject.SetActive(showMapDownload && !_showingAppearance);
+		if (showMapDownload)
+		{
+			_mapDownloadLabel.text = !string.IsNullOrEmpty(mgr.MapDownloadError)
+				? "Map download failed: " + mgr.MapDownloadError
+				: "Map available: " + mgr.PendingMapName;
+			_mapDownloadButtonLabel.text = mgr.MapDownloading ? "Downloading..." : "Download";
+			_mapDownloadButton.interactable = !mgr.MapDownloading;
 		}
 
 		if (connected && !inLobby) RefreshLobbyList(mgr.LastLobbyList);

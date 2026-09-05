@@ -9,6 +9,7 @@ public class RechargeMultiplayerMod : IRechargeMod
 
     public void OnLoad(IRechargeHost host)
     {
+        MpNetworkManager.Host = host;
         MpMenuBuilder.Install(host.PauseMenu);
 
         // host.PauseMenu is a one-time snapshot from loader init - every later
