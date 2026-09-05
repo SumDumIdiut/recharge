@@ -506,6 +506,7 @@ internal class HostPanelController : MonoBehaviour
 			_roundMapHubId = (string)payload["mapHubId"];
 			ApplyLocalAppearance();
 			ApplyAbilityRestrictions(payload["abilities"] as JObject);
+			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
 			_statusMessage = _mode == Mode.Normal ? "Playing!" : "Round started!";
 			if (!IsLocalSeeking()) EnsureMapLoaded(_roundMapHubId);
 		}
@@ -593,6 +594,38 @@ internal class HostPanelController : MonoBehaviour
 		_abilityRestore.Clear();
 	}
 
+	private double _savedWatts;
+	private bool _wattsSaved;
+	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
+
+	private void DisableWattsAndClones()
+	{
+		if (globalStats.currencyLookup != null)
+		{
+			_savedWatts = globalStats.currencyLookup[globalStats.Currencies.Cash];
+			_wattsSaved = true;
+		}
+		_disabledClones.Clear();
+		foreach (var c in Object.FindObjectsByType<clonesScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+		{
+			if (!c.enabled) continue;
+			c.enabled = false;
+			_disabledClones.Add(c);
+		}
+	}
+
+	private void RestoreWattsAndClones()
+	{
+		if (_wattsSaved && globalStats.currencyLookup != null)
+		{
+			globalStats.currencyLookup[globalStats.Currencies.Cash] = _savedWatts;
+			_wattsSaved = false;
+		}
+		foreach (var c in _disabledClones)
+			if (c != null) c.enabled = true;
+		_disabledClones.Clear();
+	}
+
 	private void ApplyLocalAppearance()
 	{
 		if (!IsLocalSeeking()) return;
@@ -612,6 +645,7 @@ internal class HostPanelController : MonoBehaviour
 		if (_localMovement != null && _movementFrozen) { _localMovement.enabled = true; _movementFrozen = false; }
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
 		RestoreAbilities();
+		RestoreWattsAndClones();
 	}
 
 	private void OnReadyClicked()
