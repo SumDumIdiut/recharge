@@ -8,7 +8,7 @@ using UnityEngine;
 
 // Cross-references local recharge.maps against the Hub catalog by name -
 // there's no export-to-hub flow yet to stash a real hub id on map.json.
-internal static class MpMapLibrary
+public static class MpMapLibrary
 {
 	private const string HubBase = "https://codecade.co.za/recharge";
 

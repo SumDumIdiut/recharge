@@ -8,7 +8,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-internal class MpNetworkManager : MonoBehaviour
+public class MpNetworkManager : MonoBehaviour
 {
 	public static MpNetworkManager Instance { get; private set; }
 	public static Recharge.ModApi.IRechargeHost Host;
@@ -16,12 +16,22 @@ internal class MpNetworkManager : MonoBehaviour
 	public string StatusText = "Not connected";
 	public int CurrentLobbyId;
 	public string CurrentLobbyName;
+	public int LocalPlayerId;
+	public bool IsHost;
+	public event System.Action<int, JObject> OnGameMessage;
 	public List<MpLobbyInfo> LastLobbyList = new List<MpLobbyInfo>();
 	public List<MpPlayerState> LastSnapshotPlayers = new List<MpPlayerState>();
 	public string PendingMapHubId;
 	public string PendingMapName;
 	public volatile bool MapDownloading;
 	public string MapDownloadError;
+	// The host's own chosen map - already local, no download needed, but loading it
+	// still means leaving the menu (PlayMap falls back to changeScene() when no
+	// Player exists yet). Deferred here instead of loaded synchronously from
+	// HostLobby so picking a map lands back on the normal in-lobby panel first,
+	// same as a joiner's own PendingMapHubId prompt - the host loads it on their
+	// own terms via the same "map ready" button, not as a surprise side effect.
+	public string PendingLocalMapId;
 	public readonly List<string> ChatLines = new List<string>();
 	private const int MaxChatLines = 50;
 
@@ -42,6 +52,7 @@ internal class MpNetworkManager : MonoBehaviour
 	public static GameObject LatestMainBit;
 	public static GameObject LatestMpPanel;
 	public static GameObject LatestPage1;
+	public static GameObject LatestInLobbyRow;
 
 	public bool IsConnected => _net.IsConnected;
 	public bool InLobby => CurrentLobbyId != 0;
@@ -257,7 +268,7 @@ internal class MpNetworkManager : MonoBehaviour
 		{
 			var lobbyName = _pendingHostName;
 			_pendingHostName = null;
-			HostLobby(lobbyName, null, null, null);
+			HostLobby(lobbyName, null, null, null, false);
 		}
 
 		ApplyLocalDotColor();
@@ -303,6 +314,10 @@ internal class MpNetworkManager : MonoBehaviour
 		{
 			case "welcome":
 				StatusText = "Connected";
+				LocalPlayerId = (int)obj["id"];
+				break;
+			case "game_msg":
+				OnGameMessage?.Invoke((int)obj["from"], (JObject)obj["payload"]);
 				break;
 			case "snapshot":
 			{
@@ -333,10 +348,17 @@ internal class MpNetworkManager : MonoBehaviour
 				var mapHubId = (string)obj["mapHubId"];
 				PendingMapHubId = null;
 				PendingMapName = null;
+				PendingLocalMapId = null;
 				if (!string.IsNullOrEmpty(mapHubId))
 				{
-					if (MpMapLibrary.IsDownloaded(mapHubId)) Host?.Events.Emit("recharge.maps.load_requested", mapHubId);
-					else { PendingMapHubId = mapHubId; PendingMapName = (string)obj["mapName"]; }
+					var mapName = (string)obj["mapName"];
+					// Same reasoning as HostLobby's own PendingLocalMapId: never auto-load
+					// synchronously here either, even when the map's already downloaded -
+					// that can still mean an unannounced changeScene() if no Player exists
+					// yet. Land on the normal in-lobby panel first; the "Map ready" prompt
+					// is what actually triggers entering gameplay, on the player's own click.
+					if (MpMapLibrary.IsDownloaded(mapHubId)) { PendingLocalMapId = mapHubId; PendingMapName = mapName; }
+					else { PendingMapHubId = mapHubId; PendingMapName = mapName; }
 				}
 				break;
 			}
@@ -483,12 +505,22 @@ internal class MpNetworkManager : MonoBehaviour
 		CurrentLobbyId = 0;
 		CurrentLobbyName = null;
 		StatusText = "Not connected";
+		IsHost = false;
 	}
 
-	public void HostLobby(string lobbyName, string mapLocalId, string mapHubId, string mapName)
+	public void HostLobby(string lobbyName, string mapLocalId, string mapHubId, string mapName, bool hard)
 	{
-		_net.Send(JsonConvert.SerializeObject(new MpHostMsg { name = lobbyName, playerName = GetDisplayName(), mapHubId = mapHubId, mapName = mapName }));
-		if (!string.IsNullOrEmpty(mapLocalId)) Host?.Events.Emit("recharge.maps.load_requested", mapLocalId);
+		_net.Send(JsonConvert.SerializeObject(new MpHostMsg { name = lobbyName, playerName = GetDisplayName(), mapHubId = mapHubId, mapName = mapName, hard = hard }));
+		if (!string.IsNullOrEmpty(mapLocalId)) { PendingLocalMapId = mapLocalId; PendingMapName = mapName; }
+		IsHost = true;
+	}
+
+	public void LoadPendingLocalMap()
+	{
+		if (string.IsNullOrEmpty(PendingLocalMapId)) return;
+		var mapId = PendingLocalMapId;
+		PendingLocalMapId = null;
+		Host?.Events.Emit("recharge.maps.load_requested", mapId);
 	}
 
 	public void RequestLobbyList()
@@ -499,6 +531,13 @@ internal class MpNetworkManager : MonoBehaviour
 	public void JoinLobby(int lobbyId)
 	{
 		_net.Send(JsonConvert.SerializeObject(new MpJoinLobbyMsg { lobbyId = lobbyId, playerName = GetDisplayName() }));
+		IsHost = false;
+	}
+
+	public void SendGameMessage(JObject payload)
+	{
+		if (CurrentLobbyId == 0) return;
+		_net.Send(JsonConvert.SerializeObject(new JObject { ["type"] = "game_msg", ["payload"] = payload }));
 	}
 
 	public void LeaveLobby()
@@ -511,6 +550,7 @@ internal class MpNetworkManager : MonoBehaviour
 		StatusText = "Connected";
 		PendingMapHubId = null;
 		PendingMapName = null;
+		PendingLocalMapId = null;
 		MapDownloadError = null;
 	}
 

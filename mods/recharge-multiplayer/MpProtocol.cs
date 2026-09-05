@@ -16,7 +16,7 @@ internal class MpStateMsg
 	public string dotColor;
 }
 
-internal class MpPlayerState
+public class MpPlayerState
 {
 	public int id;
 	public float x;
@@ -43,6 +43,7 @@ internal class MpHostMsg
 	public string playerName;
 	public string mapHubId;
 	public string mapName;
+	public bool hard;
 }
 
 internal class MpJoinLobbyMsg
@@ -52,7 +53,7 @@ internal class MpJoinLobbyMsg
 	public string playerName;
 }
 
-internal class MpLobbyInfo
+public class MpLobbyInfo
 {
 	public int id;
 	public string name;
@@ -61,6 +62,7 @@ internal class MpLobbyInfo
 	public int count;
 	public string mapHubId;
 	public string mapName;
+	public bool hard;
 }
 
 internal class MpLobbyListMsg
