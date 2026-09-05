@@ -73,7 +73,7 @@ internal static class MpMenuBuilder
 		}
 
 		var ui = clone.AddComponent<MpPanelUI>();
-		ui.Build(clone, font, settingsButtonTemplate: menu.mainBitPublic.transform.Find("Settings").gameObject);
+		ui.Build(clone, font, settingsButtonTemplate: menu.mainBitPublic.transform.Find("Settings").gameObject, menu);
 		return clone;
 	}
 }
