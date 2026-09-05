@@ -42,6 +42,25 @@ function Set-Status([string]$text) {
     if ($StatusFile) { Set-Content -Path $StatusFile -Value $text -Force }
 }
 
+# Runs an external command capturing its combined output in memory (not just
+# to a log file) so a failure can report a real excerpt directly through
+# Set-Status/throw - a log file alone isn't enough to debug from, since it can
+# fail to be written (permissions, disk, AV) or just not survive on whatever
+# machine hit the failure, leaving nothing to go on but "see logfile.log".
+# The log file is still written too, best-effort, for the full picture.
+function Invoke-LoggedBuild([string]$LogPath, [string]$Exe, [object[]]$ExeArgs) {
+    $output = & $Exe @ExeArgs 2>&1 | Out-String
+    try { Set-Content -Path $LogPath -Value $output -Force -ErrorAction Stop } catch { }
+    return [PSCustomObject]@{ Output = $output; ExitCode = $LASTEXITCODE; LogPath = $LogPath }
+}
+
+function Format-BuildFailure([string]$Prefix, $Result) {
+    $lines = $Result.Output -split "`r?`n" | Where-Object { $_.Trim() }
+    $tail = ($lines | Select-Object -Last 12) -join "`n"
+    if (-not $tail) { $tail = "(no output captured)" }
+    return "${Prefix}:`n$tail`n(full log: $($Result.LogPath))"
+}
+
 try {
     $loaderRoot = $PSScriptRoot
     $rechargeRoot = Split-Path $loaderRoot -Parent
@@ -98,10 +117,10 @@ try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $installScript = Join-Path $env:TEMP 'dotnet-install.ps1'
         Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installScript -UseBasicParsing
-        & $installScript -Channel "$RequiredSdkMajor.0" -InstallDir $localSdkDir -NoPath *> (Join-Path $env:TEMP 'dotnet-sdk-install.log')
+        $installResult = Invoke-LoggedBuild (Join-Path $env:TEMP 'dotnet-sdk-install.log') $installScript @("-Channel", "$RequiredSdkMajor.0", "-InstallDir", $localSdkDir, "-NoPath")
 
         if ((Test-Path $localDotnetExe) -and (Test-SdkCompatible $localDotnetExe)) { return $localDotnetExe }
-        throw "Could not obtain a .NET $RequiredSdkMajor+ SDK (none installed, and the automatic portable download failed or didn't provide a compatible version - check your internet connection)."
+        throw (Format-BuildFailure "Could not obtain a .NET $RequiredSdkMajor+ SDK (check your internet connection)" $installResult)
     }
 
     $dotnetExe = Get-DotnetExe
@@ -122,8 +141,8 @@ try {
 
     Set-Status "1/$($totalPhases): Building Recharge.ModApi.dll..."
     $modApiProj = Join-Path $loaderRoot 'ModApi\Recharge.ModApi.csproj'
-    & $dotnetExe build $modApiProj -c Release "-p:ManagedDir=$managed" *> (Join-Path $env:TEMP 'recharge-modapi-build.log')
-    if ($LASTEXITCODE -ne 0) { throw "Recharge.ModApi build failed - see $env:TEMP\recharge-modapi-build.log" }
+    $modApiResult = Invoke-LoggedBuild (Join-Path $env:TEMP 'recharge-modapi-build.log') $dotnetExe @("build", $modApiProj, "-c", "Release", "-p:ManagedDir=$managed")
+    if ($modApiResult.ExitCode -ne 0) { throw (Format-BuildFailure "Recharge.ModApi build failed" $modApiResult) }
     $modApiBuilt = Join-Path $loaderRoot 'ModApi\bin\Release\netstandard2.1\Recharge.ModApi.dll'
     if (-not (Test-Path $modApiBuilt)) { throw "Recharge.ModApi.dll not found after build." }
     Copy-Item $modApiBuilt $managed -Force
@@ -132,9 +151,9 @@ try {
     $work = Join-Path $env:TEMP 'recharge-loader-build'
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $work | Out-Null
-    & $dotnetExe $ilspycmd -p -o $work -r $managed $backup *> (Join-Path $work 'decompile.log')
+    $decompileResult = Invoke-LoggedBuild (Join-Path $work 'decompile.log') $dotnetExe @($ilspycmd, "-p", "-o", $work, "-r", $managed, $backup)
     $pauseMenuPath = Join-Path $work 'pauseMenuScript.cs'
-    if (-not (Test-Path $pauseMenuPath)) { throw "Decompile failed, see $work\decompile.log" }
+    if (-not (Test-Path $pauseMenuPath)) { throw (Format-BuildFailure "Decompile failed" $decompileResult) }
 
     Set-Status "3/$($totalPhases): Applying the RechargeLoader patch..."
     $awakeAnchor = "`t`t`tdeleteSaveButton.text = deleteSaveMessages[0].GetLocalizedString();`r`n`t`t}"
@@ -182,8 +201,8 @@ $refXml
 </Project>
 "@ | Set-Content -Path $csprojPath
 
-    & $dotnetExe build $csprojPath -c Release *> (Join-Path $work 'build.log')
-    if ($LASTEXITCODE -ne 0) { throw "Assembly-CSharp build failed (exit $LASTEXITCODE), see $work\build.log" }
+    $csBuildResult = Invoke-LoggedBuild (Join-Path $work 'build.log') $dotnetExe @("build", $csprojPath, "-c", "Release")
+    if ($csBuildResult.ExitCode -ne 0) { throw (Format-BuildFailure "Assembly-CSharp build failed" $csBuildResult) }
     $built = Join-Path $work 'bin\Release\netstandard2.1\Assembly-CSharp.dll'
     if (-not (Test-Path $built)) { throw "Assembly-CSharp build reported success but $built is missing." }
 
@@ -209,11 +228,11 @@ $refXml
 
         Set-Status "$($modIndex + 5)/$($totalPhases): Building mod '$($manifest.id)'..."
         $buildLog = Join-Path $env:TEMP "recharge-mod-$($manifest.id)-build.log"
-        & $dotnetExe build $proj.FullName -c Release "-p:ManagedDir=$managed" *> $buildLog
-        if ($LASTEXITCODE -ne 0) { throw "Mod '$($manifest.id)' build failed - see $buildLog" }
+        $modResult = Invoke-LoggedBuild $buildLog $dotnetExe @("build", $proj.FullName, "-c", "Release", "-p:ManagedDir=$managed")
+        if ($modResult.ExitCode -ne 0) { throw (Format-BuildFailure "Mod '$($manifest.id)' build failed" $modResult) }
 
         $modBuilt = Join-Path $modDir "bin\Release\netstandard2.1\$($manifest.entryAssembly)"
-        if (-not (Test-Path $modBuilt)) { throw "Mod '$($manifest.id)' built but $($manifest.entryAssembly) wasn't produced - see $buildLog" }
+        if (-not (Test-Path $modBuilt)) { throw (Format-BuildFailure "Mod '$($manifest.id)' built but $($manifest.entryAssembly) wasn't produced" $modResult) }
 
         # Deploy folder is keyed by the manifest's own id, not the source
         # folder name - a mod is free to rename its dev folder without that
