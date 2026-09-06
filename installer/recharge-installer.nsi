@@ -12,7 +12,7 @@
 !endif
 
 !define PRODUCT_NAME "Recharge"
-!define PRODUCT_VERSION "1.2.0"
+!define PRODUCT_VERSION "1.2.1"
 !define PRODUCT_PUBLISHER "SumDumIdiut"
 !define PRODUCT_WEBSITE "https://codecade.co.za/recharge"
 !define MAIN_EXE "recharge.exe"
