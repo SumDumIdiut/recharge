@@ -50,6 +50,7 @@ internal class MapManager : MonoBehaviour
             _currentCourseGo = null;
             RealAssetPalette.ScanCurrentScene();
             TryCaptureSpringAnimation();
+            TryCapturePlayerAnimations();
             if (_pendingMapId != null) StartCoroutine(LoadPendingMapWhenPlayerReady());
         };
         RealAssetPalette.ScanCurrentScene();
@@ -96,6 +97,11 @@ internal class MapManager : MonoBehaviour
     private void TryCaptureSpringAnimation()
     {
         if (RealAssetPalette.Get<SpringScript>() != null) StartCoroutine(RealAssetPalette.CaptureSpringAnimation());
+    }
+
+    private void TryCapturePlayerAnimations()
+    {
+        if (GameObject.FindGameObjectWithTag("Player") != null) StartCoroutine(RealAssetPalette.CapturePlayerAnimations());
     }
 
     public static string SaveFolder => "/Savedata" + (globalStats.difficultyLevel == 1 ? "hard" : "");
