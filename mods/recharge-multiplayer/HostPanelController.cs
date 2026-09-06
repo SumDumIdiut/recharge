@@ -245,6 +245,7 @@ internal class HostPanelController : MonoBehaviour
 		{
 			Mode.Normal => Mode.HideAndSeek,
 			Mode.HideAndSeek => Mode.Infection,
+			Mode.Infection => Mode.Coop,
 			_ => Mode.Normal,
 		};
 	}
@@ -344,7 +345,7 @@ internal class HostPanelController : MonoBehaviour
 		if (_modeButton != null)
 		{
 			_modeButton.interactable = canConfigure;
-			var modeLabel = _mode == Mode.Infection ? "Infection" : _mode == Mode.HideAndSeek ? "Hide & Seek" : "Normal";
+			var modeLabel = _mode == Mode.Infection ? "Infection" : _mode == Mode.HideAndSeek ? "Hide & Seek" : _mode == Mode.Coop ? "Co-op" : "Normal";
 			PauseMenuHelper.SetButtonLabel(_modeButton.gameObject, "Mode: " + modeLabel);
 		}
 		if (_mapButton != null)
@@ -382,7 +383,8 @@ internal class HostPanelController : MonoBehaviour
 			}
 		}
 
-		bool normalActive = _roundActive && _mode == Mode.Normal;
+		bool openEnded = _mode == Mode.Normal || _mode == Mode.Coop;
+		bool normalActive = _roundActive && openEnded;
 		if (_startButton != null)
 		{
 			if (normalActive && isHost)
@@ -393,7 +395,7 @@ internal class HostPanelController : MonoBehaviour
 			else
 			{
 				_startButton.interactable = mgr != null && inLobby && isHost && !_roundActive && AllReady(mgr);
-				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, _mode == Mode.Normal ? "Start Playing" : "Start Round");
+				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, openEnded ? "Start Playing" : "Start Round");
 			}
 		}
 
@@ -405,11 +407,12 @@ internal class HostPanelController : MonoBehaviour
 		else if (!isHost) statusText = "Waiting for the host to start.";
 		else if (!string.IsNullOrEmpty(_statusMessage)) statusText = _statusMessage;
 		else if (!AllReady(mgr)) statusText = "Waiting for everyone to ready up...";
-		else statusText = _mode == Mode.Normal ? "Everyone's ready - click Start Playing!" : "Everyone's ready - click Start Round!";
+		else statusText = openEnded ? "Everyone's ready - click Start Playing!" : "Everyone's ready - click Start Round!";
 		PauseMenuHelper.SetButtonLabel(_statusGo, statusText);
 	}
 
-	private enum Mode { Normal, HideAndSeek, Infection }
+	private enum Mode { Normal, HideAndSeek, Infection, Coop }
+	private readonly CoopManager _coop = new CoopManager();
 	private Mode _mode = Mode.Normal;
 	private bool _roundActive;
 	private float _hideEndTime;
@@ -463,6 +466,7 @@ internal class HostPanelController : MonoBehaviour
 
 		if (!mgr.InLobby) { EndRoundLocally("left the lobby"); return; }
 		if (!_roundActive) return;
+		if (_mode == Mode.Coop) { _coop.Tick(Time.unscaledDeltaTime, mgr.IsHost, mgr.SendGameMessage); return; }
 		if (_mode == Mode.Normal) return; // just playing - no seek/hide/tag mechanics to run
 
 		bool hiding = Time.time < _hideEndTime;
@@ -549,14 +553,14 @@ internal class HostPanelController : MonoBehaviour
 	private bool IsLocalSeeking()
 	{
 		var mgr = MpNetworkManager.Instance;
-		if (_mode == Mode.Normal) return false;
+		if (_mode == Mode.Normal || _mode == Mode.Coop) return false;
 		if (_mode == Mode.HideAndSeek) return mgr.LocalPlayerId == _seekerId;
 		return _infected.Contains(mgr.LocalPlayerId);
 	}
 
 	private bool IsOut(int playerId)
 	{
-		if (_mode == Mode.Normal) return false;
+		if (_mode == Mode.Normal || _mode == Mode.Coop) return false;
 		return _mode == Mode.HideAndSeek ? _found.Contains(playerId) || playerId == _seekerId : _infected.Contains(playerId);
 	}
 
@@ -570,7 +574,7 @@ internal class HostPanelController : MonoBehaviour
 		else if (kind == "start")
 		{
 			var modeStr = (string)payload["mode"];
-			_mode = modeStr == "infection" ? Mode.Infection : modeStr == "normal" ? Mode.Normal : Mode.HideAndSeek;
+			_mode = modeStr == "infection" ? Mode.Infection : modeStr == "coop" ? Mode.Coop : modeStr == "normal" ? Mode.Normal : Mode.HideAndSeek;
 			_seekerId = (int)payload["seeker"];
 			_infected.Clear();
 			_found.Clear();
@@ -578,14 +582,19 @@ internal class HostPanelController : MonoBehaviour
 			_lastTagSentAt.Clear();
 			if (_mode == Mode.Infection) _infected.Add(_seekerId);
 			_hideEndTime = Time.time + (float)payload["hideSeconds"];
-			_roundEndTime = _mode == Mode.Normal ? float.MaxValue : Time.time + (float)payload["roundSeconds"];
+			_roundEndTime = (_mode == Mode.Normal || _mode == Mode.Coop) ? float.MaxValue : Time.time + (float)payload["roundSeconds"];
 			_roundActive = true;
 			_seekerReleased = false;
 			_roundMapHubId = (string)payload["mapHubId"];
 			ApplyLocalAppearance();
-			ApplyAbilityRestrictions(payload["abilities"] as JObject);
+			if (_mode != Mode.Coop) ApplyAbilityRestrictions(payload["abilities"] as JObject);
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
-			_statusMessage = _mode == Mode.Normal ? "Playing!" : "Round started!";
+			if (_mode == Mode.Coop)
+			{
+				var mgrInst = MpNetworkManager.Instance;
+				_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement);
+			}
+			_statusMessage = (_mode == Mode.Normal || _mode == Mode.Coop) ? "Playing!" : "Round started!";
 			if (!IsLocalSeeking())
 			{
 				EnsureMapLoaded(_roundMapHubId);
@@ -595,6 +604,10 @@ internal class HostPanelController : MonoBehaviour
 		else if (kind == "stop")
 		{
 			EndRoundLocally("host ended the session");
+		}
+		else if (kind == "coopSync" || kind == "coopDelta")
+		{
+			_coop.HandleMessage(kind, payload, MpNetworkManager.Instance.IsHost);
 		}
 		else if (kind == "tag" && _roundActive)
 		{
@@ -713,7 +726,7 @@ internal class HostPanelController : MonoBehaviour
 
 	private void ApplyLocalAppearance()
 	{
-		if (_mode == Mode.Normal) return;
+		if (_mode == Mode.Normal || _mode == Mode.Coop) return;
 		if (_prevDotColor == null)
 		{
 			_prevDotColor = MpNetworkManager.GetDotColorHex();
@@ -736,6 +749,7 @@ internal class HostPanelController : MonoBehaviour
 		RestoreAbilities();
 		RestoreWattsAndClones();
 		ExitSpectate();
+		if (_mode == Mode.Coop) _coop.End(MpNetworkManager.Instance?.IsHost ?? false);
 		if (reason == "everyone was found") { _returnToLobbyPending = true; _returnToLobbyFadeStart = Time.unscaledTime; }
 	}
 
@@ -783,7 +797,7 @@ internal class HostPanelController : MonoBehaviour
 	private void OnStartOrStopClicked()
 	{
 		var mgr = MpNetworkManager.Instance;
-		if (mgr != null && _roundActive && _mode == Mode.Normal) OnStopClicked();
+		if (mgr != null && _roundActive && (_mode == Mode.Normal || _mode == Mode.Coop)) OnStopClicked();
 		else OnStartClicked();
 	}
 
@@ -807,7 +821,7 @@ internal class HostPanelController : MonoBehaviour
 		var everyone = new List<int>(others) { mgr.LocalPlayerId };
 
 		int seeker = -1;
-		if (_mode != Mode.Normal)
+		if (_mode != Mode.Normal && _mode != Mode.Coop)
 		{
 			if (everyone.Count < 2) { _statusMessage = "Need at least 2 players."; return; }
 			seeker = everyone[Random.Range(0, everyone.Count)];
@@ -827,9 +841,9 @@ internal class HostPanelController : MonoBehaviour
 		mgr.SendGameMessage(new JObject
 		{
 			["k"] = "start",
-			["mode"] = _mode == Mode.Infection ? "infection" : _mode == Mode.HideAndSeek ? "hideandseek" : "normal",
+			["mode"] = _mode == Mode.Infection ? "infection" : _mode == Mode.HideAndSeek ? "hideandseek" : _mode == Mode.Coop ? "coop" : "normal",
 			["seeker"] = seeker,
-			["hideSeconds"] = _mode == Mode.Normal ? 0f : HideSeconds,
+			["hideSeconds"] = (_mode == Mode.Normal || _mode == Mode.Coop) ? 0f : HideSeconds,
 			["roundSeconds"] = RoundSeconds,
 			["mapHubId"] = mapHubId,
 			["mapName"] = mapName,
@@ -856,7 +870,7 @@ internal class HostPanelController : MonoBehaviour
 
 	private void DrawHud()
 	{
-		if (!_roundActive || _mode == Mode.Normal) return;
+		if (!_roundActive || _mode == Mode.Normal || _mode == Mode.Coop) return;
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null) return;
 		string label;
