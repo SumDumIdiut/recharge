@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
@@ -28,6 +29,8 @@ internal class CoopManager
 
 	private readonly Dictionary<globalStats.Currencies, double> _lastCurrency = new Dictionary<globalStats.Currencies, double>();
 	private readonly Dictionary<globalStats.globalUpgradeSet, double> _lastGlobalUpgrade = new Dictionary<globalStats.globalUpgradeSet, double>();
+	private readonly Dictionary<int, Dictionary<localUpgrades.localUpgradeSet, double>> _lastLocalUpgrade = new Dictionary<int, Dictionary<localUpgrades.localUpgradeSet, double>>();
+	private readonly Dictionary<int, int[]> _lastTimesUsed = new Dictionary<int, int[]>();
 	private bool _lastDash, _lastWallJump, _lastDoubleJump, _lastBlockSwap;
 
 	public void Begin(bool isHost, int playerCount, Movement localMovement)
@@ -43,14 +46,24 @@ internal class CoopManager
 		DisableClones();
 		RebalanceCosts(playerCount);
 
-		if (isHost)
-		{
-			_courses.Clear();
-			_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
-			LoadOrBootstrapSave();
-		}
+		_courses.Clear();
+		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+		if (isHost) LoadOrBootstrapSave();
 
 		CaptureBaseline();
+	}
+
+	private static List<upgradeBox> GetUpgradeBoxes(courseScript course)
+	{
+		var list = new List<upgradeBox>();
+		var t = course?.localUpgradesScript?.transform;
+		if (t == null) return list;
+		for (int i = 0; i < t.childCount; i++)
+		{
+			var box = t.GetChild(i).GetComponent<upgradeBox>();
+			if (box != null) list.Add(box);
+		}
+		return list;
 	}
 
 	private void LoadOrBootstrapSave()
@@ -109,6 +122,20 @@ internal class CoopManager
 			_lastDoubleJump = _localMovement.doubleJumpUnlocked;
 			_lastBlockSwap = _localMovement.blockSwapUnlocked;
 		}
+
+		_lastLocalUpgrade.Clear();
+		_lastTimesUsed.Clear();
+		foreach (var course in _courses)
+		{
+			if (course == null || course.localUpgradesScript == null) continue;
+			var dict = new Dictionary<localUpgrades.localUpgradeSet, double>();
+			foreach (localUpgrades.localUpgradeSet key in Enum.GetValues(typeof(localUpgrades.localUpgradeSet)))
+				dict[key] = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
+			_lastLocalUpgrade[course.courseNumber] = dict;
+
+			var boxes = GetUpgradeBoxes(course);
+			_lastTimesUsed[course.courseNumber] = boxes.Select(b => b.TimesUsed).ToArray();
+		}
 	}
 
 	public void Tick(float unscaledDt, bool isHost, Action<JObject> sendGameMessage)
@@ -152,6 +179,92 @@ internal class CoopManager
 		}
 	}
 
+	private JObject BuildCoursesDelta()
+	{
+		JObject courses = null;
+		foreach (var course in _courses)
+		{
+			if (course == null || course.localUpgradesScript == null) continue;
+			var lastDict = _lastLocalUpgrade.TryGetValue(course.courseNumber, out var ld) ? ld : null;
+			JObject localUpgrades = null;
+			foreach (global::localUpgrades.localUpgradeSet key in Enum.GetValues(typeof(global::localUpgrades.localUpgradeSet)))
+			{
+				var now = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
+				var prev = lastDict != null && lastDict.TryGetValue(key, out var p) ? p : now;
+				if (Math.Abs(now - prev) > 0.0001)
+				{
+					(localUpgrades ??= new JObject())[key.ToString()] = now - prev;
+					if (lastDict == null) { lastDict = new Dictionary<global::localUpgrades.localUpgradeSet, double>(); _lastLocalUpgrade[course.courseNumber] = lastDict; }
+					lastDict[key] = now;
+				}
+			}
+
+			var boxes = GetUpgradeBoxes(course);
+			var lastTimes = _lastTimesUsed.TryGetValue(course.courseNumber, out var lt) && lt.Length == boxes.Count ? lt : new int[boxes.Count];
+			JObject boxTimesUsed = null;
+			for (int i = 0; i < boxes.Count; i++)
+			{
+				var boxDelta = boxes[i].TimesUsed - lastTimes[i];
+				if (boxDelta != 0) (boxTimesUsed ??= new JObject())[i.ToString()] = boxDelta;
+			}
+			if (boxTimesUsed != null) _lastTimesUsed[course.courseNumber] = boxes.Select(b => b.TimesUsed).ToArray();
+
+			if (localUpgrades == null && boxTimesUsed == null) continue;
+			var courseObj = new JObject();
+			if (localUpgrades != null) courseObj["localUpgrades"] = localUpgrades;
+			if (boxTimesUsed != null) courseObj["boxTimesUsed"] = boxTimesUsed;
+			(courses ??= new JObject())[course.courseNumber.ToString()] = courseObj;
+		}
+		return courses;
+	}
+
+	private JObject BuildCoursesFullSync()
+	{
+		var courses = new JObject();
+		foreach (var course in _courses)
+		{
+			if (course == null || course.localUpgradesScript == null) continue;
+			var localUpgradesObj = new JObject();
+			foreach (global::localUpgrades.localUpgradeSet key in Enum.GetValues(typeof(global::localUpgrades.localUpgradeSet)))
+				localUpgradesObj[key.ToString()] = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
+			var boxes = GetUpgradeBoxes(course);
+			var boxTimesUsedObj = new JObject();
+			for (int i = 0; i < boxes.Count; i++) boxTimesUsedObj[i.ToString()] = boxes[i].TimesUsed;
+			courses[course.courseNumber.ToString()] = new JObject { ["localUpgrades"] = localUpgradesObj, ["boxTimesUsed"] = boxTimesUsedObj };
+		}
+		return courses;
+	}
+
+	private void ApplyCoursesPayload(JObject payload, bool additive)
+	{
+		if (!(payload["courses"] is JObject courses)) return;
+		foreach (var courseEntry in courses)
+		{
+			if (!int.TryParse(courseEntry.Key, out var courseNumber)) continue;
+			var course = _courses.FirstOrDefault(c => c != null && c.courseNumber == courseNumber);
+			if (course == null || course.localUpgradesScript == null || !(courseEntry.Value is JObject courseObj)) continue;
+
+			if (courseObj["localUpgrades"] is JObject localUpgradesObj)
+			{
+				foreach (var kv in localUpgradesObj)
+				{
+					if (!Enum.TryParse<global::localUpgrades.localUpgradeSet>(kv.Key, out var key)) continue;
+					var current = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
+					course.localUpgradesScript.localUpgradeDict[key] = additive ? Math.Max(0, current + kv.Value.Value<double>()) : kv.Value.Value<double>();
+				}
+			}
+			if (courseObj["boxTimesUsed"] is JObject boxTimesUsedObj)
+			{
+				var boxes = GetUpgradeBoxes(course);
+				foreach (var kv in boxTimesUsedObj)
+				{
+					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
+					boxes[boxIndex].TimesUsed = additive ? Math.Max(0, boxes[boxIndex].TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
+				}
+			}
+		}
+	}
+
 	private JObject BuildDelta()
 	{
 		JObject currencies = null;
@@ -184,12 +297,14 @@ internal class CoopManager
 			if (_localMovement.doubleJumpUnlocked != _lastDoubleJump) { (abilities ??= new JObject())["doubleJump"] = _localMovement.doubleJumpUnlocked; _lastDoubleJump = _localMovement.doubleJumpUnlocked; }
 			if (_localMovement.blockSwapUnlocked != _lastBlockSwap) { (abilities ??= new JObject())["blockSwap"] = _localMovement.blockSwapUnlocked; _lastBlockSwap = _localMovement.blockSwapUnlocked; }
 		}
+		var courses = BuildCoursesDelta();
 
-		if (currencies == null && upgrades == null && abilities == null) return null;
+		if (currencies == null && upgrades == null && abilities == null && courses == null) return null;
 		var msg = new JObject { ["k"] = "coopDelta" };
 		if (currencies != null) msg["currencies"] = currencies;
 		if (upgrades != null) msg["upgrades"] = upgrades;
 		if (abilities != null) msg["abilities"] = abilities;
+		if (courses != null) msg["courses"] = courses;
 		return msg;
 	}
 
@@ -209,9 +324,10 @@ internal class CoopManager
 			abilities["doubleJump"] = _localMovement.doubleJumpUnlocked;
 			abilities["blockSwap"] = _localMovement.blockSwapUnlocked;
 		}
+		var courses = BuildCoursesFullSync();
 		// re-baseline so the host doesn't immediately read its own broadcast back as a new delta next tick
 		CaptureBaseline();
-		return new JObject { ["k"] = "coopSync", ["currencies"] = currencies, ["upgrades"] = upgrades, ["abilities"] = abilities };
+		return new JObject { ["k"] = "coopSync", ["currencies"] = currencies, ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
 	}
 
 	private static void ApplyCurrenciesAndUpgrades(JObject payload, bool additive)
@@ -239,12 +355,14 @@ internal class CoopManager
 	{
 		ApplyCurrenciesAndUpgrades(payload, additive: true);
 		ApplyAbilities(payload);
+		ApplyCoursesPayload(payload, additive: true);
 	}
 
 	private void ApplyFullSync(JObject payload)
 	{
 		ApplyCurrenciesAndUpgrades(payload, additive: false);
 		ApplyAbilities(payload);
+		ApplyCoursesPayload(payload, additive: false);
 		CaptureBaseline();
 	}
 
@@ -281,6 +399,11 @@ internal class CoopManager
 		if (_localMovement != null)
 		{
 			try { _localMovement.load(realFolder); } catch (Exception e) { Debug.LogError("[CoopManager] restore failed: " + e); }
+		}
+		foreach (var c in _courses)
+		{
+			if (c == null) continue;
+			try { c.load(realFolder); } catch { }
 		}
 		_courses.Clear();
 

@@ -24,7 +24,7 @@ internal static class MpMenuBuilder
 		var label = buttonGo.transform.Find("Text (TMP)");
 		if (label == null) return;
 		var loc = label.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-		if (loc != null) Object.Destroy(loc);
+		if (loc != null) Object.DestroyImmediate(loc);
 		var tmp = label.GetComponent<TMP_Text>();
 		if (tmp != null) tmp.text = text;
 	}
@@ -56,7 +56,7 @@ internal static class MpMenuBuilder
 			var titleTmp = title.GetComponent<TMP_Text>();
 			if (titleTmp != null) { titleTmp.text = "DOTnet"; font = titleTmp.font; }
 			var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-			if (loc != null) Object.Destroy(loc);
+			if (loc != null) Object.DestroyImmediate(loc);
 
 			var closeBtn = title.Find("Close");
 			if (closeBtn != null)
