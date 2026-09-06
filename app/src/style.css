@@ -30,10 +30,8 @@ body {
   z-index: 0;
   pointer-events: none;
   background-image:
-    radial-gradient(ellipse at 20% -10%, rgba(65, 248, 141, 0.05), transparent 45%),
-    radial-gradient(ellipse at 100% 110%, rgba(198, 62, 216, 0.05), transparent 45%),
-    repeating-linear-gradient(0deg, rgba(249, 255, 228, 0.025) 0 1px, transparent 1px 30px),
-    repeating-linear-gradient(90deg, rgba(249, 255, 228, 0.025) 0 1px, transparent 1px 30px);
+    repeating-linear-gradient(0deg, rgba(249, 255, 228, 0.035) 0 1px, transparent 1px 30px),
+    repeating-linear-gradient(90deg, rgba(249, 255, 228, 0.035) 0 1px, transparent 1px 30px);
 }
 
 /* ── Waveform banner ─────────────────────────────────────────────────── */
@@ -113,7 +111,7 @@ body {
 
 .home-header { margin-bottom: 34px; }
 .home-title-row { display: flex; align-items: center; gap: 14px; }
-.home-logo { width: 40px; height: 40px; display: block; filter: drop-shadow(0 0 10px rgba(65, 248, 141, 0.25)); }
+.home-logo { width: 40px; height: 40px; display: block; }
 .home-title { font-size: 28px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
 
 .home-grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; flex: 1; }
@@ -123,7 +121,6 @@ body {
   flex-shrink: 0;
   background: none;
   border: 1px solid var(--line);
-  border-radius: 10px;
   padding: 28px;
 }
 .home-panel-title { font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
@@ -152,7 +149,6 @@ body {
 .home-tile {
   background: none;
   border: 1px solid var(--line);
-  border-radius: 10px;
   color: var(--green);
   font: inherit;
   font-size: 21px;
@@ -161,7 +157,7 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.home-tile:hover:not(:disabled) { border-color: var(--green-dim); box-shadow: 0 0 16px rgba(65, 248, 141, 0.12); }
+.home-tile:hover:not(:disabled) { border-color: var(--green-dim); }
 .home-tile:disabled { opacity: 0.5; cursor: default; }
 
 .home-play-status { color: var(--text-dim); font-size: 15px; min-height: 20px; }
@@ -169,7 +165,6 @@ body {
 .home-menu-row {
   background: none;
   border: 1px solid var(--line);
-  border-radius: 10px;
   color: var(--text);
   font: inherit;
   font-size: 20px;
@@ -186,7 +181,6 @@ body {
 .btn {
   background: none;
   border: 1px solid var(--line);
-  border-radius: 8px;
   color: var(--text);
   font: inherit;
   font-size: 18px;
@@ -203,7 +197,6 @@ body {
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
   padding: 18px;
   margin-bottom: 14px;
 }
@@ -213,7 +206,6 @@ body {
 .subtab-btn {
   background: none;
   border: 1px solid var(--line);
-  border-radius: 8px;
   color: var(--text-dim);
   font: inherit;
   font-size: 16px;
@@ -225,7 +217,6 @@ body {
 .browser-search {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
   color: var(--text);
   font: inherit;
   font-size: 16px;
@@ -234,7 +225,7 @@ body {
 
 .browser-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 380px)); gap: 18px; align-items: start; }
 
-.browse-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; padding: 0 0 16px; display: flex; flex-direction: column; }
+.browse-card { background: var(--panel); border: 1px solid var(--line); padding: 0 0 16px; display: flex; flex-direction: column; }
 .browse-card-top { display: flex; flex-direction: column; gap: 0; }
 .browse-card-info { padding: 14px 16px 0; }
 .browse-card-name { font-size: 20px; color: var(--text); text-transform: uppercase; }
@@ -259,7 +250,6 @@ body {
 .toast {
   background: var(--panel);
   border: 1px solid var(--line-hi);
-  border-radius: 10px;
   color: var(--text);
   padding: 12px 18px;
   font-size: 16px;

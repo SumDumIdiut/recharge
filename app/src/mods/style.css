@@ -1,4 +1,4 @@
-.mod-toggle { width: 36px; height: 20px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; flex-shrink: 0; }
+.mod-toggle { width: 36px; height: 20px; border: 1px solid var(--line); cursor: pointer; flex-shrink: 0; }
 .mod-toggle.on { background: var(--green); border-color: var(--green); }
 
 #mods-list .browse-card { cursor: pointer; }
@@ -70,7 +70,6 @@
   max-width: 640px;
   display: block;
   border: 1px solid var(--line);
-  border-radius: 10px;
   margin-bottom: 24px;
 }
 .mod-detail-header { margin-bottom: 14px; }
@@ -95,7 +94,6 @@
 .mods-modal {
   background: var(--panel);
   border: 1px solid var(--line-hi);
-  border-radius: 12px;
   padding: 24px;
   width: 420px;
   max-width: 90vw;
