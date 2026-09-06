@@ -197,12 +197,10 @@ internal class HostPanelController : MonoBehaviour
 		RefreshMapList();
 	}
 
-	// Host gets the full config panel; everyone else just gets a Ready toggle.
+	// Now opens for everyone - config controls already gate off canConfigure
 	private void OnToggleOrReadyClicked()
 	{
-		var mgr = MpNetworkManager.Instance;
-		if (mgr != null && mgr.IsHost) OnToggleHostPanelClicked();
-		else OnReadyClicked();
+		OnToggleHostPanelClicked();
 	}
 
 	private void OnToggleHostPanelClicked()
@@ -373,9 +371,7 @@ internal class HostPanelController : MonoBehaviour
 
 	private void RefreshPickerRows()
 	{
-		// Destroy() defers to end-of-frame, which would leave the old and new
-		// rows both alive (and overlapping at the same positions) for the rest
-		// of this frame every time the picker is reopened after the first time.
+		// DestroyImmediate, not Destroy - avoids a frame of old+new rows overlapping
 		foreach (var row in _pickerRows) Object.DestroyImmediate(row);
 		_pickerRows.Clear();
 
@@ -401,8 +397,7 @@ internal class HostPanelController : MonoBehaviour
 			}
 		}
 
-		// A save picker's list only ever grows (a new folder per session) - cap
-		// what's shown at once instead of letting it eventually run into Cancel.
+		// caps rows shown per page so the list can't grow into the Cancel button
 		var totalPages = Mathf.Max(1, Mathf.CeilToInt(entries.Count / (float)PickerRowsPerPage));
 		_pickerPage = Mathf.Clamp(_pickerPage, 0, totalPages - 1);
 
@@ -482,10 +477,7 @@ internal class HostPanelController : MonoBehaviour
 	{
 		if (_mapListLoading) return;
 		_mapListLoading = true;
-		// A scene reload rebuilds this whole panel from scratch and calls this
-		// again - resetting the selection unconditionally here silently threw
-		// away whatever map the host had already picked, well after they'd
-		// picked it, with no visible cause.
+		// preserve the selection across the scene-reload rebuild
 		var previouslySelectedHubId = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count
 			? _hostableMaps[_selectedMapIndex].HubId
 			: null;
@@ -526,9 +518,7 @@ internal class HostPanelController : MonoBehaviour
 			mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = true });
 		}
 
-		// A silent auto-reconnect hands out a brand new connection id, which
-		// orphans this client's own entry in everyone's _readyStates - resend
-		// it under the new id so the roster doesn't stay stuck on "Waiting".
+		// a reconnect hands out a new connection id - resend ready under it
 		if (mgr != null && mgr.LocalPlayerId != 0 && mgr.LocalPlayerId != _lastKnownPlayerId)
 		{
 			bool resumed = _lastKnownPlayerId != 0 && inLobby;
@@ -540,10 +530,7 @@ internal class HostPanelController : MonoBehaviour
 			}
 		}
 
-		// Hide & Seek/Infection hold the seeker's own menu open for HideSeconds
-		// after "start" (see Update()'s deferred CloseMenuIfOpen) so hiders get
-		// a head start - without this, whoever gets picked as seeker just sees
-		// their menu sit there unchanged and looks stuck/broken, host or not.
+		// seeker's menu-close is deferred during HideSeconds (see Update()) - show why
 		bool seekerWaiting = _roundActive && mgr != null && IsLocalSeeking() && Time.unscaledTime < _hideEndTime;
 		if (_toggleButton != null)
 		{
@@ -552,12 +539,7 @@ internal class HostPanelController : MonoBehaviour
 				var left = Mathf.CeilToInt(_hideEndTime - Time.unscaledTime);
 				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "You're it! " + left + "s");
 			}
-			else if (isHost) PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
-			else
-			{
-				bool ready = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var tr) && tr;
-				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, ready ? "Unready" : "Ready");
-			}
+			else PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
 		}
 
 		if (_modeButton != null)
@@ -586,11 +568,15 @@ internal class HostPanelController : MonoBehaviour
 		if (_pickerSection != null) _pickerSection.SetActive(showingPicker);
 		if (showingPicker) return;
 
+		// Coop never applies these (its abilities are earned via the shared
+		// economy, not host-restricted) - _pendingAbilities is null-ed out for
+		// Coop in the "start" handler, so leaving these clickable silently did nothing.
+		bool canConfigureAbilities = canConfigure && _mode != Mode.Coop;
 		foreach (var (key, btn) in _abilityButtons)
 		{
 			if (btn == null) continue;
 			bool enabled = _abilityEnabled[key];
-			btn.interactable = canConfigure;
+			btn.interactable = canConfigureAbilities;
 			var label = _abilityDefs.First(d => d.Key == key).Label;
 			PauseMenuHelper.SetButtonLabel(btn.gameObject, label + "\n" + (enabled ? "On" : "Off"));
 			var img = btn.GetComponent<Image>();
@@ -618,7 +604,14 @@ internal class HostPanelController : MonoBehaviour
 		bool roundActiveAsHost = _roundActive && isHost;
 		if (_startButton != null)
 		{
-			if (roundActiveAsHost)
+			if (!isHost)
+			{
+				// guests reuse this slot as their Ready toggle instead of Start/Stop
+				_startButton.interactable = mgr != null && inLobby;
+				bool selfReady = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var sready) && sready;
+				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, selfReady ? "Unready" : "Ready");
+			}
+			else if (roundActiveAsHost)
 			{
 				_startButton.interactable = true;
 				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, openEnded ? "Stop Playing" : "Stop Round");
@@ -650,6 +643,13 @@ internal class HostPanelController : MonoBehaviour
 	private float _hideEndTime;
 	private float _roundEndTime;
 	private int _seekerId = -1;
+	private int _lastAppliedRoundId = -1;
+	private int _sentRoundId;
+	private float _roundResendAccumulator;
+	private const float RoundResendInterval = 3f;
+	private int _pendingStopResends;
+	private float _stopResendAccumulator;
+	private const float StopResendInterval = 1f;
 	private readonly HashSet<int> _infected = new HashSet<int>();
 	private readonly HashSet<int> _found = new HashSet<int>();
 	private bool _movementFrozen;
@@ -691,15 +691,39 @@ internal class HostPanelController : MonoBehaviour
 		}
 		TryApplyPendingAbilities();
 		TryStartModeEconomy();
+		TryCloseMenuIfNeeded();
 
 		if (_returnToLobbyPending && Time.unscaledTime - _returnToLobbyFadeStart >= ReturnToLobbyFadeDuration)
-		{
-			_returnToLobbyPending = false;
 			ReturnToLobbyMenu();
+
+		// same relay-drop risk as "start" (see its handler's comment) - resend a
+		// few times regardless of _roundActive, since the host's own already
+		// ended by the time this runs. EndRoundLocally is already a no-op once
+		// stopped, so resending "stop" itself is always safe.
+		if (mgr.IsHost && _pendingStopResends > 0)
+		{
+			_stopResendAccumulator += Time.unscaledDeltaTime;
+			if (_stopResendAccumulator >= StopResendInterval)
+			{
+				_stopResendAccumulator = 0f;
+				_pendingStopResends--;
+				mgr.SendGameMessage(new JObject { ["k"] = "stop" });
+			}
 		}
 
 		if (!mgr.InLobby) { EndRoundLocally("left the lobby"); return; }
 		if (!_roundActive) return;
+
+		if (mgr.IsHost)
+		{
+			_roundResendAccumulator += Time.unscaledDeltaTime;
+			if (_roundResendAccumulator >= RoundResendInterval)
+			{
+				_roundResendAccumulator = 0f;
+				ResendCurrentRoundState();
+			}
+		}
+
 		if (_mode == Mode.Coop) { _coop.Tick(Time.unscaledDeltaTime, mgr.IsHost, mgr.SendGameMessage); return; }
 		if (_mode == Mode.Normal) return; // just playing - no seek/hide/tag mechanics to run
 
@@ -717,8 +741,8 @@ internal class HostPanelController : MonoBehaviour
 		if (!hiding && IsLocalSeeking() && !_seekerReleased)
 		{
 			_seekerReleased = true;
-			EnsureMapLoaded(_roundMapHubId);
-			CloseMenuIfOpen();
+			EnsureMapLoaded(_roundMapHubId, closeMenuWhenReady: true);
+			TryCloseMenuIfNeeded();
 		}
 
 		if (!hiding && IsLocalSeeking() && _localMovement != null)
@@ -807,6 +831,17 @@ internal class HostPanelController : MonoBehaviour
 		}
 		else if (kind == "start")
 		{
+			var roundId = payload["roundId"]?.Value<int>() ?? -1;
+			Debug.Log($"[HostPanel] recv start: from={from} roundId={roundId} lastApplied={_lastAppliedRoundId} localId={MpNetworkManager.Instance?.LocalPlayerId}");
+			// The relay drops a game_msg for anyone not in its member set at that
+			// exact instant (a reconnect blip removes you until rejoin completes) -
+			// no retry, no replay, gone. The host now resends "start" periodically
+			// (see Update()) so anyone who missed the original catches up within a
+			// few seconds; roundId makes a resend a no-op for clients that already
+			// applied it, instead of re-running the disruptive resets below.
+			if (roundId == _lastAppliedRoundId) return;
+			_lastAppliedRoundId = roundId;
+
 			var modeStr = (string)payload["mode"];
 			_mode = modeStr == "infection" ? Mode.Infection : modeStr == "coop" ? Mode.Coop : modeStr == "normal" ? Mode.Normal : Mode.HideAndSeek;
 			_seekerId = (int)payload["seeker"];
@@ -828,10 +863,11 @@ internal class HostPanelController : MonoBehaviour
 			TryApplyPendingAbilities();
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
 			_statusMessage = (_mode == Mode.Normal || _mode == Mode.Coop) ? "Playing!" : "Round started!";
+			Debug.Log($"[HostPanel] start: IsLocalSeeking={IsLocalSeeking()} menuNull={_menu == null} menuOpen={_menu?.menuOpen}");
 			if (!IsLocalSeeking())
 			{
-				EnsureMapLoaded(_roundMapHubId);
-				CloseMenuIfOpen();
+				EnsureMapLoaded(_roundMapHubId, closeMenuWhenReady: true);
+				TryCloseMenuIfNeeded();
 			}
 		}
 		else if (kind == "stop")
@@ -866,10 +902,21 @@ internal class HostPanelController : MonoBehaviour
 		}
 	}
 
-	private void EnsureMapLoaded(string mapHubId)
+	// closeMenu was previously always set true right after calling this - but a
+	// map this client doesn't have yet downloads on a background thread, and
+	// the menu closed into whatever scene was already loaded regardless,
+	// looking exactly like "stuck"/"not entering the game" until the download
+	// finished. Only set _pendingMenuClose once the map is actually ready (or
+	// there's nothing to load in the first place).
+	private void EnsureMapLoaded(string mapHubId, bool closeMenuWhenReady)
 	{
-		if (string.IsNullOrEmpty(mapHubId) || _host == null) return;
-		if (MpMapLibrary.IsDownloaded(mapHubId)) { _host.Events.Emit("recharge.maps.load_requested", mapHubId); return; }
+		if (string.IsNullOrEmpty(mapHubId) || _host == null) { if (closeMenuWhenReady) _pendingMenuClose = true; return; }
+		if (MpMapLibrary.IsDownloaded(mapHubId))
+		{
+			_host.Events.Emit("recharge.maps.load_requested", mapHubId);
+			if (closeMenuWhenReady) _pendingMenuClose = true;
+			return;
+		}
 		if (_mapDownloading) return;
 		_mapDownloading = true;
 		_statusMessage = "Downloading map...";
@@ -879,6 +926,7 @@ internal class HostPanelController : MonoBehaviour
 			{
 				MpMapLibrary.DownloadAndExtract(mapHubId);
 				_host.Events.Emit("recharge.maps.load_requested", mapHubId);
+				if (closeMenuWhenReady) _pendingMenuClose = true; // main-thread Update() picks this up - don't touch _menu from this thread
 			}
 			catch (System.Exception e) { _statusMessage = "Map download failed: " + e.Message; }
 			finally { _mapDownloading = false; }
@@ -888,9 +936,7 @@ internal class HostPanelController : MonoBehaviour
 
 	private JObject _pendingAbilities;
 
-	// _localMovement may not have resolved yet the instant "start" arrives (a
-	// fresh scene, or the player object not yet found) - retried every frame
-	// until it succeeds instead of silently giving up on the one attempt.
+	// retried every frame until _localMovement resolves, instead of one-shot
 	private void TryApplyPendingAbilities()
 	{
 		if (_pendingAbilities == null || _localMovement == null) return;
@@ -900,10 +946,7 @@ internal class HostPanelController : MonoBehaviour
 
 	private bool _pendingModeStart;
 
-	// Same reasoning as TryApplyPendingAbilities - Co-op/Hide & Seek/Infection's
-	// own economy reset needs _localMovement too, and silently skipping it
-	// (currency doesn't need it, so that part would still work) is exactly
-	// what left one player's abilities/upgrades never actually wiped.
+	// same _localMovement-retry reasoning as TryApplyPendingAbilities
 	private void TryStartModeEconomy()
 	{
 		if (!_pendingModeStart || _localMovement == null) return;
@@ -1014,10 +1057,7 @@ internal class HostPanelController : MonoBehaviour
 		_seekerReleased = false;
 		_roundMapHubId = null;
 		_statusMessage = "Round over: " + reason;
-		// The next round's "start" wipes _readyStates, including the host's own
-		// entry - _autoReadyTried being a one-shot-per-lobby flag meant nothing
-		// ever re-sent it afterward, and the host has no manual Ready toggle to
-		// fall back on (that slot opens Host Panel for them instead).
+		// _readyStates gets wiped on the next round's "start" - re-arm auto-ready
 		_autoReadyTried = false;
 		if (_localMovement != null && _movementFrozen) { _localMovement.enabled = true; _movementFrozen = false; }
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
@@ -1073,14 +1113,26 @@ internal class HostPanelController : MonoBehaviour
 		_modeCourses.Clear();
 	}
 
-	private void CloseMenuIfOpen()
+	private bool _pendingMenuClose;
+
+	// _menu can be null/stale at the exact instant "start" arrives if this
+	// client is still mid scene-load (InstallMenuRow hasn't re-run yet) -
+	// the old one-shot CloseMenuIfOpen() had no retry, unlike every other
+	// pending* flag in this file, so a client caught in that window would
+	// never actually get their menu closed for the rest of the round.
+	private void TryCloseMenuIfNeeded()
 	{
-		if (_menu != null && _menu.menuOpen) _menu.menuButtonPressed();
+		if (!_pendingMenuClose || _menu == null) return;
+		_pendingMenuClose = false;
+		if (_menu.menuOpen) { _menu.menuButtonPressed(); Debug.Log("[HostPanel] TryCloseMenuIfNeeded: closed"); }
+		else Debug.Log("[HostPanel] TryCloseMenuIfNeeded: no-op, menu already closed");
 	}
 
 	private void ReturnToLobbyMenu()
 	{
-		if (_menu == null || _menu.menuOpen) return;
+		if (_menu == null) return; // retried next frame via the Update() call site
+		_returnToLobbyPending = false;
+		if (_menu.menuOpen) return;
 		_menu.menuButtonPressed();
 		if (MpNetworkManager.LatestMainBit != null) MpNetworkManager.LatestMainBit.SetActive(false);
 		if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(true);
@@ -1126,6 +1178,8 @@ internal class HostPanelController : MonoBehaviour
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null || !mgr.InLobby || !mgr.IsHost) return;
 		mgr.SendGameMessage(new JObject { ["k"] = "stop" });
+		_pendingStopResends = 4;
+		_stopResendAccumulator = 0f;
 		EndRoundLocally("host ended the session");
 	}
 
@@ -1158,6 +1212,9 @@ internal class HostPanelController : MonoBehaviour
 		var abilities = new JObject();
 		foreach (var kv in _abilityEnabled) abilities[kv.Key] = kv.Value;
 
+		_sentRoundId++;
+		_roundResendAccumulator = 0f;
+		Debug.Log($"[HostPanel] sending start: roundId={_sentRoundId} mode={_mode} seeker={seeker} everyone=[{string.Join(",", everyone)}] localId={mgr.LocalPlayerId}");
 		mgr.SendGameMessage(new JObject
 		{
 			["k"] = "start",
@@ -1169,6 +1226,34 @@ internal class HostPanelController : MonoBehaviour
 			["mapName"] = mapName,
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
+			["roundId"] = _sentRoundId,
+		});
+	}
+
+	// The relay drops a game_msg for anyone not in its lobby member set at that
+	// exact instant (see the "start" handler's comment) - resending the same
+	// round's "start" periodically while it's active means a client who missed
+	// it (a reconnect blip, mainly) catches up within a few seconds instead of
+	// never entering the round at all. roundId makes this a no-op for clients
+	// that already applied it.
+	private void ResendCurrentRoundState()
+	{
+		var mgr = MpNetworkManager.Instance;
+		if (mgr == null) return;
+		var abilities = new JObject();
+		foreach (var kv in _abilityEnabled) abilities[kv.Key] = kv.Value;
+		mgr.SendGameMessage(new JObject
+		{
+			["k"] = "start",
+			["mode"] = _mode == Mode.Infection ? "infection" : _mode == Mode.HideAndSeek ? "hideandseek" : _mode == Mode.Coop ? "coop" : "normal",
+			["seeker"] = _seekerId,
+			["hideSeconds"] = Mathf.Max(0f, _hideEndTime - Time.unscaledTime),
+			["roundSeconds"] = _roundEndTime == float.MaxValue ? 0f : Mathf.Max(0f, _roundEndTime - Time.unscaledTime),
+			["mapHubId"] = _roundMapHubId,
+			["mapName"] = null,
+			["abilities"] = abilities,
+			["saveName"] = _selectedSaveName,
+			["roundId"] = _sentRoundId,
 		});
 	}
 

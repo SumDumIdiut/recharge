@@ -4,11 +4,8 @@ using System.IO;
 using System.Linq;
 using UnityEngine;
 
-// Shared helper for giving a Host Panel mode (Co-op, Hide & Seek, Infection)
-// its own dedicated, always-fresh save slot, completely isolated from the
-// player's real save. Every session wipes whatever was there before and
-// starts from a true blank slate (zero currency, zero upgrades, no
-// abilities) - nothing carries over between sessions.
+// Shared helper giving a Host Panel mode (Co-op, Hide & Seek, Infection) its
+// own always-fresh save slot, isolated from the player's real save.
 internal static class ModeSaveFile
 {
 	public static List<upgradeBox> GetUpgradeBoxes(courseScript course)
@@ -44,16 +41,9 @@ internal static class ModeSaveFile
 				course.localUpgradesScript.localUpgradeDict[key] = 0.0;
 			foreach (var box in GetUpgradeBoxes(course))
 			{
-				// TimesUsed = 0 alone leaves a box that was already maxed out in the
-				// player's real save visually stuck on "CAPPED" (deactivate() greys it
-				// out and swaps its cost text) - reactivateAndReset() is the game's own
-				// method for undoing exactly that, so reuse it instead of only touching
-				// the counter.
+				// reactivateAndReset() also undoes deactivate()'s CAPPED visual state
 				box.reactivateAndReset();
-				// CalcBoxCost() (not a flat baseUpgradeCost assign) since it also
-				// accounts for course.tier - a course the player already prestiged in
-				// their real save keeps that tier here (courses aren't cloned for
-				// co-op), and baseUpgradeCost alone would under-price it.
+				// CalcBoxCost() accounts for course.tier; a flat baseUpgradeCost assign wouldn't
 				box.CalcBoxCost();
 			}
 		}
@@ -78,6 +68,10 @@ internal static class ModeSaveFile
 		{
 			if (c == null) continue;
 			try { c.load(saveFolder); } catch { }
+			// courseScript.load() restores TimesUsed but never upgradeCost (the
+			// game's own save format writes it but never reads it back) - recompute
+			// it here or a resumed save's prices stay whatever they were pre-load.
+			foreach (var box in GetUpgradeBoxes(c)) box.CalcBoxCost();
 		}
 	}
 
@@ -102,6 +96,7 @@ internal static class ModeSaveFile
 		{
 			if (c == null) continue;
 			try { c.load(realFolder); } catch { }
+			foreach (var box in GetUpgradeBoxes(c)) box.CalcBoxCost();
 		}
 	}
 

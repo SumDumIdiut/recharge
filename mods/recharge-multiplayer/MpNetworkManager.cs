@@ -339,6 +339,7 @@ public class MpNetworkManager : MonoBehaviour
 				else if (_resumeMode == ResumeMode.Join) JoinLobby(_resumeJoinLobbyId);
 				break;
 			case "game_msg":
+				Debug.Log($"[MpNet] recv game_msg from={obj["from"]} k={obj["payload"]?["k"]} localId={LocalPlayerId} hasSubscriber={OnGameMessage != null}");
 				OnGameMessage?.Invoke((int)obj["from"], (JObject)obj["payload"]);
 				break;
 			case "snapshot":
