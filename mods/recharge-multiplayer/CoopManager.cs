@@ -13,12 +13,13 @@ using UnityEngine;
 // forwards them as deltas for the host to apply and rebroadcast.
 internal class CoopManager
 {
-	private const string SaveFolder = "/SavedataCoop";
+	private const string SaveRoot = "/SavedataCoop";
 	private const float SyncInterval = 3f;
 	private const float SaveInterval = 20f;
 
 	public bool Active { get; private set; }
 
+	private string _saveFolder;
 	private Movement _localMovement;
 	private readonly List<courseScript> _courses = new List<courseScript>();
 	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
@@ -33,7 +34,7 @@ internal class CoopManager
 	private readonly Dictionary<int, int[]> _lastTimesUsed = new Dictionary<int, int[]>();
 	private bool _lastDash, _lastWallJump, _lastDoubleJump, _lastBlockSwap;
 
-	public void Begin(bool isHost, int playerCount, Movement localMovement)
+	public void Begin(bool isHost, int playerCount, Movement localMovement, string saveName)
 	{
 		Active = true;
 		_localMovement = localMovement;
@@ -49,15 +50,28 @@ internal class CoopManager
 		DisableClones();
 		RebalanceCosts(playerCount);
 
-		// Every Co-op session starts from a true blank slate, host or not - a
-		// non-host's local view gets zeroed here too so it isn't showing their
-		// own stale real-save numbers for the few seconds before the host's
-		// first sync arrives; only the host actually persists the reset to disk.
-		ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
+		var resolvedName = saveName ?? ("New-" + System.DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+		_saveFolder = SaveRoot + "/" + resolvedName;
+
 		if (isHost)
 		{
-			ModeSaveFile.DeleteAndRecreateFolder(SaveFolder);
-			ModeSaveFile.Save(SaveFolder, _localMovement, _courses);
+			if (saveName != null && ModeSaveFile.Exists(_saveFolder))
+			{
+				ModeSaveFile.Load(_saveFolder, _localMovement, _courses);
+			}
+			else
+			{
+				ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
+				ModeSaveFile.DeleteAndRecreateFolder(_saveFolder);
+				ModeSaveFile.Save(_saveFolder, _localMovement, _courses);
+			}
+		}
+		else
+		{
+			// Non-host doesn't touch disk - just zero the local view so it isn't
+			// showing stale real-save numbers for the few seconds before the
+			// host's first sync corrects it to the real shared totals.
+			ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
 		}
 
 		CaptureBaseline();
@@ -348,7 +362,7 @@ internal class CoopManager
 		CaptureBaseline();
 	}
 
-	private void PersistSave() => ModeSaveFile.Save(SaveFolder, _localMovement, _courses);
+	private void PersistSave() { if (_saveFolder != null) ModeSaveFile.Save(_saveFolder, _localMovement, _courses); }
 
 	public void End(bool isHost)
 	{

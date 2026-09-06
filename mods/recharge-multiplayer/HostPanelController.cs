@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Newtonsoft.Json.Linq;
@@ -20,9 +21,19 @@ internal class HostPanelController : MonoBehaviour
 
 	private Button _modeButton;
 	private Button _mapButton;
+	private Button _saveButton;
 	private GameObject _rosterGo;
 	private Button _startButton;
 	private GameObject _statusGo;
+
+	private GameObject _mainContent;
+	private enum PickerKind { None, Map, Save }
+	private PickerKind _activePicker = PickerKind.None;
+	private GameObject _pickerSection;
+	private TMP_Text _pickerHeader;
+	private GameObject _pickerTemplate;
+	private readonly List<GameObject> _pickerRows = new List<GameObject>();
+	private string _selectedSaveName; // null = "New Save" (fresh, wiped)
 
 	private readonly (string Key, string Label)[] _abilityDefs =
 	{
@@ -80,12 +91,21 @@ internal class HostPanelController : MonoBehaviour
 		var template = menu.mainBitPublic.transform.Find("Settings")?.gameObject;
 		if (template == null) return;
 
-		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(0, 170), OnCycleModeClicked, width: 380, height: 48, fontSize: 20f);
-		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 115), OnCycleMapClicked, width: 380, height: 48, fontSize: 20f);
+		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(-152, 170), OnCycleModeClicked, width: 148, height: 48, fontSize: 16f);
+		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 48, fontSize: 16f);
+		_saveButton = BuildActionButton(panel.transform, template, "Save: New Save", new Vector2(152, 170), OnOpenSavePickerClicked, width: 148, height: 48, fontSize: 16f);
+		MakeAutoSizeLabel(_modeButton, 8f, 15f);
+		MakeAutoSizeLabel(_mapButton, 8f, 15f);
+		MakeAutoSizeLabel(_saveButton, 8f, 15f);
 
-		CreateDivider(panel.transform, new Vector2(0, 88), 420);
+		BuildPickerSection(panel.transform, template);
 
-		var abilityCaptionGo = Object.Instantiate(template, panel.transform);
+		_mainContent = new GameObject("HostPanel_MainContent", typeof(RectTransform));
+		_mainContent.transform.SetParent(panel.transform, false);
+
+		CreateDivider(_mainContent.transform, new Vector2(0, 88), 420);
+
+		var abilityCaptionGo = Object.Instantiate(template, _mainContent.transform);
 		abilityCaptionGo.name = "HostPanel_AbilityCaption";
 		abilityCaptionGo.SetActive(true);
 		var abilityCaptionBtn = abilityCaptionGo.GetComponent<Button>();
@@ -108,7 +128,7 @@ internal class HostPanelController : MonoBehaviour
 		for (int i = 0; i < _abilityDefs.Length; i++)
 		{
 			var key = _abilityDefs[i].Key;
-			var go = Object.Instantiate(template, panel.transform);
+			var go = Object.Instantiate(template, _mainContent.transform);
 			go.name = "HostPanel_Ability_" + key;
 			go.SetActive(true);
 			var rt = (RectTransform)go.transform;
@@ -135,16 +155,16 @@ internal class HostPanelController : MonoBehaviour
 			_abilityButtons.Add((key, btn));
 		}
 
-		CreateDivider(panel.transform, new Vector2(0, 9), 420);
+		CreateDivider(_mainContent.transform, new Vector2(0, 9), 420);
 
 		var rosterBoxGo = new GameObject("HostPanelRosterBox", typeof(RectTransform), typeof(Image));
-		rosterBoxGo.transform.SetParent(panel.transform, false);
+		rosterBoxGo.transform.SetParent(_mainContent.transform, false);
 		var rosterBoxRt = (RectTransform)rosterBoxGo.transform;
 		rosterBoxRt.anchoredPosition = new Vector2(0, -35);
 		rosterBoxRt.sizeDelta = new Vector2(420, 80);
 		rosterBoxGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.25f);
 
-		_rosterGo = Object.Instantiate(template, panel.transform);
+		_rosterGo = Object.Instantiate(template, _mainContent.transform);
 		_rosterGo.name = "HostPanelRoster";
 		_rosterGo.SetActive(true);
 		var rosterBtn = _rosterGo.GetComponent<Button>();
@@ -157,9 +177,9 @@ internal class HostPanelController : MonoBehaviour
 		var rosterText = _rosterGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (rosterText != null) { rosterText.enableAutoSizing = false; rosterText.fontSize = 14; rosterText.textWrappingMode = TextWrappingModes.Normal; }
 
-		_startButton = BuildActionButton(panel.transform, template, "Start Playing", new Vector2(0, -110), OnStartOrStopClicked);
+		_startButton = BuildActionButton(_mainContent.transform, template, "Start Playing", new Vector2(0, -110), OnStartOrStopClicked);
 
-		_statusGo = Object.Instantiate(template, panel.transform);
+		_statusGo = Object.Instantiate(template, _mainContent.transform);
 		_statusGo.name = "HostPanelStatus";
 		_statusGo.SetActive(true);
 		var statusBtn = _statusGo.GetComponent<Button>();
@@ -248,12 +268,134 @@ internal class HostPanelController : MonoBehaviour
 			Mode.Infection => Mode.Coop,
 			_ => Mode.Normal,
 		};
+		_selectedSaveName = null; // a save picked for one mode isn't valid for another
 	}
 
-	private void OnCycleMapClicked()
+	private static void MakeAutoSizeLabel(Button btn, float min, float max)
 	{
-		_selectedMapIndex++;
-		if (_selectedMapIndex >= _hostableMaps.Count) _selectedMapIndex = -1;
+		var tmp = btn.GetComponentInChildren<TMP_Text>();
+		if (tmp == null) return;
+		tmp.enableAutoSizing = true;
+		tmp.fontSizeMin = min;
+		tmp.fontSizeMax = max;
+		tmp.textWrappingMode = TextWrappingModes.NoWrap;
+		tmp.overflowMode = TextOverflowModes.Overflow;
+	}
+
+	private void BuildPickerSection(Transform panel, GameObject template)
+	{
+		_pickerTemplate = template;
+		_pickerSection = new GameObject("HostPanel_PickerSection", typeof(RectTransform));
+		_pickerSection.transform.SetParent(panel, false);
+
+		var headerGo = Object.Instantiate(template, _pickerSection.transform);
+		headerGo.name = "HostPanel_PickerHeader";
+		headerGo.SetActive(true);
+		var headerBtn = headerGo.GetComponent<Button>();
+		if (headerBtn != null) headerBtn.enabled = false;
+		var headerRt = (RectTransform)headerGo.transform;
+		headerRt.anchoredPosition = new Vector2(0, 165);
+		headerRt.sizeDelta = new Vector2(400, 34);
+		_pickerHeader = headerGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		if (_pickerHeader != null)
+		{
+			var loc = _pickerHeader.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
+			if (loc != null) Object.DestroyImmediate(loc);
+			_pickerHeader.enableAutoSizing = false;
+			_pickerHeader.fontSize = 22;
+			_pickerHeader.textWrappingMode = TextWrappingModes.NoWrap;
+			_pickerHeader.overflowMode = TextOverflowModes.Overflow;
+		}
+
+		var cancelGo = BuildActionButton(_pickerSection.transform, template, "Cancel", new Vector2(0, -195), () => _activePicker = PickerKind.None);
+		_pickerSection.SetActive(false);
+	}
+
+	private void OnOpenMapPickerClicked()
+	{
+		_activePicker = PickerKind.Map;
+		RefreshPickerRows();
+	}
+
+	private void OnOpenSavePickerClicked()
+	{
+		_activePicker = PickerKind.Save;
+		RefreshPickerRows();
+	}
+
+	private static string SaveRootFolder(Mode mode) => mode switch
+	{
+		Mode.Coop => "/SavedataCoop",
+		Mode.HideAndSeek => HideAndSeekSaveFolder,
+		Mode.Infection => InfectionSaveFolder,
+		_ => null,
+	};
+
+	private List<string> ListSavesForCurrentMode()
+	{
+		var root = SaveRootFolder(_mode);
+		if (root == null) return new List<string>();
+		var path = Application.persistentDataPath + root;
+		if (!Directory.Exists(path)) return new List<string>();
+		return Directory.GetDirectories(path).Select(Path.GetFileName).OrderBy(n => n).ToList();
+	}
+
+	private void RefreshPickerRows()
+	{
+		foreach (var row in _pickerRows) Object.Destroy(row);
+		_pickerRows.Clear();
+
+		float y = 110f;
+		const float spacing = 54f;
+
+		if (_activePicker == PickerKind.Map)
+		{
+			if (_pickerHeader != null) _pickerHeader.text = "Choose a Map";
+			_pickerRows.Add(CreatePickerRow("Current Map", y, () => { _selectedMapIndex = -1; _activePicker = PickerKind.None; }));
+			y -= spacing;
+			for (int i = 0; i < _hostableMaps.Count; i++)
+			{
+				var idx = i;
+				_pickerRows.Add(CreatePickerRow(_hostableMaps[i].Name, y, () => { _selectedMapIndex = idx; _activePicker = PickerKind.None; }));
+				y -= spacing;
+			}
+		}
+		else if (_activePicker == PickerKind.Save)
+		{
+			if (_pickerHeader != null) _pickerHeader.text = "Choose a Save";
+			_pickerRows.Add(CreatePickerRow("New Save", y, () => { _selectedSaveName = null; _activePicker = PickerKind.None; }));
+			y -= spacing;
+			foreach (var name in ListSavesForCurrentMode())
+			{
+				var captured = name;
+				_pickerRows.Add(CreatePickerRow(captured, y, () => { _selectedSaveName = captured; _activePicker = PickerKind.None; }));
+				y -= spacing;
+			}
+		}
+	}
+
+	private GameObject CreatePickerRow(string label, float y, System.Action onClick)
+	{
+		var go = Object.Instantiate(_pickerTemplate, _pickerSection.transform);
+		go.name = "HostPanel_PickerRow";
+		go.SetActive(true);
+		var rt = (RectTransform)go.transform;
+		rt.anchoredPosition = new Vector2(0, y);
+		rt.sizeDelta = new Vector2(380, 44);
+		PauseMenuHelper.SetButtonLabel(go, label);
+		var tmp = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		if (tmp != null)
+		{
+			tmp.enableAutoSizing = true;
+			tmp.fontSizeMin = 10f;
+			tmp.fontSizeMax = 20f;
+			tmp.textWrappingMode = TextWrappingModes.NoWrap;
+			tmp.overflowMode = TextOverflowModes.Overflow;
+		}
+		var btn = go.GetComponent<Button>();
+		btn.onClick = new Button.ButtonClickedEvent();
+		btn.onClick.AddListener(() => onClick());
+		return go;
 	}
 
 	private static void CreateDivider(Transform parent, Vector2 pos, float width)
@@ -354,6 +496,17 @@ internal class HostPanelController : MonoBehaviour
 			var mapLabel = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count ? _hostableMaps[_selectedMapIndex].Name : "Current Map";
 			PauseMenuHelper.SetButtonLabel(_mapButton.gameObject, "Map: " + mapLabel);
 		}
+		if (_saveButton != null)
+		{
+			bool canPickSave = canConfigure && SaveRootFolder(_mode) != null;
+			_saveButton.interactable = canPickSave;
+			PauseMenuHelper.SetButtonLabel(_saveButton.gameObject, "Save: " + (_selectedSaveName ?? "New Save"));
+		}
+
+		bool showingPicker = _activePicker != PickerKind.None;
+		if (_mainContent != null) _mainContent.SetActive(!showingPicker);
+		if (_pickerSection != null) _pickerSection.SetActive(showingPicker);
+		if (showingPicker) return;
 
 		foreach (var (key, btn) in _abilityButtons)
 		{
@@ -587,8 +740,9 @@ internal class HostPanelController : MonoBehaviour
 			_roundActive = true;
 			_seekerReleased = false;
 			_roundMapHubId = (string)payload["mapHubId"];
+			_selectedSaveName = payload["saveName"]?.Value<string>();
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
-			if (_mode == Mode.HideAndSeek || _mode == Mode.Infection) ActivateModeSaveFile(_mode);
+			if (_mode == Mode.HideAndSeek || _mode == Mode.Infection) ActivateModeSaveFile(_mode, _selectedSaveName);
 			ApplyLocalAppearance();
 			TryApplyPendingAbilities();
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
@@ -603,7 +757,7 @@ internal class HostPanelController : MonoBehaviour
 				try
 				{
 					var mgrInst = MpNetworkManager.Instance;
-					_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement);
+					_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement, _selectedSaveName);
 				}
 				catch (System.Exception e) { Debug.LogError("[HostPanel] Coop.Begin failed: " + e); }
 			}
@@ -778,16 +932,28 @@ internal class HostPanelController : MonoBehaviour
 	private readonly List<courseScript> _modeCourses = new List<courseScript>();
 	private bool _modeSaveActive;
 
-	private void ActivateModeSaveFile(Mode mode)
+	private string _activeModeSaveFolder;
+
+	private void ActivateModeSaveFile(Mode mode, string saveName)
 	{
 		try
 		{
-			var folder = mode == Mode.HideAndSeek ? HideAndSeekSaveFolder : InfectionSaveFolder;
+			var root = mode == Mode.HideAndSeek ? HideAndSeekSaveFolder : InfectionSaveFolder;
+			var resolvedName = saveName ?? ("New-" + System.DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+			var folder = root + "/" + resolvedName;
+			_activeModeSaveFolder = folder;
 			_modeCourses.Clear();
 			_modeCourses.AddRange(Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
-			ModeSaveFile.ResetEconomyToZero(_localMovement, _modeCourses);
-			ModeSaveFile.DeleteAndRecreateFolder(folder);
-			ModeSaveFile.Save(folder, _localMovement, _modeCourses);
+			if (saveName != null && ModeSaveFile.Exists(folder))
+			{
+				ModeSaveFile.Load(folder, _localMovement, _modeCourses);
+			}
+			else
+			{
+				ModeSaveFile.ResetEconomyToZero(_localMovement, _modeCourses);
+				ModeSaveFile.DeleteAndRecreateFolder(folder);
+				ModeSaveFile.Save(folder, _localMovement, _modeCourses);
+			}
 			_modeSaveActive = true;
 		}
 		catch (System.Exception e) { Debug.LogError("[HostPanel] ActivateModeSaveFile failed: " + e); }
@@ -797,8 +963,11 @@ internal class HostPanelController : MonoBehaviour
 	{
 		if (!_modeSaveActive) return;
 		_modeSaveActive = false;
+		try { if (_activeModeSaveFolder != null) ModeSaveFile.Save(_activeModeSaveFolder, _localMovement, _modeCourses); }
+		catch (System.Exception e) { Debug.LogError("[HostPanel] persist failed: " + e); }
 		try { ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _modeCourses); }
 		catch (System.Exception e) { Debug.LogError("[HostPanel] DeactivateModeSaveFile failed: " + e); }
+		_activeModeSaveFolder = null;
 		_modeCourses.Clear();
 	}
 
@@ -897,6 +1066,7 @@ internal class HostPanelController : MonoBehaviour
 			["mapHubId"] = mapHubId,
 			["mapName"] = mapName,
 			["abilities"] = abilities,
+			["saveName"] = _selectedSaveName,
 		});
 	}
 

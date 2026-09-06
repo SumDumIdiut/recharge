@@ -53,6 +53,21 @@ internal static class ModeSaveFile
 		Directory.CreateDirectory(path);
 	}
 
+	public static bool Exists(string saveFolder) => File.Exists(Application.persistentDataPath + saveFolder + "/playerdata.txt");
+
+	public static void Load(string saveFolder, Movement localMovement, List<courseScript> courses)
+	{
+		if (localMovement != null)
+		{
+			try { localMovement.load(saveFolder); } catch (Exception e) { Debug.LogError("[ModeSaveFile] load failed: " + e); }
+		}
+		foreach (var c in courses)
+		{
+			if (c == null) continue;
+			try { c.load(saveFolder); } catch { }
+		}
+	}
+
 	public static void Save(string saveFolder, Movement localMovement, List<courseScript> courses)
 	{
 		if (localMovement == null) return;
