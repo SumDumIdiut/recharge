@@ -85,6 +85,12 @@ internal class CoopManager
 		foreach (var c in UnityEngine.Object.FindObjectsByType<clonesScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
 		{
 			if (!c.enabled) continue;
+			// enabled = false only stops the spawner's own Update loop - any clones
+			// already instantiated from the real save's cloneCount (set in its own
+			// Start(), long before Begin() runs) keep existing and cloneCount itself
+			// is untouched, so it'd get baked straight into the fresh co-op save.
+			// onPrestige(true) is the game's own "wipe every clone back to zero" call.
+			c.onPrestige(true);
 			c.enabled = false;
 			_disabledClones.Add(c);
 		}
