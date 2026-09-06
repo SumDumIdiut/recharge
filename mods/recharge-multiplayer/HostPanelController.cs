@@ -219,7 +219,7 @@ internal class HostPanelController : MonoBehaviour
 			var titleTmp = title.GetComponent<TMP_Text>();
 			if (titleTmp != null) titleTmp.text = "Host Panel";
 			var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-			if (loc != null) Object.Destroy(loc);
+			if (loc != null) Object.DestroyImmediate(loc);
 
 			var closeBtn = title.Find("Close");
 			if (closeBtn != null)
@@ -457,6 +457,7 @@ internal class HostPanelController : MonoBehaviour
 			var playerGo = GameObject.FindGameObjectWithTag("Player");
 			if (playerGo != null) _localMovement = playerGo.GetComponent<Movement>();
 		}
+		TryApplyPendingAbilities();
 
 		if (_returnToLobbyPending && Time.unscaledTime - _returnToLobbyFadeStart >= ReturnToLobbyFadeDuration)
 		{
@@ -469,7 +470,7 @@ internal class HostPanelController : MonoBehaviour
 		if (_mode == Mode.Coop) { _coop.Tick(Time.unscaledDeltaTime, mgr.IsHost, mgr.SendGameMessage); return; }
 		if (_mode == Mode.Normal) return; // just playing - no seek/hide/tag mechanics to run
 
-		bool hiding = Time.time < _hideEndTime;
+		bool hiding = Time.unscaledTime < _hideEndTime;
 		if (_localMovement != null)
 		{
 			bool shouldFreeze = hiding && IsLocalSeeking();
@@ -495,8 +496,8 @@ internal class HostPanelController : MonoBehaviour
 				var dist = Vector2.Distance(_localMovement.transform.position, new Vector2(p.x, p.y));
 				if (dist > TagRadius) continue;
 				// Throttled - unthrottled resends can trip the relay's per-connection rate limit.
-				if (_lastTagSentAt.TryGetValue(p.id, out var last) && Time.time - last < TagResendInterval) continue;
-				_lastTagSentAt[p.id] = Time.time;
+				if (_lastTagSentAt.TryGetValue(p.id, out var last) && Time.unscaledTime - last < TagResendInterval) continue;
+				_lastTagSentAt[p.id] = Time.unscaledTime;
 				mgr.SendGameMessage(new JObject { ["k"] = "tag", ["target"] = p.id });
 			}
 		}
@@ -512,7 +513,7 @@ internal class HostPanelController : MonoBehaviour
 			}
 		}
 
-		if (Time.time >= _roundEndTime) EndRoundLocally("time's up");
+		if (Time.unscaledTime >= _roundEndTime) EndRoundLocally("time's up");
 	}
 
 	private void EnterSpectate()
@@ -581,24 +582,29 @@ internal class HostPanelController : MonoBehaviour
 			_readyStates.Clear();
 			_lastTagSentAt.Clear();
 			if (_mode == Mode.Infection) _infected.Add(_seekerId);
-			_hideEndTime = Time.time + (float)payload["hideSeconds"];
-			_roundEndTime = (_mode == Mode.Normal || _mode == Mode.Coop) ? float.MaxValue : Time.time + (float)payload["roundSeconds"];
+			_hideEndTime = Time.unscaledTime + (float)payload["hideSeconds"];
+			_roundEndTime = (_mode == Mode.Normal || _mode == Mode.Coop) ? float.MaxValue : Time.unscaledTime + (float)payload["roundSeconds"];
 			_roundActive = true;
 			_seekerReleased = false;
 			_roundMapHubId = (string)payload["mapHubId"];
+			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
 			ApplyLocalAppearance();
-			if (_mode != Mode.Coop) ApplyAbilityRestrictions(payload["abilities"] as JObject);
+			TryApplyPendingAbilities();
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
-			if (_mode == Mode.Coop)
-			{
-				var mgrInst = MpNetworkManager.Instance;
-				_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement);
-			}
 			_statusMessage = (_mode == Mode.Normal || _mode == Mode.Coop) ? "Playing!" : "Round started!";
 			if (!IsLocalSeeking())
 			{
 				EnsureMapLoaded(_roundMapHubId);
 				CloseMenuIfOpen();
+			}
+			if (_mode == Mode.Coop)
+			{
+				try
+				{
+					var mgrInst = MpNetworkManager.Instance;
+					_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement);
+				}
+				catch (System.Exception e) { Debug.LogError("[HostPanel] Coop.Begin failed: " + e); }
 			}
 		}
 		else if (kind == "stop")
@@ -651,6 +657,18 @@ internal class HostPanelController : MonoBehaviour
 			finally { _mapDownloading = false; }
 		})
 		{ IsBackground = true }.Start();
+	}
+
+	private JObject _pendingAbilities;
+
+	// _localMovement may not have resolved yet the instant "start" arrives (a
+	// fresh scene, or the player object not yet found) - retried every frame
+	// until it succeeds instead of silently giving up on the one attempt.
+	private void TryApplyPendingAbilities()
+	{
+		if (_pendingAbilities == null || _localMovement == null) return;
+		ApplyAbilityRestrictions(_pendingAbilities);
+		_pendingAbilities = null;
 	}
 
 	private void ApplyAbilityRestrictions(JObject abilities)
@@ -874,14 +892,14 @@ internal class HostPanelController : MonoBehaviour
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null) return;
 		string label;
-		if (Time.time < _hideEndTime)
+		if (Time.unscaledTime < _hideEndTime)
 		{
-			var left = Mathf.CeilToInt(_hideEndTime - Time.time);
+			var left = Mathf.CeilToInt(_hideEndTime - Time.unscaledTime);
 			label = IsLocalSeeking() ? "Hiders are hiding: " + left + "s" : "Hide! " + left + "s";
 		}
 		else
 		{
-			var left = Mathf.CeilToInt(_roundEndTime - Time.time);
+			var left = Mathf.CeilToInt(_roundEndTime - Time.unscaledTime);
 			label = (_mode == Mode.HideAndSeek ? "Hide and Seek" : "Infection") + " - " + left + "s left";
 			if (IsLocalSeeking()) label += _mode == Mode.HideAndSeek ? " (you're it)" : " (infected)";
 		}

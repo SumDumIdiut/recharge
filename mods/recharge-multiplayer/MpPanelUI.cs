@@ -883,7 +883,7 @@ internal class MpPanelUI : MonoBehaviour
 		if (label != null)
 		{
 			var loc = label.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-			if (loc != null) Object.Destroy(loc);
+			if (loc != null) Object.DestroyImmediate(loc);
 
 			var labelRt = (RectTransform)label;
 			const float extraInset = 6f;

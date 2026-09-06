@@ -187,7 +187,7 @@ public class MpNetworkManager : MonoBehaviour
 
 		var titleTf = clone.transform.Find("Title");
 		var titleLoc = titleTf != null ? titleTf.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>() : null;
-		if (titleLoc != null) Object.Destroy(titleLoc);
+		if (titleLoc != null) Object.DestroyImmediate(titleLoc);
 		var title = titleTf != null ? titleTf.GetComponent<TMPro.TMP_Text>() : null;
 		if (title != null) title.text = "Chat";
 
