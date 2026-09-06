@@ -33,6 +33,10 @@ internal class HostPanelController : MonoBehaviour
 	private TMP_Text _pickerHeader;
 	private GameObject _pickerTemplate;
 	private readonly List<GameObject> _pickerRows = new List<GameObject>();
+	private int _pickerPage;
+	private TMP_Text _pickerPageLabel;
+	private Button _pickerPrevButton;
+	private Button _pickerNextButton;
 	private string _selectedSaveName; // null = "New Save" (fresh, wiped)
 
 	private readonly (string Key, string Label)[] _abilityDefs =
@@ -307,6 +311,29 @@ internal class HostPanelController : MonoBehaviour
 			_pickerHeader.overflowMode = TextOverflowModes.Overflow;
 		}
 
+		_pickerPrevButton = BuildActionButton(_pickerSection.transform, template, "<", new Vector2(-150, -142), () => ChangePickerPage(-1), width: 56, height: 40, fontSize: 18f);
+		_pickerNextButton = BuildActionButton(_pickerSection.transform, template, ">", new Vector2(150, -142), () => ChangePickerPage(1), width: 56, height: 40, fontSize: 18f);
+
+		var pageLabelGo = Object.Instantiate(template, _pickerSection.transform);
+		pageLabelGo.name = "HostPanel_PickerPageLabel";
+		pageLabelGo.SetActive(true);
+		var pageLabelBtn = pageLabelGo.GetComponent<Button>();
+		if (pageLabelBtn != null) pageLabelBtn.enabled = false;
+		var pageLabelRt = (RectTransform)pageLabelGo.transform;
+		pageLabelRt.anchoredPosition = new Vector2(0, -142);
+		pageLabelRt.sizeDelta = new Vector2(180, 30);
+		_pickerPageLabel = pageLabelGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		if (_pickerPageLabel != null)
+		{
+			var loc = _pickerPageLabel.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
+			if (loc != null) Object.DestroyImmediate(loc);
+			_pickerPageLabel.enableAutoSizing = false;
+			_pickerPageLabel.fontSize = 14;
+			_pickerPageLabel.color = new Color(1f, 1f, 1f, 0.6f);
+			_pickerPageLabel.textWrappingMode = TextWrappingModes.NoWrap;
+			_pickerPageLabel.overflowMode = TextOverflowModes.Overflow;
+		}
+
 		var cancelGo = BuildActionButton(_pickerSection.transform, template, "Cancel", new Vector2(0, -195), () => _activePicker = PickerKind.None);
 		_pickerSection.SetActive(false);
 	}
@@ -314,12 +341,14 @@ internal class HostPanelController : MonoBehaviour
 	private void OnOpenMapPickerClicked()
 	{
 		_activePicker = PickerKind.Map;
+		_pickerPage = 0;
 		RefreshPickerRows();
 	}
 
 	private void OnOpenSavePickerClicked()
 	{
 		_activePicker = PickerKind.Save;
+		_pickerPage = 0;
 		RefreshPickerRows();
 	}
 
@@ -340,38 +369,62 @@ internal class HostPanelController : MonoBehaviour
 		return Directory.GetDirectories(path).Select(Path.GetFileName).OrderBy(n => n).ToList();
 	}
 
+	private const int PickerRowsPerPage = 5;
+
 	private void RefreshPickerRows()
 	{
-		foreach (var row in _pickerRows) Object.Destroy(row);
+		// Destroy() defers to end-of-frame, which would leave the old and new
+		// rows both alive (and overlapping at the same positions) for the rest
+		// of this frame every time the picker is reopened after the first time.
+		foreach (var row in _pickerRows) Object.DestroyImmediate(row);
 		_pickerRows.Clear();
 
-		float y = 110f;
-		const float spacing = 54f;
-
+		var entries = new List<(string Label, System.Action OnClick)>();
 		if (_activePicker == PickerKind.Map)
 		{
 			if (_pickerHeader != null) _pickerHeader.text = "Choose a Map";
-			_pickerRows.Add(CreatePickerRow("Current Map", y, () => { _selectedMapIndex = -1; _activePicker = PickerKind.None; }));
-			y -= spacing;
+			entries.Add(("Current Map", () => { _selectedMapIndex = -1; _activePicker = PickerKind.None; }));
 			for (int i = 0; i < _hostableMaps.Count; i++)
 			{
 				var idx = i;
-				_pickerRows.Add(CreatePickerRow(_hostableMaps[i].Name, y, () => { _selectedMapIndex = idx; _activePicker = PickerKind.None; }));
-				y -= spacing;
+				entries.Add((_hostableMaps[i].Name, () => { _selectedMapIndex = idx; _activePicker = PickerKind.None; }));
 			}
 		}
 		else if (_activePicker == PickerKind.Save)
 		{
 			if (_pickerHeader != null) _pickerHeader.text = "Choose a Save";
-			_pickerRows.Add(CreatePickerRow("New Save", y, () => { _selectedSaveName = null; _activePicker = PickerKind.None; }));
-			y -= spacing;
+			entries.Add(("New Save", () => { _selectedSaveName = null; _activePicker = PickerKind.None; }));
 			foreach (var name in ListSavesForCurrentMode())
 			{
 				var captured = name;
-				_pickerRows.Add(CreatePickerRow(captured, y, () => { _selectedSaveName = captured; _activePicker = PickerKind.None; }));
-				y -= spacing;
+				entries.Add((captured, () => { _selectedSaveName = captured; _activePicker = PickerKind.None; }));
 			}
 		}
+
+		// A save picker's list only ever grows (a new folder per session) - cap
+		// what's shown at once instead of letting it eventually run into Cancel.
+		var totalPages = Mathf.Max(1, Mathf.CeilToInt(entries.Count / (float)PickerRowsPerPage));
+		_pickerPage = Mathf.Clamp(_pickerPage, 0, totalPages - 1);
+
+		float y = 110f;
+		const float spacing = 54f;
+		var start = _pickerPage * PickerRowsPerPage;
+		var end = Mathf.Min(start + PickerRowsPerPage, entries.Count);
+		for (int i = start; i < end; i++)
+		{
+			_pickerRows.Add(CreatePickerRow(entries[i].Label, y, entries[i].OnClick));
+			y -= spacing;
+		}
+
+		if (_pickerPageLabel != null) _pickerPageLabel.text = totalPages > 1 ? $"Page {_pickerPage + 1}/{totalPages}" : "";
+		if (_pickerPrevButton != null) _pickerPrevButton.gameObject.SetActive(totalPages > 1);
+		if (_pickerNextButton != null) _pickerNextButton.gameObject.SetActive(totalPages > 1);
+	}
+
+	private void ChangePickerPage(int delta)
+	{
+		_pickerPage += delta;
+		RefreshPickerRows();
 	}
 
 	private GameObject CreatePickerRow(string label, float y, System.Action onClick)
@@ -429,10 +482,23 @@ internal class HostPanelController : MonoBehaviour
 	{
 		if (_mapListLoading) return;
 		_mapListLoading = true;
+		// A scene reload rebuilds this whole panel from scratch and calls this
+		// again - resetting the selection unconditionally here silently threw
+		// away whatever map the host had already picked, well after they'd
+		// picked it, with no visible cause.
+		var previouslySelectedHubId = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count
+			? _hostableMaps[_selectedMapIndex].HubId
+			: null;
 		new Thread(() =>
 		{
 			try { _hostableMaps = MpMapLibrary.GetHostableMaps(); }
-			finally { _mapListLoading = false; _selectedMapIndex = -1; }
+			finally
+			{
+				_mapListLoading = false;
+				_selectedMapIndex = previouslySelectedHubId != null
+					? _hostableMaps.FindIndex(m => m.HubId == previouslySelectedHubId)
+					: -1;
+			}
 		})
 		{ IsBackground = true }.Start();
 	}
@@ -500,7 +566,9 @@ internal class HostPanelController : MonoBehaviour
 		{
 			bool canPickSave = canConfigure && SaveRootFolder(_mode) != null;
 			_saveButton.interactable = canPickSave;
-			PauseMenuHelper.SetButtonLabel(_saveButton.gameObject, "Save: " + (_selectedSaveName ?? "New Save"));
+			var saveLabel = _selectedSaveName ?? "New Save";
+			if (saveLabel.Length > 14) saveLabel = saveLabel.Substring(0, 12) + "..";
+			PauseMenuHelper.SetButtonLabel(_saveButton.gameObject, "Save: " + saveLabel);
 		}
 
 		bool showingPicker = _activePicker != PickerKind.None;
