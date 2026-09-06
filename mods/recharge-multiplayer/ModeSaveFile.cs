@@ -42,7 +42,11 @@ internal static class ModeSaveFile
 			if (course?.localUpgradesScript == null) continue;
 			foreach (var key in course.localUpgradesScript.localUpgradeDict.Keys.ToList())
 				course.localUpgradesScript.localUpgradeDict[key] = 0.0;
-			foreach (var box in GetUpgradeBoxes(course)) box.TimesUsed = 0;
+			foreach (var box in GetUpgradeBoxes(course))
+			{
+				box.TimesUsed = 0;
+				box.upgradeCost = box.baseUpgradeCost;
+			}
 		}
 	}
 

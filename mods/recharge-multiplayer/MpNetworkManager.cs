@@ -217,12 +217,18 @@ public class MpNetworkManager : MonoBehaviour
 
 	internal static string GetDisplayName()
 	{
+		var custom = PlayerPrefs.GetString("MpDisplayName", "");
+		if (!string.IsNullOrWhiteSpace(custom)) return custom;
 		try
 		{
-			if (SteamManager.Initialized) return SteamFriends.GetPersonaName();
+			if (SteamManager.Initialized)
+			{
+				var steamName = SteamFriends.GetPersonaName();
+				if (!string.IsNullOrWhiteSpace(steamName)) return steamName;
+			}
 		}
 		catch { }
-		return PlayerPrefs.GetString("MpDisplayName", "Player");
+		return "Player";
 	}
 
 	private const string NameColorPrefsKey = "MpNameColor";
