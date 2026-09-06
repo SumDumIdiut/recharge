@@ -5,7 +5,7 @@ public class RechargeMultiplayerMod : IRechargeMod
 {
     public string Id => "recharge.multiplayer";
     public string DisplayName => "DOTnet";
-    public Version Version => new Version(1, 6, 2);
+    public Version Version => new Version(1, 6, 3);
 
     public void OnLoad(IRechargeHost host)
     {
