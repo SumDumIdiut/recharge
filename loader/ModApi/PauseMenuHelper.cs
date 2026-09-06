@@ -384,7 +384,7 @@ namespace Recharge.ModApi
                 var titleTmp = title.GetComponent<TMP_Text>();
                 if (titleTmp != null) titleTmp.text = label;
                 var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-                if (loc != null) UnityEngine.Object.Destroy(loc);
+                if (loc != null) UnityEngine.Object.DestroyImmediate(loc);
 
                 var closeBtn = title.Find("Close");
                 if (closeBtn != null)
@@ -409,7 +409,7 @@ namespace Recharge.ModApi
             var label = buttonGo.transform.Find("Text (TMP)");
             if (label == null) return;
             var loc = label.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-            if (loc != null) UnityEngine.Object.Destroy(loc);
+            if (loc != null) UnityEngine.Object.DestroyImmediate(loc);
             var tmp = label.GetComponent<TMP_Text>();
             if (tmp != null) tmp.text = text;
         }
