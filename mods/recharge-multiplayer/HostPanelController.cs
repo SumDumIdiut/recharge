@@ -611,6 +611,7 @@ internal class HostPanelController : MonoBehaviour
 			if (playerGo != null) _localMovement = playerGo.GetComponent<Movement>();
 		}
 		TryApplyPendingAbilities();
+		TryStartModeEconomy();
 
 		if (_returnToLobbyPending && Time.unscaledTime - _returnToLobbyFadeStart >= ReturnToLobbyFadeDuration)
 		{
@@ -742,7 +743,8 @@ internal class HostPanelController : MonoBehaviour
 			_roundMapHubId = (string)payload["mapHubId"];
 			_selectedSaveName = payload["saveName"]?.Value<string>();
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
-			if (_mode == Mode.HideAndSeek || _mode == Mode.Infection) ActivateModeSaveFile(_mode, _selectedSaveName);
+			_pendingModeStart = _mode == Mode.HideAndSeek || _mode == Mode.Infection || _mode == Mode.Coop;
+			TryStartModeEconomy();
 			ApplyLocalAppearance();
 			TryApplyPendingAbilities();
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
@@ -751,15 +753,6 @@ internal class HostPanelController : MonoBehaviour
 			{
 				EnsureMapLoaded(_roundMapHubId);
 				CloseMenuIfOpen();
-			}
-			if (_mode == Mode.Coop)
-			{
-				try
-				{
-					var mgrInst = MpNetworkManager.Instance;
-					_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement, _selectedSaveName);
-				}
-				catch (System.Exception e) { Debug.LogError("[HostPanel] Coop.Begin failed: " + e); }
 			}
 		}
 		else if (kind == "stop")
@@ -824,6 +817,31 @@ internal class HostPanelController : MonoBehaviour
 		if (_pendingAbilities == null || _localMovement == null) return;
 		ApplyAbilityRestrictions(_pendingAbilities);
 		_pendingAbilities = null;
+	}
+
+	private bool _pendingModeStart;
+
+	// Same reasoning as TryApplyPendingAbilities - Co-op/Hide & Seek/Infection's
+	// own economy reset needs _localMovement too, and silently skipping it
+	// (currency doesn't need it, so that part would still work) is exactly
+	// what left one player's abilities/upgrades never actually wiped.
+	private void TryStartModeEconomy()
+	{
+		if (!_pendingModeStart || _localMovement == null) return;
+		_pendingModeStart = false;
+		if (_mode == Mode.HideAndSeek || _mode == Mode.Infection)
+		{
+			ActivateModeSaveFile(_mode, _selectedSaveName);
+		}
+		else if (_mode == Mode.Coop)
+		{
+			try
+			{
+				var mgrInst = MpNetworkManager.Instance;
+				_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement, _selectedSaveName);
+			}
+			catch (System.Exception e) { Debug.LogError("[HostPanel] Coop.Begin failed: " + e); }
+		}
 	}
 
 	private void ApplyAbilityRestrictions(JObject abilities)

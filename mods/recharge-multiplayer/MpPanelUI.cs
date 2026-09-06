@@ -54,6 +54,7 @@ internal class MpPanelUI : MonoBehaviour
 	private bool _showingAppearance;
 	private Image _colourSwatch;
 	private Slider _rSlider, _gSlider, _bSlider;
+	private TMP_InputField _nameField;
 	private Color _pendingColor = Color.white;
 
 	private readonly Color[] _colorPresets =
@@ -165,9 +166,13 @@ internal class MpPanelUI : MonoBehaviour
 		_presetPageLabel.color = new Color(1f, 1f, 1f, 0.6f);
 		RefreshPresetPage();
 
-		_rSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -35), "R", new Color(1f, 0.4f, 0.4f));
-		_gSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -85), "G", new Color(0.4f, 1f, 0.4f));
-		_bSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -135), "B", new Color(0.4f, 0.6f, 1f));
+		_nameField = CreateInputField(_appearanceSection.transform, new Vector2(0, -40), new Vector2(300, 40), "Your name");
+		_nameField.characterLimit = 24;
+		_nameField.onEndEdit.AddListener(OnNameFieldChanged);
+
+		_rSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -80), "R", new Color(1f, 0.4f, 0.4f));
+		_gSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -122), "G", new Color(0.4f, 1f, 0.4f));
+		_bSlider = CreateColorSlider(_appearanceSection.transform, new Vector2(0, -164), "B", new Color(0.4f, 0.6f, 1f));
 		_rSlider.onValueChanged.AddListener(_ => OnSliderChanged());
 		_gSlider.onValueChanged.AddListener(_ => OnSliderChanged());
 		_bSlider.onValueChanged.AddListener(_ => OnSliderChanged());
@@ -291,6 +296,13 @@ internal class MpPanelUI : MonoBehaviour
 		_pendingColor = ParseHexOrDefault(MpNetworkManager.GetNameColorHex(), Color.white);
 		RefreshSwatchPreview();
 		SyncSlidersToColor();
+		if (_nameField != null) _nameField.text = PlayerPrefs.GetString("MpDisplayName", "");
+	}
+
+	private static void OnNameFieldChanged(string value)
+	{
+		PlayerPrefs.SetString("MpDisplayName", value.Trim());
+		PlayerPrefs.Save();
 	}
 
 	public void TestOpenAppearance() => OnAppearanceClicked();
