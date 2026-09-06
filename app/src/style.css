@@ -1,14 +1,16 @@
 * { box-sizing: border-box; }
 
 :root {
-  --bg:      #08110c;
-  --panel:   #0e1a13;
-  --line:    oklch(80% 0.19 150 / 0.35);
-  --line-hi: oklch(80% 0.19 150);
-  --green:   oklch(80% 0.19 150);
-  --green-dim: oklch(80% 0.19 150 / 0.6);
-  --text:    #d8f5e2;
-  --text-dim: oklch(80% 0.19 150 / 0.55);
+  --bg:      #141414;
+  --panel:   #1c1c1c;
+  --line:    rgba(249, 255, 228, 0.14);
+  --line-hi: rgba(249, 255, 228, 0.4);
+  --text:    #f9ffe4;
+  --text-dim: rgba(249, 255, 228, 0.55);
+  --green:   #41f88d;
+  --green-dim: rgba(65, 248, 141, 0.6);
+  --magenta: #c63ed8;
+  --magenta-dim: rgba(198, 62, 216, 0.6);
 }
 
 html { color-scheme: dark; }
@@ -28,8 +30,10 @@ body {
   z-index: 0;
   pointer-events: none;
   background-image:
-    repeating-linear-gradient(0deg, oklch(80% 0.19 150 / 0.06) 0 1px, transparent 1px 30px),
-    repeating-linear-gradient(90deg, oklch(80% 0.19 150 / 0.06) 0 1px, transparent 1px 30px);
+    radial-gradient(ellipse at 20% -10%, rgba(65, 248, 141, 0.05), transparent 45%),
+    radial-gradient(ellipse at 100% 110%, rgba(198, 62, 216, 0.05), transparent 45%),
+    repeating-linear-gradient(0deg, rgba(249, 255, 228, 0.025) 0 1px, transparent 1px 30px),
+    repeating-linear-gradient(90deg, rgba(249, 255, 228, 0.025) 0 1px, transparent 1px 30px);
 }
 
 /* ── Waveform banner ─────────────────────────────────────────────────── */
@@ -79,7 +83,7 @@ body {
 .crumb-back {
   background: none;
   border: none;
-  color: var(--green);
+  color: var(--text);
   font: inherit;
   font-size: 20px;
   text-transform: uppercase;
@@ -108,7 +112,9 @@ body {
 .home-page { width: 100%; flex: 1; display: flex; flex-direction: column; }
 
 .home-header { margin-bottom: 34px; }
-.home-title { font-size: 28px; letter-spacing: 2px; color: var(--green); text-transform: uppercase; }
+.home-title-row { display: flex; align-items: center; gap: 14px; }
+.home-logo { width: 40px; height: 40px; display: block; filter: drop-shadow(0 0 10px rgba(65, 248, 141, 0.25)); }
+.home-title { font-size: 28px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
 
 .home-grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; flex: 1; }
 
@@ -117,6 +123,7 @@ body {
   flex-shrink: 0;
   background: none;
   border: 1px solid var(--line);
+  border-radius: 10px;
   padding: 28px;
 }
 .home-panel-title { font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
@@ -145,6 +152,7 @@ body {
 .home-tile {
   background: none;
   border: 1px solid var(--line);
+  border-radius: 10px;
   color: var(--green);
   font: inherit;
   font-size: 21px;
@@ -153,7 +161,7 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.home-tile:hover:not(:disabled) { border-color: var(--line-hi); }
+.home-tile:hover:not(:disabled) { border-color: var(--green-dim); box-shadow: 0 0 16px rgba(65, 248, 141, 0.12); }
 .home-tile:disabled { opacity: 0.5; cursor: default; }
 
 .home-play-status { color: var(--text-dim); font-size: 15px; min-height: 20px; }
@@ -161,7 +169,8 @@ body {
 .home-menu-row {
   background: none;
   border: 1px solid var(--line);
-  color: var(--green);
+  border-radius: 10px;
+  color: var(--text);
   font: inherit;
   font-size: 20px;
   text-transform: uppercase;
@@ -169,15 +178,16 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.home-menu-row:hover { border-color: var(--line-hi); background: oklch(80% 0.19 150 / 0.06); }
+.home-menu-row:hover { border-color: var(--line-hi); background: rgba(249, 255, 228, 0.05); }
 
 /* ── Sub-pages ────────────────────────────────────────────────────────── */
-.page-header { font-size: 26px; color: var(--green); margin-bottom: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
+.page-header { font-size: 26px; color: var(--text); margin-bottom: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
 
 .btn {
   background: none;
   border: 1px solid var(--line);
-  color: var(--green);
+  border-radius: 8px;
+  color: var(--text);
   font: inherit;
   font-size: 18px;
   text-transform: uppercase;
@@ -185,13 +195,15 @@ body {
   cursor: pointer;
 }
 .btn:hover { border-color: var(--line-hi); }
-.btn-primary { border-color: var(--line-hi); color: var(--green); }
+.btn-primary { border-color: var(--green-dim); color: var(--green); }
+.btn-primary:hover { border-color: var(--green); }
 
 .home-panel .btn { width: 100%; margin-top: 22px; }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
+  border-radius: 10px;
   padding: 18px;
   margin-bottom: 14px;
 }
@@ -201,6 +213,7 @@ body {
 .subtab-btn {
   background: none;
   border: 1px solid var(--line);
+  border-radius: 8px;
   color: var(--text-dim);
   font: inherit;
   font-size: 16px;
@@ -208,10 +221,11 @@ body {
   padding: 6px 16px;
   cursor: pointer;
 }
-.subtab-btn.active { border-color: var(--line-hi); color: var(--green); }
+.subtab-btn.active { border-color: var(--green-dim); color: var(--green); }
 .browser-search {
   background: var(--panel);
   border: 1px solid var(--line);
+  border-radius: 8px;
   color: var(--text);
   font: inherit;
   font-size: 16px;
@@ -220,10 +234,10 @@ body {
 
 .browser-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 380px)); gap: 18px; align-items: start; }
 
-.browse-card { background: var(--panel); border: 1px solid var(--line); padding: 0 0 16px; display: flex; flex-direction: column; }
+.browse-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; padding: 0 0 16px; display: flex; flex-direction: column; }
 .browse-card-top { display: flex; flex-direction: column; gap: 0; }
 .browse-card-info { padding: 14px 16px 0; }
-.browse-card-name { font-size: 20px; color: var(--green); text-transform: uppercase; }
+.browse-card-name { font-size: 20px; color: var(--text); text-transform: uppercase; }
 .browse-card-meta { color: var(--text-dim); font-size: 14px; }
 .browse-card-desc { color: var(--text-dim); font-size: 15px; margin-top: 6px; line-height: 1.4; padding: 0 16px; }
 .browse-card-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 0 16px; }
@@ -245,6 +259,7 @@ body {
 .toast {
   background: var(--panel);
   border: 1px solid var(--line-hi);
+  border-radius: 10px;
   color: var(--text);
   padding: 12px 18px;
   font-size: 16px;
