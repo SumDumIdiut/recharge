@@ -5,12 +5,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
-// Host-authoritative shared economy for Host Panel's Co-op mode. The host's
-// own save (a separate "/SavedataCoop" folder, never the real "/Savedata")
-// is the single source of truth; everyone else mirrors whatever the host
-// broadcasts. Non-host clients still earn/spend locally through completely
-// normal vanilla gameplay - this only detects the resulting changes and
-// forwards them as deltas for the host to apply and rebroadcast.
+// Host-authoritative shared economy for Host Panel's Co-op mode.
 internal class CoopManager
 {
 	private const string SaveRoot = "/SavedataCoop";
@@ -68,9 +63,7 @@ internal class CoopManager
 		}
 		else
 		{
-			// Non-host doesn't touch disk - just zero the local view so it isn't
-			// showing stale real-save numbers for the few seconds before the
-			// host's first sync corrects it to the real shared totals.
+			// non-host: zero the local view until the host's first sync arrives
 			ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
 		}
 
@@ -85,11 +78,7 @@ internal class CoopManager
 		foreach (var c in UnityEngine.Object.FindObjectsByType<clonesScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
 		{
 			if (!c.enabled) continue;
-			// enabled = false only stops the spawner's own Update loop - any clones
-			// already instantiated from the real save's cloneCount (set in its own
-			// Start(), long before Begin() runs) keep existing and cloneCount itself
-			// is untouched, so it'd get baked straight into the fresh co-op save.
-			// onPrestige(true) is the game's own "wipe every clone back to zero" call.
+			// enabled=false alone leaves stale clones/cloneCount from the real save
 			c.onPrestige(true);
 			c.enabled = false;
 			_disabledClones.Add(c);
@@ -263,10 +252,7 @@ internal class CoopManager
 					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
 					var box = boxes[boxIndex];
 					box.TimesUsed = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
-					// TimesUsed alone is just the displayed count - upgradeCost only
-					// escalates through the box's own buy flow, so a purchase another
-					// player made never raised OUR copy's price. CalcBoxCost() is the
-					// game's own "recompute cost from scratch off TimesUsed" method.
+					// TimesUsed synced but upgradeCost didn't - recompute it too
 					box.CalcBoxCost();
 				}
 			}
