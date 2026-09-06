@@ -364,6 +364,86 @@ internal static class RealAssetPalette
         _springFramesCaptured = true;
     }
 
+    private static bool _dotFramesCaptured;
+    private static readonly int[] DotAnimationStates = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    private static readonly string[] DotAnimationNames = { "idle", "run", "falling", "wallslide", "state4", "rising", "dash", "death" };
+
+    // Same recording technique as CaptureSpringAnimation, applied to every
+    // integer value Movement.cs's own animator.SetInteger("Animation", n)
+    // call site uses (0-7) - cloning just the player's "Sprite" child (not
+    // the whole player object) so Movement's own physics-driven logic isn't
+    // still running on the clone and fighting these forced state changes.
+    public static IEnumerator CapturePlayerAnimations()
+    {
+        if (_dotFramesCaptured) yield break;
+        var dir = Path.Combine(MapPaths.TexturesDir, "dot");
+        if (File.Exists(Path.Combine(dir, "manifest.json"))) { _dotFramesCaptured = true; yield break; }
+
+        var playerGo = GameObject.FindGameObjectWithTag("Player");
+        var spriteTf = playerGo != null ? playerGo.transform.Find("Sprite") : null;
+        if (spriteTf == null) yield break;
+
+        var spawnPos = new Vector3(60100f, 60000f, 0f); // its own far pocket, distinct from the spring's
+        var clone = UnityEngine.Object.Instantiate(spriteTf.gameObject, spawnPos, Quaternion.identity);
+        clone.SetActive(true);
+
+        var sr = clone.GetComponentInChildren<SpriteRenderer>();
+        var animator = clone.GetComponent<Animator>() ?? clone.GetComponentInChildren<Animator>();
+        if (sr == null || animator == null)
+        {
+            Debug.LogWarning("[RechargeMaps] player animation capture: missing SpriteRenderer or Animator");
+            UnityEngine.Object.Destroy(clone);
+            yield break;
+        }
+        animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+
+        Directory.CreateDirectory(dir);
+        var stateNames = new List<string>();
+
+        for (int s = 0; s < DotAnimationStates.Length; s++)
+        {
+            var stateName = DotAnimationNames[s];
+            animator.speed = 1f;
+            animator.SetInteger("Animation", DotAnimationStates[s]);
+
+            var frames = new List<Sprite>();
+            yield return null;
+            yield return null; // let the transition/blend settle before sampling
+            if (sr.sprite != null) frames.Add(sr.sprite);
+
+            float elapsed = 0f;
+            while (elapsed < 1.5f)
+            {
+                yield return null;
+                elapsed += Time.unscaledDeltaTime;
+                if (sr.sprite != null && !frames.Contains(sr.sprite)) frames.Add(sr.sprite);
+            }
+
+            var stateDir = Path.Combine(dir, stateName);
+            Directory.CreateDirectory(stateDir);
+            for (int i = 0; i < frames.Count; i++)
+            {
+                try
+                {
+                    var bytes = ExtractSpritePng(frames[i]);
+                    if (bytes != null) File.WriteAllBytes(Path.Combine(stateDir, i + ".png"), bytes);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[RechargeMaps] dot frame export failed for '" + stateName + "': " + e.Message);
+                }
+            }
+            File.WriteAllText(Path.Combine(stateDir, "manifest.json"),
+                "[" + string.Join(",", Enumerable.Range(0, frames.Count).Select(i => "\"frame_" + i + "\"")) + "]");
+            Debug.Log("[RechargeMaps] captured " + frames.Count + " frames for dot state '" + stateName + "'");
+            stateNames.Add(stateName);
+        }
+
+        File.WriteAllText(Path.Combine(dir, "manifest.json"), "[" + string.Join(",", stateNames.Select(n => "\"" + n + "\"")) + "]");
+        UnityEngine.Object.Destroy(clone);
+        _dotFramesCaptured = true;
+    }
+
     private static void LogPlatformMoverCount()
     {
         var all = Resources.FindObjectsOfTypeAll<PlatformMover>();
