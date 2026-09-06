@@ -150,10 +150,14 @@ internal class MpPanelUI : MonoBehaviour
 			_presetSwatches.Add(swatch);
 		}
 
-		var prevGo = CloneButton(_appearanceSection.transform, "<", new Vector2(-260, 30), new Vector2(40, 50));
-		prevGo.GetComponent<Button>().onClick.AddListener(() => ChangePresetPage(-1));
-		var nextGo = CloneButton(_appearanceSection.transform, ">", new Vector2(260, 30), new Vector2(40, 50));
-		nextGo.GetComponent<Button>().onClick.AddListener(() => ChangePresetPage(1));
+		var prevGo = CloneButton(_appearanceSection.transform, "<", new Vector2(-280, 30), new Vector2(56, 54));
+		var prevBtn = prevGo.GetComponent<Button>();
+		prevBtn.onClick.AddListener(() => ChangePresetPage(-1));
+		LockButtonColor(prevBtn);
+		var nextGo = CloneButton(_appearanceSection.transform, ">", new Vector2(280, 30), new Vector2(56, 54));
+		var nextBtn = nextGo.GetComponent<Button>();
+		nextBtn.onClick.AddListener(() => ChangePresetPage(1));
+		LockButtonColor(nextBtn);
 
 		_presetPageLabel = CreateLabel(_appearanceSection.transform, "PresetPage", new Vector2(0, -5), new Vector2(160, 20), "");
 		_presetPageLabel.alignment = TextAlignmentOptions.Center;
@@ -172,6 +176,17 @@ internal class MpPanelUI : MonoBehaviour
 		doneGo.GetComponent<Button>().onClick.AddListener(OnAppearanceDoneClicked);
 
 		_appearanceSection.SetActive(false);
+	}
+
+	// A hover/select tint on a tiny button reads as a whole different colour
+	// once its own background is this small - keep it visually static instead.
+	private static void LockButtonColor(Button btn)
+	{
+		var cb = btn.colors;
+		cb.highlightedColor = cb.normalColor;
+		cb.selectedColor = cb.normalColor;
+		cb.pressedColor = new Color(cb.normalColor.r * 0.8f, cb.normalColor.g * 0.8f, cb.normalColor.b * 0.8f, cb.normalColor.a);
+		btn.colors = cb;
 	}
 
 	private Image CreateSwatchButton(Transform parent, Vector2 pos, Vector2 size, Color? fixedColor = null, UnityEngine.Events.UnityAction onClick = null)
