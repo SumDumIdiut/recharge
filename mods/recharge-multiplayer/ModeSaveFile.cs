@@ -44,7 +44,12 @@ internal static class ModeSaveFile
 				course.localUpgradesScript.localUpgradeDict[key] = 0.0;
 			foreach (var box in GetUpgradeBoxes(course))
 			{
-				box.TimesUsed = 0;
+				// TimesUsed = 0 alone leaves a box that was already maxed out in the
+				// player's real save visually stuck on "CAPPED" (deactivate() greys it
+				// out and swaps its cost text) - reactivateAndReset() is the game's own
+				// method for undoing exactly that, so reuse it instead of only touching
+				// the counter.
+				box.reactivateAndReset();
 				box.upgradeCost = box.baseUpgradeCost;
 			}
 		}

@@ -540,9 +540,19 @@ internal class HostPanelController : MonoBehaviour
 			}
 		}
 
+		// Hide & Seek/Infection hold the seeker's own menu open for HideSeconds
+		// after "start" (see Update()'s deferred CloseMenuIfOpen) so hiders get
+		// a head start - without this, whoever gets picked as seeker just sees
+		// their menu sit there unchanged and looks stuck/broken, host or not.
+		bool seekerWaiting = _roundActive && mgr != null && IsLocalSeeking() && Time.unscaledTime < _hideEndTime;
 		if (_toggleButton != null)
 		{
-			if (isHost) PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
+			if (seekerWaiting)
+			{
+				var left = Mathf.CeilToInt(_hideEndTime - Time.unscaledTime);
+				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "You're it! " + left + "s");
+			}
+			else if (isHost) PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
 			else
 			{
 				bool ready = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var tr) && tr;
@@ -605,13 +615,13 @@ internal class HostPanelController : MonoBehaviour
 		}
 
 		bool openEnded = _mode == Mode.Normal || _mode == Mode.Coop;
-		bool normalActive = _roundActive && openEnded;
+		bool roundActiveAsHost = _roundActive && isHost;
 		if (_startButton != null)
 		{
-			if (normalActive && isHost)
+			if (roundActiveAsHost)
 			{
 				_startButton.interactable = true;
-				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, "Stop Playing");
+				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, openEnded ? "Stop Playing" : "Stop Round");
 			}
 			else
 			{
@@ -623,8 +633,9 @@ internal class HostPanelController : MonoBehaviour
 		if (_statusGo == null) return;
 		string statusText;
 		if (mgr == null || !inLobby) statusText = "Host or join a lobby to play.";
-		else if (normalActive) statusText = isHost ? "Playing - click Stop Playing to end." : "Playing.";
-		else if (_roundActive) statusText = "Round in progress.";
+		else if (seekerWaiting) statusText = "You're the seeker - hiders get " + Mathf.CeilToInt(_hideEndTime - Time.unscaledTime) + "s to hide...";
+		else if (roundActiveAsHost) statusText = openEnded ? "Playing - click Stop Playing to end." : "Round in progress - click Stop Round to end.";
+		else if (_roundActive) statusText = openEnded ? "Playing." : "Round in progress.";
 		else if (!isHost) statusText = "Waiting for the host to start.";
 		else if (!string.IsNullOrEmpty(_statusMessage)) statusText = _statusMessage;
 		else if (!AllReady(mgr)) statusText = "Waiting for everyone to ready up...";
@@ -1106,7 +1117,7 @@ internal class HostPanelController : MonoBehaviour
 	private void OnStartOrStopClicked()
 	{
 		var mgr = MpNetworkManager.Instance;
-		if (mgr != null && _roundActive && (_mode == Mode.Normal || _mode == Mode.Coop)) OnStopClicked();
+		if (mgr != null && _roundActive && mgr.IsHost) OnStopClicked();
 		else OnStartClicked();
 	}
 
