@@ -103,7 +103,7 @@ internal class HostPanelController : MonoBehaviour
 		_mainContent = new GameObject("HostPanel_MainContent", typeof(RectTransform));
 		_mainContent.transform.SetParent(panel.transform, false);
 
-		CreateDivider(_mainContent.transform, new Vector2(0, 88), 420);
+		CreateDivider(_mainContent.transform, new Vector2(0, 125), 420);
 
 		var abilityCaptionGo = Object.Instantiate(template, _mainContent.transform);
 		abilityCaptionGo.name = "HostPanel_AbilityCaption";
@@ -111,7 +111,7 @@ internal class HostPanelController : MonoBehaviour
 		var abilityCaptionBtn = abilityCaptionGo.GetComponent<Button>();
 		if (abilityCaptionBtn != null) abilityCaptionBtn.enabled = false;
 		var abilityCaptionRt = (RectTransform)abilityCaptionGo.transform;
-		abilityCaptionRt.anchoredPosition = new Vector2(0, 72);
+		abilityCaptionRt.anchoredPosition = new Vector2(0, 100);
 		abilityCaptionRt.sizeDelta = new Vector2(380, 26);
 		var abilityCaptionText = abilityCaptionGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (abilityCaptionText != null)
@@ -132,7 +132,7 @@ internal class HostPanelController : MonoBehaviour
 			go.name = "HostPanel_Ability_" + key;
 			go.SetActive(true);
 			var rt = (RectTransform)go.transform;
-			rt.anchoredPosition = new Vector2(xs[i], 35);
+			rt.anchoredPosition = new Vector2(xs[i], 55);
 			rt.sizeDelta = new Vector2(110, 44);
 			var abilityText = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 			if (abilityText != null)
@@ -155,7 +155,7 @@ internal class HostPanelController : MonoBehaviour
 			_abilityButtons.Add((key, btn));
 		}
 
-		CreateDivider(_mainContent.transform, new Vector2(0, 9), 420);
+		CreateDivider(_mainContent.transform, new Vector2(0, 15), 420);
 
 		var rosterBoxGo = new GameObject("HostPanelRosterBox", typeof(RectTransform), typeof(Image));
 		rosterBoxGo.transform.SetParent(_mainContent.transform, false);
