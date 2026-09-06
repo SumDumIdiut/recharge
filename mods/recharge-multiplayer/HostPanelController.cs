@@ -935,6 +935,11 @@ internal class HostPanelController : MonoBehaviour
 		_seekerReleased = false;
 		_roundMapHubId = null;
 		_statusMessage = "Round over: " + reason;
+		// The next round's "start" wipes _readyStates, including the host's own
+		// entry - _autoReadyTried being a one-shot-per-lobby flag meant nothing
+		// ever re-sent it afterward, and the host has no manual Ready toggle to
+		// fall back on (that slot opens Host Panel for them instead).
+		_autoReadyTried = false;
 		if (_localMovement != null && _movementFrozen) { _localMovement.enabled = true; _movementFrozen = false; }
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
 		RestoreAbilities();
