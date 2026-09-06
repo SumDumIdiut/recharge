@@ -709,13 +709,19 @@ internal class HostPanelController : MonoBehaviour
 		_disabledClones.Clear();
 	}
 
+	private const string DefaultGreyHex = "#888888";
+
 	private void ApplyLocalAppearance()
 	{
-		if (!IsLocalSeeking()) return;
-		_prevDotColor = MpNetworkManager.GetDotColorHex();
-		_prevNameColor = MpNetworkManager.GetNameColorHex();
-		MpNetworkManager.SetDotColorHex("#FF0000");
-		MpNetworkManager.SetNameColorHex("#FF0000");
+		if (_mode == Mode.Normal) return;
+		if (_prevDotColor == null)
+		{
+			_prevDotColor = MpNetworkManager.GetDotColorHex();
+			_prevNameColor = MpNetworkManager.GetNameColorHex();
+		}
+		var color = IsLocalSeeking() ? "#FF0000" : DefaultGreyHex;
+		MpNetworkManager.SetDotColorHex(color);
+		MpNetworkManager.SetNameColorHex(color);
 	}
 
 	private void EndRoundLocally(string reason)
