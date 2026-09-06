@@ -111,7 +111,20 @@ body {
 
 .home-header { margin-bottom: 34px; }
 .home-title-row { display: flex; align-items: center; gap: 14px; }
-.home-logo { width: 64px; height: 64px; display: block; }
+.home-logo {
+  width: 64px;
+  height: 64px;
+  display: block;
+  filter:
+    drop-shadow(1px 0 0 #fff)
+    drop-shadow(-1px 0 0 #fff)
+    drop-shadow(0 1px 0 #fff)
+    drop-shadow(0 -1px 0 #fff)
+    drop-shadow(0.7px 0.7px 0 #fff)
+    drop-shadow(-0.7px 0.7px 0 #fff)
+    drop-shadow(0.7px -0.7px 0 #fff)
+    drop-shadow(-0.7px -0.7px 0 #fff);
+}
 .home-title { font-size: 28px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
 
 .home-grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; flex: 1; }
