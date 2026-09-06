@@ -43,45 +43,27 @@ internal class CoopManager
 		var saveloader = UnityEngine.Object.FindFirstObjectByType<Saveloader>();
 		if (saveloader != null) saveloader.CancelInvoke("autosave");
 
+		_courses.Clear();
+		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+
 		DisableClones();
 		RebalanceCosts(playerCount);
 
-		_courses.Clear();
-		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
-		if (isHost) LoadOrBootstrapSave();
+		// Every Co-op session starts from a true blank slate, host or not - a
+		// non-host's local view gets zeroed here too so it isn't showing their
+		// own stale real-save numbers for the few seconds before the host's
+		// first sync arrives; only the host actually persists the reset to disk.
+		ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
+		if (isHost)
+		{
+			ModeSaveFile.DeleteAndRecreateFolder(SaveFolder);
+			ModeSaveFile.Save(SaveFolder, _localMovement, _courses);
+		}
 
 		CaptureBaseline();
 	}
 
-	private static List<upgradeBox> GetUpgradeBoxes(courseScript course)
-	{
-		var list = new List<upgradeBox>();
-		var t = course?.localUpgradesScript?.transform;
-		if (t == null) return list;
-		for (int i = 0; i < t.childCount; i++)
-		{
-			var box = t.GetChild(i).GetComponent<upgradeBox>();
-			if (box != null) list.Add(box);
-		}
-		return list;
-	}
-
-	private void LoadOrBootstrapSave()
-	{
-		if (_localMovement == null) return;
-		var path = Application.persistentDataPath + SaveFolder;
-		Directory.CreateDirectory(path);
-		var exists = File.Exists(path + "/playerdata.txt");
-		if (exists)
-		{
-			try { _localMovement.load(SaveFolder); } catch (Exception e) { Debug.LogError("[CoopManager] load failed: " + e); }
-			foreach (var c in _courses) { try { c.load(SaveFolder); } catch { } }
-		}
-		else
-		{
-			PersistSave();
-		}
-	}
+	private static List<upgradeBox> GetUpgradeBoxes(courseScript course) => ModeSaveFile.GetUpgradeBoxes(course);
 
 	private void DisableClones()
 	{
@@ -366,16 +348,7 @@ internal class CoopManager
 		CaptureBaseline();
 	}
 
-	private void PersistSave()
-	{
-		if (_localMovement == null) return;
-		try
-		{
-			_localMovement.save(SaveFolder);
-			foreach (var c in _courses) c.save(SaveFolder);
-		}
-		catch (Exception e) { Debug.LogError("[CoopManager] save failed: " + e); }
-	}
+	private void PersistSave() => ModeSaveFile.Save(SaveFolder, _localMovement, _courses);
 
 	public void End(bool isHost)
 	{
@@ -395,16 +368,7 @@ internal class CoopManager
 		}
 		_rebalancedBoxes.Clear();
 
-		var realFolder = "/Savedata" + (globalStats.difficultyLevel == 1 ? "hard" : "");
-		if (_localMovement != null)
-		{
-			try { _localMovement.load(realFolder); } catch (Exception e) { Debug.LogError("[CoopManager] restore failed: " + e); }
-		}
-		foreach (var c in _courses)
-		{
-			if (c == null) continue;
-			try { c.load(realFolder); } catch { }
-		}
+		ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 		_courses.Clear();
 
 		var saveloader = UnityEngine.Object.FindFirstObjectByType<Saveloader>();
