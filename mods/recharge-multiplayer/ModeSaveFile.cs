@@ -50,7 +50,11 @@ internal static class ModeSaveFile
 				// method for undoing exactly that, so reuse it instead of only touching
 				// the counter.
 				box.reactivateAndReset();
-				box.upgradeCost = box.baseUpgradeCost;
+				// CalcBoxCost() (not a flat baseUpgradeCost assign) since it also
+				// accounts for course.tier - a course the player already prestiged in
+				// their real save keeps that tier here (courses aren't cloned for
+				// co-op), and baseUpgradeCost alone would under-price it.
+				box.CalcBoxCost();
 			}
 		}
 	}

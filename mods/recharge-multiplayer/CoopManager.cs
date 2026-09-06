@@ -261,7 +261,13 @@ internal class CoopManager
 				foreach (var kv in boxTimesUsedObj)
 				{
 					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
-					boxes[boxIndex].TimesUsed = additive ? Math.Max(0, boxes[boxIndex].TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
+					var box = boxes[boxIndex];
+					box.TimesUsed = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
+					// TimesUsed alone is just the displayed count - upgradeCost only
+					// escalates through the box's own buy flow, so a purchase another
+					// player made never raised OUR copy's price. CalcBoxCost() is the
+					// game's own "recompute cost from scratch off TimesUsed" method.
+					box.CalcBoxCost();
 				}
 			}
 		}
