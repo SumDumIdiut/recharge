@@ -588,6 +588,7 @@ internal class HostPanelController : MonoBehaviour
 			_seekerReleased = false;
 			_roundMapHubId = (string)payload["mapHubId"];
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
+			if (_mode == Mode.HideAndSeek || _mode == Mode.Infection) ActivateModeSaveFile(_mode);
 			ApplyLocalAppearance();
 			TryApplyPendingAbilities();
 			if (_mode == Mode.HideAndSeek) DisableWattsAndClones();
@@ -768,7 +769,37 @@ internal class HostPanelController : MonoBehaviour
 		RestoreWattsAndClones();
 		ExitSpectate();
 		if (_mode == Mode.Coop) _coop.End(MpNetworkManager.Instance?.IsHost ?? false);
+		if (_mode == Mode.HideAndSeek || _mode == Mode.Infection) DeactivateModeSaveFile();
 		if (reason == "everyone was found") { _returnToLobbyPending = true; _returnToLobbyFadeStart = Time.unscaledTime; }
+	}
+
+	private const string HideAndSeekSaveFolder = "/SavedataHideAndSeek";
+	private const string InfectionSaveFolder = "/SavedataInfection";
+	private readonly List<courseScript> _modeCourses = new List<courseScript>();
+	private bool _modeSaveActive;
+
+	private void ActivateModeSaveFile(Mode mode)
+	{
+		try
+		{
+			var folder = mode == Mode.HideAndSeek ? HideAndSeekSaveFolder : InfectionSaveFolder;
+			_modeCourses.Clear();
+			_modeCourses.AddRange(Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+			ModeSaveFile.ResetEconomyToZero(_localMovement, _modeCourses);
+			ModeSaveFile.DeleteAndRecreateFolder(folder);
+			ModeSaveFile.Save(folder, _localMovement, _modeCourses);
+			_modeSaveActive = true;
+		}
+		catch (System.Exception e) { Debug.LogError("[HostPanel] ActivateModeSaveFile failed: " + e); }
+	}
+
+	private void DeactivateModeSaveFile()
+	{
+		if (!_modeSaveActive) return;
+		_modeSaveActive = false;
+		try { ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _modeCourses); }
+		catch (System.Exception e) { Debug.LogError("[HostPanel] DeactivateModeSaveFile failed: " + e); }
+		_modeCourses.Clear();
 	}
 
 	private void CloseMenuIfOpen()
