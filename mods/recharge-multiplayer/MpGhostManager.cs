@@ -17,6 +17,7 @@ internal static class MpGhostManager
 
 	private static readonly Dictionary<int, GhostEntry> _ghosts = new Dictionary<int, GhostEntry>();
 	private static Transform _spriteTemplate;
+	private static float _lastSnapshotLogTime = -999f;
 
 	public static void SetTemplate(Transform playerSprite)
 	{
@@ -27,9 +28,13 @@ internal static class MpGhostManager
 
 	public static void ApplySnapshot(List<MpPlayerState> players)
 	{
+		bool doLog = Time.unscaledTime - _lastSnapshotLogTime > 2f;
+		if (doLog) _lastSnapshotLogTime = Time.unscaledTime;
+
 		var seen = new HashSet<int>();
 		foreach (var p in players)
 		{
+			if (doLog) Debug.Log($"[MpGhost] snapshot id={p.id} name={p.name} pos=({p.x:F1},{p.y:F1}) paused={p.isPaused}");
 			seen.Add(p.id);
 			var pos = new Vector3(p.x, p.y, 0f);
 			var dotColor = ParseColorOr(p.dotColor, new Color(0.4f, 0.6f, 1f, 0.9f));

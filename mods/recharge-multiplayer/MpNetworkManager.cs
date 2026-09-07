@@ -38,6 +38,7 @@ public class MpNetworkManager : MonoBehaviour
 	private float _stateSendAccumulator;
 	private const float StateSendInterval = 1f / 60f;
 	private bool _chatRowEnsured;
+	private float _lastStateLogTime = -999f;
 
 	private static readonly string FlagPath = System.IO.Path.Combine(Application.persistentDataPath, "mp-test.flag");
 	private float _flagCheckAccumulator;
@@ -307,6 +308,12 @@ public class MpNetworkManager : MonoBehaviour
 		int animState = anim != null ? anim.GetInteger("Animation") : 0;
 		float animSpeed = anim != null ? anim.speed : 1f;
 		bool isPaused = Time.timeScale <= 0f;
+
+		if (Time.unscaledTime - _lastStateLogTime > 2f)
+		{
+			_lastStateLogTime = Time.unscaledTime;
+			Debug.Log($"[MpNet] send state localId={LocalPlayerId} pos=({pos.x:F1},{pos.y:F1}) paused={isPaused} lobby={CurrentLobbyId}");
+		}
 
 		var msg = new MpStateMsg
 		{
