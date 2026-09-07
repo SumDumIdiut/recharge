@@ -18,7 +18,6 @@ internal class CoopManager
 	private Movement _localMovement;
 	private readonly List<courseScript> _courses = new List<courseScript>();
 	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
-	private readonly List<(upgradeBox box, double scaleFactor, double baseCost)> _rebalancedBoxes = new List<(upgradeBox, double, double)>();
 
 	private float _syncAccumulator;
 	private float _saveAccumulator;
@@ -29,7 +28,7 @@ internal class CoopManager
 	private readonly Dictionary<int, int[]> _lastTimesUsed = new Dictionary<int, int[]>();
 	private bool _lastDash, _lastWallJump, _lastDoubleJump, _lastBlockSwap;
 
-	public void Begin(bool isHost, int playerCount, Movement localMovement, string saveName)
+	public void Begin(bool isHost, Movement localMovement, string saveName)
 	{
 		Active = true;
 		_localMovement = localMovement;
@@ -43,7 +42,6 @@ internal class CoopManager
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
 
 		DisableClones();
-		RebalanceCosts(playerCount);
 
 		var resolvedName = saveName ?? ("New-" + System.DateTime.Now.ToString("yyyyMMdd-HHmmss"));
 		_saveFolder = SaveRoot + "/" + resolvedName;
@@ -86,32 +84,7 @@ internal class CoopManager
 		}
 	}
 
-	private void RebalanceCosts(int playerCount)
-	{
-		_rebalancedBoxes.Clear();
-		if (playerCount <= 1) return;
-		var factor = 1.0 / playerCount;
-		foreach (var box in UnityEngine.Object.FindObjectsByType<upgradeBox>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-		{
-			_rebalancedBoxes.Add((box, box.upgradeScaleFactor, box.baseUpgradeCost));
-			// Only rebalance the STARTING cost, never upgradeScaleFactor - that's the
-			// per-purchase growth multiplier (ScaleBoxCost: cost *= upgradeScaleFactor
-			// each buy). A typical growth factor like 1.15 divided by 4 players becomes
-			// 0.2875 - below 1 - so every purchase after the first made cost SHRINK
-			// instead of grow, and combined with the floor-at-1 fix below, cost got
-			// stuck at exactly 1w forever. That's what let one client stand on a kiosk
-			// and auto-buy it 232 times instead of the price escalating out of reach
-			// after a couple of purchases like it should.
-			//
-			// A plain multiply can land below 1 (e.g. baseCost 1 / 4 players = 0.25) -
-			// CashDisplay rounds that display to "0w" while the real affordability
-			// check still needs the actual 0.25, which 0.0 Cash never satisfies.
-			// Floor every rebalanced cost at 1 so a displayed price is always real.
-			box.baseUpgradeCost = System.Math.Max(1.0, System.Math.Ceiling(box.baseUpgradeCost * factor));
-		}
-	}
-
-	private void CaptureBaseline()
+private void CaptureBaseline()
 	{
 		_lastCurrency.Clear();
 		foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
@@ -395,14 +368,6 @@ internal class CoopManager
 
 		foreach (var c in _disabledClones) if (c != null) { c.gameObject.SetActive(true); c.enabled = true; }
 		_disabledClones.Clear();
-
-		foreach (var (box, scaleFactor, baseCost) in _rebalancedBoxes)
-		{
-			if (box == null) continue;
-			box.upgradeScaleFactor = scaleFactor;
-			box.baseUpgradeCost = baseCost;
-		}
-		_rebalancedBoxes.Clear();
 
 		ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 		_courses.Clear();
