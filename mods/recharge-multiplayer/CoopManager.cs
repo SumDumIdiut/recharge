@@ -246,7 +246,10 @@ internal class CoopManager
 				{
 					if (!Enum.TryParse<global::localUpgrades.localUpgradeSet>(kv.Key, out var key)) continue;
 					var current = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
-					course.localUpgradesScript.localUpgradeDict[key] = additive ? Math.Max(0, current + kv.Value.Value<double>()) : kv.Value.Value<double>();
+					// same stale-full-sync race as globalUpgradeDict above - local upgrade
+					// levels only go up during a round, so never let an older incoming
+					// full sync erase a purchase this client already applied locally
+					course.localUpgradesScript.localUpgradeDict[key] = additive ? Math.Max(0, current + kv.Value.Value<double>()) : Math.Max(current, kv.Value.Value<double>());
 				}
 			}
 			if (courseObj["boxTimesUsed"] is JObject boxTimesUsedObj)
@@ -256,7 +259,7 @@ internal class CoopManager
 				{
 					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
 					var box = boxes[boxIndex];
-					box.TimesUsed = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
+					box.TimesUsed = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : Math.Max(box.TimesUsed, kv.Value.Value<int>());
 					// TimesUsed synced but upgradeCost didn't - recompute it too
 					box.CalcBoxCost();
 				}
@@ -338,7 +341,15 @@ internal class CoopManager
 		if (payload["upgrades"] is JObject upgrades)
 			foreach (var kv in upgrades)
 				if (Enum.TryParse<globalStats.globalUpgradeSet>(kv.Key, out var u))
-					globalStats.globalUpgradeDict[u] = additive ? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>()) : kv.Value.Value<double>();
+					// A periodic full sync (host, every 3s) can be stale relative to a
+					// purchase this client already applied locally moments ago - it races
+					// against that purchase's delta reaching the host first. Upgrade levels
+					// only ever go up during a round, so take whichever is higher instead
+					// of blindly trusting the (possibly older) incoming value - otherwise
+					// a client's own just-bought upgrade can get silently erased.
+					globalStats.globalUpgradeDict[u] = additive
+						? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>())
+						: Math.Max(globalStats.globalUpgradeDict[u], kv.Value.Value<double>());
 	}
 
 	private void ApplyAbilities(JObject payload)
