@@ -669,6 +669,8 @@ internal class HostPanelController : MonoBehaviour
 	private int _pendingStopResends;
 	private float _stopResendAccumulator;
 	private const float StopResendInterval = 1f;
+	private float _readyResendAccumulator;
+	private const float ReadyResendInterval = 2f;
 	private readonly HashSet<int> _infected = new HashSet<int>();
 	private readonly HashSet<int> _found = new HashSet<int>();
 	private bool _movementFrozen;
@@ -732,7 +734,23 @@ internal class HostPanelController : MonoBehaviour
 		}
 
 		if (!mgr.InLobby) { EndRoundLocally("left the lobby"); return; }
-		if (!_roundActive) return;
+
+		if (!_roundActive)
+		{
+			// same relay-drop risk as "start"/"stop" (see their handlers' comments) -
+			// a guest's one-shot "ready" can vanish for the host or another guest if
+			// the relay drops it during a connect/reconnect blip, leaving that player
+			// stuck showing "Waiting" forever even though their own button already
+			// flipped locally. Resend periodically while sitting in the lobby -
+			// recipients just overwrite the same value, so a resend is always harmless.
+			_readyResendAccumulator += Time.unscaledDeltaTime;
+			if (_readyResendAccumulator >= ReadyResendInterval)
+			{
+				_readyResendAccumulator = 0f;
+				mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = mgr.IsHost || _localReadyIntent });
+			}
+			return;
+		}
 
 		if (mgr.IsHost)
 		{
