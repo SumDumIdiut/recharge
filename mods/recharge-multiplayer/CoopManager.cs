@@ -95,7 +95,11 @@ internal class CoopManager
 		{
 			_rebalancedBoxes.Add((box, box.upgradeScaleFactor, box.baseUpgradeCost));
 			box.upgradeScaleFactor *= factor;
-			box.baseUpgradeCost *= factor;
+			// A plain multiply can land below 1 (e.g. baseCost 1 / 4 players = 0.25) -
+			// CashDisplay rounds that display to "0w" while the real affordability
+			// check still needs the actual 0.25, which 0.0 Cash never satisfies.
+			// Floor every rebalanced cost at 1 so a displayed price is always real.
+			box.baseUpgradeCost = System.Math.Max(1.0, System.Math.Ceiling(box.baseUpgradeCost * factor));
 		}
 	}
 
