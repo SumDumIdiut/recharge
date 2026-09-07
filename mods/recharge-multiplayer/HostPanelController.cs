@@ -53,6 +53,7 @@ internal class HostPanelController : MonoBehaviour
 
 	private List<MpMapLibrary.HostableMap> _hostableMaps = new List<MpMapLibrary.HostableMap>();
 	private int _selectedMapIndex = -1; // -1 = current map, don't touch it (removed as a *pickable* option, but still the safe startup default)
+	private string _lastLoggedMapLabel;
 	private volatile bool _mapListLoading;
 
 	private readonly Dictionary<int, bool> _readyStates = new Dictionary<int, bool>();
@@ -386,12 +387,12 @@ internal class HostPanelController : MonoBehaviour
 		if (_activePicker == PickerKind.Map)
 		{
 			if (_pickerHeader != null) _pickerHeader.text = "Choose a Map";
-			entries.Add(("Base Game", () => { _selectedMapIndex = -2; _activePicker = PickerKind.None; }));
-			entries.Add(("B-Side", () => { _selectedMapIndex = -3; _activePicker = PickerKind.None; }));
+			entries.Add(("Base Game", () => { _selectedMapIndex = -2; _activePicker = PickerKind.None; Debug.Log("[HostPanel] map picker: selected Base Game (-2)"); }));
+			entries.Add(("B-Side", () => { _selectedMapIndex = -3; _activePicker = PickerKind.None; Debug.Log("[HostPanel] map picker: selected B-Side (-3)"); }));
 			for (int i = 0; i < _hostableMaps.Count; i++)
 			{
 				var idx = i;
-				entries.Add((_hostableMaps[i].Name, () => { _selectedMapIndex = idx; _activePicker = PickerKind.None; }));
+				entries.Add((_hostableMaps[i].Name, () => { _selectedMapIndex = idx; _activePicker = PickerKind.None; Debug.Log($"[HostPanel] map picker: selected hub map idx={idx} name={_hostableMaps[idx].Name}"); }));
 			}
 		}
 		else if (_activePicker == PickerKind.Save)
@@ -485,6 +486,7 @@ internal class HostPanelController : MonoBehaviour
 	{
 		if (_mapListLoading) return;
 		_mapListLoading = true;
+		Debug.Log($"[HostPanel] RefreshMapList: starting fetch, current _selectedMapIndex={_selectedMapIndex}");
 		// preserve the selection across the scene-reload rebuild
 		var previouslySelectedHubId = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count
 			? _hostableMaps[_selectedMapIndex].HubId
@@ -495,6 +497,7 @@ internal class HostPanelController : MonoBehaviour
 			finally
 			{
 				_mapListLoading = false;
+				Debug.Log($"[HostPanel] RefreshMapList: fetch completed, previouslySelectedHubId={previouslySelectedHubId ?? "null"} _selectedMapIndex(before any touch)={_selectedMapIndex}");
 				// Only re-resolve a hub-map selection whose list index may have shifted
 				// after the refresh. Anything else - Current Map/Base Game/B-Side, or a
 				// NEW selection the user made on the main thread while this fetch was
@@ -529,6 +532,13 @@ internal class HostPanelController : MonoBehaviour
 		else if (isHost && !_autoReadyTried)
 		{
 			_autoReadyTried = true;
+			// A manual ready click (OnReadyClicked) also consumes whatever map the
+			// player picked while creating the lobby (PendingBaseGameHard/PendingMapHubId/
+			// PendingLocalMapId) - the host never goes through that click at all, it
+			// auto-readies here instead, so its own initial Base Game/B-Side choice was
+			// silently left unconsumed and the host just stayed on whatever scene it
+			// was already in.
+			TryConsumePendingMapLoad();
 			mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = true });
 		}
 
@@ -574,6 +584,11 @@ internal class HostPanelController : MonoBehaviour
 				: _selectedMapIndex == -2 ? "Base Game"
 				: _selectedMapIndex == -3 ? "B-Side"
 				: "Current Map";
+			if (mapLabel != _lastLoggedMapLabel)
+			{
+				_lastLoggedMapLabel = mapLabel;
+				Debug.Log($"[HostPanel] map label changed to '{mapLabel}' (_selectedMapIndex={_selectedMapIndex})");
+			}
 			PauseMenuHelper.SetButtonLabel(_mapButton.gameObject, "Map:\n" + mapLabel);
 		}
 		if (_saveButton != null)
