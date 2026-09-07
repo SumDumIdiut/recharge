@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
@@ -18,6 +19,12 @@ internal class CoopManager
 	private Movement _localMovement;
 	private readonly List<courseScript> _courses = new List<courseScript>();
 	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
+	private readonly List<(courseScript course, int originalBaseReward)> _scaledRewards = new List<(courseScript, int)>();
+
+	// courseScript.baseReward is private - reflection is the established pattern in
+	// this codebase for touching a real base-game field with no public accessor.
+	private static readonly FieldInfo BaseRewardField =
+		typeof(courseScript).GetField("baseReward", BindingFlags.NonPublic | BindingFlags.Instance);
 
 	private float _syncAccumulator;
 	private float _saveAccumulator;
@@ -28,7 +35,7 @@ internal class CoopManager
 	private readonly Dictionary<int, int[]> _lastTimesUsed = new Dictionary<int, int[]>();
 	private bool _lastDash, _lastWallJump, _lastDoubleJump, _lastBlockSwap;
 
-	public void Begin(bool isHost, Movement localMovement, string saveName)
+	public void Begin(bool isHost, int playerCount, Movement localMovement, string saveName)
 	{
 		Active = true;
 		_localMovement = localMovement;
@@ -65,10 +72,31 @@ internal class CoopManager
 			ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
 		}
 
+		// After Load/ResetEconomyToZero (both can touch reward/baseReward) so this
+		// runs last and the displayed reward is immediately correct on every client -
+		// every player runs this locally with the same host-broadcast playerCount,
+		// so the base reward is consistent everywhere, not just wherever it was
+		// first computed.
+		ScaleBaseRewards(playerCount);
+
 		CaptureBaseline();
 	}
 
 	private static List<upgradeBox> GetUpgradeBoxes(courseScript course) => ModeSaveFile.GetUpgradeBoxes(course);
+
+	private void ScaleBaseRewards(int playerCount)
+	{
+		_scaledRewards.Clear();
+		if (playerCount <= 1 || BaseRewardField == null) return;
+		foreach (var course in _courses)
+		{
+			if (course == null) continue;
+			var original = (int)BaseRewardField.GetValue(course);
+			BaseRewardField.SetValue(course, original * playerCount);
+			_scaledRewards.Add((course, original));
+			course.UpdateReward();
+		}
+	}
 
 	private void DisableClones()
 	{
@@ -368,6 +396,14 @@ private void CaptureBaseline()
 
 		foreach (var c in _disabledClones) if (c != null) { c.gameObject.SetActive(true); c.enabled = true; }
 		_disabledClones.Clear();
+
+		// baseReward isn't part of the save format (only reward/rewardTier are), so
+		// ModeSaveFile.Restore() below never touches it - without this, the scaled
+		// value would silently leak into the real single-player save the next time
+		// the periodic UpdateReward() recomputes reward from it.
+		foreach (var (course, original) in _scaledRewards)
+			if (course != null) BaseRewardField.SetValue(course, original);
+		_scaledRewards.Clear();
 
 		ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 		_courses.Clear();

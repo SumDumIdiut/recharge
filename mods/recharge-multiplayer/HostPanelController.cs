@@ -688,6 +688,7 @@ internal class HostPanelController : MonoBehaviour
 	private float _hideEndTime;
 	private float _roundEndTime;
 	private int _seekerId = -1;
+	private int _roundPlayerCount = 1;
 	private float _cloneHideAccumulator;
 	private const float CloneHideInterval = 2f;
 	private int _lastAppliedRoundId = -1;
@@ -949,6 +950,10 @@ internal class HostPanelController : MonoBehaviour
 			_roundMapHubId = (string)payload["mapHubId"];
 			_roundMapKind = payload["mapKind"]?.Value<string>() ?? "current";
 			_selectedSaveName = payload["saveName"]?.Value<string>();
+			// A shared value from the host, not each client's own LastSnapshotPlayers.Count -
+			// per-client snapshots could disagree (stale entries, timing), which would
+			// desync Coop's base-reward scaling between host and guests.
+			_roundPlayerCount = payload["playerCount"]?.Value<int>() ?? (MpNetworkManager.Instance?.LastSnapshotPlayers.Count + 1 ?? 1);
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
 			_pendingModeStart = _mode == Mode.HideAndSeek || _mode == Mode.Infection || _mode == Mode.Coop;
 			TryStartModeEconomy();
@@ -1062,7 +1067,7 @@ internal class HostPanelController : MonoBehaviour
 			try
 			{
 				var mgrInst = MpNetworkManager.Instance;
-				_coop.Begin(mgrInst.IsHost, _localMovement, _selectedSaveName);
+				_coop.Begin(mgrInst.IsHost, _roundPlayerCount, _localMovement, _selectedSaveName);
 			}
 			catch (System.Exception e) { Debug.LogError("[HostPanel] Coop.Begin failed: " + e); }
 		}
@@ -1366,6 +1371,7 @@ internal class HostPanelController : MonoBehaviour
 
 		_sentRoundId++;
 		_roundResendAccumulator = 0f;
+		_roundPlayerCount = everyone.Count;
 		Debug.Log($"[HostPanel] sending start: roundId={_sentRoundId} mode={_mode} seeker={seeker} everyone=[{string.Join(",", everyone)}] localId={mgr.LocalPlayerId}");
 		mgr.SendGameMessage(new JObject
 		{
@@ -1380,6 +1386,7 @@ internal class HostPanelController : MonoBehaviour
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
+			["playerCount"] = _roundPlayerCount,
 		});
 	}
 
@@ -1408,6 +1415,7 @@ internal class HostPanelController : MonoBehaviour
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
+			["playerCount"] = _roundPlayerCount,
 		});
 	}
 
