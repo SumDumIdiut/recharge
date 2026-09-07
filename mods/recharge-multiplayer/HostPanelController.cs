@@ -489,20 +489,21 @@ internal class HostPanelController : MonoBehaviour
 		var previouslySelectedHubId = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count
 			? _hostableMaps[_selectedMapIndex].HubId
 			: null;
-		// Base Game (-2) / B-Side (-3) aren't hub maps, so previouslySelectedHubId is
-		// null for them too - without this they silently fell through to -1 the
-		// instant this background refresh finished, racing against and clobbering
-		// whatever the user had just clicked in the picker.
-		var previouslySelectedSpecial = _selectedMapIndex < 0 ? _selectedMapIndex : -1;
 		new Thread(() =>
 		{
 			try { _hostableMaps = MpMapLibrary.GetHostableMaps(); }
 			finally
 			{
 				_mapListLoading = false;
-				_selectedMapIndex = previouslySelectedHubId != null
-					? _hostableMaps.FindIndex(m => m.HubId == previouslySelectedHubId)
-					: previouslySelectedSpecial;
+				// Only re-resolve a hub-map selection whose list index may have shifted
+				// after the refresh. Anything else - Current Map/Base Game/B-Side, or a
+				// NEW selection the user made on the main thread while this fetch was
+				// still in flight - must be left alone: reapplying a snapshot captured
+				// before the fetch started would silently clobber whatever the user
+				// picked in the meantime (this was the actual bug - Base Game looking
+				// like it "didn't take" was this completion racing the user's click).
+				if (previouslySelectedHubId != null)
+					_selectedMapIndex = _hostableMaps.FindIndex(m => m.HubId == previouslySelectedHubId);
 			}
 		})
 		{ IsBackground = true }.Start();
