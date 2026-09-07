@@ -95,12 +95,12 @@ internal class HostPanelController : MonoBehaviour
 		var template = menu.mainBitPublic.transform.Find("Settings")?.gameObject;
 		if (template == null) return;
 
-		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(-152, 170), OnCycleModeClicked, width: 148, height: 48, fontSize: 16f);
-		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 48, fontSize: 16f);
-		_saveButton = BuildActionButton(panel.transform, template, "Save: New Save", new Vector2(152, 170), OnOpenSavePickerClicked, width: 148, height: 48, fontSize: 16f);
-		MakeAutoSizeLabel(_modeButton, 8f, 15f);
-		MakeAutoSizeLabel(_mapButton, 8f, 15f);
-		MakeAutoSizeLabel(_saveButton, 8f, 15f);
+		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(-152, 170), OnCycleModeClicked, width: 148, height: 60, fontSize: 16f);
+		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 60, fontSize: 16f);
+		_saveButton = BuildActionButton(panel.transform, template, "Save: New Save", new Vector2(152, 170), OnOpenSavePickerClicked, width: 148, height: 60, fontSize: 16f);
+		MakeAutoSizeLabel(_modeButton, 10f, 20f);
+		MakeAutoSizeLabel(_mapButton, 10f, 20f);
+		MakeAutoSizeLabel(_saveButton, 10f, 20f);
 
 		BuildPickerSection(panel.transform, template);
 
@@ -380,6 +380,8 @@ internal class HostPanelController : MonoBehaviour
 		{
 			if (_pickerHeader != null) _pickerHeader.text = "Choose a Map";
 			entries.Add(("Current Map", () => { _selectedMapIndex = -1; _activePicker = PickerKind.None; }));
+			entries.Add(("Base Game", () => { _selectedMapIndex = -2; _activePicker = PickerKind.None; }));
+			entries.Add(("B-Side", () => { _selectedMapIndex = -3; _activePicker = PickerKind.None; }));
 			for (int i = 0; i < _hostableMaps.Count; i++)
 			{
 				var idx = i;
@@ -551,7 +553,10 @@ internal class HostPanelController : MonoBehaviour
 		if (_mapButton != null)
 		{
 			_mapButton.interactable = canConfigure;
-			var mapLabel = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count ? _hostableMaps[_selectedMapIndex].Name : "Current Map";
+			var mapLabel = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count ? _hostableMaps[_selectedMapIndex].Name
+				: _selectedMapIndex == -2 ? "Base Game"
+				: _selectedMapIndex == -3 ? "B-Side"
+				: "Current Map";
 			PauseMenuHelper.SetButtonLabel(_mapButton.gameObject, "Map: " + mapLabel);
 		}
 		if (_saveButton != null)
@@ -564,6 +569,12 @@ internal class HostPanelController : MonoBehaviour
 		}
 
 		bool showingPicker = _activePicker != PickerKind.None;
+		// Mode/Map/Save sit directly on the panel, not inside _mainContent, so
+		// hiding just _mainContent left them visible - overlapping the picker's
+		// own header at almost the same y position.
+		if (_modeButton != null) _modeButton.gameObject.SetActive(!showingPicker);
+		if (_mapButton != null) _mapButton.gameObject.SetActive(!showingPicker);
+		if (_saveButton != null) _saveButton.gameObject.SetActive(!showingPicker);
 		if (_mainContent != null) _mainContent.SetActive(!showingPicker);
 		if (_pickerSection != null) _pickerSection.SetActive(showingPicker);
 		if (showingPicker) return;
@@ -655,6 +666,7 @@ internal class HostPanelController : MonoBehaviour
 	private bool _movementFrozen;
 	private bool _seekerReleased;
 	private string _roundMapHubId;
+	private string _roundMapKind = "current";
 	private volatile bool _mapDownloading;
 	private string _prevDotColor;
 	private string _prevNameColor;
@@ -741,8 +753,17 @@ internal class HostPanelController : MonoBehaviour
 		if (!hiding && IsLocalSeeking() && !_seekerReleased)
 		{
 			_seekerReleased = true;
-			EnsureMapLoaded(_roundMapHubId, closeMenuWhenReady: true);
-			TryCloseMenuIfNeeded();
+			if (_roundMapKind == "base" || _roundMapKind == "bside")
+			{
+				var mgrForScene = MpNetworkManager.Instance;
+				if (mgrForScene != null) mgrForScene.PendingBaseGameHard = _roundMapKind == "bside";
+				if (_menu != null) { if (_roundMapKind == "bside") _menu.changeSceneHard(); else _menu.changeScene(); }
+			}
+			else
+			{
+				EnsureMapLoaded(_roundMapHubId, closeMenuWhenReady: true);
+				TryCloseMenuIfNeeded();
+			}
 		}
 
 		if (!hiding && IsLocalSeeking() && _localMovement != null)
@@ -855,6 +876,7 @@ internal class HostPanelController : MonoBehaviour
 			_roundActive = true;
 			_seekerReleased = false;
 			_roundMapHubId = (string)payload["mapHubId"];
+			_roundMapKind = payload["mapKind"]?.Value<string>() ?? "current";
 			_selectedSaveName = payload["saveName"]?.Value<string>();
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
 			_pendingModeStart = _mode == Mode.HideAndSeek || _mode == Mode.Infection || _mode == Mode.Coop;
@@ -866,8 +888,17 @@ internal class HostPanelController : MonoBehaviour
 			Debug.Log($"[HostPanel] start: IsLocalSeeking={IsLocalSeeking()} menuNull={_menu == null} menuOpen={_menu?.menuOpen}");
 			if (!IsLocalSeeking())
 			{
-				EnsureMapLoaded(_roundMapHubId, closeMenuWhenReady: true);
-				TryCloseMenuIfNeeded();
+				if (_roundMapKind == "base" || _roundMapKind == "bside")
+				{
+					var mgrForScene = MpNetworkManager.Instance;
+					if (mgrForScene != null) mgrForScene.PendingBaseGameHard = _roundMapKind == "bside";
+					if (_menu != null) { if (_roundMapKind == "bside") _menu.changeSceneHard(); else _menu.changeScene(); }
+				}
+				else
+				{
+					EnsureMapLoaded(_roundMapHubId, closeMenuWhenReady: true);
+					TryCloseMenuIfNeeded();
+				}
 			}
 		}
 		else if (kind == "stop")
@@ -1056,6 +1087,7 @@ internal class HostPanelController : MonoBehaviour
 		_roundActive = false;
 		_seekerReleased = false;
 		_roundMapHubId = null;
+		_roundMapKind = "current";
 		_statusMessage = "Round over: " + reason;
 		// _readyStates gets wiped on the next round's "start" - re-arm auto-ready
 		_autoReadyTried = false;
@@ -1208,6 +1240,7 @@ internal class HostPanelController : MonoBehaviour
 			mapHubId = map.HubId;
 			mapName = map.Name;
 		}
+		var mapKind = _selectedMapIndex == -2 ? "base" : _selectedMapIndex == -3 ? "bside" : "current";
 
 		var abilities = new JObject();
 		foreach (var kv in _abilityEnabled) abilities[kv.Key] = kv.Value;
@@ -1224,6 +1257,7 @@ internal class HostPanelController : MonoBehaviour
 			["roundSeconds"] = RoundSeconds,
 			["mapHubId"] = mapHubId,
 			["mapName"] = mapName,
+			["mapKind"] = mapKind,
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
@@ -1251,6 +1285,7 @@ internal class HostPanelController : MonoBehaviour
 			["roundSeconds"] = _roundEndTime == float.MaxValue ? 0f : Mathf.Max(0f, _roundEndTime - Time.unscaledTime),
 			["mapHubId"] = _roundMapHubId,
 			["mapName"] = null,
+			["mapKind"] = _roundMapKind,
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
