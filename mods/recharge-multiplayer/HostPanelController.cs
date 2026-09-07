@@ -532,13 +532,15 @@ internal class HostPanelController : MonoBehaviour
 		else if (isHost && !_autoReadyTried)
 		{
 			_autoReadyTried = true;
-			// A manual ready click (OnReadyClicked) also consumes whatever map the
-			// player picked while creating the lobby (PendingBaseGameHard/PendingMapHubId/
-			// PendingLocalMapId) - the host never goes through that click at all, it
-			// auto-readies here instead, so its own initial Base Game/B-Side choice was
-			// silently left unconsumed and the host just stayed on whatever scene it
-			// was already in.
-			TryConsumePendingMapLoad();
+			// Seed the round-start map picker with whatever was chosen on the
+			// host-creation screen (MpPanelUI.FinalizeHost) - the actual scene load
+			// only happens later, when Start Playing is clicked (the same path an
+			// explicit round-start map re-selection already uses correctly), not
+			// here. Loading it immediately on auto-ready skipped the lobby/chat
+			// wait entirely and dropped the host straight into gameplay.
+			if (mgr.PendingHostMapKind == "base") _selectedMapIndex = -2;
+			else if (mgr.PendingHostMapKind == "bside") _selectedMapIndex = -3;
+			mgr.PendingHostMapKind = null;
 			mgr.SendGameMessage(new JObject { ["k"] = "ready", ["ready"] = true });
 		}
 

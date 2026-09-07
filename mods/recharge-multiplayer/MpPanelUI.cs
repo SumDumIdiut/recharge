@@ -556,6 +556,7 @@ internal class MpPanelUI : MonoBehaviour
 			bool hard = mapIndex == -2;
 			var mgr = MpNetworkManager.GetOrCreate();
 			mgr.PendingBaseGameHard = hard;
+			mgr.PendingHostMapKind = hard ? "bside" : "base";
 			mgr.HostLobby(name, null, null, null, hard);
 		}
 		_showingMapPicker = false;

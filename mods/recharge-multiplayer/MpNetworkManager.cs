@@ -27,6 +27,10 @@ public class MpNetworkManager : MonoBehaviour
 	public string MapDownloadError;
 	public string PendingLocalMapId;
 	public bool? PendingBaseGameHard;
+	// "base"/"bside" - the host's map choice from MpPanelUI's host-creation screen,
+	// consumed once by HostPanelController to seed its own round-start map picker
+	// (Start Playing) instead of loading the scene immediately on auto-ready.
+	public string PendingHostMapKind;
 	public readonly List<string> ChatLines = new List<string>();
 	private const int MaxChatLines = 50;
 
@@ -584,6 +588,7 @@ public class MpNetworkManager : MonoBehaviour
 		PendingMapName = null;
 		PendingLocalMapId = null;
 		PendingBaseGameHard = null;
+		PendingHostMapKind = null;
 		MapDownloadError = null;
 	}
 
