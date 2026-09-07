@@ -20,6 +20,36 @@
   background: var(--green);
 }
 
+.theme-presets { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+.preset-option {
+  background: none;
+  border: 2px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  padding: 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  width: 132px;
+}
+.preset-option:hover { border-color: var(--line-hi); }
+.theme-swatch { width: 100%; height: 56px; display: flex; overflow: hidden; border: 1px solid var(--line); }
+.theme-swatch span { flex: 1; }
+
+.theme-colors { display: flex; gap: 20px; flex-wrap: wrap; padding-top: 14px; border-top: 1px solid var(--line); }
+.color-field { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 15px; color: var(--text-dim); cursor: pointer; }
+.color-field input[type="color"] {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: none;
+  cursor: pointer;
+}
+
 .launcher-update-available { color: var(--magenta); }
 #launcher-download-link { color: var(--green); margin-left: 8px; text-decoration: underline; }
 #launcher-notes { margin-top: 6px; line-height: 1.5; }

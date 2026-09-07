@@ -1,3 +1,39 @@
+import { PRESETS, ATTRS, getColors, applyColors, applyPreset } from '/theme.js';
+
+function renderAppearance() {
+  const presetsEl = document.getElementById('theme-presets');
+  const colorsEl = document.getElementById('theme-colors');
+  if (!presetsEl || !colorsEl) return;
+  const current = getColors();
+
+  presetsEl.innerHTML = PRESETS.map((p) => {
+    const swatch = [p.bg, p.panel, p.accent, p.accent2].map((c) => `<span style="background:${c}"></span>`).join('');
+    return `<button class="preset-option" data-preset-id="${p.id}">
+      <div class="theme-swatch">${swatch}</div>
+      ${p.name}
+    </button>`;
+  }).join('');
+  presetsEl.querySelectorAll('.preset-option').forEach((btn) => {
+    btn.onclick = () => {
+      applyPreset(btn.dataset.presetId);
+      renderAppearance();
+    };
+  });
+
+  colorsEl.innerHTML = ATTRS.map(
+    (a) => `<label class="color-field">
+      <input type="color" data-attr="${a.key}" value="${current[a.key]}" />
+      ${a.label}
+    </label>`
+  ).join('');
+  colorsEl.querySelectorAll('input[type=color]').forEach((input) => {
+    input.oninput = () => {
+      const colors = { ...getColors(), [input.dataset.attr]: input.value };
+      applyColors(colors);
+    };
+  });
+}
+
 // Not a picker - the game path is auto-detected only. This just reveals the
 // current folder in the real Windows Explorer so the user can verify it.
 window.__settingsBrowse = async function () {
@@ -93,4 +129,5 @@ export async function init() {
   listen('loader-progress', (event) => setProgress(event.payload));
   refreshStatus();
   refreshLauncherStatus();
+  renderAppearance();
 }

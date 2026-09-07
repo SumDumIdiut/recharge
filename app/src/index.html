@@ -4,6 +4,36 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Recharge</title>
+    <script>
+      // applied before any CSS paints, so there's no flash of the wrong colors.
+      // Mirrors applyColors() in theme.js - duplicated here since this has to
+      // run synchronously, before the module graph has a chance to load.
+      (function () {
+        try {
+          var c = JSON.parse(localStorage.getItem('rechargeColors'));
+          if (!c || !c.bg) return;
+          function hex(h) {
+            var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h || '');
+            return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
+          }
+          function rgba(h, a) { var v = hex(h); return 'rgba(' + v[0] + ', ' + v[1] + ', ' + v[2] + ', ' + a + ')'; }
+          var s = document.documentElement.style;
+          s.setProperty('--bg', c.bg);
+          s.setProperty('--panel', c.panel);
+          s.setProperty('--text', c.text);
+          s.setProperty('--text-dim', rgba(c.text, 0.55));
+          s.setProperty('--line', rgba(c.text, 0.14));
+          s.setProperty('--line-hi', rgba(c.text, 0.4));
+          s.setProperty('--grid-line', rgba(c.text, 0.035));
+          s.setProperty('--green', c.accent);
+          s.setProperty('--green-dim', rgba(c.accent, 0.6));
+          s.setProperty('--magenta', c.accent2);
+          s.setProperty('--magenta-dim', rgba(c.accent2, 0.6));
+          var v = hex(c.bg);
+          s.colorScheme = (v[0] * 299 + v[1] * 587 + v[2] * 114) / 1000 < 128 ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/mods/style.css" />

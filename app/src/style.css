@@ -1,5 +1,11 @@
 * { box-sizing: border-box; }
 
+/* ── Colors ───────────────────────────────────────────────────────────
+   Every visual color in this app reads from these custom properties.
+   The values below are the "Dark" preset and the fallback before any
+   custom pick is saved - actual overrides are applied inline on
+   documentElement by /theme.js (see applyColors), since per-attribute
+   pickers can't be expressed as a fixed set of CSS blocks. */
 :root {
   --bg:      #141414;
   --panel:   #1c1c1c;
@@ -11,9 +17,9 @@
   --green-dim: rgba(65, 248, 141, 0.6);
   --magenta: #c63ed8;
   --magenta-dim: rgba(198, 62, 216, 0.6);
+  --grid-line: rgba(249, 255, 228, 0.035);
+  color-scheme: dark;
 }
-
-html { color-scheme: dark; }
 
 body {
   margin: 0;
@@ -30,8 +36,8 @@ body {
   z-index: 0;
   pointer-events: none;
   background-image:
-    repeating-linear-gradient(0deg, rgba(249, 255, 228, 0.035) 0 1px, transparent 1px 30px),
-    repeating-linear-gradient(90deg, rgba(249, 255, 228, 0.035) 0 1px, transparent 1px 30px);
+    repeating-linear-gradient(0deg, var(--grid-line) 0 1px, transparent 1px 30px),
+    repeating-linear-gradient(90deg, var(--grid-line) 0 1px, transparent 1px 30px);
 }
 
 /* ── Waveform banner ─────────────────────────────────────────────────── */
@@ -111,20 +117,7 @@ body {
 
 .home-header { margin-bottom: 34px; }
 .home-title-row { display: flex; align-items: center; gap: 14px; }
-.home-logo {
-  width: 64px;
-  height: 64px;
-  display: block;
-  filter:
-    drop-shadow(1px 0 0 #fff)
-    drop-shadow(-1px 0 0 #fff)
-    drop-shadow(0 1px 0 #fff)
-    drop-shadow(0 -1px 0 #fff)
-    drop-shadow(0.7px 0.7px 0 #fff)
-    drop-shadow(-0.7px 0.7px 0 #fff)
-    drop-shadow(0.7px -0.7px 0 #fff)
-    drop-shadow(-0.7px -0.7px 0 #fff);
-}
+.home-logo { width: 64px; height: 64px; display: block; }
 .home-title { font-size: 28px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
 
 .home-grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; flex: 1; }
