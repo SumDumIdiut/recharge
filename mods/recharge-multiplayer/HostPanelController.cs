@@ -489,6 +489,11 @@ internal class HostPanelController : MonoBehaviour
 		var previouslySelectedHubId = _selectedMapIndex >= 0 && _selectedMapIndex < _hostableMaps.Count
 			? _hostableMaps[_selectedMapIndex].HubId
 			: null;
+		// Base Game (-2) / B-Side (-3) aren't hub maps, so previouslySelectedHubId is
+		// null for them too - without this they silently fell through to -1 the
+		// instant this background refresh finished, racing against and clobbering
+		// whatever the user had just clicked in the picker.
+		var previouslySelectedSpecial = _selectedMapIndex < 0 ? _selectedMapIndex : -1;
 		new Thread(() =>
 		{
 			try { _hostableMaps = MpMapLibrary.GetHostableMaps(); }
@@ -497,7 +502,7 @@ internal class HostPanelController : MonoBehaviour
 				_mapListLoading = false;
 				_selectedMapIndex = previouslySelectedHubId != null
 					? _hostableMaps.FindIndex(m => m.HubId == previouslySelectedHubId)
-					: -1;
+					: previouslySelectedSpecial;
 			}
 		})
 		{ IsBackground = true }.Start();
