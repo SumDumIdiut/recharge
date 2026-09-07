@@ -283,7 +283,11 @@ internal class HostPanelController : MonoBehaviour
 		tmp.enableAutoSizing = true;
 		tmp.fontSizeMin = min;
 		tmp.fontSizeMax = max;
-		tmp.textWrappingMode = TextWrappingModes.NoWrap;
+		// NoWrap forced the whole block's font size down to whatever fit the single
+		// widest line ("Current Map") - Mode/Save's shorter values then looked
+		// inconsistently bigger. Wrapping lets a long value spill onto its own
+		// extra line instead, so autosize can pick a size close to max for all three.
+		tmp.textWrappingMode = TextWrappingModes.Normal;
 		tmp.overflowMode = TextOverflowModes.Overflow;
 	}
 
