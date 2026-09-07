@@ -52,7 +52,7 @@ internal class HostPanelController : MonoBehaviour
 	private readonly Dictionary<string, bool> _abilityRestore = new Dictionary<string, bool>();
 
 	private List<MpMapLibrary.HostableMap> _hostableMaps = new List<MpMapLibrary.HostableMap>();
-	private int _selectedMapIndex = -2; // -2 = Base Game (default; "Current Map" removed as a choice)
+	private int _selectedMapIndex = -1; // -1 = current map, don't touch it (removed as a *pickable* option, but still the safe startup default)
 	private volatile bool _mapListLoading;
 
 	private readonly Dictionary<int, bool> _readyStates = new Dictionary<int, bool>();
@@ -96,7 +96,7 @@ internal class HostPanelController : MonoBehaviour
 		if (template == null) return;
 
 		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(-152, 170), OnCycleModeClicked, width: 148, height: 60, fontSize: 16f);
-		_mapButton = BuildActionButton(panel.transform, template, "Map: Base Game", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 60, fontSize: 16f);
+		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 60, fontSize: 16f);
 		_saveButton = BuildActionButton(panel.transform, template, "Save: New Save", new Vector2(152, 170), OnOpenSavePickerClicked, width: 148, height: 60, fontSize: 16f);
 		MakeAutoSizeLabel(_modeButton, 10f, 20f);
 		MakeAutoSizeLabel(_mapButton, 10f, 20f);
