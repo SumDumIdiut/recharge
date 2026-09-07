@@ -901,6 +901,12 @@ internal class HostPanelController : MonoBehaviour
 			_roundEndTime = (_mode == Mode.Normal || _mode == Mode.Coop) ? float.MaxValue : Time.unscaledTime + (float)payload["roundSeconds"];
 			_roundActive = true;
 			_seekerReleased = false;
+			// A guest sitting on DOTnet's own Multiplayer/lobby screen (reached from
+			// the main menu, independent of the native pause menu) never gets that
+			// screen dismissed by anything else - only the host's own "Host Panel"
+			// click hides it, and only on the host's own client. Without this, the
+			// round starts for real underneath but stays invisible behind the panel.
+			if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(false);
 			_roundMapHubId = (string)payload["mapHubId"];
 			_roundMapKind = payload["mapKind"]?.Value<string>() ?? "current";
 			_selectedSaveName = payload["saveName"]?.Value<string>();
