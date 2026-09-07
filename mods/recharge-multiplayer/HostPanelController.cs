@@ -52,7 +52,7 @@ internal class HostPanelController : MonoBehaviour
 	private readonly Dictionary<string, bool> _abilityRestore = new Dictionary<string, bool>();
 
 	private List<MpMapLibrary.HostableMap> _hostableMaps = new List<MpMapLibrary.HostableMap>();
-	private int _selectedMapIndex = -1; // -1 = current map, don't touch it
+	private int _selectedMapIndex = -2; // -2 = Base Game (default; "Current Map" removed as a choice)
 	private volatile bool _mapListLoading;
 
 	private readonly Dictionary<int, bool> _readyStates = new Dictionary<int, bool>();
@@ -96,7 +96,7 @@ internal class HostPanelController : MonoBehaviour
 		if (template == null) return;
 
 		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(-152, 170), OnCycleModeClicked, width: 148, height: 60, fontSize: 16f);
-		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 60, fontSize: 16f);
+		_mapButton = BuildActionButton(panel.transform, template, "Map: Base Game", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 60, fontSize: 16f);
 		_saveButton = BuildActionButton(panel.transform, template, "Save: New Save", new Vector2(152, 170), OnOpenSavePickerClicked, width: 148, height: 60, fontSize: 16f);
 		MakeAutoSizeLabel(_modeButton, 10f, 20f);
 		MakeAutoSizeLabel(_mapButton, 10f, 20f);
@@ -386,7 +386,6 @@ internal class HostPanelController : MonoBehaviour
 		if (_activePicker == PickerKind.Map)
 		{
 			if (_pickerHeader != null) _pickerHeader.text = "Choose a Map";
-			entries.Add(("Current Map", () => { _selectedMapIndex = -1; _activePicker = PickerKind.None; }));
 			entries.Add(("Base Game", () => { _selectedMapIndex = -2; _activePicker = PickerKind.None; }));
 			entries.Add(("B-Side", () => { _selectedMapIndex = -3; _activePicker = PickerKind.None; }));
 			for (int i = 0; i < _hostableMaps.Count; i++)
@@ -666,6 +665,9 @@ internal class HostPanelController : MonoBehaviour
 	private float _hideEndTime;
 	private float _roundEndTime;
 	private int _seekerId = -1;
+	private int _roundPlayerCount = 1;
+	private float _cloneHideAccumulator;
+	private const float CloneHideInterval = 2f;
 	private int _lastAppliedRoundId = -1;
 	private int _sentRoundId;
 	private float _roundResendAccumulator;
@@ -764,6 +766,16 @@ internal class HostPanelController : MonoBehaviour
 				_roundResendAccumulator = 0f;
 				ResendCurrentRoundState();
 			}
+		}
+
+		// Per-client, local-only re-assertion (every mode, not just host) - a course
+		// or its kiosk that loads in slightly after the round already started (a
+		// scene transition mid-round) would otherwise keep its Clone box visible.
+		_cloneHideAccumulator += Time.unscaledDeltaTime;
+		if (_cloneHideAccumulator >= CloneHideInterval)
+		{
+			_cloneHideAccumulator = 0f;
+			HideCloneUpgradeBoxes();
 		}
 
 		if (_mode == Mode.Coop) { _coop.Tick(Time.unscaledDeltaTime, mgr.IsHost, mgr.SendGameMessage); return; }
@@ -915,6 +927,10 @@ internal class HostPanelController : MonoBehaviour
 			_roundMapHubId = (string)payload["mapHubId"];
 			_roundMapKind = payload["mapKind"]?.Value<string>() ?? "current";
 			_selectedSaveName = payload["saveName"]?.Value<string>();
+			// A shared value from the host, not each client's own LastSnapshotPlayers.Count -
+			// per-client snapshots could disagree (stale entries, timing), which desynced
+			// every upgradeBox's rebalanced cost between host and guests.
+			_roundPlayerCount = payload["playerCount"]?.Value<int>() ?? (MpNetworkManager.Instance?.LastSnapshotPlayers.Count + 1 ?? 1);
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
 			_pendingModeStart = _mode == Mode.HideAndSeek || _mode == Mode.Infection || _mode == Mode.Coop;
 			TryStartModeEconomy();
@@ -1028,7 +1044,7 @@ internal class HostPanelController : MonoBehaviour
 			try
 			{
 				var mgrInst = MpNetworkManager.Instance;
-				_coop.Begin(mgrInst.IsHost, mgrInst.LastSnapshotPlayers.Count + 1, _localMovement, _selectedSaveName);
+				_coop.Begin(mgrInst.IsHost, _roundPlayerCount, _localMovement, _selectedSaveName);
 			}
 			catch (System.Exception e) { Debug.LogError("[HostPanel] Coop.Begin failed: " + e); }
 		}
@@ -1082,14 +1098,26 @@ internal class HostPanelController : MonoBehaviour
 	// kiosk itself (not just disabling clonesScript, which a direct method call
 	// like clones.spawnNewClone() ignores) removes the confusing dead interaction
 	// where walking into the box did nothing.
+	private readonly List<courseScript> _blankedCloneMultCourses = new List<courseScript>();
+
+	// Re-callable repeatedly and safely (see the periodic re-assertion in Update()) -
+	// never clears its own tracking lists, since a course/kiosk that loads in after
+	// the round already started (a late scene transition) must still get caught.
 	private void HideCloneUpgradeBoxes()
 	{
-		_hiddenCloneBoxes.Clear();
 		foreach (var b in Object.FindObjectsByType<upgradeBox>(FindObjectsInactive.Include, FindObjectsSortMode.None))
 		{
 			if (b.upgrade != localUpgrades.localUpgradeSet.cloneCount || !b.gameObject.activeSelf) continue;
 			b.gameObject.SetActive(false);
-			_hiddenCloneBoxes.Add(b);
+			if (!_hiddenCloneBoxes.Contains(b)) _hiddenCloneBoxes.Add(b);
+		}
+		// "Clone reward mult: X.Xx" - purely clone-specific, unlike rewardDisplay/
+		// currentTimeDisplay which show real course info worth keeping visible.
+		foreach (var c in Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+		{
+			if (c.personalBonusDisplay == null || c.personalBonusDisplay.text.Length == 0) continue;
+			c.personalBonusDisplay.text = "";
+			if (!_blankedCloneMultCourses.Contains(c)) _blankedCloneMultCourses.Add(c);
 		}
 	}
 
@@ -1098,6 +1126,9 @@ internal class HostPanelController : MonoBehaviour
 		foreach (var b in _hiddenCloneBoxes)
 			if (b != null) b.gameObject.SetActive(true);
 		_hiddenCloneBoxes.Clear();
+		foreach (var c in _blankedCloneMultCourses)
+			if (c != null) c.updateCloneMultBonus();
+		_blankedCloneMultCourses.Clear();
 	}
 
 	private void DisableWattsAndClones()
@@ -1310,6 +1341,7 @@ internal class HostPanelController : MonoBehaviour
 
 		_sentRoundId++;
 		_roundResendAccumulator = 0f;
+		_roundPlayerCount = everyone.Count;
 		Debug.Log($"[HostPanel] sending start: roundId={_sentRoundId} mode={_mode} seeker={seeker} everyone=[{string.Join(",", everyone)}] localId={mgr.LocalPlayerId}");
 		mgr.SendGameMessage(new JObject
 		{
@@ -1324,6 +1356,7 @@ internal class HostPanelController : MonoBehaviour
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
+			["playerCount"] = _roundPlayerCount,
 		});
 	}
 
@@ -1352,6 +1385,7 @@ internal class HostPanelController : MonoBehaviour
 			["abilities"] = abilities,
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
+			["playerCount"] = _roundPlayerCount,
 		});
 	}
 
