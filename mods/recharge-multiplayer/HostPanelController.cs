@@ -197,9 +197,15 @@ internal class HostPanelController : MonoBehaviour
 		RefreshMapList();
 	}
 
-	// Now opens for everyone - config controls already gate off canConfigure
+	// Opens the panel for everyone (config controls already gate off
+	// canConfigure) - but for guests this used to be their ONLY ready toggle,
+	// a single click from the lobby row. Making it panel-only lost that; do
+	// both, so guests keep the one-click ready-up they had and can also see
+	// the panel now.
 	private void OnToggleOrReadyClicked()
 	{
+		var mgr = MpNetworkManager.Instance;
+		if (mgr != null && !mgr.IsHost) OnReadyClicked();
 		OnToggleHostPanelClicked();
 	}
 
@@ -541,7 +547,12 @@ internal class HostPanelController : MonoBehaviour
 				var left = Mathf.CeilToInt(_hideEndTime - Time.unscaledTime);
 				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "You're it! " + left + "s");
 			}
-			else PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
+			else if (isHost) PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
+			else
+			{
+				bool ready = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var tr) && tr;
+				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, ready ? "Unready" : "Ready");
+			}
 		}
 
 		if (_modeButton != null)
