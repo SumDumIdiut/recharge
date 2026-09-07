@@ -556,7 +556,7 @@ internal class HostPanelController : MonoBehaviour
 		{
 			_modeButton.interactable = canConfigure;
 			var modeLabel = _mode == Mode.Infection ? "Infection" : _mode == Mode.HideAndSeek ? "Hide & Seek" : _mode == Mode.Coop ? "Co-op" : "Normal";
-			PauseMenuHelper.SetButtonLabel(_modeButton.gameObject, "Mode: " + modeLabel);
+			PauseMenuHelper.SetButtonLabel(_modeButton.gameObject, "Mode:\n" + modeLabel);
 		}
 		if (_mapButton != null)
 		{
@@ -565,7 +565,7 @@ internal class HostPanelController : MonoBehaviour
 				: _selectedMapIndex == -2 ? "Base Game"
 				: _selectedMapIndex == -3 ? "B-Side"
 				: "Current Map";
-			PauseMenuHelper.SetButtonLabel(_mapButton.gameObject, "Map: " + mapLabel);
+			PauseMenuHelper.SetButtonLabel(_mapButton.gameObject, "Map:\n" + mapLabel);
 		}
 		if (_saveButton != null)
 		{
@@ -573,7 +573,7 @@ internal class HostPanelController : MonoBehaviour
 			_saveButton.interactable = canPickSave;
 			var saveLabel = _selectedSaveName ?? "New Save";
 			if (saveLabel.Length > 14) saveLabel = saveLabel.Substring(0, 12) + "..";
-			PauseMenuHelper.SetButtonLabel(_saveButton.gameObject, "Save: " + saveLabel);
+			PauseMenuHelper.SetButtonLabel(_saveButton.gameObject, "Save:\n" + saveLabel);
 		}
 
 		bool showingPicker = _activePicker != PickerKind.None;
@@ -907,6 +907,7 @@ internal class HostPanelController : MonoBehaviour
 			// click hides it, and only on the host's own client. Without this, the
 			// round starts for real underneath but stays invisible behind the panel.
 			if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(false);
+			HideCloneUpgradeBoxes();
 			_roundMapHubId = (string)payload["mapHubId"];
 			_roundMapKind = payload["mapKind"]?.Value<string>() ?? "current";
 			_selectedSaveName = payload["saveName"]?.Value<string>();
@@ -1069,6 +1070,31 @@ internal class HostPanelController : MonoBehaviour
 	private double _savedWatts;
 	private bool _wattsSaved;
 	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
+	private readonly List<upgradeBox> _hiddenCloneBoxes = new List<upgradeBox>();
+
+	// The Clone purchase kiosk (upgradeBox with upgrade == cloneCount) buys into
+	// clonesScript's automatic passive-income ghosts, which have no multiplayer
+	// sync at all - each client would spawn its own untracked ghosts. Hiding the
+	// kiosk itself (not just disabling clonesScript, which a direct method call
+	// like clones.spawnNewClone() ignores) removes the confusing dead interaction
+	// where walking into the box did nothing.
+	private void HideCloneUpgradeBoxes()
+	{
+		_hiddenCloneBoxes.Clear();
+		foreach (var b in Object.FindObjectsByType<upgradeBox>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+		{
+			if (b.upgrade != localUpgrades.localUpgradeSet.cloneCount || !b.gameObject.activeSelf) continue;
+			b.gameObject.SetActive(false);
+			_hiddenCloneBoxes.Add(b);
+		}
+	}
+
+	private void RestoreCloneUpgradeBoxes()
+	{
+		foreach (var b in _hiddenCloneBoxes)
+			if (b != null) b.gameObject.SetActive(true);
+		_hiddenCloneBoxes.Clear();
+	}
 
 	private void DisableWattsAndClones()
 	{
@@ -1127,6 +1153,7 @@ internal class HostPanelController : MonoBehaviour
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
 		RestoreAbilities();
 		RestoreWattsAndClones();
+		RestoreCloneUpgradeBoxes();
 		ExitSpectate();
 		if (_mode == Mode.Coop) _coop.End(MpNetworkManager.Instance?.IsHost ?? false);
 		if (_mode == Mode.HideAndSeek || _mode == Mode.Infection) DeactivateModeSaveFile();

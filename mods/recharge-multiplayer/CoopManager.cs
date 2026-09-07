@@ -81,6 +81,7 @@ internal class CoopManager
 			// enabled=false alone leaves stale clones/cloneCount from the real save
 			c.onPrestige(true);
 			c.enabled = false;
+			c.gameObject.SetActive(false); // hide the purchase kiosk itself - disabled-but-visible looked broken, not disabled
 			_disabledClones.Add(c);
 		}
 	}
@@ -369,7 +370,7 @@ internal class CoopManager
 
 		if (isHost) PersistSave();
 
-		foreach (var c in _disabledClones) if (c != null) c.enabled = true;
+		foreach (var c in _disabledClones) if (c != null) { c.gameObject.SetActive(true); c.enabled = true; }
 		_disabledClones.Clear();
 
 		foreach (var (box, scaleFactor, baseCost) in _rebalancedBoxes)
