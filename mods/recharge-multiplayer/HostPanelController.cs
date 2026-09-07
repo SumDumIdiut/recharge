@@ -1141,6 +1141,13 @@ internal class HostPanelController : MonoBehaviour
 			if (c.personalBonusDisplay == null || c.personalBonusDisplay.text.Length == 0) continue;
 			c.personalBonusDisplay.text = "";
 			if (!_blankedCloneMultCourses.Contains(c)) _blankedCloneMultCourses.Add(c);
+
+			// currentTimeDisplay is shared with the real lap-time readout ("- 2.54s -"),
+			// so it can't be blanked unconditionally like personalBonusDisplay - only
+			// clear it when it's actually showing "N Clones" right now; anything else
+			// (the real timer) is left completely alone.
+			if (c.currentTimeDisplay != null && c.currentTimeDisplay.text.Contains("Clone"))
+				c.currentTimeDisplay.text = "";
 		}
 	}
 
