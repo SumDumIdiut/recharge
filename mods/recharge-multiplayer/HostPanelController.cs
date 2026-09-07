@@ -197,16 +197,13 @@ internal class HostPanelController : MonoBehaviour
 		RefreshMapList();
 	}
 
-	// Opens the panel for everyone (config controls already gate off
-	// canConfigure) - but for guests this used to be their ONLY ready toggle,
-	// a single click from the lobby row. Making it panel-only lost that; do
-	// both, so guests keep the one-click ready-up they had and can also see
-	// the panel now.
+	// Host gets the full config panel; guests just get a Ready toggle - no
+	// panel access from this button at all.
 	private void OnToggleOrReadyClicked()
 	{
 		var mgr = MpNetworkManager.Instance;
-		if (mgr != null && !mgr.IsHost) OnReadyClicked();
-		OnToggleHostPanelClicked();
+		if (mgr != null && mgr.IsHost) OnToggleHostPanelClicked();
+		else OnReadyClicked();
 	}
 
 	private void OnToggleHostPanelClicked()
