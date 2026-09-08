@@ -98,6 +98,18 @@ internal class CoopManager
 	{
 		if (!Active) return;
 		_localMovement = localMovement;
+		// A freshly spawned Movement initializes its own ability fields from the
+		// player's REAL single-player save, not this Coop session's progress -
+		// if that real save has an ability unlocked, the new instance starts
+		// with it true, and since ApplyAbilities OR-merges (an ability can only
+		// ever turn on, never off, by design - see its own comment), that leaked
+		// true then spreads to the whole lobby the next time it gets synced.
+		// Reapply this session's own tracked state instead of trusting whatever
+		// the new instance came up with.
+		_localMovement.dashUnlocked = _lastDash;
+		_localMovement.wallJumpUnlocked = _lastWallJump;
+		_localMovement.doubleJumpUnlocked = _lastDoubleJump;
+		_localMovement.blockSwapUnlocked = _lastBlockSwap;
 		_courses.Clear();
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
 		DisableClones();
