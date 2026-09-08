@@ -28,6 +28,8 @@ internal class CoopManager
 
 	private float _syncAccumulator;
 	private float _saveAccumulator;
+	private float _abilityResendAccumulator;
+	private const float AbilityResendInterval = 3f;
 
 	private readonly Dictionary<globalStats.Currencies, double> _lastCurrency = new Dictionary<globalStats.Currencies, double>();
 	private readonly Dictionary<globalStats.globalUpgradeSet, double> _lastGlobalUpgrade = new Dictionary<globalStats.globalUpgradeSet, double>();
@@ -151,6 +153,22 @@ private void CaptureBaseline()
 		{
 			var delta = BuildDelta();
 			if (delta != null) sendGameMessage(delta);
+
+			// BuildDelta only sends abilities on local change, one-shot - if that one
+			// coopDelta gets dropped by the relay (documented elsewhere in this mod:
+			// it drops a game_msg for anyone not in its member set at that exact
+			// instant), the purchase never reaches the host and stays permanently
+			// local to whoever bought it. Periodically resend the full current
+			// ability state regardless of change - safe now that ApplyAbilities
+			// OR-merges instead of overwriting, so a resend (or a guest's still-false
+			// flag for something someone else bought) can never regress anyone.
+			_abilityResendAccumulator += unscaledDt;
+			if (_abilityResendAccumulator >= AbilityResendInterval)
+			{
+				_abilityResendAccumulator = 0f;
+				var resend = BuildAbilitiesResend();
+				if (resend != null) sendGameMessage(resend);
+			}
 		}
 
 		_syncAccumulator += unscaledDt;
@@ -276,6 +294,22 @@ private void CaptureBaseline()
 		}
 	}
 
+	private JObject BuildAbilitiesResend()
+	{
+		if (_localMovement == null) return null;
+		return new JObject
+		{
+			["k"] = "coopDelta",
+			["abilities"] = new JObject
+			{
+				["dash"] = _localMovement.dashUnlocked,
+				["wallJump"] = _localMovement.wallJumpUnlocked,
+				["doubleJump"] = _localMovement.doubleJumpUnlocked,
+				["blockSwap"] = _localMovement.blockSwapUnlocked,
+			},
+		};
+	}
+
 	private JObject BuildDelta()
 	{
 		JObject currencies = null;
@@ -364,10 +398,14 @@ private void CaptureBaseline()
 	private void ApplyAbilities(JObject payload)
 	{
 		if (!(payload["abilities"] is JObject abilities) || _localMovement == null) return;
-		if (abilities["dash"] != null) _localMovement.dashUnlocked = abilities["dash"].Value<bool>();
-		if (abilities["wallJump"] != null) _localMovement.wallJumpUnlocked = abilities["wallJump"].Value<bool>();
-		if (abilities["doubleJump"] != null) _localMovement.doubleJumpUnlocked = abilities["doubleJump"].Value<bool>();
-		if (abilities["blockSwap"] != null) _localMovement.blockSwapUnlocked = abilities["blockSwap"].Value<bool>();
+		// OR, never overwrite - abilities only ever get unlocked during a round, never
+		// revoked, so a stale "false" (from a client that hasn't caught up to someone
+		// else's purchase yet, or a delayed/reordered message) must never be able to
+		// un-set an ability another client already correctly has.
+		if (abilities["dash"] != null) _localMovement.dashUnlocked |= abilities["dash"].Value<bool>();
+		if (abilities["wallJump"] != null) _localMovement.wallJumpUnlocked |= abilities["wallJump"].Value<bool>();
+		if (abilities["doubleJump"] != null) _localMovement.doubleJumpUnlocked |= abilities["doubleJump"].Value<bool>();
+		if (abilities["blockSwap"] != null) _localMovement.blockSwapUnlocked |= abilities["blockSwap"].Value<bool>();
 	}
 
 	private void ApplyDelta(JObject payload)
