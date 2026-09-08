@@ -19,6 +19,7 @@ window.navigate = async function navigate(tab) {
   document.getElementById('view-' + curTab)?.classList.remove('v-on');
   document.getElementById('view-' + tab)?.classList.add('v-on');
   curTab = tab;
+  try { localStorage.setItem('rechargeCurrentTab', tab); } catch {}
 
   document.getElementById('crumb-bar').hidden = tab === 'home';
 
@@ -70,3 +71,12 @@ window.addEventListener('keydown', async (e) => {
 });
 
 initHome();
+
+// curTab/the loaded-tab cache above are just in-memory JS state - a reload
+// (Ctrl+R, or the webview's own devtools reload) wipes them, which otherwise
+// always lands back on the hardcoded Home default regardless of which tab
+// was actually open. Restore it from where navigate() last saved it.
+try {
+  const savedTab = localStorage.getItem('rechargeCurrentTab');
+  if (savedTab && savedTab !== 'home') window.navigate(savedTab);
+} catch {}
