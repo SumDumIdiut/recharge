@@ -690,7 +690,7 @@ internal class HostPanelController : MonoBehaviour
 	private int _seekerId = -1;
 	private int _roundPlayerCount = 1;
 	private float _cloneHideAccumulator;
-	private const float CloneHideInterval = 2f;
+	private const float CloneHideInterval = 0.5f;
 	private int _lastAppliedRoundId = -1;
 	private int _sentRoundId;
 	private float _roundResendAccumulator;
@@ -1245,6 +1245,11 @@ internal class HostPanelController : MonoBehaviour
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
 		RestoreAbilities();
 		RestoreWattsAndClones();
+		// One last blank-if-showing-Clone-text pass before the periodic check (which
+		// only runs while _roundActive) stops entirely - otherwise "N Clones" written
+		// right at round-end (a course-finish event) lingers on screen indefinitely
+		// with nothing left running to catch it.
+		HideCloneUpgradeBoxes();
 		RestoreCloneUpgradeBoxes();
 		ExitSpectate();
 		if (_mode == Mode.Coop) _coop.End(MpNetworkManager.Instance?.IsHost ?? false);
