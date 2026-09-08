@@ -738,7 +738,18 @@ internal class HostPanelController : MonoBehaviour
 		if (_localMovement == null)
 		{
 			var playerGo = GameObject.FindGameObjectWithTag("Player");
-			if (playerGo != null) _localMovement = playerGo.GetComponent<Movement>();
+			if (playerGo != null)
+			{
+				_localMovement = playerGo.GetComponent<Movement>();
+				// Coop.Begin() can run just before a Base Game/B-Side scene load (the
+				// "start" handler calls TryStartModeEconomy() before deciding whether
+				// to change scene) - the instant that new scene loads, every Movement/
+				// courseScript CoopManager captured gets destroyed, and nothing else
+				// ever re-points it at the new scene's objects. Left unrefreshed, this
+				// silently breaks all Coop sync (currency, upgrades, abilities) for the
+				// rest of the round.
+				if (_mode == Mode.Coop && _localMovement != null) _coop.RefreshSceneReferences(_localMovement);
+			}
 		}
 		TryApplyPendingAbilities();
 		TryStartModeEconomy();

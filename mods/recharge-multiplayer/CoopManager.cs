@@ -36,10 +36,12 @@ internal class CoopManager
 	private readonly Dictionary<int, Dictionary<localUpgrades.localUpgradeSet, double>> _lastLocalUpgrade = new Dictionary<int, Dictionary<localUpgrades.localUpgradeSet, double>>();
 	private readonly Dictionary<int, int[]> _lastTimesUsed = new Dictionary<int, int[]>();
 	private bool _lastDash, _lastWallJump, _lastDoubleJump, _lastBlockSwap;
+	private int _playerCount;
 
 	public void Begin(bool isHost, int playerCount, Movement localMovement, string saveName)
 	{
 		Active = true;
+		_playerCount = playerCount;
 		_localMovement = localMovement;
 		_syncAccumulator = 0f;
 		_saveAccumulator = 0f;
@@ -82,6 +84,24 @@ internal class CoopManager
 		ScaleBaseRewards(playerCount);
 
 		CaptureBaseline();
+	}
+
+	// Begin() can run just before a Base Game/B-Side scene load (the "start"
+	// handler calls TryStartModeEconomy() before deciding whether to change
+	// scene) - the instant that new scene loads, every Movement/courseScript
+	// captured above gets destroyed by Unity, and nothing else ever re-points
+	// this at the new scene's objects. Left unrefreshed, every sync comparison
+	// (BuildDelta/ApplyDelta/ApplyFullSync) silently no-ops against dead
+	// references - currency, upgrades, abilities, all of it. Called from
+	// HostPanelController the moment it re-finds its own local player post-load.
+	public void RefreshSceneReferences(Movement localMovement)
+	{
+		if (!Active) return;
+		_localMovement = localMovement;
+		_courses.Clear();
+		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+		DisableClones();
+		ScaleBaseRewards(_playerCount);
 	}
 
 	private static List<upgradeBox> GetUpgradeBoxes(courseScript course) => ModeSaveFile.GetUpgradeBoxes(course);
