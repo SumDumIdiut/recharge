@@ -1123,6 +1123,22 @@ internal class HostPanelController : MonoBehaviour
 	// where walking into the box did nothing.
 	private readonly List<courseScript> _blankedCloneMultCourses = new List<courseScript>();
 
+	// Every localUpgradeSet entry that only ever feeds clonesScript's automatic
+	// passive-income ghosts - cloneCount (buy a clone), cloneMult/fastCloneChance/
+	// bigCloneChance/GreenCloneRewardBase/enableCloneDustGeneration (all tune how
+	// those ghosts pay out). cashPerLoop ("base reward") is a general economy
+	// upgrade, not clone-specific, so it's deliberately excluded.
+	private static bool IsCloneUpgrade(localUpgrades.localUpgradeSet upgrade) => upgrade switch
+	{
+		localUpgrades.localUpgradeSet.cloneCount => true,
+		localUpgrades.localUpgradeSet.cloneMult => true,
+		localUpgrades.localUpgradeSet.fastCloneChance => true,
+		localUpgrades.localUpgradeSet.bigCloneChance => true,
+		localUpgrades.localUpgradeSet.GreenCloneRewardBase => true,
+		localUpgrades.localUpgradeSet.enableCloneDustGeneration => true,
+		_ => false,
+	};
+
 	// Re-callable repeatedly and safely (see the periodic re-assertion in Update()) -
 	// never clears its own tracking lists, since a course/kiosk that loads in after
 	// the round already started (a late scene transition) must still get caught.
@@ -1130,7 +1146,7 @@ internal class HostPanelController : MonoBehaviour
 	{
 		foreach (var b in Object.FindObjectsByType<upgradeBox>(FindObjectsInactive.Include, FindObjectsSortMode.None))
 		{
-			if (b.upgrade != localUpgrades.localUpgradeSet.cloneCount || !b.gameObject.activeSelf) continue;
+			if (!IsCloneUpgrade(b.upgrade) || !b.gameObject.activeSelf) continue;
 			b.gameObject.SetActive(false);
 			if (!_hiddenCloneBoxes.Contains(b)) _hiddenCloneBoxes.Add(b);
 		}
