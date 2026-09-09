@@ -136,6 +136,11 @@ function renderBrowse() {
 }
 
 function render() {
+  // A hub-beam install re-fetches this tab's view.html from scratch (see
+  // app.js's refreshTab), which resets the subtab buttons' "active" class
+  // to their hardcoded markup default regardless of currentSubtab - resync
+  // it here so the pill never disagrees with which grid is actually shown.
+  document.querySelectorAll('#view-mods .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('mods-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('mods-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
   renderInstalled();

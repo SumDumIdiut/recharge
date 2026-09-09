@@ -120,12 +120,23 @@ function initCustomCss() {
   };
 }
 
-// Not a picker - the game path is auto-detected only. This just reveals the
-// current folder in the real Windows Explorer so the user can verify it.
+// Opens a real folder picker so a wrong or failed auto-detect can be
+// corrected by hand - previously this button only revealed the already-set
+// path in Explorer with no way to actually change it.
 window.__settingsBrowse = async function () {
   const { invoke } = window.__TAURI__.core;
+  const { open } = window.__TAURI__.dialog;
+  const currentPath = document.getElementById('settings-game-path').value || undefined;
   try {
-    await invoke('open_game_folder_in_explorer');
+    const chosen = await open({
+      directory: true,
+      multiple: false,
+      title: 'Select the IGTAP install folder',
+      defaultPath: currentPath,
+    });
+    if (!chosen) return; // user cancelled
+    await invoke('set_game_path', { path: chosen });
+    await refreshStatus();
   } catch (err) {
     alert(String(err));
   }

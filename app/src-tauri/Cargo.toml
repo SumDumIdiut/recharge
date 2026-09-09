@@ -1,6 +1,6 @@
 [package]
 name = "recharge"
-version = "1.2.10"
+version = "1.2.11"
 description = "Recharge - IGTAP mod manager"
 authors = ["SumDumIdiut"]
 edition = "2021"
@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
