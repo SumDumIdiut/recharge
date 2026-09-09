@@ -156,7 +156,19 @@ try {
         Set-Content -Path (Join-Path $gameDir 'steam_appid.txt') -Value $SteamAppId -Force -NoNewline
     }
 
-    $managed = Join-Path $gameDir 'IGTAPsnfDemo_Data\Managed'
+    # Don't assume the Demo branch's folder name - the game's own Unity data
+    # folder is "<ProductName>_Data" and differs per branch/variant (Demo vs.
+    # Playtest). steam.rs's managed_dir()/find_assembly_csharp() already
+    # discover this dynamically for the exact same reason; hardcoding
+    # "IGTAPsnfDemo_Data" here broke installs for anyone not on that exact
+    # branch even though GameDir itself was correct.
+    $dataDir = Get-ChildItem -Path $gameDir -Directory -Filter '*_Data' -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName 'Managed') } |
+        Select-Object -First 1
+    if (-not $dataDir) {
+        throw "No <Name>_Data folder with a Managed subfolder found under $gameDir - is GameDir correct?"
+    }
+    $managed = Join-Path $dataDir.FullName 'Managed'
     $backup = Join-Path $managed 'Assembly-CSharp.ORIGINAL.dll'
     $deployed = Join-Path $managed 'Assembly-CSharp.dll'
     $rechargeCache = Join-Path $managed 'Assembly-CSharp.RECHARGE.dll'
