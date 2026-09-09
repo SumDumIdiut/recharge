@@ -112,6 +112,33 @@ internal class CoopManager
 		_localMovement.blockSwapUnlocked = _lastBlockSwap;
 		_courses.Clear();
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+		// Same leak, same fix, for course-level upgrades - a freshly loaded
+		// courseScript (new scene) starts from its own real-save state, not
+		// this Coop session's accumulated purchases, and nothing else ever put
+		// the session's own tracked progress back onto it. Without this,
+		// "upgrades aren't matched" after a scene transition: the sync
+		// mechanism (BuildCoursesDelta/ApplyCoursesPayload) is correctly
+		// targeting the new instance again (thanks to the _courses refresh
+		// above), but the instance itself silently reverted to a different
+		// starting point first.
+		foreach (var course in _courses)
+		{
+			if (course?.localUpgradesScript == null) continue;
+			if (_lastLocalUpgrade.TryGetValue(course.courseNumber, out var lastDict))
+			{
+				foreach (var kv in lastDict)
+					course.localUpgradesScript.localUpgradeDict[kv.Key] = kv.Value;
+			}
+			if (_lastTimesUsed.TryGetValue(course.courseNumber, out var lastTimes))
+			{
+				var boxes = GetUpgradeBoxes(course);
+				for (int i = 0; i < boxes.Count && i < lastTimes.Length; i++)
+				{
+					boxes[i].TimesUsed = lastTimes[i];
+					boxes[i].CalcBoxCost();
+				}
+			}
+		}
 		DisableClones();
 		ScaleBaseRewards(_playerCount);
 	}
