@@ -749,6 +749,12 @@ internal class HostPanelController : MonoBehaviour
 				// silently breaks all Coop sync (currency, upgrades, abilities) for the
 				// rest of the round.
 				if (_mode == Mode.Coop && _localMovement != null) _coop.RefreshSceneReferences(_localMovement);
+				// Same fix, same reason, for Hide & Seek/Infection's own ability
+				// restrictions - a fresh Movement otherwise keeps whatever the
+				// player's real single-player save has instead of what the host
+				// configured for this round.
+				if ((_mode == Mode.HideAndSeek || _mode == Mode.Infection) && _localMovement != null && _lastAppliedAbilities != null)
+					ApplyAbilityRestrictions(_lastAppliedAbilities);
 			}
 		}
 		TryApplyPendingAbilities();
@@ -966,6 +972,7 @@ internal class HostPanelController : MonoBehaviour
 			// desync Coop's base-reward scaling between host and guests.
 			_roundPlayerCount = payload["playerCount"]?.Value<int>() ?? (MpNetworkManager.Instance?.LastSnapshotPlayers.Count + 1 ?? 1);
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
+			_lastAppliedAbilities = _pendingAbilities;
 			_pendingModeStart = _mode == Mode.HideAndSeek || _mode == Mode.Infection || _mode == Mode.Coop;
 			TryStartModeEconomy();
 			ApplyLocalAppearance();
@@ -1053,6 +1060,13 @@ internal class HostPanelController : MonoBehaviour
 	}
 
 	private JObject _pendingAbilities;
+	// Kept for the whole round (unlike _pendingAbilities, consumed once) so a
+	// later scene transition that destroys/replaces _localMovement - same
+	// class of bug CoopManager.RefreshSceneReferences fixed for Coop - can
+	// re-apply the host's ability restrictions to the new instance. Without
+	// this, a fresh Movement spawned mid-round for Hide & Seek/Infection just
+	// keeps whatever abilities the player's real single-player save has.
+	private JObject _lastAppliedAbilities;
 
 	// retried every frame until _localMovement resolves, instead of one-shot
 	private void TryApplyPendingAbilities()
@@ -1244,6 +1258,7 @@ internal class HostPanelController : MonoBehaviour
 		if (_localMovement != null && _movementFrozen) { _localMovement.enabled = true; _movementFrozen = false; }
 		if (_prevDotColor != null) { MpNetworkManager.SetDotColorHex(_prevDotColor); MpNetworkManager.SetNameColorHex(_prevNameColor); _prevDotColor = null; _prevNameColor = null; }
 		RestoreAbilities();
+		_lastAppliedAbilities = null;
 		RestoreWattsAndClones();
 		// One last blank-if-showing-Clone-text pass before the periodic check (which
 		// only runs while _roundActive) stops entirely - otherwise "N Clones" written
