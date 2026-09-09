@@ -61,6 +61,10 @@ function renderBrowse() {
 }
 
 function render() {
+  // Same self-heal as mods/script.js: a hub-beam install re-fetches this
+  // tab's view.html from scratch, resetting the subtab buttons' "active"
+  // class to their hardcoded default - resync it against currentSubtab.
+  document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('maps-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('maps-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
   renderInstalled();
