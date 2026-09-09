@@ -5,6 +5,26 @@
     <div class="settings-label">Appearance</div>
     <div class="theme-presets" id="theme-presets"></div>
     <div class="theme-colors" id="theme-colors"></div>
+
+    <div class="settings-sublabel">Background texture</div>
+    <div class="texture-row">
+      <div class="texture-preview" id="texture-preview"></div>
+      <div class="texture-actions">
+        <label class="btn" for="texture-input">Upload image…</label>
+        <input type="file" id="texture-input" accept="image/*" hidden />
+        <button class="btn" id="texture-remove-btn" hidden>Remove</button>
+      </div>
+    </div>
+    <div class="settings-error" id="texture-error" hidden></div>
+
+    <div class="settings-sublabel">Custom CSS</div>
+    <div class="css-row">
+      <label class="btn" for="css-file-input">Upload .css file…</label>
+      <input type="file" id="css-file-input" accept=".css,text/css" hidden />
+      <button class="btn" id="css-clear-btn">Clear</button>
+    </div>
+    <textarea class="css-textarea" id="custom-css-textarea" placeholder="/* Paste or upload custom CSS - applied live, overrides everything above */" spellcheck="false"></textarea>
+    <div class="settings-error" id="css-error" hidden></div>
   </div>
 
   <div class="card">

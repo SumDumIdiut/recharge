@@ -18,6 +18,7 @@
   --magenta: #c63ed8;
   --magenta-dim: rgba(198, 62, 216, 0.6);
   --grid-line: rgba(249, 255, 228, 0.035);
+  --bg-image: none;
   color-scheme: dark;
 }
 
@@ -25,7 +26,12 @@ body {
   margin: 0;
   font-family: 'VT323', ui-monospace, monospace;
   font-size: 19px;
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: var(--bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   color: var(--text);
   position: relative;
 }

@@ -53,3 +53,39 @@
 .launcher-update-available { color: var(--magenta); }
 #launcher-download-link { color: var(--green); margin-left: 8px; text-decoration: underline; }
 #launcher-notes { margin-top: 6px; line-height: 1.5; }
+
+.settings-sublabel {
+  font-size: 16px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin: 18px 0 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.texture-row, .css-row { display: flex; align-items: center; gap: 10px; }
+.texture-preview {
+  width: 72px;
+  height: 48px;
+  border: 1px solid var(--line);
+  background-color: var(--bg);
+  background-image: var(--bg-image, none);
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+}
+.texture-actions { display: flex; gap: 10px; }
+
+.css-textarea {
+  width: 100%;
+  min-height: 140px;
+  margin-top: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: 15px ui-monospace, monospace;
+  padding: 10px;
+  resize: vertical;
+}
+
+.settings-error { color: var(--magenta); margin-top: 8px; }

@@ -30,6 +30,8 @@ export const ATTRS = [
 ];
 
 const STORAGE_KEY = 'rechargeColors';
+const TEXTURE_KEY = 'rechargeBgTexture';
+const CUSTOM_CSS_KEY = 'rechargeCustomCss';
 
 function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
@@ -77,4 +79,50 @@ export function applyColors(colors) {
 export function applyPreset(id) {
   const preset = PRESETS.find((p) => p.id === id) || PRESETS[0];
   applyColors({ ...preset });
+}
+
+// Background texture - a user-uploaded image layered over the flat --bg
+// color (see body's background-image in style.css). Stored as a data URL
+// so it survives a relaunch with no extra Tauri command needed to read it
+// back off disk.
+export function getBgTexture() {
+  try { return localStorage.getItem(TEXTURE_KEY) || ''; } catch (e) { return ''; }
+}
+
+export function applyBgTexture(dataUrl) {
+  // Persist first - if a large image blows localStorage's quota, throw
+  // before touching the visible property at all. Applying it anyway would
+  // look like it worked right up until the next relaunch silently drops it.
+  try {
+    if (dataUrl) localStorage.setItem(TEXTURE_KEY, dataUrl);
+    else localStorage.removeItem(TEXTURE_KEY);
+  } catch (e) {
+    throw e;
+  }
+  document.documentElement.style.setProperty('--bg-image', dataUrl ? `url("${dataUrl}")` : 'none');
+}
+
+// Custom CSS - injected last (after style.css and every tab's own
+// stylesheet) so it can freely override anything, including the
+// --bg/--panel/etc. custom properties applyColors sets inline.
+const CUSTOM_CSS_ELEMENT_ID = 'recharge-custom-css';
+
+export function getCustomCss() {
+  try { return localStorage.getItem(CUSTOM_CSS_KEY) || ''; } catch (e) { return ''; }
+}
+
+export function applyCustomCss(css) {
+  try {
+    if (css) localStorage.setItem(CUSTOM_CSS_KEY, css);
+    else localStorage.removeItem(CUSTOM_CSS_KEY);
+  } catch (e) {
+    throw e;
+  }
+  let el = document.getElementById(CUSTOM_CSS_ELEMENT_ID);
+  if (!el) {
+    el = document.createElement('style');
+    el.id = CUSTOM_CSS_ELEMENT_ID;
+    document.head.appendChild(el);
+  }
+  el.textContent = css || '';
 }

@@ -1,4 +1,7 @@
-import { PRESETS, ATTRS, getColors, applyColors, applyPreset } from '/theme.js';
+import {
+  PRESETS, ATTRS, getColors, applyColors, applyPreset,
+  getBgTexture, applyBgTexture, getCustomCss, applyCustomCss,
+} from '/theme.js';
 
 function renderAppearance() {
   const presetsEl = document.getElementById('theme-presets');
@@ -32,6 +35,89 @@ function renderAppearance() {
       applyColors(colors);
     };
   });
+}
+
+function readFileAs(file, method) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader[method](file);
+  });
+}
+
+function renderTexturePreview() {
+  const removeBtn = document.getElementById('texture-remove-btn');
+  removeBtn.hidden = !getBgTexture();
+}
+
+function initTexture() {
+  const input = document.getElementById('texture-input');
+  const removeBtn = document.getElementById('texture-remove-btn');
+  const errorEl = document.getElementById('texture-error');
+
+  renderTexturePreview();
+
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    errorEl.hidden = true;
+    try {
+      const dataUrl = await readFileAs(file, 'readAsDataURL');
+      applyBgTexture(dataUrl);
+      renderTexturePreview();
+    } catch (err) {
+      errorEl.textContent = 'Could not use that image: ' + (err?.message || err);
+      errorEl.hidden = false;
+    }
+  };
+
+  removeBtn.onclick = () => {
+    applyBgTexture('');
+    renderTexturePreview();
+  };
+}
+
+function initCustomCss() {
+  const textarea = document.getElementById('custom-css-textarea');
+  const fileInput = document.getElementById('css-file-input');
+  const clearBtn = document.getElementById('css-clear-btn');
+  const errorEl = document.getElementById('css-error');
+
+  textarea.value = getCustomCss();
+
+  const apply = () => {
+    errorEl.hidden = true;
+    try {
+      applyCustomCss(textarea.value);
+    } catch (err) {
+      errorEl.textContent = 'Could not save custom CSS: ' + (err?.message || err);
+      errorEl.hidden = false;
+    }
+  };
+
+  // Applied live as you type, not just on an explicit save - matches every
+  // other Appearance control on this page (color pickers apply on input too).
+  textarea.oninput = apply;
+
+  fileInput.onchange = async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (!file) return;
+    try {
+      textarea.value = await readFileAs(file, 'readAsText');
+      apply();
+    } catch (err) {
+      errorEl.textContent = 'Could not read that file: ' + (err?.message || err);
+      errorEl.hidden = false;
+    }
+  };
+
+  clearBtn.onclick = () => {
+    textarea.value = '';
+    apply();
+  };
 }
 
 // Not a picker - the game path is auto-detected only. This just reveals the
@@ -130,4 +216,6 @@ export async function init() {
   refreshStatus();
   refreshLauncherStatus();
   renderAppearance();
+  initTexture();
+  initCustomCss();
 }
