@@ -17,6 +17,28 @@
     </div>
     <div class="settings-error" id="texture-error" hidden></div>
 
+    <div class="settings-sublabel">Waveform</div>
+    <div class="settings-row">
+      <label class="color-field" style="flex-direction: row; gap: 8px; cursor: pointer;">
+        <input type="checkbox" id="wave-enabled" />
+        Show waveform banner
+      </label>
+    </div>
+    <div class="wave-sliders" id="wave-sliders">
+      <label class="wave-slider-row">
+        Speed
+        <input type="range" id="wave-speed" min="20" max="220" step="5" />
+      </label>
+      <label class="wave-slider-row">
+        Height
+        <input type="range" id="wave-amplitude" min="4" max="40" step="1" />
+      </label>
+      <label class="wave-slider-row">
+        Density
+        <input type="range" id="wave-density" min="120" max="500" step="10" />
+      </label>
+    </div>
+
     <div class="settings-sublabel">Custom CSS</div>
     <div class="css-row">
       <label class="btn" for="css-file-input">Upload .css file…</label>

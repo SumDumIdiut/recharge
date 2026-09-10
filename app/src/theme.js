@@ -32,6 +32,7 @@ export const ATTRS = [
 const STORAGE_KEY = 'rechargeColors';
 const TEXTURE_KEY = 'rechargeBgTexture';
 const CUSTOM_CSS_KEY = 'rechargeCustomCss';
+const WAVE_KEY = 'rechargeWaveSettings';
 
 function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
@@ -125,4 +126,23 @@ export function applyCustomCss(css) {
     document.head.appendChild(el);
   }
   el.textContent = css || '';
+}
+
+// Home's procedural waveform banner - persisted here (not just in-memory in
+// home.js) so it survives a relaunch, matching every other Appearance
+// control on this page. home.js reads these via getWaveSettings() each time
+// it (re)builds the waveform; this module doesn't touch the DOM for it
+// directly since the waveform is generated SVG geometry, not a CSS property.
+export const WAVE_DEFAULTS = { enabled: true, speed: 90, amplitude: 20, density: 300 };
+
+export function getWaveSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WAVE_KEY));
+    if (saved) return { ...WAVE_DEFAULTS, ...saved };
+  } catch (e) {}
+  return { ...WAVE_DEFAULTS };
+}
+
+export function saveWaveSettings(settings) {
+  try { localStorage.setItem(WAVE_KEY, JSON.stringify(settings)); } catch (e) {}
 }
