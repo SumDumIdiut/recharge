@@ -1,10 +1,16 @@
+import { getWaveSettings } from '/theme.js';
+
 let pollHandle = null;
 let lastLaunchMode = null;
 
 // ── Procedural waveform: randomized spikes, beat synced to what's on screen ──
-const WAVE_BASE_Y = 22;
-const WAVE_SPEED = 90; // px/sec
 const BEAT_SHAPES = ['single', 'double', 'sharp'];
+
+// Bumped every time startWaveform() (re)builds the banner, so a stale
+// requestAnimationFrame loop from a previous build can tell it's obsolete
+// and stop recursing - without this, calling startWaveform() again to pick
+// up a settings change would run two competing loops on the same polyline.
+let waveGeneration = 0;
 
 function shapePoints(shape, x0, width, height, baseY) {
   const h = height;
@@ -28,12 +34,16 @@ function peakFraction(shape) {
   return shape === 'sharp' ? 0.2 : shape === 'double' ? 0.62 : 0.65;
 }
 
-function buildWaveform(minTotalWidth) {
+// amplitude/density come from the user's saved waveform settings - amplitude
+// is the average peak height, density is the average distance between beats
+// (both jittered the same +/-40%/+/-25% the original hardcoded ranges used,
+// just centered on the configured value instead of a fixed constant).
+function buildWaveform(minTotalWidth, amplitude, density) {
   const units = [];
   let x = 0;
   while (x < minTotalWidth) {
-    const width = 220 + Math.random() * 160;
-    const height = 12 + Math.random() * 16;
+    const width = density * (0.75 + Math.random() * 0.5);
+    const height = amplitude * (0.6 + Math.random() * 0.8);
     const shape = BEAT_SHAPES[Math.floor(Math.random() * BEAT_SHAPES.length)];
     units.push({ x0: x, width, height, shape, peakX: x + width * peakFraction(shape) });
     x += width;
@@ -41,29 +51,48 @@ function buildWaveform(minTotalWidth) {
   return { units, totalWidth: x };
 }
 
-function startWaveform() {
+export function startWaveform() {
   const svg = document.querySelector('.wave-trace');
   const polyline = svg?.querySelector('polyline');
   const banner = document.getElementById('wave-banner');
   if (!svg || !polyline || !banner) return;
 
+  const myGeneration = ++waveGeneration;
+  const settings = getWaveSettings();
+  banner.style.display = settings.enabled ? '' : 'none';
+  if (!settings.enabled) return;
+
   const containerWidth = banner.clientWidth || 900;
-  const { units, totalWidth } = buildWaveform(Math.max(containerWidth * 3, 6000));
+  const { units, totalWidth } = buildWaveform(Math.max(containerWidth * 3, 6000), settings.amplitude, settings.density);
+
+  // The banner/SVG height used to be a flat 44px regardless of amplitude -
+  // fine at the original fixed height=12-28 range, but the editable slider
+  // goes up to 40, and a peak can swing up to ~0.7x the jittered height
+  // (itself up to 1.4x the configured amplitude) off the centerline. Left
+  // at 44px, a high amplitude setting just got its peaks clipped off top
+  // and bottom. Size the banner to the WORST CASE for the current setting
+  // instead, so nothing this waveform can draw is ever cut off.
+  const maxPeakDeviation = settings.amplitude * 1.4 * 0.7;
+  const svgHeight = Math.max(44, Math.ceil(maxPeakDeviation * 2 + 8));
+  const baseY = svgHeight / 2;
+  banner.style.height = svgHeight + 'px';
 
   const allPoints = [];
-  for (const u of units) allPoints.push(...shapePoints(u.shape, u.x0, u.width, u.height, WAVE_BASE_Y));
-  for (const u of units) allPoints.push(...shapePoints(u.shape, u.x0 + totalWidth, u.width, u.height, WAVE_BASE_Y));
+  for (const u of units) allPoints.push(...shapePoints(u.shape, u.x0, u.width, u.height, baseY));
+  for (const u of units) allPoints.push(...shapePoints(u.shape, u.x0 + totalWidth, u.width, u.height, baseY));
 
   svg.setAttribute('width', String(totalWidth * 2));
-  svg.setAttribute('viewBox', `0 0 ${totalWidth * 2} 44`);
+  svg.setAttribute('height', String(svgHeight));
+  svg.setAttribute('viewBox', `0 0 ${totalWidth * 2} ${svgHeight}`);
   polyline.setAttribute('points', allPoints.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
 
   const lastScreenX = new Map(units.map((u) => [u, null]));
   const start = performance.now();
 
   function frame(now) {
+    if (myGeneration !== waveGeneration) return; // a newer startWaveform() call superseded this loop
     const elapsed = (now - start) / 1000;
-    const offset = (elapsed * WAVE_SPEED) % totalWidth;
+    const offset = (elapsed * settings.speed) % totalWidth;
     polyline.style.transform = `translateX(${-offset}px)`;
 
     const tx = (banner.clientWidth || containerWidth) - 30;

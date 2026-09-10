@@ -1,7 +1,9 @@
 import {
   PRESETS, ATTRS, getColors, applyColors, applyPreset,
   getBgTexture, applyBgTexture, getCustomCss, applyCustomCss,
+  getWaveSettings, saveWaveSettings,
 } from '/theme.js';
+import { startWaveform } from '/home.js';
 
 function renderAppearance() {
   const presetsEl = document.getElementById('theme-presets');
@@ -120,6 +122,41 @@ function initCustomCss() {
   };
 }
 
+function initWaveform() {
+  const enabledEl = document.getElementById('wave-enabled');
+  const speedEl = document.getElementById('wave-speed');
+  const amplitudeEl = document.getElementById('wave-amplitude');
+  const densityEl = document.getElementById('wave-density');
+  const slidersEl = document.getElementById('wave-sliders');
+
+  const settings = getWaveSettings();
+  enabledEl.checked = settings.enabled;
+  speedEl.value = settings.speed;
+  amplitudeEl.value = settings.amplitude;
+  densityEl.value = settings.density;
+  slidersEl.style.opacity = settings.enabled ? '1' : '0.4';
+
+  // Live-applies against the actual Home banner (always present in the DOM,
+  // Home is never lazy-unloaded) rather than needing a restart to see the
+  // effect of a slider drag.
+  function apply() {
+    const next = {
+      enabled: enabledEl.checked,
+      speed: Number(speedEl.value),
+      amplitude: Number(amplitudeEl.value),
+      density: Number(densityEl.value),
+    };
+    saveWaveSettings(next);
+    slidersEl.style.opacity = next.enabled ? '1' : '0.4';
+    startWaveform();
+  }
+
+  enabledEl.oninput = apply;
+  speedEl.oninput = apply;
+  amplitudeEl.oninput = apply;
+  densityEl.oninput = apply;
+}
+
 // Opens a real folder picker so a wrong or failed auto-detect can be
 // corrected by hand - previously this button only revealed the already-set
 // path in Explorer with no way to actually change it.
@@ -228,5 +265,6 @@ export async function init() {
   refreshLauncherStatus();
   renderAppearance();
   initTexture();
+  initWaveform();
   initCustomCss();
 }

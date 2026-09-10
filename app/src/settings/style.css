@@ -89,3 +89,14 @@
 }
 
 .settings-error { color: var(--magenta); margin-top: 8px; }
+
+.wave-sliders { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; transition: opacity 0.15s ease; }
+.wave-slider-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+.wave-slider-row input[type="range"] { width: 100%; accent-color: var(--green); }
