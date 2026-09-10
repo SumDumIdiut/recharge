@@ -761,6 +761,14 @@ internal class HostPanelController : MonoBehaviour
 		TryStartModeEconomy();
 		TryCloseMenuIfNeeded();
 
+		// manualSave (unlike the periodic autosave already suspended in
+		// ActivateModeSaveFile) gets freshly re-scheduled at an arbitrary
+		// time mid-round - any real course finish during the round calls
+		// courseScript.stopTracking(true), which Invokes it 1s later. A
+		// one-time cancel at round start can't catch that; cancelling every
+		// frame while active does, well within its 1s delay.
+		if (_modeSaveActive) FindRealSaveloader()?.CancelInvoke("manualSave");
+
 		if (_returnToLobbyPending && Time.unscaledTime - _returnToLobbyFadeStart >= ReturnToLobbyFadeDuration)
 			ReturnToLobbyMenu();
 
@@ -1300,6 +1308,7 @@ internal class HostPanelController : MonoBehaviour
 				ModeSaveFile.Save(folder, _localMovement, _modeCourses);
 			}
 			_modeSaveActive = true;
+			SuspendRealAutosave();
 		}
 		catch (System.Exception e) { Debug.LogError("[HostPanel] ActivateModeSaveFile failed: " + e); }
 	}
@@ -1314,6 +1323,35 @@ internal class HostPanelController : MonoBehaviour
 		catch (System.Exception e) { Debug.LogError("[HostPanel] DeactivateModeSaveFile failed: " + e); }
 		_activeModeSaveFolder = null;
 		_modeCourses.Clear();
+		ResumeRealAutosave();
+	}
+
+	// The vanilla Saveloader is completely unaware of ModeSaveFile's temporary
+	// folder swap above - its own autosave() (every 10s) and manualSave()
+	// (Invoked 1s after ANY real course finish, via courseScript.stopTracking)
+	// both hardcode "/Savedata" and save every SaveableObject's CURRENT
+	// in-memory state, abilities included. Left alone, playing even one real
+	// course during a Hide & Seek/Infection round - or just staying in one
+	// for 10+ seconds - permanently bakes that round's ability set into the
+	// player's REAL save the moment either fires, well before this class's
+	// own Restore() above ever gets a chance to undo it. Found by matching a
+	// live "everyone has every ability, but globalUpgradeDict shows nothing
+	// purchased" corrupted save against dated backups - not a byproduct of
+	// the ability-sync fixes shipped earlier this session, since it corrupts
+	// the file mid-round regardless of Coop/Hide&Seek sync being otherwise
+	// correct by then.
+	private Saveloader _realSaveloader;
+
+	private Saveloader FindRealSaveloader() => _realSaveloader != null ? _realSaveloader : (_realSaveloader = Object.FindFirstObjectByType<Saveloader>());
+
+	private void SuspendRealAutosave() => FindRealSaveloader()?.CancelInvoke("autosave");
+
+	private void ResumeRealAutosave()
+	{
+		var s = FindRealSaveloader();
+		if (s == null) return;
+		s.CancelInvoke("autosave");
+		s.InvokeRepeating("autosave", 10f, 10f);
 	}
 
 	private bool _pendingMenuClose;
