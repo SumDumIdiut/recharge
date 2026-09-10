@@ -1,9 +1,0 @@
-{
-  "id": "recharge.rlagent",
-  "displayName": "RL Speedrunner",
-  "version": "1.0.0",
-  "author": "Flipped",
-  "entryAssembly": "RechargeRlAgent.dll",
-  "minLoaderVersion": "1.0.0",
-  "enabled": true
-}
