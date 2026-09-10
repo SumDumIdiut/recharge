@@ -70,6 +70,37 @@ pub fn is_game_running(app: AppHandle) -> bool {
     is_process_running(&exe_name)
 }
 
+fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
+    let Some(managed) = managed_dir(game_dir) else {
+        return if modded {
+            Err("Couldn't find the game's Managed folder to switch to the modded build.".into())
+        } else {
+            Ok(())
+        };
+    };
+    let deployed = managed.join("Assembly-CSharp.dll");
+    let source = if modded {
+        managed.join("Assembly-CSharp.RECHARGE.dll")
+    } else {
+        managed.join("Assembly-CSharp.ORIGINAL.dll")
+    };
+    if modded && !source.is_file() {
+        return Err(
+            "Modded launch needs RechargeLoader installed first (Settings > Install/Update)."
+                .into(),
+        );
+    }
+    if source.is_file() {
+        std::fs::copy(&source, &deployed).map_err(|e| {
+            format!(
+                "Failed to switch to the {} build: {e}",
+                if modded { "modded" } else { "vanilla" }
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn launch_game(app: AppHandle, modded: bool) -> Result<(), String> {
     let game_path = settings::get_game_path(app)
@@ -83,30 +114,24 @@ pub fn launch_game(app: AppHandle, modded: bool) -> Result<(), String> {
         return Err("The game is already running - only one instance at a time.".into());
     }
 
-    if let Some(managed) = managed_dir(&game_dir) {
-        let deployed = managed.join("Assembly-CSharp.dll");
-        let source = if modded {
-            managed.join("Assembly-CSharp.RECHARGE.dll")
-        } else {
-            managed.join("Assembly-CSharp.ORIGINAL.dll")
-        };
-        if modded && !source.is_file() {
-            return Err(
-                "Modded launch needs RechargeLoader installed first (Settings > Install/Update)."
-                    .into(),
-            );
-        }
-        if source.is_file() {
-            std::fs::copy(&source, &deployed)
-                .map_err(|e| format!("Failed to switch to the {} build: {e}", if modded { "modded" } else { "vanilla" }))?;
-        }
-    } else if modded {
-        return Err("Couldn't find the game's Managed folder to switch to the modded build.".into());
-    }
+    deploy_build(&game_dir, modded)?;
 
     Command::new(&exe)
         .current_dir(&game_dir)
         .spawn()
         .map_err(|e| format!("Failed to launch game: {e}"))?;
     Ok(())
+}
+
+// A modded launch leaves Assembly-CSharp.dll swapped to the RECHARGE build on
+// disk - the swap is a real file copy, not a launch-time-only trick, so it's
+// still in effect for the *next* launch too, including one started straight
+// from Steam with Recharge never open. Call this once the modded process
+// exits so the game's at-rest state is always vanilla, and mods only run
+// when something actually asked for them.
+#[tauri::command]
+pub fn restore_vanilla_build(app: AppHandle) -> Result<(), String> {
+    let game_path = settings::get_game_path(app)
+        .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
+    deploy_build(&PathBuf::from(&game_path), false)
 }

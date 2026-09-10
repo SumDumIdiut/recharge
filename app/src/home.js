@@ -1,4 +1,5 @@
 let pollHandle = null;
+let lastLaunchMode = null;
 
 // ── Procedural waveform: randomized spikes, beat synced to what's on screen ──
 const WAVE_BASE_Y = 22;
@@ -105,6 +106,19 @@ async function pollRunning() {
     pollHandle = null;
     setPlaying(false);
     logLine('game process exited');
+    // The modded swap is a real file on disk, not a launch-time-only trick -
+    // it's still deployed for whatever runs the game next, Steam-direct
+    // included. Put it back to vanilla the moment the modded session ends so
+    // "just running the game through Steam" is never silently modded.
+    if (lastLaunchMode === 'modded') {
+      lastLaunchMode = null;
+      try {
+        await invoke('restore_vanilla_build');
+        logLine('switched back to <b>vanilla</b>');
+      } catch (err) {
+        logLine(`couldn't switch back to vanilla: ${String(err)}`);
+      }
+    }
   }
 }
 
@@ -114,6 +128,7 @@ window.__homeLaunch = async function (mode) {
   logLine(`launching <b>${mode.toUpperCase()}</b>…`);
   try {
     await invoke('launch_game', { modded: mode === 'modded' });
+    lastLaunchMode = mode;
     logLine(`process started (${mode})`);
     if (!pollHandle) pollHandle = setInterval(pollRunning, 2000);
   } catch (err) {
@@ -208,6 +223,13 @@ export async function initHome() {
     logLine('game process already running');
   } else {
     logLine('no active game process');
+    // Covers the case where Recharge (or the whole PC) closed mid-modded-
+    // session and never got to run pollRunning's own restore-on-exit - the
+    // game isn't running right now, so it's safe to force the at-rest state
+    // back to vanilla before anything launches it directly from Steam.
+    try {
+      await invoke('restore_vanilla_build');
+    } catch { /* no install detected yet, or nothing to restore - fine */ }
   }
 
   startWaveform();

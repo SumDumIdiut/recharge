@@ -34,6 +34,7 @@ pub fn run() {
             launcher::check_launcher_update,
             play::launch_game,
             play::is_game_running,
+            play::restore_vanilla_build,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
