@@ -76,7 +76,9 @@ async function loadCatalog() {
 
 function renderInstalled() {
   const list = document.getElementById('mods-installed-view');
-  const filtered = installedCache.filter((m) => matchesSearch(m.displayName + ' ' + (m.author || '')));
+  const filtered = installedCache
+    .filter((m) => matchesSearch(m.displayName + ' ' + (m.author || '')))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = installedCache.length
       ? '<div class="empty-state">No mods match your search.</div>'
@@ -112,7 +114,9 @@ function renderBrowse() {
     list.innerHTML = '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>';
     return;
   }
-  const filtered = catalog.filter((m) => matchesSearch(m.name + ' ' + m.description + ' ' + m.author));
+  const filtered = catalog
+    .filter((m) => matchesSearch(m.name + ' ' + m.description + ' ' + m.author))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = '<div class="empty-state">No mods match your search.</div>';
     return;

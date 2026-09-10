@@ -15,7 +15,9 @@ function matchesSearch(haystack) {
 
 function renderInstalled() {
   const list = document.getElementById('maps-installed-view');
-  const filtered = installedCache.filter((m) => matchesSearch(m.name));
+  const filtered = installedCache
+    .filter((m) => matchesSearch(m.name))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = installedCache.length
       ? '<div class="empty-state">No maps match your search.</div>'
@@ -39,7 +41,9 @@ function renderInstalled() {
 
 function renderBrowse() {
   const list = document.getElementById('maps-browse-view');
-  const filtered = MAP_CATALOG.filter((m) => matchesSearch(m.name + ' ' + (m.description || '') + ' ' + (m.author || '')));
+  const filtered = MAP_CATALOG
+    .filter((m) => matchesSearch(m.name + ' ' + (m.description || '') + ' ' + (m.author || '')))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = '<div class="empty-state">No maps published yet.</div>';
     return;
