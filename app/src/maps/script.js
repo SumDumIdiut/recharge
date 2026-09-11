@@ -16,6 +16,7 @@ function matchesSearch(haystack) {
 function renderInstalled() {
   const list = document.getElementById('maps-installed-view');
   const filtered = installedCache
+    .filter((m) => !m.id.startsWith('_'))
     .filter((m) => matchesSearch(m.name))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {

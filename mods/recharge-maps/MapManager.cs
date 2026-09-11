@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -13,19 +14,19 @@ internal class MapManager : MonoBehaviour
 {
     public static MapManager Instance { get; private set; }
 
-    // The custom-map id currently spawned in the pocket, or null when playing
-    // real Base Game/B-side content. Cleared on every real scene load (the
-    // only way a player actually leaves the pocket - custom maps never call
-    // SceneManager.LoadScene themselves), so it can't desync from reality.
     public static string CurrentMapId { get; private set; }
 
+    public const string BaseGameEditsMapId = "_BaseGameEdits";
+    public const string BSideEditsMapId = "_BSideEdits";
+
     private GameObject _currentCourseGo;
+    private GameObject _currentOverlayGo;
 
-    // Far from any real course geometry (~-10000..20000), so nothing needs
-    // hiding except the cloned course template's own DisableBits content.
     private static readonly Vector2 PocketOrigin = new Vector2(50000f, 50000f);
-
+    private const float RealCameraOrthoSize = 550f;
     private static readonly BindingFlags NonPublicInstance = BindingFlags.NonPublic | BindingFlags.Instance;
+
+    public static string SaveFolder => "/Savedata" + (globalStats.difficultyLevel == 1 ? "hard" : "");
 
     public static MapManager GetOrCreate()
     {
@@ -47,27 +48,49 @@ internal class MapManager : MonoBehaviour
         SceneManager.sceneLoaded += (scene, mode) =>
         {
             CurrentMapId = null;
-            _currentCourseGo = null;
+            if (_currentCourseGo != null) { Destroy(_currentCourseGo); _currentCourseGo = null; }
+            if (_currentOverlayGo != null) { Destroy(_currentOverlayGo); _currentOverlayGo = null; }
             RealAssetPalette.ScanCurrentScene();
             TryCaptureSpringAnimation();
+            TryExportCourseSnapshot();
             if (_pendingMapId != null) StartCoroutine(LoadPendingMapWhenPlayerReady());
         };
         RealAssetPalette.ScanCurrentScene();
         TryCaptureSpringAnimation();
+        TryExportCourseSnapshot();
+        StartCoroutine(HeartbeatLog());
+    }
+
+    private IEnumerator HeartbeatLog()
+    {
+        var wait = new WaitForSeconds(10f);
+        while (true)
+        {
+            yield return wait;
+            try
+            {
+                RealAssetPalette.LogFullDiagnostics();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[RechargeMaps] heartbeat log failed: " + e);
+            }
+        }
     }
 
     private string _pendingMapId;
+    private bool _pendingMapIsOverlay;
 
-    // Picking a map only ever spawns a pocket within whatever scene is
-    // already loaded - it never itself starts a real scene transition. From
-    // the title screen (no gameplay scene entered yet) there's no Player to
-    // move into that pocket, so LoadMap's own MovePlayerIn silently no-ops:
-    // the level spawns, nothing visible happens, and the only symptom is the
-    // frame hitch from spawning it. This is the entry point the Play picker
-    // should call instead of LoadMap directly - it starts Base Game first
-    // when there's no Player yet, then loads the map once one actually exists.
     public void PlayMap(string mapId, pauseMenuScript menu)
     {
+        if (IsOverlayMap(mapId))
+        {
+            _pendingMapId = mapId;
+            _pendingMapIsOverlay = true;
+            menu.changeSceneHard();
+            return;
+        }
+
         var playerGo = GameObject.FindGameObjectWithTag("Player");
         if (playerGo != null && playerGo.GetComponent<Movement>() != null)
         {
@@ -75,12 +98,25 @@ internal class MapManager : MonoBehaviour
             return;
         }
         _pendingMapId = mapId;
+        _pendingMapIsOverlay = false;
         menu.changeScene();
     }
 
-    private System.Collections.IEnumerator LoadPendingMapWhenPlayerReady()
+    public static bool IsOverlayMap(string mapId)
+    {
+        try
+        {
+            var path = Path.Combine(MapPaths.MapsDir, mapId, "map.json");
+            if (!File.Exists(path)) return false;
+            return JsonConvert.DeserializeObject<MapDefinition>(File.ReadAllText(path))?.IsOverlay ?? false;
+        }
+        catch { return false; }
+    }
+
+    private IEnumerator LoadPendingMapWhenPlayerReady()
     {
         var mapId = _pendingMapId;
+        var isOverlay = _pendingMapIsOverlay;
         _pendingMapId = null;
         float waited = 0f;
         while (waited < 10f)
@@ -90,7 +126,52 @@ internal class MapManager : MonoBehaviour
             yield return null;
             waited += Time.unscaledDeltaTime;
         }
-        LoadMap(mapId);
+        if (isOverlay) ApplyOverlay(mapId); else LoadMap(mapId);
+    }
+
+    public void SnapCameraToRealPlayerWhenReady(string autoApplyMapId = null)
+    {
+        StartCoroutine(SnapCameraToRealPlayerCoroutine(autoApplyMapId));
+    }
+
+    private IEnumerator SnapCameraToRealPlayerCoroutine(string autoApplyMapId = null)
+    {
+        float waited = 0f;
+        GameObject playerGo = null;
+        Movement movement = null;
+        while (waited < 10f)
+        {
+            playerGo = GameObject.FindGameObjectWithTag("Player");
+            movement = playerGo != null ? playerGo.GetComponent<Movement>() : null;
+            if (movement != null && movement.cam != null) break;
+            yield return null;
+            waited += Time.unscaledDeltaTime;
+        }
+        if (movement == null || movement.cam == null) yield break;
+
+        yield return null;
+
+        var pos = (Vector2)playerGo.transform.position;
+        if (Vector2.Distance(pos, PocketOrigin) < 20000f)
+        {
+            var start = RealAssetPalette.Get<startGate>();
+            var rescuePos = start != null ? (Vector3)start.transform.position : Vector3.zero;
+            playerGo.transform.position = rescuePos;
+            var body = playerGo.GetComponent<Rigidbody2D>();
+            if (body != null) { body.position = rescuePos; body.linearVelocity = Vector2.zero; }
+            movement.respawnPoint = rescuePos;
+            Debug.Log("[RechargeMaps] player was stuck in the pocket at " + pos + " - rescued to real start position " + rescuePos);
+            pos = rescuePos;
+        }
+
+        movement.cam.setup(pos, RealCameraOrthoSize);
+        movement.cam.newTarget(playerGo, movement.cam.defaultoffset, true, Vector2.zero);
+        Debug.Log("[RechargeMaps] snapped camera back to real player at " + pos);
+
+        if (autoApplyMapId != null && Directory.Exists(Path.Combine(MapPaths.MapsDir, autoApplyMapId)))
+        {
+            ApplyOverlay(autoApplyMapId);
+        }
     }
 
     private void TryCaptureSpringAnimation()
@@ -98,7 +179,12 @@ internal class MapManager : MonoBehaviour
         if (RealAssetPalette.Get<SpringScript>() != null) StartCoroutine(RealAssetPalette.CaptureSpringAnimation());
     }
 
-    public static string SaveFolder => "/Savedata" + (globalStats.difficultyLevel == 1 ? "hard" : "");
+    private void TryExportCourseSnapshot()
+    {
+        var scene = SceneManager.GetActiveScene().name;
+        if (scene != "Overworld" && scene != "OverworldHard") return;
+        StartCoroutine(RealAssetPalette.ExportCourseSnapshot(scene));
+    }
 
     public void LoadMap(string mapId)
     {
@@ -120,13 +206,76 @@ internal class MapManager : MonoBehaviour
         }
     }
 
-    // Deletes just the given map's own course-progress file (courseScript.save/
-    // load already namespace it by courseNumber - see StableCourseNumber - so
-    // this never touches real Base Game/B-side data or any other custom map's
-    // progress, unlike the vanilla Delete Save buttons which wipe a whole
-    // folder). Works on any map id, not just the one currently loaded - the
-    // Maps panel lets a player browse to and delete a map's save without
-    // having to load it first.
+    public void ApplyOverlay(string mapId)
+    {
+        try
+        {
+            var path = Path.Combine(MapPaths.MapsDir, mapId, "map.json");
+            if (!File.Exists(path)) { Debug.LogError("[RechargeMaps] overlay map not found: " + path); return; }
+
+            var def = JsonConvert.DeserializeObject<MapDefinition>(File.ReadAllText(path));
+            if (def?.Groups == null || def.Groups.Count == 0) { Debug.LogError("[RechargeMaps] overlay map has no groups: " + mapId); return; }
+
+            if (_currentOverlayGo != null) { Destroy(_currentOverlayGo); _currentOverlayGo = null; }
+            LoadCustomImages(mapId, def);
+
+            var holder = new GameObject("RechargeMapOverlay_" + mapId);
+            _currentOverlayGo = holder;
+
+            _activeOrigin = Vector2.zero;
+            try
+            {
+                foreach (var obj in def.Groups[0].Objects)
+                {
+                    var type = obj["type"]?.Value<string>();
+                    switch (type)
+                    {
+                        case "block": SpawnBlock(obj, holder.transform); break;
+                        case "blueBlock": SpawnColoredBlock(obj, holder.transform, isOrange: false); break;
+                        case "orangeBlock": SpawnColoredBlock(obj, holder.transform, isOrange: true); break;
+                        case "spike": SpawnSimple<spikeScript>(obj, holder.transform); break;
+                        case "checkpoint": SpawnSimple<checkpointScript>(obj, holder.transform); break;
+                        case "wattTile": SpawnWattTile(obj, holder.transform); break;
+                        case "modifyObject": ApplyOverlayModify(obj); break;
+                        default: Debug.LogWarning("[RechargeMaps] overlay: unsupported object type '" + type + "', skipped"); break;
+                    }
+                }
+            }
+            finally
+            {
+                _activeOrigin = null;
+            }
+
+            CurrentMapId = mapId;
+            Debug.Log("[RechargeMaps] applied overlay map '" + mapId + "' onto the real scene (" + def.Groups[0].Objects.Count + " objects)");
+        }
+        catch (Exception e)
+        {
+            _activeOrigin = null;
+            Debug.LogError("[RechargeMaps] ApplyOverlay failed: " + e);
+        }
+    }
+
+    private void ApplyOverlayModify(JObject obj)
+    {
+        var objectName = obj["objectName"]?.Value<string>();
+        if (string.IsNullOrEmpty(objectName) || objectName.ToLowerInvariant() == "player") return;
+
+        GameObject found = null;
+        foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
+        {
+            if (go.scene.IsValid() && go.name == objectName) { found = go; break; }
+        }
+        if (found == null)
+        {
+            Debug.LogWarning("[RechargeMaps] overlay MODIFY '" + objectName + "' - no matching real object found in scene");
+            return;
+        }
+
+        found.transform.position = WorldPos(obj);
+        found.transform.rotation = Rot(obj);
+    }
+
     public static void DeleteMapSave(string mapId)
     {
         var path = Application.persistentDataPath + SaveFolder + "/course" + StableCourseNumber(mapId) + "data.txt";
@@ -159,10 +308,6 @@ internal class MapManager : MonoBehaviour
 
         course.courseNumber = StableCourseNumber(mapId);
         course.init = true;
-        // The cloned template is "course 1", the decorative course shown behind the
-        // main menu - it has isOnPauseMenu=true, which makes load() read the bundled
-        // MenuCourseData.txt (a canned demo ghost-path) instead of a real per-course
-        // save file. Force it off so a fresh map starts clean, not replaying that ghost.
         typeof(courseScript).GetField("isOnPauseMenu", NonPublicInstance)?.SetValue(course, false);
         try { course.load(SaveFolder); } catch (Exception e) { Debug.LogWarning("[RechargeMaps] course.load failed (expected on first play): " + e.Message); }
 
@@ -179,6 +324,11 @@ internal class MapManager : MonoBehaviour
                 case "platform": SpawnPlatform(obj, courseGo.transform); break;
                 case "deco": SpawnDeco(obj, courseGo.transform); break;
                 case "customImage": SpawnCustomImage(obj, courseGo.transform); break;
+                case "block": SpawnBlock(obj, courseGo.transform); break;
+                case "blueBlock": SpawnColoredBlock(obj, courseGo.transform, isOrange: false); break;
+                case "orangeBlock": SpawnColoredBlock(obj, courseGo.transform, isOrange: true); break;
+                case "wattTile": SpawnWattTile(obj, courseGo.transform); break;
+                case "modifyObject": SpawnModifyObject(obj, courseGo.transform); break;
                 default: Debug.LogWarning("[RechargeMaps] unknown object type '" + type + "', skipped"); break;
             }
         }
@@ -191,26 +341,36 @@ internal class MapManager : MonoBehaviour
 
     private static int StableCourseNumber(string mapId)
     {
-        // FNV-1a, folded into a high range unlikely to collide with real course numbers.
-        unchecked
+        uint hash = 2166136261;
+        foreach (var c in mapId)
         {
-            uint hash = 2166136261;
-            foreach (var c in mapId) { hash ^= c; hash *= 16777619; }
-            return 900000 + (int)(hash % 100000);
+            hash ^= c;
+            hash *= 16777619;
         }
+        return (int)(900000 + hash % 100000);
     }
+
+    private static Vector2? _activeOrigin;
 
     private static Vector3 WorldPos(JObject obj)
     {
+        var origin = _activeOrigin ?? PocketOrigin;
         var x = obj["x"]?.Value<float>() ?? 0f;
         var y = obj["y"]?.Value<float>() ?? 0f;
-        return new Vector3(PocketOrigin.x + x, PocketOrigin.y + y, 0f);
+        return new Vector3(origin.x + x, origin.y + y, 0f);
     }
+
+    public static bool IsInPocket()
+    {
+        return CurrentMapId != null && !IsOverlayMap(CurrentMapId);
+    }
+
+    public static Vector2 CurrentOrigin => _activeOrigin ?? (IsInPocket() ? PocketOrigin : Vector2.zero);
 
     private static Quaternion Rot(JObject obj)
     {
-        var r = obj["rotation"]?.Value<float>() ?? 0f;
-        return Quaternion.Euler(0f, 0f, r);
+        var rotation = obj["rotation"]?.Value<float>() ?? 0f;
+        return Quaternion.Euler(0f, 0f, rotation);
     }
 
     private void SpawnSimple<T>(JObject obj, Transform parent) where T : Component
@@ -238,16 +398,18 @@ internal class MapManager : MonoBehaviour
         var positionsToken = obj["positions"] as JArray;
         if (positionsToken == null || positionsToken.Count == 0) return;
 
-        var positionDataType = typeof(PlatformMover).GetNestedType("PositionData", BindingFlags.NonPublic);
-        var tweenType = typeof(PlatformMover).GetNestedType("TweenType", BindingFlags.NonPublic);
+        var positionDataType = typeof(PlatformMover).GetNestedType("PositionData", NonPublicInstance);
+        var tweenType = typeof(PlatformMover).GetNestedType("TweenType", NonPublicInstance);
         if (positionDataType == null) { Debug.LogWarning("[RechargeMaps] PlatformMover.PositionData not found via reflection"); return; }
 
-        var array = Array.CreateInstance(positionDataType, positionsToken.Count);
+        var positions = Array.CreateInstance(positionDataType, positionsToken.Count);
         for (int i = 0; i < positionsToken.Count; i++)
         {
             var p = (JObject)positionsToken[i];
             object boxed = Activator.CreateInstance(positionDataType);
-            SetStructField(positionDataType, ref boxed, "position", new Vector2(p["x"]?.Value<float>() ?? 0f, p["y"]?.Value<float>() ?? 0f));
+            var x = p["x"]?.Value<float>() ?? 0f;
+            var y = p["y"]?.Value<float>() ?? 0f;
+            SetStructField(positionDataType, ref boxed, "position", new Vector2(x, y));
             SetStructField(positionDataType, ref boxed, "timeToReachFromPrevious", p["timeToReachFromPrevious"]?.Value<float>() ?? 0f);
             SetStructField(positionDataType, ref boxed, "autoStartNextPhase", p["autoStartNextPhase"]?.Value<bool>() ?? false);
             SetStructField(positionDataType, ref boxed, "nextPhaseOnEnter", p["nextPhaseOnEnter"]?.Value<bool>() ?? false);
@@ -261,20 +423,17 @@ internal class MapManager : MonoBehaviour
                 catch { tweenValue = Enum.ToObject(tweenType, 0); }
                 SetStructField(positionDataType, ref boxed, "wayToTweenTo", tweenValue);
             }
-            array.SetValue(boxed, i);
+            positions.SetValue(boxed, i);
         }
 
-        typeof(PlatformMover).GetField("Positions", NonPublicInstance)?.SetValue(platform, array);
+        typeof(PlatformMover).GetField("Positions", NonPublicInstance)?.SetValue(platform, positions);
         var platformTypeField = typeof(PlatformMover).GetField("PlatformType", NonPublicInstance);
-        if (platformTypeField != null) platformTypeField.SetValue(platform, Enum.ToObject(platformTypeField.FieldType, 0)); // NONE - avoids the ZipMoversUnlocked gate
+        if (platformTypeField != null) platformTypeField.SetValue(platform, Enum.ToObject(platformTypeField.FieldType, 0));
         platform.JumpToState(0);
     }
 
     private readonly Dictionary<string, Sprite> _customImageSprites = new Dictionary<string, Sprite>();
 
-    // Loaded fresh per LoadMap call (not cached across maps) - assetIds are
-    // generated client-side per editor session so collisions across different
-    // maps are possible in principle, and images are small/cheap to reload.
     private void LoadCustomImages(string mapId, MapDefinition def)
     {
         _customImageSprites.Clear();
@@ -289,7 +448,7 @@ internal class MapManager : MonoBehaviour
                 var bytes = File.ReadAllBytes(path);
                 var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
                 if (!ImageConversion.LoadImage(tex, bytes)) { Debug.LogWarning("[RechargeMaps] custom image decode failed: " + path); continue; }
-                var sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                var sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), ci.PixelsPerUnit ?? 100f);
                 _customImageSprites[ci.AssetId] = sprite;
             }
             catch (Exception e)
@@ -318,6 +477,184 @@ internal class MapManager : MonoBehaviour
         SpawnSprite("CustomImage_" + assetId, sprite, obj, parent);
     }
 
+    private void SpawnBlock(JObject obj, Transform parent)
+    {
+        var assetId = obj["assetId"]?.Value<string>();
+        Sprite sprite = null;
+        if (assetId != null) _customImageSprites.TryGetValue(assetId, out sprite);
+
+        var go = new GameObject("MapBlock");
+        go.transform.SetParent(parent, false);
+        go.transform.position = WorldPos(obj);
+        go.transform.rotation = Rot(obj);
+        go.tag = "Ground";
+        var groundLayer = LayerMask.NameToLayer("Ground");
+        go.layer = groundLayer != -1 ? groundLayer : LayerMask.NameToLayer("Default");
+
+        Vector2 size = RealAssetPalette.GroundCellSize;
+        if (sprite != null)
+        {
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = sprite;
+            sr.sortingLayerID = RealAssetPalette.GroundSortingLayerID;
+            sr.sortingOrder = RealAssetPalette.GroundSortingOrder;
+            size = sprite.bounds.size;
+        }
+        var scaleX = obj["scaleX"]?.Value<float>() ?? 1f;
+        var scaleY = obj["scaleY"]?.Value<float>() ?? 1f;
+        go.transform.localScale = new Vector3(scaleX, scaleY, 1f);
+
+        var box = go.AddComponent<BoxCollider2D>();
+        box.size = size;
+        var body = go.AddComponent<Rigidbody2D>();
+        body.bodyType = RigidbodyType2D.Static;
+        body.constraints = RigidbodyConstraints2D.FreezeAll;
+    }
+
+    private void SpawnColoredBlock(JObject obj, Transform parent, bool isOrange)
+    {
+        var go = new GameObject(isOrange ? "MapOrangeBlock" : "MapBlueBlock");
+        go.transform.SetParent(parent, false);
+        go.transform.position = WorldPos(obj);
+        go.transform.rotation = Rot(obj);
+        go.tag = "Ground";
+        var groundLayer = LayerMask.NameToLayer("Ground");
+        go.layer = groundLayer != -1 ? groundLayer : LayerMask.NameToLayer("Default");
+
+        Vector2 size = RealAssetPalette.GroundCellSize;
+        var tile = RealAssetPalette.GetTile(isOrange ? "orangeBlocks" : "blueBlocks", 0) as Tile;
+        if (tile?.sprite != null)
+        {
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = tile.sprite;
+            sr.sortingLayerID = RealAssetPalette.GroundSortingLayerID;
+            sr.sortingOrder = RealAssetPalette.GroundSortingOrder;
+            size = tile.sprite.bounds.size;
+        }
+
+        var box = go.AddComponent<BoxCollider2D>();
+        box.size = size;
+        var body = go.AddComponent<Rigidbody2D>();
+        body.bodyType = RigidbodyType2D.Static;
+        body.constraints = RigidbodyConstraints2D.FreezeAll;
+    }
+
+    private void SpawnWattTile(JObject obj, Transform parent)
+    {
+        var assetId = obj["assetId"]?.Value<string>();
+        Sprite sprite = null;
+        if (assetId != null) _customImageSprites.TryGetValue(assetId, out sprite);
+
+        var go = new GameObject("MapWattTile");
+        go.transform.SetParent(parent, false);
+        go.transform.position = WorldPos(obj);
+        go.transform.rotation = Rot(obj);
+
+        Vector2 size = RealAssetPalette.GroundCellSize;
+        if (sprite != null)
+        {
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = sprite;
+            sr.sortingLayerID = RealAssetPalette.GroundSortingLayerID;
+            sr.sortingOrder = RealAssetPalette.GroundSortingOrder;
+            size = sprite.bounds.size;
+        }
+
+        var box = go.AddComponent<BoxCollider2D>();
+        box.isTrigger = true;
+        box.size = size;
+
+        var trigger = go.AddComponent<MapRewardTrigger>();
+        trigger.Currency = globalStats.Currencies.Cash;
+        trigger.Amount = obj["amount"]?.Value<double>() ?? 1e25;
+    }
+
+    private static readonly string[] ModifyDenyKeywords =
+    {
+        "prestige", "globalcash", "cashperloop", "clonemult", "activeclonearea", "upgradebox",
+    };
+
+    private static readonly string[] ModifyAllowedUpgradeNames =
+    {
+        "dashunlock", "double jump", "wall jump", "air jump", "end demo",
+    };
+
+    private void SpawnModifyObject(JObject obj, Transform parent)
+    {
+        var objectName = obj["objectName"]?.Value<string>();
+        if (string.IsNullOrEmpty(objectName)) return;
+        var lower = objectName.ToLowerInvariant();
+
+        if (lower.Contains("ground"))
+        {
+            var grid = parent.Find("Grid");
+            if (grid == null)
+            {
+                var gridGo = new GameObject("Grid");
+                gridGo.transform.SetParent(parent, false);
+                var gridComp = gridGo.AddComponent<Grid>();
+                gridComp.cellSize = RealAssetPalette.GroundCellSize;
+                grid = gridGo.transform;
+            }
+            grid.position = WorldPos(obj);
+            grid.rotation = Rot(obj);
+            return;
+        }
+
+        if (lower == "player") return;
+
+        foreach (var deny in ModifyDenyKeywords)
+        {
+            if (!lower.Contains(deny)) continue;
+            bool allowed = false;
+            foreach (var ok in ModifyAllowedUpgradeNames)
+            {
+                if (lower == ok) { allowed = true; break; }
+            }
+            if (!allowed)
+            {
+                Debug.LogWarning("[RechargeMaps] MODIFY '" + objectName + "' skipped - not safe to reposition automatically");
+                return;
+            }
+        }
+
+        GameObject found = null;
+        foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
+        {
+            if (go.scene.IsValid() && go.name == objectName) { found = go; break; }
+        }
+        if (found == null)
+        {
+            Debug.LogWarning("[RechargeMaps] MODIFY '" + objectName + "' - no matching real object found in scene");
+            return;
+        }
+
+        if (found.GetComponentInChildren<Tilemap>() != null)
+        {
+            Debug.LogWarning("[RechargeMaps] MODIFY '" + objectName + "' - real object is a whole Tilemap, not a small fixture, skipped");
+            return;
+        }
+
+        var cloneParent = found.GetComponent<upgradeBox>() != null
+            ? (parent.Find("localUpgrades") ?? parent)
+            : parent;
+
+        var clone = Instantiate(found, cloneParent);
+        clone.name = found.name;
+        clone.transform.position = WorldPos(obj);
+        clone.transform.rotation = Rot(obj);
+        clone.transform.localScale = Vector3.one;
+        const float maxReasonableSize = 200f;
+        foreach (var renderer in clone.GetComponentsInChildren<Renderer>())
+        {
+            if (renderer.bounds.size.x <= maxReasonableSize && renderer.bounds.size.y <= maxReasonableSize) continue;
+            Debug.LogWarning("[RechargeMaps] MODIFY '" + objectName + "' - cloned object is implausibly large (" +
+                renderer.bounds.size + "), likely matched the wrong real object - discarding");
+            Destroy(clone);
+            return;
+        }
+    }
+
     private void SpawnSprite(string goName, Sprite sprite, JObject obj, Transform parent)
     {
         var go = new GameObject(goName);
@@ -328,6 +665,8 @@ internal class MapManager : MonoBehaviour
         go.transform.localScale = Vector3.one * scale;
         var sr = go.AddComponent<SpriteRenderer>();
         sr.sprite = sprite;
+        sr.sortingLayerID = RealAssetPalette.GroundSortingLayerID;
+        sr.sortingOrder = RealAssetPalette.GroundSortingOrder;
     }
 
     private void PaintTile(string tilemapName, JObject obj, Transform parent)
@@ -361,10 +700,6 @@ internal class MapManager : MonoBehaviour
     {
         if (parent.Find(name) != null) return;
 
-        // Tilemap.CellToWorld/collision alignment need a Grid ancestor with the
-        // real cellSize - the cached template was cloned as a bare Tilemap (no
-        // Grid parent), which silently made CellToWorld collapse every cell to
-        // the same position. Give it one, matching the real Grid found at scan time.
         var gridGo = parent.Find("Grid");
         if (gridGo == null)
         {
@@ -403,13 +738,6 @@ internal class MapManager : MonoBehaviour
         var start = RealAssetPalette.Spawn<startGate>(startPos, Quaternion.identity, courseTransform);
         var end = RealAssetPalette.Spawn<endGate>(endPos, Quaternion.identity, courseTransform);
 
-        // Gates are level fixtures, not physics props - force kinematic so gravity/
-        // collision impulses from other spawned colliders can't drift them off their
-        // intended spot. Also force isTrigger: the player spawns at the exact same
-        // position as the start gate, and if its collider were ever non-trigger,
-        // Unity's overlap-separation solver launches the (dynamic) player at high
-        // speed to resolve the interpenetration - confirmed via position diagnostics
-        // showing an instant ~350-unit horizontal launch immediately after spawn.
         foreach (var gateGo in new[] { start != null ? start.gameObject : null, end != null ? end.gameObject : null })
         {
             if (gateGo == null) continue;
@@ -420,9 +748,6 @@ internal class MapManager : MonoBehaviour
 
         if (start != null)
         {
-            // resetPoint is a private GameObject ref the source scene wired to some
-            // external marker that isn't part of the cloned subtree, so it comes
-            // across null and startGate.OnTriggerStay2D NullRefs on every touch.
             var resetPointField = typeof(startGate).GetField("resetPoint", NonPublicInstance);
             if (resetPointField != null && resetPointField.GetValue(start) == null)
             {
@@ -432,13 +757,14 @@ internal class MapManager : MonoBehaviour
 
         if (end != null)
         {
-            // The real endGate would otherwise call courseScript.stopTracking(player, true),
-            // triggering the tier-multiplier reward calc. Rewards here are author-configured
-            // (see MapRewardTrigger), so force this off - keeps every other real side effect
-            // (tracking stop, courseResetPoint reset) intact.
             typeof(endGate).GetField("isEndOfCourse", NonPublicInstance)?.SetValue(end, false);
 
-            if (group.Reward != null && group.Reward.Amount > 0 && Enum.TryParse(group.Reward.Currency, out globalStats.Currencies currency))
+            if (Vector2.Distance(startPos, endPos) < 5f)
+            {
+                foreach (var col in end.GetComponents<Collider2D>()) col.enabled = false;
+                Debug.LogWarning("[RechargeMaps] end gate co-located with spawn (no real end position in source data) - disabled its trigger to avoid a real-game NullReferenceException");
+            }
+            else if (group.Reward != null && group.Reward.Amount > 0 && Enum.TryParse(group.Reward.Currency, out globalStats.Currencies currency))
             {
                 var trigger = end.gameObject.AddComponent<MapRewardTrigger>();
                 trigger.Currency = currency;
@@ -460,46 +786,27 @@ internal class MapManager : MonoBehaviour
 
         var spawnPos = new Vector3(PocketOrigin.x + group.StartX, PocketOrigin.y + group.StartY, 0f);
         playerGo.transform.position = spawnPos;
-        // A Rigidbody2D caches its own position and can silently snap transform.position
-        // back on the next physics step unless the body itself is told too.
         var body = playerGo.GetComponent<Rigidbody2D>();
         if (body != null)
         {
             body.position = spawnPos;
-            body.linearVelocity = Vector2.zero; // don't carry over pre-teleport momentum
+            body.linearVelocity = Vector2.zero;
         }
         movement.respawnPoint = spawnPos;
 
-        // The pocket is far from any real scene lighting - IGTAP uses URP 2D
-        // (Light2D-lit), so without this everything renders pure black even
-        // though it's all really there (confirmed via position diagnostics).
         movement.lightActive = true;
         if (movement.personalLight != null) movement.personalLight.enabled = true;
 
         if (movement.cam != null)
         {
-            movement.cam.setup(spawnPos, 40f); // TEMP: wider than default for Phase-1 visual verification
+            movement.cam.setup(spawnPos, RealCameraOrthoSize);
             movement.cam.newTarget(playerGo, movement.cam.defaultoffset, true, Vector2.zero);
         }
 
         StartCoroutine(ReassertSpawnAfterDash(playerGo.transform, body, movement, spawnPos));
     }
 
-    // A dash (or any other in-flight input/impulse active on the exact frame a
-    // map loads) can carry the player away from the intended spawn point before
-    // this frame's position set takes visible effect - confirmed via diagnostics
-    // showing dashActive=true immediately after teleport, launching the player
-    // ~350 units before dashActive naturally clears ~0.3s later. Once nothing is
-    // active, re-assert the real spawn position/velocity so it sticks.
-    //
-    // Also re-applies the camera setup at the end of this same wait: loading a
-    // map on the very first frame a Player exists (PlayMap's deferred path,
-    // used when a map is picked from the title screen with no gameplay scene
-    // entered yet) races the real game's own camera/HUD initialization for
-    // that fresh scene, which can run after MovePlayerIn's own cam.setup and
-    // stomp it - producing a stuck, wrongly-zoomed camera. Re-asserting once
-    // more here, after whatever's mid-flight has settled, wins that race.
-    private System.Collections.IEnumerator ReassertSpawnAfterDash(Transform playerTransform, Rigidbody2D body, Movement movement, Vector3 spawnPos)
+    private IEnumerator ReassertSpawnAfterDash(Transform playerTransform, Rigidbody2D body, Movement movement, Vector3 spawnPos)
     {
         float waited = 0f;
         while (movement.dashActive && waited < 1f)
@@ -515,10 +822,9 @@ internal class MapManager : MonoBehaviour
             body.position = spawnPos;
             body.linearVelocity = Vector2.zero;
         }
-
         if (movement.cam != null)
         {
-            movement.cam.setup(spawnPos, 40f);
+            movement.cam.setup(spawnPos, RealCameraOrthoSize);
             movement.cam.newTarget(playerTransform.gameObject, movement.cam.defaultoffset, true, Vector2.zero);
         }
     }
@@ -535,7 +841,6 @@ internal class MapManager : MonoBehaviour
 
     private static void SetStructField(Type structType, ref object boxed, string fieldName, object value)
     {
-        var field = structType.GetField(fieldName, NonPublicInstance | BindingFlags.Public);
-        field?.SetValue(boxed, value);
+        structType.GetField(fieldName, NonPublicInstance | BindingFlags.Public)?.SetValue(boxed, value);
     }
 }

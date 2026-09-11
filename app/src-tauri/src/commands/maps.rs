@@ -28,6 +28,17 @@ fn textures_dir(app: &AppHandle) -> Option<PathBuf> {
     )
 }
 
+fn snapshots_dir(app: &AppHandle) -> Option<PathBuf> {
+    let game_path = settings::get_game_path(app.clone())?;
+    Some(
+        PathBuf::from(game_path)
+            .join("Recharge")
+            .join("Mods")
+            .join("recharge.maps")
+            .join("course-snapshots"),
+    )
+}
+
 // Rejects anything that isn't a plain single path segment - no separators,
 // no "..", no empty string - since `id` and `filename` come from the editor
 // and end up directly in a filesystem path.
@@ -183,4 +194,12 @@ pub fn read_tile_rules(app: AppHandle, tilemap: String) -> Result<String, String
     let tilemap = sanitize_segment(&tilemap)?;
     let dir = textures_dir(&app).ok_or("game path not set")?.join(tilemap);
     std::fs::read_to_string(dir.join("rules.json")).map_err(|_| "no rule data yet - launch the game and visit a course first".to_string())
+}
+
+#[tauri::command]
+pub fn get_course_snapshot(app: AppHandle, scene: String) -> Result<String, String> {
+    let scene = sanitize_segment(&scene)?;
+    let dir = snapshots_dir(&app).ok_or("game path not set")?;
+    std::fs::read_to_string(dir.join(format!("{scene}.json")))
+        .map_err(|_| "no snapshot yet - launch the game and enter this difficulty once".to_string())
 }

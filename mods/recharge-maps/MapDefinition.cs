@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 internal class MapDefinition
 {
     [JsonProperty("formatVersion")] public int FormatVersion = 1;
+    [JsonProperty("isOverlay")] public bool IsOverlay;
     [JsonProperty("name")] public string Name = "";
     [JsonProperty("description")] public string Description = "";
     [JsonProperty("images")] public List<string> Images = new List<string>();
@@ -15,6 +16,7 @@ internal class MapCustomImage
 {
     [JsonProperty("assetId")] public string AssetId;
     [JsonProperty("path")] public string Path;
+    [JsonProperty("pixelsPerUnit")] public float? PixelsPerUnit;
 }
 
 internal class MapGroup

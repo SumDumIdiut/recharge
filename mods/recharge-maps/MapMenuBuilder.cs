@@ -8,14 +8,6 @@ using UnityEngine;
 using UnityEngine.Localization;
 using UnityEngine.UI;
 
-// "Start Game" (renamed from the real vanilla "Start Demo") and "Delete save
-// data" both switch the real main menu panel itself into "picker mode"
-// instead of acting directly - StartGame/DeleteSave/Settings' row slots
-// become up to 3 individual map entries (Base Game/B-side/every custom map,
-// each its own clickable row - no single "current" selection to page
-// through), a "< i/N >" row below them pages between groups of 3 when there
-// are more maps than that, and Quit's own slot is taken over by a Back row
-// for as long as picker mode is active.
 internal static class MapMenuBuilder
 {
     private static readonly BindingFlags NonPublicInstance = BindingFlags.NonPublic | BindingFlags.Instance;
@@ -24,24 +16,14 @@ internal static class MapMenuBuilder
     public static void Install(pauseMenuScript menu)
     {
         if (menu.mainBitPublic == null || menu.settingsBitPublic == null) return;
-        if (menu.mainBitPublic.transform.Find("MapsInstalled") != null) return; // idempotent per instance
+        if (menu.mainBitPublic.transform.Find("MapsInstalled") != null) return;
 
         var marker = new GameObject("MapsInstalled");
         marker.transform.SetParent(menu.mainBitPublic.transform, false);
 
-        // The real B-side/hard-mode row (gated behind BsideEnabler, only
-        // visible once snfDemoCompleted is set) now lives inside the map
-        // picker instead - hide the original so it doesn't float redundantly.
         var bside = menu.mainBitPublic.GetComponentInChildren<BsideEnabler>(true);
         if (bside != null) bside.gameObject.SetActive(false);
 
-        // True vertical centering, not a guessed offset: this panel's own
-        // anchor (both min and max) already sits at the screen's vertical
-        // center (0.5) and its pivot is 0.5 too, so anchoredPosition.y = 0
-        // centers it exactly regardless of how tall it ends up once
-        // PauseMenuHelper sizes it for however many mods are installed.
-        // Applied once, before that sizing runs, so it's baked into every
-        // measurement downstream rather than fighting it after the fact.
         var mainRt = menu.mainBitPublic.GetComponent<RectTransform>();
         if (mainRt != null) mainRt.anchoredPosition = new Vector2(mainRt.anchoredPosition.x, 0f);
 
@@ -71,7 +53,7 @@ internal static class MapMenuBuilder
     {
         public string Label;
         public MapPageKind Kind;
-        public string MapId; // only meaningful for Custom
+        public string MapId;
         public Action Play;
     }
 
@@ -81,7 +63,7 @@ internal static class MapMenuBuilder
         public RectTransform StartGame;
         public RectTransform DeleteSave;
         public RectTransform Settings;
-        public GameObject[] Slots; // up to RowsPerPage map rows, reused across picker pages
+        public GameObject[] Slots;
         public GameObject PagerRow;
         public GameObject BackRow;
 
@@ -200,18 +182,6 @@ internal static class MapMenuBuilder
             if (Menu.menuOpen) Menu.menuButtonPressed();
         }
 
-        // Base Game/B-side: forwards every click straight to the real
-        // vanilla DeleteSavePressed()/DeleteSavePressedHard() (same 4-click
-        // escalating confirm, same whole-folder + shared currency/upgrade
-        // wipe) so this can never drift from real behavior - then mirrors
-        // the real button's own resulting text. Both always target their own
-        // real folder regardless of which difficulty is currently active, so
-        // this is correct for whichever row is clicked.
-        // Custom map: no vanilla equivalent exists, so this drives its own
-        // escalating confirm (reusing the same real localized messages,
-        // tracked per row since several maps can be on screen at once) and,
-        // on the final click, deletes only that map's own course-progress
-        // file, reloading it live if it's the one currently in the pocket.
         private void ClickDelete(GameObject slot, MapPage page)
         {
             if (page.Kind == MapPageKind.Custom)
@@ -291,12 +261,6 @@ internal static class MapMenuBuilder
         var counterRt = (RectTransform)counterGo.transform;
         counterRt.anchoredPosition = Vector2.zero;
         counterRt.sizeDelta = new Vector2(100f, counterRt.sizeDelta.y);
-        // Left with its Button intact but disabled, rather than destroyed -
-        // the real rows' orange comes from the Button's own Normal color
-        // state, not a fixed text color, and disabling (not just clearing
-        // onClick) freezes it there instead of leaving it selectable via
-        // keyboard/gamepad nav or mouse hover (which would flip it to the
-        // Highlighted color, a stray green, since it's still a real Selectable).
         var counterBtn = counterGo.GetComponent<Button>();
         if (counterBtn != null) counterBtn.enabled = false;
 
@@ -312,19 +276,24 @@ internal static class MapMenuBuilder
         return state;
     }
 
-    // Base Game is always first; B-side mirrors BsideEnabler's own gate
-    // exactly (moving it doesn't unlock anything the player hasn't already
-    // earned); every <mapsDir>/<id>/map.json folder follows.
     private static List<MapPage> BuildPageList(pauseMenuScript menu)
     {
         var pages = new List<MapPage>
         {
-            new MapPage { Label = "Base Game", Kind = MapPageKind.BaseGame, Play = () => menu.changeScene() }
+            new MapPage { Label = "Base Game", Kind = MapPageKind.BaseGame, Play = () =>
+            {
+                menu.changeScene();
+                MapManager.Instance?.SnapCameraToRealPlayerWhenReady(MapManager.BaseGameEditsMapId);
+            } }
         };
 
         if (PlayerPrefs.HasKey("snfDemoCompleted"))
         {
-            pages.Add(new MapPage { Label = "B-side", Kind = MapPageKind.BSide, Play = () => menu.changeSceneHard() });
+            pages.Add(new MapPage { Label = "B-side", Kind = MapPageKind.BSide, Play = () =>
+            {
+                menu.changeSceneHard();
+                MapManager.Instance?.SnapCameraToRealPlayerWhenReady(MapManager.BSideEditsMapId);
+            } });
         }
 
         string[] mapIds;
@@ -345,7 +314,7 @@ internal static class MapMenuBuilder
 
         foreach (var mapId in mapIds)
         {
-            var id = mapId; // local copy for the closure
+            var id = mapId;
             pages.Add(new MapPage { Label = id, Kind = MapPageKind.Custom, MapId = id, Play = () => MapManager.Instance.PlayMap(id, menu) });
         }
 

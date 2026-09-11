@@ -29,6 +29,7 @@ pub fn run() {
             maps::list_tile_textures,
             maps::read_tile_texture,
             maps::read_tile_rules,
+            maps::get_course_snapshot,
             loader::loader_status,
             loader::install_or_update_loader,
             launcher::check_launcher_update,

@@ -1,16 +1,13 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.Tilemaps;
 
-// Opportunistically finds and caches one real instance of each gameplay component
-// the map editor needs to clone from, across whatever scenes the player visits.
-// The cache is cumulative for the whole play session (some types, like the
-// atom/currency system, only live in specific scenes - e.g. the main menu).
 internal static class RealAssetPalette
 {
     private static readonly Dictionary<Type, Component> Templates = new Dictionary<Type, Component>();
@@ -20,6 +17,9 @@ internal static class RealAssetPalette
     private static GameObject _holder;
 
     public static Vector3 GroundCellSize { get; private set; } = new Vector3(32f, 32f, 1f);
+    public static int GroundSortingLayerID { get; private set; }
+    public static int GroundSortingOrder { get; private set; }
+    private static bool _groundSortingCaptured;
 
     private static readonly Type[] ScanTypes =
     {
@@ -67,20 +67,55 @@ internal static class RealAssetPalette
 
         ScanTilemaps();
         ScanDecoProps();
+        ExportComponentSprites();
         LogGroundDiagnostics();
         LogSwapperDiagnostics();
         LogPlatformMoverCount();
     }
 
+    private static readonly (Type Type, string ExportName)[] SpriteExportTypes =
+    {
+        (typeof(spikeScript), "spike"),
+        (typeof(startGate), "startGate"),
+        (typeof(endGate), "endGate"),
+        (typeof(upgradeBox), "upgradeBox"),
+    };
+    private static readonly HashSet<string> _spriteExported = new HashSet<string>();
+
+    private static void ExportComponentSprites()
+    {
+        foreach (var (type, name) in SpriteExportTypes)
+        {
+            if (_spriteExported.Contains(name)) continue;
+            Component comp = Templates.TryGetValue(type, out var cached) ? cached : FindLiveInstance(type);
+            var sr = comp != null ? comp.GetComponentInChildren<SpriteRenderer>(true) : null;
+            if (sr == null || sr.sprite == null) continue;
+
+            var dir = Path.Combine(MapPaths.TexturesDir, name);
+            Directory.CreateDirectory(dir);
+            var pngPath = Path.Combine(dir, "0.png");
+            if (!File.Exists(pngPath))
+            {
+                try
+                {
+                    var bytes = ExtractSpritePng(sr.sprite);
+                    if (bytes != null) File.WriteAllBytes(pngPath, bytes);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[RechargeMaps] sprite export failed for '" + name + "': " + e.Message);
+                    continue;
+                }
+            }
+            File.WriteAllText(Path.Combine(dir, "manifest.json"), "[\"" + name + "\"]");
+            _spriteExported.Add(name);
+            Debug.Log("[RechargeMaps] exported sprite for '" + name + "'");
+        }
+    }
+
     private static readonly Dictionary<string, Sprite> DecoSprites = new Dictionary<string, Sprite>();
     private static bool _treeDecoExported;
 
-    // Decorative props (trees, etc.) - scoped to a static-sprite placeable for
-    // v1, not a full replica of TreeController's hand-coded grow animation
-    // (it has no Animator/AnimationClip at all - real growth is a code-driven
-    // scale/position tween per trunk, confirmed via decompile). Caches the
-    // real live Sprite reference (for runtime spawning) AND exports a PNG
-    // (for the out-of-process Recharge editor's palette), same split as tiles.
     private static void ScanDecoProps()
     {
         if (_treeDecoExported) return;
@@ -110,7 +145,7 @@ internal static class RealAssetPalette
                 }
             }
             i++;
-            if (i >= 8) break; // representative art, not every internal trunk/light part
+            if (i >= 8) break;
         }
         File.WriteAllText(Path.Combine(dir, "manifest.json"), "[" + string.Join(",", names.Select(n => "\"" + n.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"")) + "]");
         _treeDecoExported = true;
@@ -167,6 +202,18 @@ internal static class RealAssetPalette
             if (found.layoutGrid != null) GroundCellSize = found.layoutGrid.cellSize;
             Debug.Log("[RechargeMaps] tilemap '" + name + "' cellSize=" + found.cellSize + " transform.localScale=" + found.transform.localScale + " layoutGrid.cellSize=" + (found.layoutGrid != null ? found.layoutGrid.cellSize.ToString() : "n/a"));
 
+            if (name == "ground" && !_groundSortingCaptured)
+            {
+                var tmRenderer = found.GetComponent<TilemapRenderer>();
+                if (tmRenderer != null)
+                {
+                    GroundSortingLayerID = tmRenderer.sortingLayerID;
+                    GroundSortingOrder = tmRenderer.sortingOrder;
+                    _groundSortingCaptured = true;
+                    Debug.Log("[RechargeMaps] real ground sortingLayer=" + SortingLayer.IDToName(GroundSortingLayerID) + " sortingOrder=" + GroundSortingOrder);
+                }
+            }
+
             var tiles = new List<TileBase>();
             foreach (var t in found.GetTilesBlock(found.cellBounds))
             {
@@ -186,19 +233,12 @@ internal static class RealAssetPalette
         }
     }
 
-    // Real ground/block art is authored as Unity RuleTiles (confirmed:
-    // Unity.2D.Tilemap.Extras.dll ships with the game) - each numbered tile
-    // we already extract as a flat PNG may ALSO carry the artist's real
-    // neighbor-matching rule(s) (the "side/inner/corner" structure), which is
-    // the ground truth for auto-tiling instead of guessing from pixel art.
-    // One entry per tile index, parallel to manifest.json; null if the tile
-    // isn't a RuleTile or has no rules.
     private static void ExportTileRules(string tilemapName, List<TileBase> tiles)
     {
         var dir = Path.Combine(MapPaths.TexturesDir, tilemapName);
         Directory.CreateDirectory(dir);
         var rulesPath = Path.Combine(dir, "rules.json");
-        if (File.Exists(rulesPath)) return; // already exported this session/run
+        if (File.Exists(rulesPath)) return;
 
         var sb = new System.Text.StringBuilder();
         sb.Append("[");
@@ -236,12 +276,6 @@ internal static class RealAssetPalette
         Debug.Log("[RechargeMaps] exported tiling rules for '" + tilemapName + "': " + ruleBearingCount + " rule-bearing tiles of " + tiles.Count);
     }
 
-    // So the Recharge editor (a separate process, no live game access) can show
-    // real tile art in its palette instead of flat color swatches. Extraction
-    // uses a RenderTexture blit + ReadPixels round-trip specifically because the
-    // source atlas texture is very likely not marked Read/Write Enabled - GetPixels()
-    // would throw directly, but blitting to a RenderTexture and reading that back
-    // works regardless of the source texture's own readability flag.
     private static void ExportTileTextures(string tilemapName, List<TileBase> tiles)
     {
         var dir = Path.Combine(MapPaths.TexturesDir, tilemapName);
@@ -252,7 +286,7 @@ internal static class RealAssetPalette
         {
             names.Add(tiles[i] != null ? tiles[i].name : ("tile_" + i));
             var pngPath = Path.Combine(dir, i + ".png");
-            if (File.Exists(pngPath)) continue; // already exported this session/run
+            if (File.Exists(pngPath)) continue;
 
             var sprite = (tiles[i] as Tile)?.sprite;
             if (sprite == null) continue;
@@ -293,11 +327,6 @@ internal static class RealAssetPalette
 
     private static bool _springFramesCaptured;
 
-    // AnimationUtility (the normal way to read an AnimationClip's keyframe
-    // sprites) is a UnityEditor-only API, unavailable in a built game. Instead
-    // this actually plays the spring's real activation animation on a spare
-    // clone and samples SpriteRenderer.sprite every frame, exporting each
-    // distinct sprite encountered - a real recording, not static analysis.
     public static IEnumerator CaptureSpringAnimation()
     {
         if (_springFramesCaptured) yield break;
@@ -307,7 +336,7 @@ internal static class RealAssetPalette
         var template = Get<SpringScript>();
         if (template == null) yield break;
 
-        var spawnPos = new Vector3(60000f, 60000f, 0f); // separate, far from the map-editing pocket too
+        var spawnPos = new Vector3(60000f, 60000f, 0f);
         var clone = UnityEngine.Object.Instantiate(template.gameObject, spawnPos, Quaternion.identity);
         clone.SetActive(true);
 
@@ -322,17 +351,13 @@ internal static class RealAssetPalette
             yield break;
         }
 
-        // The clone is spawned far from any camera - by default an Animator
-        // stops advancing when nothing renders it (visibility-based culling),
-        // which otherwise freezes normalizedTime at 0 forever. Confirmed via
-        // diagnostic logging showing normTime stuck at 0.00 for the full 2s window.
         animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
         var frames = new List<Sprite>();
-        yield return null; // let Start() run (ForceStateNormalizedTime resting pose)
+        yield return null;
         if (sr.sprite != null) frames.Add(sr.sprite);
 
-        animator.SetTrigger("Trigger"); // same trigger the real hit does
+        animator.SetTrigger("Trigger");
 
         float elapsed = 0f;
         while (elapsed < 2f)
@@ -364,6 +389,143 @@ internal static class RealAssetPalette
         _springFramesCaptured = true;
     }
 
+    public static IEnumerator ExportCourseSnapshot(string sceneName)
+    {
+        var path = Path.Combine(MapPaths.SnapshotsDir, sceneName + ".json");
+        if (File.Exists(path)) yield break;
+
+        var ground = FindGroundTilemap(sceneName);
+        var blue = FindSceneTilemap("blueBlocks", sceneName);
+        var orange = FindSceneTilemap("orangeBlocks", sceneName);
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("{");
+        sb.Append("\"groundCells\":[");
+        int groundCount = 0;
+        foreach (var e in AppendCells(sb, ground)) { groundCount = e; yield return null; }
+        sb.Append("],\"blueCells\":[");
+        int blueCount = 0;
+        foreach (var e in AppendCells(sb, blue)) { blueCount = e; yield return null; }
+        sb.Append("],\"orangeCells\":[");
+        int orangeCount = 0;
+        foreach (var e in AppendCells(sb, orange)) { orangeCount = e; yield return null; }
+        sb.Append("],\"spikes\":[");
+        int spikeCount = 0;
+        foreach (var e in AppendPositions<spikeScript>(sb, sceneName, excludeTilemapBacked: true)) { spikeCount = e; yield return null; }
+        sb.Append("],\"startGates\":[");
+        int startGateCount = 0;
+        foreach (var e in AppendPositions<startGate>(sb, sceneName, excludeTilemapBacked: false)) { startGateCount = e; yield return null; }
+        sb.Append("],\"endGates\":[");
+        int endGateCount = 0;
+        foreach (var e in AppendPositions<endGate>(sb, sceneName, excludeTilemapBacked: false)) { endGateCount = e; yield return null; }
+        sb.Append("],\"upgradeBoxes\":[");
+        int upgradeBoxCount = 0;
+        foreach (var e in AppendUpgradeBoxes(sb, sceneName)) { upgradeBoxCount = e; yield return null; }
+        sb.Append("]}");
+
+        Directory.CreateDirectory(MapPaths.SnapshotsDir);
+        File.WriteAllText(path, sb.ToString());
+        Debug.Log("[RechargeMaps] exported course snapshot '" + sceneName + "': ground=" + groundCount + " blue=" + blueCount + " orange=" + orangeCount +
+            " spikes=" + spikeCount + " startGates=" + startGateCount + " endGates=" + endGateCount + " upgradeBoxes=" + upgradeBoxCount);
+    }
+
+    private static IEnumerable<int> AppendPositions<T>(System.Text.StringBuilder sb, string sceneName, bool excludeTilemapBacked) where T : Component
+    {
+        var items = Resources.FindObjectsOfTypeAll<T>()
+            .Where(c => c.gameObject.scene.IsValid() && c.gameObject.scene.name == sceneName && (!excludeTilemapBacked || c.gameObject.GetComponent<Tilemap>() == null))
+            .ToArray();
+        for (int i = 0; i < items.Length; i++)
+        {
+            if (i > 0) sb.Append(",");
+            var t = items[i].transform;
+            sb.Append("{\"x\":").Append(t.position.x.ToString(CultureInfo.InvariantCulture))
+              .Append(",\"y\":").Append(t.position.y.ToString(CultureInfo.InvariantCulture))
+              .Append(",\"rotation\":").Append(t.eulerAngles.z.ToString(CultureInfo.InvariantCulture)).Append("}");
+            if (i % 200 == 199) yield return i + 1;
+        }
+        yield return items.Length;
+    }
+
+    private static IEnumerable<int> AppendUpgradeBoxes(System.Text.StringBuilder sb, string sceneName)
+    {
+        var items = Resources.FindObjectsOfTypeAll<upgradeBox>()
+            .Where(c => c.gameObject.scene.IsValid() && c.gameObject.scene.name == sceneName)
+            .ToArray();
+        for (int i = 0; i < items.Length; i++)
+        {
+            if (i > 0) sb.Append(",");
+            var t = items[i].transform;
+            sb.Append("{\"x\":").Append(t.position.x.ToString(CultureInfo.InvariantCulture))
+              .Append(",\"y\":").Append(t.position.y.ToString(CultureInfo.InvariantCulture))
+              .Append(",\"rotation\":").Append(t.eulerAngles.z.ToString(CultureInfo.InvariantCulture))
+              .Append(",\"name\":\"").Append(EscapeJson(items[i].gameObject.name)).Append("\"}");
+            if (i % 200 == 199) yield return i + 1;
+        }
+        yield return items.Length;
+    }
+
+    private static string EscapeJson(string s)
+    {
+        return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    private static IEnumerable<int> AppendCells(System.Text.StringBuilder sb, Tilemap tilemap)
+    {
+        if (tilemap == null) yield break;
+        int n = 0;
+        foreach (var pos in tilemap.cellBounds.allPositionsWithin)
+        {
+            if (!tilemap.HasTile(pos)) continue;
+            var world = tilemap.GetCellCenterWorld(pos);
+            if (n > 0) sb.Append(",");
+            sb.Append("[").Append(world.x.ToString(CultureInfo.InvariantCulture)).Append(",").Append(world.y.ToString(CultureInfo.InvariantCulture)).Append("]");
+            n++;
+            if (n % 500 == 0) yield return n;
+        }
+        yield return n;
+    }
+
+    private static Tilemap FindSceneTilemap(string name, string sceneName)
+    {
+        foreach (var tm in Resources.FindObjectsOfTypeAll<Tilemap>())
+        {
+            if (tm.gameObject.scene.IsValid() && tm.gameObject.scene.name == sceneName && tm.gameObject.name == name) return tm;
+        }
+        return null;
+    }
+
+    private static readonly string[] GroundAliases = { "ground", "new awesome nikki ground" };
+    private static readonly HashSet<string> GroundExcludeNames = new HashSet<string> { "blueBlocks", "orangeBlocks", "InvisibleWall", "OOB areas", "Oldground" };
+
+    private static Tilemap FindGroundTilemap(string sceneName)
+    {
+        foreach (var alias in GroundAliases)
+        {
+            var found = FindSceneTilemap(alias, sceneName);
+            if (found != null) return found;
+        }
+
+        Tilemap best = null;
+        int bestCount = -1;
+        foreach (var tm in Resources.FindObjectsOfTypeAll<Tilemap>())
+        {
+            if (!tm.gameObject.scene.IsValid() || tm.gameObject.scene.name != sceneName) continue;
+            if (!tm.gameObject.activeInHierarchy) continue;
+            if (tm.gameObject.tag != "Ground") continue;
+            if (GroundExcludeNames.Contains(tm.gameObject.name)) continue;
+            if (tm.GetComponent<TilemapCollider2D>() == null) continue;
+
+            int count = 0;
+            foreach (var pos in tm.cellBounds.allPositionsWithin)
+            {
+                if (tm.HasTile(pos)) count++;
+            }
+            if (count > bestCount) { bestCount = count; best = tm; }
+        }
+        if (best != null) Debug.Log("[RechargeMaps] ground tilemap fallback picked '" + GetPath(best.transform) + "' (" + bestCount + "+ cells) for scene " + sceneName);
+        return best;
+    }
+
     private static void LogPlatformMoverCount()
     {
         var all = Resources.FindObjectsOfTypeAll<PlatformMover>();
@@ -374,15 +536,24 @@ internal static class RealAssetPalette
     private static Component FindLiveInstance(Type type)
     {
         var all = Resources.FindObjectsOfTypeAll(type);
+        Component fallback = null;
         foreach (var obj in all)
         {
             var comp = obj as Component;
-            if (comp != null && comp.gameObject.scene.IsValid())
+            if (comp == null || !comp.gameObject.scene.IsValid()) continue;
+            if (comp.gameObject.GetComponent<Tilemap>() != null) continue;
+
+            if (fallback == null) fallback = comp;
+
+            var sr = comp.GetComponentInChildren<SpriteRenderer>();
+            if (sr != null && sr.sprite != null)
             {
-                return comp;
+                var size = sr.sprite.bounds.size;
+                if (size.x > GroundCellSize.x * 1.5f || size.y > GroundCellSize.y * 1.5f) continue;
             }
+            return comp;
         }
-        return null;
+        return fallback;
     }
 
     private static void LogGroundDiagnostics()
@@ -394,6 +565,57 @@ internal static class RealAssetPalette
             var col = go.GetComponent<Collider2D>();
             Debug.Log("[RechargeMaps]   ground: " + GetPath(go.transform) + " layer=" + LayerMask.LayerToName(go.layer) + " collider=" + (col != null ? col.GetType().Name : "none"));
         }
+    }
+
+    public static void LogFullDiagnostics()
+    {
+        var sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        Debug.Log("[RechargeMaps] === heartbeat: scene=" + sceneName + " time=" + Time.time.ToString("F1") + " ===");
+
+        foreach (var tm in Resources.FindObjectsOfTypeAll<Tilemap>())
+        {
+            if (!tm.gameObject.scene.IsValid()) continue;
+            var renderer = tm.GetComponent<TilemapRenderer>();
+            Debug.Log("[RechargeMaps]   Tilemap '" + GetPath(tm.transform) + "': activeInHierarchy=" + tm.gameObject.activeInHierarchy +
+                " rendererEnabled=" + (renderer != null ? renderer.enabled.ToString() : "no-renderer") +
+                " sortingLayer=" + (renderer != null ? SortingLayer.IDToName(renderer.sortingLayerID) : "n/a") +
+                " sortingOrder=" + (renderer != null ? renderer.sortingOrder.ToString() : "n/a") +
+                " cellBounds=" + tm.cellBounds + " localPos=" + tm.transform.position);
+        }
+
+        foreach (var cam in Resources.FindObjectsOfTypeAll<Camera>())
+        {
+            if (!cam.gameObject.scene.IsValid()) continue;
+            Debug.Log("[RechargeMaps]   Camera '" + GetPath(cam.transform) + "': enabled=" + cam.enabled +
+                " activeInHierarchy=" + cam.gameObject.activeInHierarchy + " pos=" + cam.transform.position +
+                " orthoSize=" + cam.orthographicSize + " depth=" + cam.depth +
+                " cullingMask=" + DecodeLayerMask(cam.cullingMask) +
+                " includesGround=" + ((cam.cullingMask & (1 << LayerMask.NameToLayer("Ground"))) != 0));
+        }
+
+        var grounds = GameObject.FindGameObjectsWithTag("Ground");
+        Debug.Log("[RechargeMaps]   " + grounds.Length + " active Ground-tagged objects total");
+        foreach (var go in grounds)
+        {
+            var renderer = go.GetComponent<Renderer>();
+            var col = go.GetComponent<Collider2D>();
+            Debug.Log("[RechargeMaps]     " + GetPath(go.transform) + " activeInHierarchy=" + go.activeInHierarchy +
+                " layer=" + LayerMask.LayerToName(go.layer) +
+                " renderer=" + (renderer != null ? renderer.GetType().Name + ":" + renderer.enabled : "none") +
+                " collider=" + (col != null ? col.GetType().Name + ":" + col.enabled : "none"));
+        }
+    }
+
+    private static string DecodeLayerMask(int mask)
+    {
+        var names = new List<string>();
+        for (int i = 0; i < 32; i++)
+        {
+            if ((mask & (1 << i)) == 0) continue;
+            var name = LayerMask.LayerToName(i);
+            names.Add(string.IsNullOrEmpty(name) ? i.ToString() : name);
+        }
+        return "[" + string.Join(",", names) + "]";
     }
 
     private static void LogSwapperDiagnostics()
@@ -430,6 +652,7 @@ internal static class RealAssetPalette
         if (template == null) return null;
         var clone = UnityEngine.Object.Instantiate(template.gameObject, worldPos, rotation, parent);
         clone.SetActive(true);
+        clone.transform.localScale = Vector3.one;
         return clone.GetComponent<T>();
     }
 
