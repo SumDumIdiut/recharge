@@ -8,21 +8,12 @@ using UnityEngine.UI;
 namespace Recharge.ModApi
 {
     /// <summary>
-    /// Adds an entry to the real pause menu. Page 1 is the real vanilla menu
-    /// (Start Demo / Delete Save Data / Settings), untouched; every mod's
-    /// entry lives on page 2+, reusing the exact same row slots, up to 4 per
-    /// page, flipped between with a compact "&lt; i/N &gt;" control. The
-    /// panel, the pager row and Quit are all sized/positioned exactly once
-    /// (for the worst case - a full page of mod rows) and never move again as
-    /// pages flip - a lighter page (like the 3-row vanilla one) just leaves
-    /// its unused slots blank instead of resizing anything.
+    /// Adds an entry to the real pause menu. Page 1 is the untouched vanilla
+    /// menu; every mod's entry lives on page 2+, sharing the same row slots
+    /// (up to 3 each), flipped with a "&lt; i/N &gt;" control.
     /// </summary>
     public static class PauseMenuHelper
     {
-        // 3, not 4 - matches the real vanilla page's own row count
-        // (StartGame/DeleteSave/Settings), which is already about as tall as
-        // the panel can go without the fixed-size panel running past the
-        // bottom of the screen.
         private const int MaxRowsPerPage = 3;
 
         private class ModRowSpec
@@ -32,19 +23,8 @@ namespace Recharge.ModApi
             public Action OnClick;
         }
 
-        // Session-wide list of what mod rows exist (page 2+ content). OnClick
-        // is REPLACED (not just registered once) on every call, since it
-        // closes over whatever panel/menu instance is live right now - those
-        // get destroyed on every scene reload, so a stale closure from an
-        // earlier instance must never be left wired after a mod re-registers.
         private static readonly List<ModRowSpec> _rows = new List<ModRowSpec>();
 
-        // Reflection, not the native patch's mainBitPublic/settingsBitPublic
-        // properties - this class builds as part of Recharge.ModApi itself,
-        // which build-loader.ps1 compiles BEFORE the patch that adds those
-        // properties even runs (confirmed live: a never-before-patched game
-        // install fails ModApi's own build with CS1061 on both). Mods built
-        // later (after the patch) can and do use the real properties fine.
         private static readonly System.Reflection.FieldInfo MainBitField =
             typeof(pauseMenuScript).GetField("mainBit", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         private static readonly System.Reflection.FieldInfo SettingsBitField =
@@ -55,18 +35,11 @@ namespace Recharge.ModApi
 
         /// <summary>
         /// Registers a mod entry that runs <paramref name="onClick"/> when
-        /// selected - no sub-panel of its own. Use this when you're managing
-        /// your own panel (open it from onClick - its own Back button should
-        /// return to <c>menu.mainBitPublic</c>). Use <see cref="AddPanelRow"/>
-        /// instead if you just need a blank sub-screen to fill in.
+        /// selected, with no sub-panel of its own. Use <see cref="AddPanelRow"/>
+        /// instead if you need a blank sub-screen to fill in.
         /// </summary>
-        /// <param name="rowName">
-        /// A stable, unique id for this row (not shown to the player) - also
-        /// this call's idempotency key, safe to call unconditionally every
-        /// session (including every scene load, since a fresh pauseMenuScript
-        /// instance needs its own copy of the pager rebuilt).
-        /// </param>
-        /// <returns>The shared pager row's GameObject, or null if the real menu's expected shape wasn't found (e.g. the game updated) - added defensively, log a warning and continue rather than throw.</returns>
+        /// <param name="rowName">Stable, unique id for this row - also the idempotency key, safe to call every scene load.</param>
+        /// <returns>The shared pager row's GameObject, or null if the real menu's expected shape wasn't found.</returns>
         public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick)
         {
             if (menu == null || MainBit(menu) == null || SettingsBit(menu) == null) return null;
@@ -76,13 +49,11 @@ namespace Recharge.ModApi
 
         /// <summary>
         /// Registers a mod entry that opens a blank sub-panel (cloned from
-        /// the real Settings panel's own shape, so it matches the game's own
-        /// visual style) when selected - the sub-panel's Close button is
-        /// already wired back to <c>menu.mainBitPublic</c> directly. Fill the
-        /// returned GameObject with your own UI content after this call
-        /// returns.
+        /// the real Settings panel, matching its visual style) when
+        /// selected, with its Close button already wired back. Fill the
+        /// returned GameObject with your own UI content.
         /// </summary>
-        /// <param name="rowName">Same idempotency key as <see cref="AddRow"/> - also becomes the sub-panel GameObject's name suffix ("&lt;rowName&gt;Bit").</param>
+        /// <param name="rowName">Same idempotency key as <see cref="AddRow"/>.</param>
         /// <returns>The (empty) sub-panel GameObject, inactive until selected, or null if the real menu's expected shape wasn't found.</returns>
         public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label)
         {
@@ -123,19 +94,29 @@ namespace Recharge.ModApi
             if (existing != null)
             {
                 var rt = existing.GetComponent<PagerRuntime>();
-                if (rt != null) ShowPage(rt, rt.CurrentPage); // re-render in case a row was just added/changed
+                if (rt != null) ShowPage(rt, rt.CurrentPage);
                 return existing.gameObject;
             }
             return BuildPager(menu);
         }
 
+        private static RectTransform FindFirst(Transform parent, params string[] names)
+        {
+            foreach (var name in names)
+            {
+                var found = parent.Find(name) as RectTransform;
+                if (found != null) return found;
+            }
+            return null;
+        }
+
         private static GameObject BuildPager(pauseMenuScript menu)
         {
             var mainBitGo = MainBit(menu);
-            var startGame = mainBitGo.transform.Find("StartGame") as RectTransform;
-            var deleteSave = mainBitGo.transform.Find("DeleteSave") as RectTransform;
-            var settings = mainBitGo.transform.Find("Settings") as RectTransform;
-            var quit = mainBitGo.transform.Find("QuitToDesktop") as RectTransform;
+            var startGame = FindFirst(mainBitGo.transform, "StartGame", "Resume");
+            var deleteSave = FindFirst(mainBitGo.transform, "DeleteSave", "Checkpoint Toggle", "CheckpointToggle");
+            var settings = FindFirst(mainBitGo.transform, "Settings");
+            var quit = FindFirst(mainBitGo.transform, "QuitToDesktop", "Quit to menu", "QuitToMenu");
             if (startGame == null || settings == null || quit == null) return null;
 
             float rowSpacing = settings.anchoredPosition.y - quit.anchoredPosition.y;
@@ -149,17 +130,9 @@ namespace Recharge.ModApi
             {
                 panelTopY = background.anchoredPosition.y + background.sizeDelta.y / 2f;
                 var panelBottomEdge = background.anchoredPosition.y - background.sizeDelta.y / 2f;
-                // +20 safety buffer - the real vanilla margin below Quit is
-                // tight even for the original 3-row layout, and reserving
-                // space for a full MaxRowsPerPage below leaves none to spare.
                 bottomMargin = originalQuitY - panelBottomEdge + 20f;
             }
 
-            // The real dividers between StartGame/DeleteSave/Settings/Quit
-            // don't track per-page row counts, so they're dropped entirely
-            // (found by position, not name, since the real names - "Line",
-            // "Line (1)", ... - aren't a reliable contract) and replaced
-            // below with fresh ones at the now-fixed slot gaps instead.
             float regionTop = topY - 0.01f;
             float regionBottom = originalQuitY + 0.01f;
             Transform dividerTemplate = null;
@@ -191,11 +164,6 @@ namespace Recharge.ModApi
             rt.BottomMargin = bottomMargin;
             rt.CurrentPage = 0;
 
-            // Fixed once, for good - sized for the worst case (a full
-            // MaxRowsPerPage of content) so the panel/pager/Quit never move
-            // again as pages flip; a lighter page (e.g. the 3-row vanilla
-            // one) just leaves its unused slots blank instead of shrinking
-            // anything, per how this is meant to look.
             float pagerY = topY - MaxRowsPerPage * rowSpacing;
             float quitY = pagerY - rowSpacing;
             quit.anchoredPosition = new Vector2(quit.anchoredPosition.x, quitY);
@@ -207,9 +175,6 @@ namespace Recharge.ModApi
                 background.anchoredPosition = new Vector2(background.anchoredPosition.x, (panelTopY + bottomEdge) / 2f);
             }
 
-            // One divider per gap between the fixed slots (StartGame..slot3,
-            // then the pager, then Quit) - safe to place once, up front, now
-            // that none of those positions ever move again.
             if (dividerTemplate != null)
             {
                 for (int i = 0; i < MaxRowsPerPage + 1; i++)
@@ -221,23 +186,26 @@ namespace Recharge.ModApi
                 }
             }
 
-            // Reusable content-row slots for mod pages, cloned from Quit
-            // (guaranteed to stay active and structurally identical to the
-            // real rows, unlike Settings which page 0 can hide).
             rt.Slots = new GameObject[MaxRowsPerPage];
             for (int i = 0; i < MaxRowsPerPage; i++)
             {
                 var slotGo = UnityEngine.Object.Instantiate(quit.gameObject, quit.parent);
                 slotGo.name = "ModsPagerSlot" + i;
                 slotGo.SetActive(false);
+                CopyButtonTextColor(settings.gameObject, slotGo);
                 rt.Slots[i] = slotGo;
             }
+
+            float rowWidth = quit.sizeDelta.x;
+            float arrowWidth = Mathf.Min(50f, rowWidth * 0.16f);
+            float arrowX = rowWidth / 2f - arrowWidth / 2f;
+            float counterWidth = Mathf.Max(60f, rowWidth - arrowWidth * 2f - 12f);
 
             var prevGo = UnityEngine.Object.Instantiate(quit.gameObject, pagerRt);
             prevGo.name = "Prev";
             var prevRt = (RectTransform)prevGo.transform;
-            prevRt.anchoredPosition = new Vector2(-110f, 0f);
-            prevRt.sizeDelta = new Vector2(60f, prevRt.sizeDelta.y);
+            prevRt.anchoredPosition = new Vector2(-arrowX, 0f);
+            prevRt.sizeDelta = new Vector2(arrowWidth, prevRt.sizeDelta.y);
             SetButtonLabel(prevGo, "<");
             ScaleButtonFontSize(prevGo, 1.6f);
             var prevBtn = prevGo.GetComponent<Button>();
@@ -247,8 +215,8 @@ namespace Recharge.ModApi
             var nextGo = UnityEngine.Object.Instantiate(quit.gameObject, pagerRt);
             nextGo.name = "Next";
             var nextRt = (RectTransform)nextGo.transform;
-            nextRt.anchoredPosition = new Vector2(110f, 0f);
-            nextRt.sizeDelta = new Vector2(60f, nextRt.sizeDelta.y);
+            nextRt.anchoredPosition = new Vector2(arrowX, 0f);
+            nextRt.sizeDelta = new Vector2(arrowWidth, nextRt.sizeDelta.y);
             SetButtonLabel(nextGo, ">");
             ScaleButtonFontSize(nextGo, 1.6f);
             var nextBtn = nextGo.GetComponent<Button>();
@@ -259,16 +227,7 @@ namespace Recharge.ModApi
             counterGo.name = "Counter";
             var counterRt = (RectTransform)counterGo.transform;
             counterRt.anchoredPosition = Vector2.zero;
-            counterRt.sizeDelta = new Vector2(170f, counterRt.sizeDelta.y);
-            // Left with its Button intact but disabled, rather than
-            // destroyed - the real rows' orange comes from the Button's own
-            // Normal color state, not a fixed text color, so destroying it
-            // and trying to reproduce that color by hand never reliably
-            // matched. Disabling (not just clearing onClick) freezes it at
-            // whatever color it already has instead of leaving it selectable
-            // - otherwise keyboard/gamepad nav or a mouse hover can flip it
-            // to the Highlighted color (a stray green) since it's still a
-            // real Selectable.
+            counterRt.sizeDelta = new Vector2(counterWidth, counterRt.sizeDelta.y);
             var counterBtn = counterGo.GetComponent<Button>();
             if (counterBtn != null) counterBtn.enabled = false;
 
@@ -276,10 +235,6 @@ namespace Recharge.ModApi
             return pagerGo;
         }
 
-        // Only ever toggles/relabels content rows within the MaxRowsPerPage
-        // fixed slots - the panel, pager row and Quit were positioned once in
-        // BuildPager and are never touched again, so a lighter page just
-        // leaves its unused slots blank instead of resizing anything.
         private static void ShowPage(PagerRuntime rt, int page)
         {
             int modPageCount = _rows.Count == 0 ? 0 : (int)Math.Ceiling(_rows.Count / (double)MaxRowsPerPage);
@@ -326,7 +281,7 @@ namespace Recharge.ModApi
                         btn.onClick = new Button.ButtonClickedEvent();
                         btn.onClick.AddListener(() =>
                         {
-                            mainBit.SetActive(false); // the page this row lives on doesn't hide itself before invoking a mod's onClick otherwise
+                            mainBit.SetActive(false);
                             spec.OnClick();
                         });
                     }
@@ -356,13 +311,6 @@ namespace Recharge.ModApi
             var settingsScript = clone.GetComponent<SettingsScript>();
             if (settingsScript != null) UnityEngine.Object.Destroy(settingsScript);
 
-            // The title bar isn't reliably sibling index 0 (confirmed live -
-            // assuming "first child" left both the title text and Back
-            // button destroyed, since some other child occupied that slot
-            // instead) - match by the source panel's own real name instead,
-            // same as recharge-multiplayer/MpMenuBuilder.cs's hand-rolled
-            // equivalent already does. Falls back to "first child" only if
-            // that name is ever missing, rather than failing outright.
             Transform title = null;
             foreach (Transform child in clone.transform)
             {
@@ -403,7 +351,7 @@ namespace Recharge.ModApi
             return clone;
         }
 
-        /// <summary>Relabels a cloned button's TMP text, stripping any inherited localization hookup so your own text sticks. Exposed publicly since it's just as useful when hand-styling rows outside <see cref="AddRow"/>/<see cref="AddPanelRow"/>.</summary>
+        /// <summary>Relabels a cloned button's TMP text, stripping any inherited localization hookup so your own text sticks.</summary>
         public static void SetButtonLabel(GameObject buttonGo, string text)
         {
             var label = buttonGo.transform.Find("Text (TMP)");
@@ -414,7 +362,7 @@ namespace Recharge.ModApi
             if (tmp != null) tmp.text = text;
         }
 
-        /// <summary>Copies another cloned button's own live TMP text color onto this one - the reliable way to match the real menu's normal orange exactly, since reconstructing it from an RGB guess doesn't survive whatever color-space/material handling TMP applies at render time.</summary>
+        /// <summary>Copies another cloned button's own live TMP text color onto this one - more reliable than reconstructing it from an RGB guess.</summary>
         public static void CopyButtonTextColor(GameObject sourceButtonGo, GameObject targetButtonGo)
         {
             var sourceLabel = sourceButtonGo.transform.Find("Text (TMP)");
@@ -423,7 +371,7 @@ namespace Recharge.ModApi
             SetButtonTextColor(targetButtonGo, sourceTmp.color);
         }
 
-        /// <summary>Multiplies a cloned button's TMP font size (e.g. to make a lone "&lt;"/"&gt;" glyph read clearly at a small button width). Exposed publicly for the same reason as <see cref="SetButtonLabel"/>.</summary>
+        /// <summary>Multiplies a cloned button's TMP font size (e.g. for a lone "&lt;"/"&gt;" glyph).</summary>
         public static void ScaleButtonFontSize(GameObject buttonGo, float multiplier)
         {
             var label = buttonGo.transform.Find("Text (TMP)");
@@ -433,7 +381,7 @@ namespace Recharge.ModApi
             tmp.fontSize *= multiplier;
         }
 
-        /// <summary>Sets a cloned button's TMP text color directly - needed once its Button component is destroyed (e.g. a label-only element like a page counter), since a plain `.color` write alone doesn't reliably override TMP's own face color / vertex gradient.</summary>
+        /// <summary>Sets a cloned button's TMP text color directly, including face color - a plain `.color` write alone doesn't reliably override TMP's vertex gradient.</summary>
         public static void SetButtonTextColor(GameObject buttonGo, Color color)
         {
             var label = buttonGo.transform.Find("Text (TMP)");
