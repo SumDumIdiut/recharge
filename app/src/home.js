@@ -248,8 +248,8 @@ async function checkForLauncherUpdate() {
     laterBtn.onclick = () => { overlay.hidden = true; };
     nowBtn.onclick = async () => {
       if (!info.downloadUrl) {
-        window.__TAURI__.opener.openUrl(info.url);
-        overlay.hidden = true;
+        progress.hidden = false;
+        progress.textContent = "This release has no installer attached - can't update in-app.";
         return;
       }
       nowBtn.disabled = true;

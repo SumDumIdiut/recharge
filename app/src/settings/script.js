@@ -273,7 +273,8 @@ window.__launcherUpdate = async function () {
 
   if (launcherUpdateInfo?.appUpdateAvailable) {
     if (!launcherUpdateInfo.downloadUrl) {
-      window.__TAURI__.opener.openUrl(launcherUpdateInfo.url);
+      progress.hidden = false;
+      progress.textContent = "This release has no installer attached - can't update in-app.";
       return;
     }
     btn.disabled = true;
