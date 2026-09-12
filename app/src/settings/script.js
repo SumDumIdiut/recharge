@@ -230,19 +230,19 @@ async function refreshStatus() {
 // Recharge's own version vs. the real GitHub releases feed - distinct from
 // RechargeLoader above, which is the mod-framework contract mods build
 // against, not the app itself.
+let launcherUpdateInfo = null;
+
 async function refreshLauncherStatus() {
   const { invoke } = window.__TAURI__.core;
   const status = document.getElementById('launcher-status');
   const notes = document.getElementById('launcher-notes');
+  const updateBtn = document.getElementById('launcher-update-btn');
   try {
     const info = await invoke('check_launcher_update');
+    launcherUpdateInfo = info;
     if (info.updateAvailable) {
-      status.innerHTML = `v${info.currentVersion} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span> <a href="#" id="launcher-download-link">Download</a>`;
-      const link = document.getElementById('launcher-download-link');
-      link.onclick = (e) => {
-        e.preventDefault();
-        window.__TAURI__.opener.openUrl(info.url);
-      };
+      status.innerHTML = `v${info.currentVersion} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span>`;
+      updateBtn.hidden = false;
       if (info.notes) {
         notes.textContent = info.notes;
         notes.hidden = false;
@@ -251,6 +251,7 @@ async function refreshLauncherStatus() {
       }
     } else {
       status.textContent = `v${info.currentVersion} (up to date)`;
+      updateBtn.hidden = true;
       notes.hidden = true;
     }
   } catch (err) {
@@ -258,9 +259,35 @@ async function refreshLauncherStatus() {
   }
 }
 
+window.__launcherUpdate = async function () {
+  const { invoke } = window.__TAURI__.core;
+  const btn = document.getElementById('launcher-update-btn');
+  const progress = document.getElementById('launcher-update-progress');
+  if (!launcherUpdateInfo?.downloadUrl) {
+    window.__TAURI__.opener.openUrl(launcherUpdateInfo?.url);
+    return;
+  }
+  btn.disabled = true;
+  progress.hidden = false;
+  progress.textContent = 'Starting…';
+  try {
+    // On success this process is closed by the backend before it ever
+    // returns - there's no "finished" state to show here, only failure.
+    await invoke('install_launcher_update', { url: launcherUpdateInfo.downloadUrl });
+  } catch (err) {
+    btn.disabled = false;
+    progress.textContent = String(err);
+  }
+};
+
 export async function init() {
   const { listen } = window.__TAURI__.event;
   listen('loader-progress', (event) => setProgress(event.payload));
+  listen('launcher-update-progress', (event) => {
+    const progress = document.getElementById('launcher-update-progress');
+    progress.hidden = false;
+    progress.textContent = event.payload;
+  });
   refreshStatus();
   refreshLauncherStatus();
   renderAppearance();

@@ -25,6 +25,7 @@ pub fn run() {
             loader::loader_status,
             loader::install_or_update_loader,
             launcher::check_launcher_update,
+            launcher::install_launcher_update,
             play::launch_game,
             play::is_game_running,
             play::restore_vanilla_build,

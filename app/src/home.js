@@ -214,6 +214,61 @@ function showOnboarding(html) {
   };
 }
 
+async function checkForLauncherUpdate() {
+  const { invoke } = window.__TAURI__.core;
+  const { event } = window.__TAURI__;
+  let info;
+  try {
+    info = await invoke('check_launcher_update');
+  } catch {
+    return; // offline, or GitHub unreachable - just try again next launch
+  }
+  if (!info.updateAvailable) return;
+
+  logLine(`update available: <b>v${info.latestVersion}</b>`);
+  const overlay = document.getElementById('update-overlay');
+  const body = document.getElementById('update-body');
+  const progress = document.getElementById('update-progress');
+  const laterBtn = document.getElementById('update-later');
+  const nowBtn = document.getElementById('update-now');
+  body.innerHTML = `<p>Recharge <b>v${info.latestVersion}</b> is available (you're on v${info.currentVersion}).</p>${info.notes ? `<p>${escapeForHtml(info.notes)}</p>` : ''}`;
+  progress.hidden = true;
+  nowBtn.disabled = false;
+  laterBtn.disabled = false;
+  overlay.hidden = false;
+
+  event.listen('launcher-update-progress', (e) => {
+    progress.hidden = false;
+    progress.textContent = e.payload;
+  });
+
+  laterBtn.onclick = () => { overlay.hidden = true; };
+  nowBtn.onclick = async () => {
+    if (!info.downloadUrl) {
+      window.__TAURI__.opener.openUrl(info.url);
+      overlay.hidden = true;
+      return;
+    }
+    nowBtn.disabled = true;
+    laterBtn.disabled = true;
+    progress.hidden = false;
+    progress.textContent = 'Starting…';
+    try {
+      // On success this process is closed by the backend before it ever
+      // returns - there's no "finished" state to show here, only failure.
+      await invoke('install_launcher_update', { url: info.downloadUrl });
+    } catch (err) {
+      nowBtn.disabled = false;
+      laterBtn.disabled = false;
+      progress.textContent = String(err);
+    }
+  };
+}
+
+function escapeForHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 export async function initHome() {
   const { invoke } = window.__TAURI__.core;
 
@@ -240,6 +295,10 @@ export async function initHome() {
       `<p>Almost there - <b>RechargeLoader</b> isn't installed yet, and it's what lets mods actually run in-game.</p>
        <p>Go to Settings and click <b>Install / Update</b> under RechargeLoader to finish setup.</p>`
     );
+  } else {
+    // Only nag about updating Recharge itself once first-run setup is out
+    // of the way - no point stacking this on top of the onboarding overlay.
+    checkForLauncherUpdate();
   }
 
   try {
