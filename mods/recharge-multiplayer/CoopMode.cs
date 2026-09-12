@@ -218,59 +218,54 @@ private void CaptureBaseline()
 		}
 	}
 
+	// Every player builds/applies deltas and snapshots the same way now - no host-only privilege.
 	public void Tick(float unscaledDt, bool isHost, Action<JObject> sendGameMessage)
 	{
 		if (!Active) return;
 
 		_realSaveloader?.CancelInvoke("manualSave");
 
-		if (!isHost)
+		_deltaAccumulator += unscaledDt;
+		if (_deltaAccumulator >= DeltaInterval)
 		{
-			_deltaAccumulator += unscaledDt;
-			if (_deltaAccumulator >= DeltaInterval)
-			{
-				_deltaAccumulator = 0f;
-				var delta = BuildDelta();
-				if (delta != null) sendGameMessage(delta);
-			}
+			_deltaAccumulator = 0f;
+			var delta = BuildDelta();
+			if (delta != null) sendGameMessage(delta);
+		}
 
-			_abilityResendAccumulator += unscaledDt;
-			if (_abilityResendAccumulator >= AbilityResendInterval)
-			{
-				_abilityResendAccumulator = 0f;
-				var resend = BuildAbilitiesResend();
-				if (resend != null) sendGameMessage(resend);
-			}
+		_abilityResendAccumulator += unscaledDt;
+		if (_abilityResendAccumulator >= AbilityResendInterval)
+		{
+			_abilityResendAccumulator = 0f;
+			var resend = BuildAbilitiesResend();
+			if (resend != null) sendGameMessage(resend);
 		}
 
 		_syncAccumulator += unscaledDt;
-		if (isHost && _syncAccumulator >= SyncInterval)
+		if (_syncAccumulator >= SyncInterval)
 		{
 			_syncAccumulator = 0f;
-			sendGameMessage(BuildFullSync());
+			sendGameMessage(BuildSnapshot());
 		}
 
-		if (isHost)
+		_saveAccumulator += unscaledDt;
+		if (_saveAccumulator >= SaveInterval)
 		{
-			_saveAccumulator += unscaledDt;
-			if (_saveAccumulator >= SaveInterval)
-			{
-				_saveAccumulator = 0f;
-				PersistSave();
-			}
+			_saveAccumulator = 0f;
+			PersistSave();
 		}
 	}
 
-	public void HandleMessage(string kind, JObject payload, bool isHost)
+	public void HandleMessage(string kind, JObject payload, int from, int localPlayerId)
 	{
-		if (!Active) return;
+		if (!Active || from == localPlayerId) return; // never apply a message that's actually our own
 		if (kind == "coopDelta")
 		{
-			if (isHost) ApplyDelta(payload);
+			ApplyDelta(payload);
 		}
 		else if (kind == "coopSync")
 		{
-			ApplyFullSync(payload);
+			ApplySnapshot(payload);
 		}
 	}
 
@@ -346,22 +341,10 @@ private void CaptureBaseline()
 				{
 					if (!Enum.TryParse<global::localUpgrades.localUpgradeSet>(kv.Key, out var key)) continue;
 					var current = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
-					// Non-additive used to clamp to Math.Max(current, incoming) so a
-					// buyer's own just-bought value could never be knocked back down
-					// by a stale sync - but that one-way clamp is exactly what let a
-					// non-host's purchase get permanently stuck: if the host's own
-					// value never legitimately caught up (see the ApplyDelta baseline
-					// fix below for why), nothing could ever correct it. A straight
-					// assignment matches how currency already works - always
-					// converges to the host's authoritative value, occasionally
-					// dipping before catching back up, but never stuck.
-					var updated = additive ? Math.Max(0, current + kv.Value.Value<double>()) : kv.Value.Value<double>();
+					// Only ever goes up in this game, so symmetric Math.Max across all peers is safe.
+					var updated = additive ? Math.Max(0, current + kv.Value.Value<double>()) : Math.Max(current, kv.Value.Value<double>());
 					course.localUpgradesScript.localUpgradeDict[key] = updated;
-					// Keep this instance's own delta-baseline in lockstep with
-					// whatever it just applied from a peer - otherwise a later
-					// RefreshSceneReferences (any real scene reload) restores the
-					// stale pre-delta value from this dictionary, silently reverting
-					// a purchase that was only ever applied to the live box/dict.
+					// Keep our own delta-baseline in sync, or a later RefreshSceneReferences reverts this.
 					baseline ??= _lastLocalUpgrade.TryGetValue(course.courseNumber, out var d) ? d : (_lastLocalUpgrade[course.courseNumber] = new Dictionary<global::localUpgrades.localUpgradeSet, double>());
 					baseline[key] = updated;
 				}
@@ -376,7 +359,7 @@ private void CaptureBaseline()
 				{
 					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
 					var box = boxes[boxIndex];
-					var updated = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
+					var updated = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : Math.Max(box.TimesUsed, kv.Value.Value<int>());
 					box.TimesUsed = updated;
 					box.CalcBoxCost();
 					ApplyBoxCapState(box);
@@ -445,11 +428,9 @@ private void CaptureBaseline()
 		return msg;
 	}
 
-	private JObject BuildFullSync()
+	// No currency here - it can go DOWN (spending), so it only ever moves via BuildDelta's additive path.
+	private JObject BuildSnapshot()
 	{
-		var currencies = new JObject();
-		foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
-			currencies[c.ToString()] = globalStats.currencyLookup[c];
 		var upgrades = new JObject();
 		foreach (globalStats.globalUpgradeSet u in Enum.GetValues(typeof(globalStats.globalUpgradeSet)))
 			upgrades[u.ToString()] = globalStats.globalUpgradeDict[u];
@@ -463,7 +444,7 @@ private void CaptureBaseline()
 		}
 		var courses = BuildCoursesFullSync();
 		CaptureBaseline();
-		return new JObject { ["k"] = "coopSync", ["currencies"] = currencies, ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
+		return new JObject { ["k"] = "coopSync", ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
 	}
 
 	private static void ApplyCurrenciesAndUpgrades(JObject payload, bool additive)
@@ -471,13 +452,13 @@ private void CaptureBaseline()
 		if (payload["currencies"] is JObject currencies)
 			foreach (var kv in currencies)
 				if (Enum.TryParse<globalStats.Currencies>(kv.Key, out var c))
-					globalStats.currencyLookup[c] = additive ? Math.Max(0, globalStats.currencyLookup[c] + kv.Value.Value<double>()) : kv.Value.Value<double>();
+					globalStats.currencyLookup[c] = Math.Max(0, globalStats.currencyLookup[c] + kv.Value.Value<double>());
 		if (payload["upgrades"] is JObject upgrades)
 			foreach (var kv in upgrades)
 				if (Enum.TryParse<globalStats.globalUpgradeSet>(kv.Key, out var u))
 					globalStats.globalUpgradeDict[u] = additive
 						? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>())
-						: kv.Value.Value<double>();
+						: Math.Max(globalStats.globalUpgradeDict[u], kv.Value.Value<double>());
 	}
 
 	private void ApplyAbilities(JObject payload)
@@ -498,7 +479,7 @@ private void CaptureBaseline()
 		ApplyCoursesPayload(payload, additive: true);
 	}
 
-	private void ApplyFullSync(JObject payload)
+	private void ApplySnapshot(JObject payload)
 	{
 		ApplyCurrenciesAndUpgrades(payload, additive: false);
 		ApplyAbilities(payload);
@@ -553,7 +534,7 @@ private void CaptureBaseline()
 		if (!Active) return;
 		Active = false;
 
-		if (isHost) PersistSave();
+		PersistSave();
 
 		foreach (var c in _disabledClones) if (c != null) { c.gameObject.SetActive(true); c.enabled = true; }
 		_disabledClones.Clear();

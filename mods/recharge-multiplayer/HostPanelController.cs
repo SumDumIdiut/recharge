@@ -778,7 +778,7 @@ internal class HostPanelController : MonoBehaviour
 		}
 		else if (kind == "coopSync" || kind == "coopDelta")
 		{
-			_coop.HandleMessage(kind, payload, MpNetworkManager.Instance.IsHost);
+			_coop.HandleMessage(kind, payload, from, MpNetworkManager.Instance.LocalPlayerId);
 		}
 	}
 
