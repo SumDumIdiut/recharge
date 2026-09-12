@@ -29,17 +29,6 @@ fn mods_dir(app: &AppHandle) -> Option<PathBuf> {
     Some(PathBuf::from(game_path).join("Recharge").join("Mods"))
 }
 
-fn maps_dir(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
-    Some(
-        PathBuf::from(game_path)
-            .join("Recharge")
-            .join("Mods")
-            .join("recharge.maps")
-            .join("maps"),
-    )
-}
-
 #[derive(Deserialize)]
 struct HubItem {
     name: String,
@@ -97,27 +86,11 @@ fn install_mod_zip(app: &AppHandle, bytes: Vec<u8>) -> Result<(), String> {
     Ok(())
 }
 
-// Maps have no manifest-driven id of their own yet, so the recharge-hub
-// submission id (already unique) is used as the install folder name.
-fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), String> {
-    let dir = maps_dir(app).ok_or("game path not set")?;
-    let target = dir.join(hub_id);
-    let _ = std::fs::remove_dir_all(&target);
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid package: {e}"))?;
-    archive
-        .extract(&target)
-        .map_err(|e| format!("couldn't extract package: {e}"))?;
-    Ok(())
-}
-
 // Downloads one approved submission from recharge-hub and installs it in
 // place. Shared by the local beam HTTP endpoint below.
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
-    if kind != "mods" && kind != "maps" {
-        return Err("kind must be 'mods' or 'maps'".to_string());
+    if kind != "mods" {
+        return Err("kind must be 'mods'".to_string());
     }
     sanitize_id(id)?;
 
@@ -132,11 +105,7 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
 
     let bytes = download(&format!("{HUB_BASE}/api/{kind}/{id}/file"))?;
 
-    if kind == "mods" {
-        install_mod_zip(app, bytes)?;
-    } else {
-        install_map_zip(app, bytes, id)?;
-    }
+    install_mod_zip(app, bytes)?;
 
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -150,7 +119,7 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
     Ok(meta.name)
 }
 
-// The app's own Mods/Maps > Browse tabs call this directly via invoke() -
+// The app's own Mods > Browse tab calls this directly via invoke() -
 // same underlying logic the local beam HTTP endpoint below exposes to the
 // external web viewer, just reached the normal way for in-app JS.
 #[tauri::command]

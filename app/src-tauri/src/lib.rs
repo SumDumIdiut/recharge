@@ -1,7 +1,7 @@
 mod commands;
 mod vdf;
 
-use commands::{hub, launcher, loader, maps, mods, play, settings, steam};
+use commands::{hub, launcher, loader, mods, play, settings, steam};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,14 +21,6 @@ pub fn run() {
             mods::set_mod_enabled,
             mods::uninstall_mod,
             hub::install_from_hub_cmd,
-            maps::list_maps,
-            maps::get_map,
-            maps::save_map,
-            maps::delete_map,
-            maps::save_map_image,
-            maps::list_tile_textures,
-            maps::read_tile_texture,
-            maps::read_tile_rules,
             loader::loader_status,
             loader::install_or_update_loader,
             launcher::check_launcher_update,
