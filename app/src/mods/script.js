@@ -4,6 +4,11 @@
 // actual download+install this tab's Install button triggers.
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
+// recharge.maps is infrastructure the Map Editor/Maps tabs always need, not an
+// optional feature a user picks - it stays fully installed and running, just
+// never shown here so it doesn't look like a toggleable, ordinary mod.
+const HIDDEN_MOD_IDS = new Set(['recharge.maps']);
+
 let currentSubtab = 'installed';
 let searchTerm = '';
 let installedCache = [];
@@ -369,7 +374,8 @@ window.__modCloseDetail = function () {
 
 async function refresh() {
   const { invoke } = window.__TAURI__.core;
-  installedCache = await invoke('list_installed_mods');
+  const all = await invoke('list_installed_mods');
+  installedCache = all.filter((m) => !HIDDEN_MOD_IDS.has(m.id));
   render();
 }
 

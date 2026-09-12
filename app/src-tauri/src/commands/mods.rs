@@ -91,9 +91,15 @@ pub fn set_mod_enabled(app: AppHandle, id: String, enabled: bool) -> Result<(), 
 }
 
 // Removes a mod's entire deployed folder (DLL, mod.json, data/) - this is
-// intentionally more thorough than just disabling it.
+// intentionally more thorough than just disabling it. Refuses to touch
+// recharge.maps: it's infrastructure the Map Editor/Maps tabs depend on
+// (see HIDDEN_MOD_IDS in app/src/mods/script.js), never something a user
+// should be able to remove from this generic mod list.
 #[tauri::command]
 pub fn uninstall_mod(app: AppHandle, id: String) -> Result<(), String> {
+    if id == "recharge.maps" {
+        return Err("recharge.maps is required by the Maps/Amplifier tabs and can't be uninstalled here".to_string());
+    }
     for (manifest_path, manifest) in each_manifest(&app) {
         if manifest.id != id {
             continue;
