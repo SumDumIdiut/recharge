@@ -447,18 +447,31 @@ private void CaptureBaseline()
 		return new JObject { ["k"] = "coopSync", ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
 	}
 
-	private static void ApplyCurrenciesAndUpgrades(JObject payload, bool additive)
+	// Applying a peer's contribution must also move our own delta-baseline to
+	// match, or our next BuildDelta compares our (now peer-bumped) live value
+	// against a stale baseline, treats the peer's own contribution as new
+	// local activity, and rebroadcasts it - which they then apply as
+	// additional additive income, which we then see reflected back etc.
+	private void ApplyCurrenciesAndUpgrades(JObject payload, bool additive)
 	{
 		if (payload["currencies"] is JObject currencies)
 			foreach (var kv in currencies)
 				if (Enum.TryParse<globalStats.Currencies>(kv.Key, out var c))
-					globalStats.currencyLookup[c] = Math.Max(0, globalStats.currencyLookup[c] + kv.Value.Value<double>());
+				{
+					var updated = Math.Max(0, globalStats.currencyLookup[c] + kv.Value.Value<double>());
+					globalStats.currencyLookup[c] = updated;
+					_lastCurrency[c] = updated;
+				}
 		if (payload["upgrades"] is JObject upgrades)
 			foreach (var kv in upgrades)
 				if (Enum.TryParse<globalStats.globalUpgradeSet>(kv.Key, out var u))
-					globalStats.globalUpgradeDict[u] = additive
+				{
+					var updated = additive
 						? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>())
 						: Math.Max(globalStats.globalUpgradeDict[u], kv.Value.Value<double>());
+					globalStats.globalUpgradeDict[u] = updated;
+					_lastGlobalUpgrade[u] = updated;
+				}
 	}
 
 	private void ApplyAbilities(JObject payload)
@@ -470,6 +483,12 @@ private void CaptureBaseline()
 		if (abilities["blockSwap"] != null) _localMovement.blockSwapUnlocked |= abilities["blockSwap"].Value<bool>();
 		if (_localMovement.dashUnlocked && _localMovement.maxAirDashes < 1) _localMovement.maxAirDashes = 1;
 		if (_localMovement.doubleJumpUnlocked && _localMovement.maxAirJumps < 1) _localMovement.maxAirJumps = 1;
+		// Keep our own resend-baseline in sync so we don't mistake a peer's
+		// grant for new local activity and needlessly rebroadcast it forever.
+		_lastDash = _localMovement.dashUnlocked;
+		_lastWallJump = _localMovement.wallJumpUnlocked;
+		_lastDoubleJump = _localMovement.doubleJumpUnlocked;
+		_lastBlockSwap = _localMovement.blockSwapUnlocked;
 	}
 
 	private void ApplyDelta(JObject payload)
