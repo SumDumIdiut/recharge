@@ -341,23 +341,46 @@ private void CaptureBaseline()
 
 			if (courseObj["localUpgrades"] is JObject localUpgradesObj)
 			{
+				Dictionary<global::localUpgrades.localUpgradeSet, double> baseline = null;
 				foreach (var kv in localUpgradesObj)
 				{
 					if (!Enum.TryParse<global::localUpgrades.localUpgradeSet>(kv.Key, out var key)) continue;
 					var current = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
-					course.localUpgradesScript.localUpgradeDict[key] = additive ? Math.Max(0, current + kv.Value.Value<double>()) : Math.Max(current, kv.Value.Value<double>());
+					// Non-additive used to clamp to Math.Max(current, incoming) so a
+					// buyer's own just-bought value could never be knocked back down
+					// by a stale sync - but that one-way clamp is exactly what let a
+					// non-host's purchase get permanently stuck: if the host's own
+					// value never legitimately caught up (see the ApplyDelta baseline
+					// fix below for why), nothing could ever correct it. A straight
+					// assignment matches how currency already works - always
+					// converges to the host's authoritative value, occasionally
+					// dipping before catching back up, but never stuck.
+					var updated = additive ? Math.Max(0, current + kv.Value.Value<double>()) : kv.Value.Value<double>();
+					course.localUpgradesScript.localUpgradeDict[key] = updated;
+					// Keep this instance's own delta-baseline in lockstep with
+					// whatever it just applied from a peer - otherwise a later
+					// RefreshSceneReferences (any real scene reload) restores the
+					// stale pre-delta value from this dictionary, silently reverting
+					// a purchase that was only ever applied to the live box/dict.
+					baseline ??= _lastLocalUpgrade.TryGetValue(course.courseNumber, out var d) ? d : (_lastLocalUpgrade[course.courseNumber] = new Dictionary<global::localUpgrades.localUpgradeSet, double>());
+					baseline[key] = updated;
 				}
 			}
 			if (courseObj["boxTimesUsed"] is JObject boxTimesUsedObj)
 			{
 				var boxes = GetUpgradeBoxes(course);
+				int[] baseline = _lastTimesUsed.TryGetValue(course.courseNumber, out var bt) && bt.Length == boxes.Count
+					? bt
+					: (_lastTimesUsed[course.courseNumber] = boxes.Select(b => b.TimesUsed).ToArray());
 				foreach (var kv in boxTimesUsedObj)
 				{
 					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
 					var box = boxes[boxIndex];
-					box.TimesUsed = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : Math.Max(box.TimesUsed, kv.Value.Value<int>());
+					var updated = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : kv.Value.Value<int>();
+					box.TimesUsed = updated;
 					box.CalcBoxCost();
 					ApplyBoxCapState(box);
+					baseline[boxIndex] = updated;
 				}
 			}
 		}
@@ -454,7 +477,7 @@ private void CaptureBaseline()
 				if (Enum.TryParse<globalStats.globalUpgradeSet>(kv.Key, out var u))
 					globalStats.globalUpgradeDict[u] = additive
 						? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>())
-						: Math.Max(globalStats.globalUpgradeDict[u], kv.Value.Value<double>());
+						: kv.Value.Value<double>();
 	}
 
 	private void ApplyAbilities(JObject payload)
