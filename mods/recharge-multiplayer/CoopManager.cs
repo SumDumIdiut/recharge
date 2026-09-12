@@ -20,6 +20,7 @@ internal class CoopManager
 	private readonly List<courseScript> _courses = new List<courseScript>();
 	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
 	private readonly List<(courseScript course, int originalBaseReward)> _scaledRewards = new List<(courseScript, int)>();
+	private readonly List<(upgradeBox box, double originalBaseCost)> _scaledUpgradeCosts = new List<(upgradeBox, double)>();
 
 	// courseScript.baseReward is private - reflection is the established pattern in
 	// this codebase for touching a real base-game field with no public accessor.
@@ -76,51 +77,30 @@ internal class CoopManager
 			ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
 		}
 
-		// After Load/ResetEconomyToZero (both can touch reward/baseReward) so this
-		// runs last and the displayed reward is immediately correct on every client -
-		// every player runs this locally with the same host-broadcast playerCount,
-		// so the base reward is consistent everywhere, not just wherever it was
-		// first computed.
+		// After Load/ResetEconomyToZero (both can touch reward/baseReward), so every
+		// client ends up with the same host-broadcast-playerCount-scaled values.
 		ScaleBaseRewards(playerCount);
+		ScaleMovementUpgradeCosts(playerCount);
 
 		CaptureBaseline();
 	}
 
-	// Begin() can run just before a Base Game/B-Side scene load (the "start"
-	// handler calls TryStartModeEconomy() before deciding whether to change
-	// scene) - the instant that new scene loads, every Movement/courseScript
-	// captured above gets destroyed by Unity, and nothing else ever re-points
-	// this at the new scene's objects. Left unrefreshed, every sync comparison
-	// (BuildDelta/ApplyDelta/ApplyFullSync) silently no-ops against dead
-	// references - currency, upgrades, abilities, all of it. Called from
-	// HostPanelController the moment it re-finds its own local player post-load.
+	// A scene load after Begin() destroys every Movement/courseScript captured
+	// above - called from HostPanelController once it re-finds the local player,
+	// so sync comparisons stop targeting dead references.
 	public void RefreshSceneReferences(Movement localMovement)
 	{
 		if (!Active) return;
 		_localMovement = localMovement;
-		// A freshly spawned Movement initializes its own ability fields from the
-		// player's REAL single-player save, not this Coop session's progress -
-		// if that real save has an ability unlocked, the new instance starts
-		// with it true, and since ApplyAbilities OR-merges (an ability can only
-		// ever turn on, never off, by design - see its own comment), that leaked
-		// true then spreads to the whole lobby the next time it gets synced.
-		// Reapply this session's own tracked state instead of trusting whatever
-		// the new instance came up with.
+		// A freshly spawned Movement starts from the real single-player save, not
+		// this session's progress - reapply the session's own tracked state.
 		_localMovement.dashUnlocked = _lastDash;
 		_localMovement.wallJumpUnlocked = _lastWallJump;
 		_localMovement.doubleJumpUnlocked = _lastDoubleJump;
 		_localMovement.blockSwapUnlocked = _lastBlockSwap;
 		_courses.Clear();
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
-		// Same leak, same fix, for course-level upgrades - a freshly loaded
-		// courseScript (new scene) starts from its own real-save state, not
-		// this Coop session's accumulated purchases, and nothing else ever put
-		// the session's own tracked progress back onto it. Without this,
-		// "upgrades aren't matched" after a scene transition: the sync
-		// mechanism (BuildCoursesDelta/ApplyCoursesPayload) is correctly
-		// targeting the new instance again (thanks to the _courses refresh
-		// above), but the instance itself silently reverted to a different
-		// starting point first.
+		// Same leak, same fix, for course-level upgrades and TimesUsed.
 		foreach (var course in _courses)
 		{
 			if (course?.localUpgradesScript == null) continue;
@@ -141,9 +121,33 @@ internal class CoopManager
 		}
 		DisableClones();
 		ScaleBaseRewards(_playerCount);
+		ScaleMovementUpgradeCosts(_playerCount);
 	}
 
 	private static List<upgradeBox> GetUpgradeBoxes(courseScript course) => ModeSaveFile.GetUpgradeBoxes(course);
+
+	// Movement-type boxes only (Wall Jump/Double Jump/Dash/Block Swap/Dash Swap),
+	// not endDemo and not any regular localUpgrade/globalUpgrade box. Scale
+	// baseUpgradeCost, not upgradeCost - CalcBoxCost() derives the latter from it.
+	private void ScaleMovementUpgradeCosts(int playerCount)
+	{
+		_scaledUpgradeCosts.Clear();
+		foreach (var course in _courses)
+		{
+			if (course == null) continue;
+			foreach (var box in GetUpgradeBoxes(course))
+			{
+				if (box == null) continue;
+				if (box.upgrade != localUpgrades.localUpgradeSet.Movement) continue;
+				if (box.movementUpgrade == upgradeBox.movementUpgrades.endDemo) continue;
+
+				var original = box.baseUpgradeCost;
+				_scaledUpgradeCosts.Add((box, original));
+				box.baseUpgradeCost = original / 5.0 * playerCount;
+				box.CalcBoxCost();
+			}
+		}
+	}
 
 	private void ScaleBaseRewards(int playerCount)
 	{
@@ -213,14 +217,9 @@ private void CaptureBaseline()
 			var delta = BuildDelta();
 			if (delta != null) sendGameMessage(delta);
 
-			// BuildDelta only sends abilities on local change, one-shot - if that one
-			// coopDelta gets dropped by the relay (documented elsewhere in this mod:
-			// it drops a game_msg for anyone not in its member set at that exact
-			// instant), the purchase never reaches the host and stays permanently
-			// local to whoever bought it. Periodically resend the full current
-			// ability state regardless of change - safe now that ApplyAbilities
-			// OR-merges instead of overwriting, so a resend (or a guest's still-false
-			// flag for something someone else bought) can never regress anyone.
+			// BuildDelta sends abilities only once on change, and a dropped coopDelta
+			// loses it permanently - periodically resend full state instead; safe
+			// since ApplyAbilities OR-merges rather than overwriting.
 			_abilityResendAccumulator += unscaledDt;
 			if (_abilityResendAccumulator >= AbilityResendInterval)
 			{
@@ -332,9 +331,7 @@ private void CaptureBaseline()
 				{
 					if (!Enum.TryParse<global::localUpgrades.localUpgradeSet>(kv.Key, out var key)) continue;
 					var current = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
-					// same stale-full-sync race as globalUpgradeDict above - local upgrade
-					// levels only go up during a round, so never let an older incoming
-					// full sync erase a purchase this client already applied locally
+					// Same stale-full-sync race as globalUpgradeDict below.
 					course.localUpgradesScript.localUpgradeDict[key] = additive ? Math.Max(0, current + kv.Value.Value<double>()) : Math.Max(current, kv.Value.Value<double>());
 				}
 			}
@@ -443,12 +440,9 @@ private void CaptureBaseline()
 		if (payload["upgrades"] is JObject upgrades)
 			foreach (var kv in upgrades)
 				if (Enum.TryParse<globalStats.globalUpgradeSet>(kv.Key, out var u))
-					// A periodic full sync (host, every 3s) can be stale relative to a
-					// purchase this client already applied locally moments ago - it races
-					// against that purchase's delta reaching the host first. Upgrade levels
-					// only ever go up during a round, so take whichever is higher instead
-					// of blindly trusting the (possibly older) incoming value - otherwise
-					// a client's own just-bought upgrade can get silently erased.
+					// A periodic full sync can be stale relative to a purchase this client
+					// just applied locally - take whichever value is higher instead of
+					// blindly trusting the incoming one (upgrade levels only ever go up).
 					globalStats.globalUpgradeDict[u] = additive
 						? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>())
 						: Math.Max(globalStats.globalUpgradeDict[u], kv.Value.Value<double>());
@@ -457,10 +451,8 @@ private void CaptureBaseline()
 	private void ApplyAbilities(JObject payload)
 	{
 		if (!(payload["abilities"] is JObject abilities) || _localMovement == null) return;
-		// OR, never overwrite - abilities only ever get unlocked during a round, never
-		// revoked, so a stale "false" (from a client that hasn't caught up to someone
-		// else's purchase yet, or a delayed/reordered message) must never be able to
-		// un-set an ability another client already correctly has.
+		// OR, never overwrite - abilities only ever get unlocked, never revoked, so a
+		// stale "false" must never un-set one another client already has.
 		if (abilities["dash"] != null) _localMovement.dashUnlocked |= abilities["dash"].Value<bool>();
 		if (abilities["wallJump"] != null) _localMovement.wallJumpUnlocked |= abilities["wallJump"].Value<bool>();
 		if (abilities["doubleJump"] != null) _localMovement.doubleJumpUnlocked |= abilities["doubleJump"].Value<bool>();
@@ -494,13 +486,17 @@ private void CaptureBaseline()
 		foreach (var c in _disabledClones) if (c != null) { c.gameObject.SetActive(true); c.enabled = true; }
 		_disabledClones.Clear();
 
-		// baseReward isn't part of the save format (only reward/rewardTier are), so
-		// ModeSaveFile.Restore() below never touches it - without this, the scaled
-		// value would silently leak into the real single-player save the next time
-		// the periodic UpdateReward() recomputes reward from it.
+		// baseReward isn't part of the save format, so Restore() below never touches
+		// it - without this the scaled value leaks into the real single-player save.
 		foreach (var (course, original) in _scaledRewards)
 			if (course != null) BaseRewardField.SetValue(course, original);
 		_scaledRewards.Clear();
+
+		// baseUpgradeCost isn't saved either (see ScaleMovementUpgradeCosts) - same
+		// leak risk into the real single-player save without an explicit restore.
+		foreach (var (box, original) in _scaledUpgradeCosts)
+			if (box != null) { box.baseUpgradeCost = original; box.CalcBoxCost(); }
+		_scaledUpgradeCosts.Clear();
 
 		ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 		_courses.Clear();
