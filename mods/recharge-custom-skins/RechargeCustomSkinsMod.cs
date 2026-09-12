@@ -38,10 +38,9 @@ namespace RechargeCustomSkins
 
             var title = panel.transform.Find("Settings") ?? (panel.transform.childCount > 0 ? panel.transform.GetChild(0) : null);
             var font = title != null ? title.GetComponent<TMP_Text>()?.font : null;
-            var buttonTemplate = menu.mainBitPublic.transform.Find("Settings").gameObject;
 
             var ui = panel.AddComponent<SkinPanelUI>();
-            ui.Build(panel, font, buttonTemplate, _controller);
+            ui.Build(panel, font, _controller);
         }
 
         public void OnUnload() { }
