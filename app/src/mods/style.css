@@ -65,6 +65,8 @@
 
 .browse-card-info { min-width: 0; }
 
+.browse-card-name-protected, .mod-detail-name-protected { color: var(--green); }
+
 .mod-detail-image {
   width: 100%;
   max-width: 640px;

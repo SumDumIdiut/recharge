@@ -4,10 +4,11 @@
 // actual download+install this tab's Install button triggers.
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
-// recharge.maps is infrastructure the Map Editor/Maps tabs always need, not an
-// optional feature a user picks - it stays fully installed and running, just
-// never shown here so it doesn't look like a toggleable, ordinary mod.
-const HIDDEN_MOD_IDS = new Set(['recharge.maps']);
+// recharge.maps is infrastructure the Maps tab always needs, not an optional
+// feature a user picks - it shows up in Installed (so it's not a mystery
+// what's running), styled distinctly and without an uninstall option, but
+// never appears in Browse/the hub catalog since it isn't something to install.
+const PROTECTED_MOD_IDS = new Set(['recharge.maps']);
 
 let currentSubtab = 'installed';
 let searchTerm = '';
@@ -57,16 +58,18 @@ async function loadCatalog() {
   try {
     const res = await fetch(`${HUB_BASE}/api/mods`);
     const rows = await res.json();
-    catalog = rows.map((row) => ({
-      id: row.id,
-      modId: row.modId || null,
-      name: row.name,
-      author: row.author,
-      version: row.version || '1.0.0',
-      description: row.description,
-      image: row.gallery?.length ? `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
-      dependencies: [],
-    }));
+    catalog = rows
+      .map((row) => ({
+        id: row.id,
+        modId: row.modId || null,
+        name: row.name,
+        author: row.author,
+        version: row.version || '1.0.0',
+        description: row.description,
+        image: row.gallery?.length ? `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
+        dependencies: [],
+      }))
+      .filter((c) => !PROTECTED_MOD_IDS.has(c.modId));
     catalogError = false;
   } catch (err) {
     catalog = [];
@@ -89,18 +92,19 @@ function renderInstalled() {
     .map((m) => {
       const entry = catalog.find((c) => c.modId === m.id);
       const hasUpdate = entry && isNewerVersion(entry.version, m.version);
+      const protectedMod = PROTECTED_MOD_IDS.has(m.id);
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
       ${thumb(entry, hasUpdate ? `<button class="browse-card-badge browse-card-badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
-        <div class="browse-card-name">${escapeHtml(m.displayName)}</div>
+        <div class="browse-card-name${protectedMod ? ' browse-card-name-protected' : ''}">${escapeHtml(m.displayName)}</div>
         <div class="browse-card-meta">${m.author ? escapeHtml(m.author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="mod-update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
       </div>
       <div class="browse-card-actions">
         <span class="browse-card-meta">${m.enabled ? 'Enabled' : 'Disabled'}</span>
         <div class="browse-card-actions-right">
           <div class="mod-toggle ${m.enabled ? 'on' : ''}" data-id="${escapeHtml(m.id)}" onclick="event.stopPropagation(); window.__modToggle(this)"></div>
-          <button class="browse-card-icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__modConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(m.displayName).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          ${protectedMod ? '' : `<button class="browse-card-icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__modConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(m.displayName).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>`}
         </div>
       </div>
     </div>`;
@@ -313,16 +317,18 @@ window.__modOpenDetail = function (id) {
   const name = entry ? entry.name : installedMod.displayName;
   const author = entry ? entry.author : installedMod.author;
   const version = entry ? entry.version : installedMod.version;
+  const description = entry?.description || installedMod?.description;
   const deps = installedMod?.dependencies?.length ? installedMod.dependencies : entry?.dependencies;
+  const protectedMod = installed && PROTECTED_MOD_IDS.has(realId);
 
   document.getElementById('mods-detail').innerHTML = `
     <button class="crumb-back" id="mods-detail-back" onclick="window.__modCloseDetail()" style="margin-bottom:20px;">&lt; Mods</button>
     ${entry?.image ? `<img class="mod-detail-image" src="${escapeHtml(entry.image)}" alt="" />` : ''}
     <div class="mod-detail-header">
-      <div class="mod-detail-name">${escapeHtml(name)}</div>
+      <div class="mod-detail-name${protectedMod ? ' mod-detail-name-protected' : ''}">${escapeHtml(name)}</div>
       <div class="mod-detail-meta">${author ? escapeHtml(author) + ' \u00b7 ' : ''}v${escapeHtml(version)}</div>
     </div>
-    ${entry?.description ? `<div class="mod-detail-desc">${escapeHtml(entry.description)}</div>` : ''}
+    ${description ? `<div class="mod-detail-desc">${escapeHtml(description)}</div>` : ''}
     ${deps?.length ? `<div class="mod-detail-deps">Requires: ${deps.map(escapeHtml).join(', ')}</div>` : ''}
     <div class="mod-detail-actions">
       ${
@@ -331,7 +337,7 @@ window.__modOpenDetail = function (id) {
                <span class="browse-card-meta">${installedMod.enabled ? 'Enabled' : 'Disabled'}</span>
                <div class="mod-toggle ${installedMod.enabled ? 'on' : ''}" id="mods-detail-toggle" data-id="${escapeHtml(realId)}" onclick="window.__modToggle(this)"></div>
              </div>
-             <button class="btn mod-detail-uninstall" onclick="window.__modConfirmUninstall('${escapeHtml(realId)}', '${escapeHtml(name).replace(/'/g, "\\'")}')">Uninstall</button>`
+             ${protectedMod ? '' : `<button class="btn mod-detail-uninstall" onclick="window.__modConfirmUninstall('${escapeHtml(realId)}', '${escapeHtml(name).replace(/'/g, "\\'")}')">Uninstall</button>`}`
           : entry
             ? `<button class="btn btn-primary" onclick="window.__modInstall('${escapeHtml(hubId)}', this)">Install</button>`
             : ''
@@ -374,8 +380,7 @@ window.__modCloseDetail = function () {
 
 async function refresh() {
   const { invoke } = window.__TAURI__.core;
-  const all = await invoke('list_installed_mods');
-  installedCache = all.filter((m) => !HIDDEN_MOD_IDS.has(m.id));
+  installedCache = await invoke('list_installed_mods');
   render();
 }
 
