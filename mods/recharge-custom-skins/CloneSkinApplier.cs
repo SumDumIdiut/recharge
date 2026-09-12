@@ -6,53 +6,66 @@ namespace RechargeCustomSkins
 {
     internal static class CloneSkinApplier
     {
-        // clonesScript.cloneSprites is real save data - courseScript.save()
-        // looks each entry up in spriteLookup.lookup to serialize it, so it
-        // must always hold real vanilla Sprite references or autosave throws
-        // a KeyNotFoundException and silently aborts. clonesScript's own
-        // Update() assigns activeSpriteRenderers[k].sprite = cloneSprites[n]
-        // every frame - overwriting that same renderer field afterward (from
-        // LateUpdate, which Unity always runs after Update) reskins the
-        // visible ghosts without ever touching the array that gets saved.
+        // cloneSprites is real save data (courseScript.save() looks each
+        // entry up in spriteLookup.lookup) and must stay untouched or
+        // autosave throws. Reskin activeSpriteRenderers instead, from
+        // LateUpdate (after clonesScript.Update() assigns them each frame).
         private static readonly FieldInfo ActiveSpriteRenderersField =
             typeof(clonesScript).GetField("activeSpriteRenderers", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static bool _loggedOnce;
+        private static bool _loggedMissingField;
+        private static int _lastLoggedStatsKey = -1;
 
-        public static void Apply(Sprite skinSprite)
+        public static void Apply(SkinController controller, SkinRuntime runtime)
         {
-            if (skinSprite == null) return;
+            if (runtime == null) return;
             if (ActiveSpriteRenderersField == null)
             {
-                if (!_loggedOnce) { Debug.LogWarning("[CustomSkins] clonesScript.activeSpriteRenderers field not found via reflection"); _loggedOnce = true; }
+                if (!_loggedMissingField) { Debug.LogWarning("[CustomSkins] clonesScript.activeSpriteRenderers field not found via reflection"); _loggedMissingField = true; }
                 return;
             }
 
             var cloneScripts = Object.FindObjectsByType<clonesScript>(FindObjectsInactive.Include, FindObjectsSortMode.None);
             int totalRenderers = 0;
+            int matched = 0;
             foreach (var cs in cloneScripts)
             {
-                if (ActiveSpriteRenderersField.GetValue(cs) is List<SpriteRenderer> renderers)
+                if (!(ActiveSpriteRenderersField.GetValue(cs) is List<SpriteRenderer> renderers)) continue;
+                foreach (var sr in renderers)
                 {
-                    totalRenderers += renderers.Count;
-                    foreach (var sr in renderers)
+                    if (sr == null) continue;
+                    totalRenderers++;
+                    if (runtime.IsSheet)
                     {
-                        if (sr != null) sr.sprite = skinSprite;
+                        if (controller.TryGetVanillaRowFrame(sr.sprite, sr.flipY, out var m))
+                        {
+                            sr.sprite = controller.GetCustomCellSprite(runtime, m.row, m.frame);
+                            // The matched cell's real orientation is already
+                            // baked into the custom texture - cancel any live
+                            // flip so it isn't flipped a second time.
+                            if (m.flipY) sr.flipY = false;
+                            matched++;
+                        }
+                    }
+                    else if (runtime.FlatSprite != null)
+                    {
+                        sr.sprite = runtime.FlatSprite;
+                        matched++;
                     }
                 }
             }
 
-            if (!_loggedOnce && cloneScripts.Length > 0)
+            int statsKey = cloneScripts.Length * 100000 + totalRenderers * 1000 + matched;
+            if (statsKey != _lastLoggedStatsKey)
             {
-                Debug.Log("[CustomSkins] CloneSkinApplier.Apply: found " + cloneScripts.Length + " clonesScript instance(s), " + totalRenderers + " active clone renderer(s) skinned");
-                _loggedOnce = true;
+                _lastLoggedStatsKey = statsKey;
+                Debug.Log("[CustomSkins] CloneSkinApplier.Apply: " + cloneScripts.Length + " clonesScript instance(s), " + totalRenderers + " active renderer(s), " + matched + " matched+skinned");
             }
         }
 
         public static void RestoreVanilla()
         {
-            // No-op: cloneSprites was never modified, and clonesScript's own
-            // Update() reassigns each active clone's real sprite every frame.
+            // No-op: cloneSprites was never modified.
         }
     }
 }

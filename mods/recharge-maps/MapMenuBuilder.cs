@@ -226,6 +226,7 @@ internal static class MapMenuBuilder
             var slotGo = UnityEngine.Object.Instantiate(startGame.gameObject, menu.mainBitPublic.transform);
             slotGo.name = "MapsPickerSlot" + i;
             slotGo.SetActive(false);
+            PauseMenuHelper.CopyButtonTextColor(startGame.gameObject, slotGo);
             state.Slots[i] = slotGo;
         }
 
@@ -240,6 +241,7 @@ internal static class MapMenuBuilder
         prevRt.anchoredPosition = new Vector2(-110f, 0f);
         prevRt.sizeDelta = new Vector2(60f, prevRt.sizeDelta.y);
         SetButtonLabel(prevGo, "<");
+        PauseMenuHelper.CopyButtonTextColor(startGame.gameObject, prevGo);
         PauseMenuHelper.ScaleButtonFontSize(prevGo, 1.6f);
         var prevBtn = prevGo.GetComponent<Button>();
         prevBtn.onClick = new Button.ButtonClickedEvent();
@@ -251,6 +253,7 @@ internal static class MapMenuBuilder
         nextRt.anchoredPosition = new Vector2(110f, 0f);
         nextRt.sizeDelta = new Vector2(60f, nextRt.sizeDelta.y);
         SetButtonLabel(nextGo, ">");
+        PauseMenuHelper.CopyButtonTextColor(startGame.gameObject, nextGo);
         PauseMenuHelper.ScaleButtonFontSize(nextGo, 1.6f);
         var nextBtn = nextGo.GetComponent<Button>();
         nextBtn.onClick = new Button.ButtonClickedEvent();
@@ -261,12 +264,14 @@ internal static class MapMenuBuilder
         var counterRt = (RectTransform)counterGo.transform;
         counterRt.anchoredPosition = Vector2.zero;
         counterRt.sizeDelta = new Vector2(100f, counterRt.sizeDelta.y);
+        PauseMenuHelper.CopyButtonTextColor(startGame.gameObject, counterGo);
         var counterBtn = counterGo.GetComponent<Button>();
         if (counterBtn != null) counterBtn.enabled = false;
 
         var backGo = UnityEngine.Object.Instantiate(startGame.gameObject, menu.mainBitPublic.transform);
         backGo.name = "MapsPickerBack";
         SetButtonLabel(backGo, "Back");
+        PauseMenuHelper.CopyButtonTextColor(startGame.gameObject, backGo);
         var backBtn = backGo.GetComponent<Button>();
         backBtn.onClick = new Button.ButtonClickedEvent();
         backBtn.onClick.AddListener(state.Close);

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
-using Recharge.ModApi;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace RechargeCustomSkins
@@ -9,7 +9,6 @@ namespace RechargeCustomSkins
     internal class SkinPanelUI : MonoBehaviour
     {
         private SkinController _controller;
-        private GameObject _buttonTemplate;
         private TMP_FontAsset _font;
 
         private readonly List<GameObject> _skinRows = new List<GameObject>();
@@ -21,66 +20,89 @@ namespace RechargeCustomSkins
         private const int PageSize = 4;
         private int _page;
 
-        public void Build(GameObject panel, TMP_FontAsset font, GameObject buttonTemplate, SkinController controller)
+        private Color _orange = new Color(1f, 0.5f, 0f, 1f);
+        private static readonly Color Green = new Color(0.6f, 1f, 0.6f, 1f);
+
+        public void Build(GameObject panel, TMP_FontAsset font, SkinController controller)
         {
             _root = panel.transform;
             _font = font;
-            _buttonTemplate = buttonTemplate;
             _controller = controller;
 
             foreach (var group in panel.GetComponentsInChildren<CanvasGroup>(true)) group.alpha = 1f;
             foreach (var anim in panel.GetComponentsInChildren<Animator>(true)) Object.Destroy(anim);
 
-            CreateLabel(_root, "SkinsHeader", new Vector2(0, 170), new Vector2(420, 30), "Choose a skin", 23, TextAlignmentOptions.Center);
+            var panelRt = panel.GetComponent<RectTransform>();
+            if (panelRt != null) panelRt.sizeDelta = new Vector2(620f, 500f);
+
+            var panelImg = panel.GetComponent<Image>();
+            if (panelImg != null && panelImg.sprite != null)
+            {
+                _boxSprite = panelImg.sprite;
+                _boxImageType = panelImg.type;
+            }
+
+            // Close/Back button is never touched - any change to it (position
+            // included) makes it stop rendering.
+            var titleGo = _root.Find("Settings")?.gameObject;
+            var titleRt = titleGo != null ? titleGo.GetComponent<RectTransform>() : null;
+            if (titleRt != null) titleRt.anchoredPosition += new Vector2(15f, 5f);
+
+            CreateDivider(_root, new Vector2(0, 195), 600);
+
+            var header = CreateLabel(_root, "SkinsHeader", new Vector2(0, 150), new Vector2(560, 26), "Choose a skin");
+            header.fontSize = 20;
+            header.color = new Color(1f, 1f, 1f, 0.65f);
+            header.alignment = TextAlignmentOptions.MidlineLeft;
+
+            CreateBox(_root, "SkinsBox", new Vector2(0, 65), new Vector2(580, 190), 2.5f);
 
             for (int i = 0; i < PageSize; i++)
             {
                 int slot = i;
-                var row = CloneButton(_root, "SkinRow" + i, new Vector2(0, 116 - slot * 50), new Vector2(400, 42), null, 22f);
-                var button = row.GetComponent<Button>();
-                button.onClick.AddListener(() => OnSkinRowClicked(slot));
+                var row = CreateButton(_root, "SkinRow" + i, new Vector2(0, 128 - slot * 38), new Vector2(540, 32), "", 18f, Color.white, TextAlignmentOptions.Center, false);
+                row.GetComponent<Button>().onClick.AddListener(() => OnSkinRowClicked(slot));
                 _skinRows.Add(row);
             }
 
-            var prevGo = CloneButton(_root, "SkinsPrev", new Vector2(-155, -70), new Vector2(60, 38), "<", 21f);
+            var prevGo = CreateButton(_root, "SkinsPrev", new Vector2(-90, -45), new Vector2(80, 28), "< Prev", 16f, _orange, TextAlignmentOptions.Right, false);
             prevGo.GetComponent<Button>().onClick.AddListener(() => ChangePage(-1));
-            var nextGo = CloneButton(_root, "SkinsNext", new Vector2(155, -70), new Vector2(60, 38), ">", 21f);
+            var nextGo = CreateButton(_root, "SkinsNext", new Vector2(90, -45), new Vector2(80, 28), "Next >", 16f, _orange, TextAlignmentOptions.Left, false);
             nextGo.GetComponent<Button>().onClick.AddListener(() => ChangePage(1));
-            _pageLabel = CreateLabel(_root, "SkinsPage", new Vector2(0, -70), new Vector2(160, 30), "1/1", 19, TextAlignmentOptions.Center);
+            _pageLabel = CreateLabel(_root, "SkinsPage", new Vector2(0, -45), new Vector2(70, 26), "1/1");
+            _pageLabel.fontSize = 15;
 
-            CreateDivider(_root, new Vector2(0, -100), 440);
+            var exportHeader = CreateLabel(_root, "ExportHeader", new Vector2(0, -82), new Vector2(560, 26), "Export skin template");
+            exportHeader.fontSize = 20;
+            exportHeader.color = new Color(1f, 1f, 1f, 0.65f);
+            exportHeader.alignment = TextAlignmentOptions.MidlineLeft;
 
-            CreateLabel(_root, "ExportHeader", new Vector2(0, -126), new Vector2(420, 26), "Export skin template", 21, TextAlignmentOptions.Center);
-
-            _pathLabel = CreateLabel(_root, "ExportPath", new Vector2(0, -154), new Vector2(430, 24), "", 15, TextAlignmentOptions.Center);
+            CreateBox(_root, "ExportBox", new Vector2(0, -112), new Vector2(580, 34), 10f);
+            _pathLabel = CreateLabel(_root, "ExportPath", new Vector2(0, -112), new Vector2(560, 26), "");
+            _pathLabel.fontSize = 15;
+            _pathLabel.alignment = TextAlignmentOptions.MidlineLeft;
             _pathLabel.enableWordWrapping = false;
             _pathLabel.overflowMode = TextOverflowModes.Ellipsis;
             _pathLabel.color = new Color(0.85f, 0.85f, 0.85f, 1f);
 
-            var browseGo = CloneButton(_root, "Browse", new Vector2(-110, -188), new Vector2(200, 44), "Browse...", 20f);
+            var browseGo = CreateButton(_root, "Browse", new Vector2(-150, -155), new Vector2(180, 30), "Browse...", 17f, _orange, TextAlignmentOptions.Center, false);
             browseGo.GetComponent<Button>().onClick.AddListener(OnBrowseClicked);
-            var exportGo = CloneButton(_root, "ExportNow", new Vector2(110, -188), new Vector2(200, 44), "Export Template", 20f);
+            var exportGo = CreateButton(_root, "ExportNow", new Vector2(150, -155), new Vector2(180, 30), "Export", 17f, _orange, TextAlignmentOptions.Center, false);
             exportGo.GetComponent<Button>().onClick.AddListener(OnExportClicked);
 
-            _statusLabel = CreateLabel(_root, "ExportStatus", new Vector2(35, -222), new Vector2(300, 24), "", 15, TextAlignmentOptions.Center);
+            _statusLabel = CreateLabel(_root, "ExportStatus", new Vector2(0, -188), new Vector2(400, 24), "");
+            _statusLabel.fontSize = 14;
             _statusLabel.enableWordWrapping = false;
             _statusLabel.overflowMode = TextOverflowModes.Ellipsis;
-            _statusLabel.color = new Color(0.6f, 1f, 0.6f, 1f);
-
-            var backGo = _root.Find("Settings")?.Find("Close")?.gameObject;
-            if (backGo != null)
-            {
-                var backRt = (RectTransform)backGo.transform;
-                backRt.anchoredPosition = new Vector2(-175, -222);
-                backRt.sizeDelta = new Vector2(100, 36);
-                var backTmp = backGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-                if (backTmp != null) { backTmp.enableAutoSizing = false; backTmp.fontSize = 19f; }
-            }
+            _statusLabel.color = Green;
 
             Refresh();
         }
 
         private void OnEnable() => Refresh();
+
+        private const float RowSpacing = 38f;
+        private const float BoxCenterY = 65f;
 
         private void Refresh()
         {
@@ -90,22 +112,29 @@ namespace RechargeCustomSkins
             if (_page < 0) _page = 0;
             _pageLabel.text = (_page + 1) + "/" + totalPages;
 
+            int startIdx = _page * PageSize;
+            int count = Mathf.Clamp(names.Count - startIdx, 0, PageSize);
+            float blockTopY = BoxCenterY + (count - 1) * RowSpacing / 2f;
+
             for (int i = 0; i < PageSize; i++)
             {
-                int displayIndex = _page * PageSize + i;
                 var row = _skinRows[i];
-                if (displayIndex >= names.Count)
+                if (i >= count)
                 {
                     row.SetActive(false);
                     continue;
                 }
                 row.SetActive(true);
+                var rt = (RectTransform)row.transform;
+                rt.anchoredPosition = new Vector2(rt.anchoredPosition.x, blockTopY - i * RowSpacing);
+
+                int displayIndex = startIdx + i;
                 bool isCurrent = displayIndex == _controller.CurrentIndex + 1;
                 var label = row.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
                 if (label != null)
                 {
                     label.text = (isCurrent ? "> " : "") + names[displayIndex];
-                    label.color = isCurrent ? new Color(0.6f, 1f, 0.6f, 1f) : Color.white;
+                    label.color = isCurrent ? Green : Color.white;
                 }
             }
 
@@ -141,43 +170,78 @@ namespace RechargeCustomSkins
         {
             bool ok = _controller.ExportTemplate(out var message);
             _statusLabel.text = message;
-            _statusLabel.color = ok ? new Color(0.6f, 1f, 0.6f, 1f) : new Color(1f, 0.6f, 0.6f, 1f);
+            _statusLabel.color = ok ? Green : new Color(1f, 0.6f, 0.6f, 1f);
         }
 
-        private GameObject CloneButton(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string labelOverride = null, float fontSize = 20f)
+        private GameObject CreateButton(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string label, float fontSize, Color color, TextAlignmentOptions align, bool showBox)
         {
-            var go = Object.Instantiate(_buttonTemplate, parent);
-            go.name = name;
-            go.SetActive(true);
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
             var rt = (RectTransform)go.transform;
             rt.anchoredPosition = anchoredPos;
             rt.sizeDelta = size;
 
-            foreach (var loc in go.GetComponentsInChildren<UnityEngine.Localization.Components.LocalizeStringEvent>(true))
-                Object.DestroyImmediate(loc);
+            var img = go.AddComponent<Image>();
+            var baseColor = showBox ? new Color(1f, 1f, 1f, 0.05f) : new Color(0f, 0f, 0f, 0f);
+            img.color = baseColor;
 
-            var label = go.transform.Find("Text (TMP)");
-            if (label != null)
-            {
-                var tmp = label.GetComponent<TMP_Text>();
-                if (tmp != null)
-                {
-                    tmp.text = labelOverride ?? name;
-                    tmp.enableAutoSizing = false;
-                    tmp.fontSize = fontSize;
-                    tmp.enableWordWrapping = false;
-                    tmp.overflowMode = TextOverflowModes.Ellipsis;
-                }
-            }
+            var btn = go.AddComponent<Button>();
+            btn.targetGraphic = img;
 
-            PauseMenuHelper.CopyButtonTextColor(_buttonTemplate, go);
+            var trigger = go.AddComponent<EventTrigger>();
+            var enterEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerEnter };
+            enterEntry.callback.AddListener(_ => img.color = new Color(1f, 1f, 1f, 0.15f));
+            trigger.triggers.Add(enterEntry);
+            var exitEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerExit };
+            exitEntry.callback.AddListener(_ => img.color = baseColor);
+            trigger.triggers.Add(exitEntry);
 
-            var button = go.GetComponent<Button>();
-            button.onClick = new Button.ButtonClickedEvent();
+            var textGo = new GameObject("Text (TMP)", typeof(RectTransform));
+            textGo.transform.SetParent(go.transform, false);
+            var textRt = (RectTransform)textGo.transform;
+            textRt.anchorMin = Vector2.zero;
+            textRt.anchorMax = Vector2.one;
+            textRt.offsetMin = align == TextAlignmentOptions.Left ? new Vector2(10, 0) : Vector2.zero;
+            textRt.offsetMax = align == TextAlignmentOptions.Right ? new Vector2(-10, 0) : Vector2.zero;
+            var tmp = textGo.AddComponent<TextMeshProUGUI>();
+            tmp.font = _font;
+            tmp.fontSize = fontSize;
+            tmp.alignment = align;
+            tmp.color = color;
+            tmp.text = label;
+            tmp.enableWordWrapping = false;
+            tmp.overflowMode = TextOverflowModes.Ellipsis;
+
             return go;
         }
 
-        private TMP_Text CreateLabel(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string text, float fontSize, TextAlignmentOptions align)
+        private Sprite _boxSprite;
+        private Image.Type _boxImageType;
+
+        private GameObject CreateBox(Transform parent, string name, Vector2 anchoredPos, Vector2 size, float pixelsPerUnitMultiplier)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = anchoredPos;
+            rt.sizeDelta = size;
+            var img = go.AddComponent<Image>();
+            if (_boxSprite != null)
+            {
+                img.sprite = _boxSprite;
+                img.type = _boxImageType;
+                img.pixelsPerUnitMultiplier = pixelsPerUnitMultiplier;
+                img.color = Color.white; // no tint - crushes the sprite's border detail otherwise
+            }
+            else
+            {
+                img.color = new Color(0f, 0f, 0f, 0.25f);
+            }
+            img.raycastTarget = false;
+            return go;
+        }
+
+        private TMP_Text CreateLabel(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string text)
         {
             var go = new GameObject(name, typeof(RectTransform));
             go.transform.SetParent(parent, false);
@@ -186,8 +250,8 @@ namespace RechargeCustomSkins
             rt.sizeDelta = size;
             var tmp = go.AddComponent<TextMeshProUGUI>();
             tmp.font = _font;
-            tmp.fontSize = fontSize;
-            tmp.alignment = align;
+            tmp.fontSize = 24;
+            tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
             tmp.text = text;
             return tmp;

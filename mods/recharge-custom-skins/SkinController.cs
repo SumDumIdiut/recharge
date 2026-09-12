@@ -37,6 +37,11 @@ namespace RechargeCustomSkins
         private float _originalPixelsPerUnit = 100f;
         private string _exportDir;
 
+        private SkinGridLayout? _canonicalLayout;
+        // A sprite can be reused both normal and vertically mirrored across
+        // clips, so it maps to every (row, frame, flipY) triple that uses it.
+        private Dictionary<Sprite, List<(int row, int frame, bool flipY)>> _vanillaSpriteEntries;
+
         public void Init(IRechargeHost host)
         {
             _host = host;
@@ -52,10 +57,6 @@ namespace RechargeCustomSkins
             StartCoroutine(HeartbeatLog());
         }
 
-        // Periodic full-state dump, same rationale as RechargeMaps' own
-        // heartbeat: a continuous timeline in Player.log catches silent
-        // state drift (player lost, animator missing, wrong material) that
-        // one-off event logging would never surface.
         private System.Collections.IEnumerator HeartbeatLog()
         {
             var wait = new WaitForSeconds(10f);
@@ -169,13 +170,10 @@ namespace RechargeCustomSkins
             }
         }
 
-        // A skin file can be either a plain flat image (legacy/simple recolor)
-        // or a full multi-clip animation sheet exported by ExportTemplate and
-        // edited cell-by-cell. Detected by recomputing the exact grid the real
-        // game's own clips/frame-counts would produce and checking the file
-        // matches it (size + a couple of the magenta gutter pixels) - if it
-        // does, cells are sliced from those same live-computed coordinates
-        // instead of guessing at the image's layout.
+        // A skin file is either a flat image or a multi-clip sheet exported
+        // by ExportTemplate - detected by recomputing the real grid the
+        // game's clips/frame-counts would produce and matching it against
+        // the file (size + magenta gutter pixels).
         private SkinRuntime EnsureRuntime(int index)
         {
             var (fileName, bytes, runtime) = _skins[index];
@@ -193,7 +191,7 @@ namespace RechargeCustomSkins
 
             if (EnsurePlayer())
             {
-                var layout = TemplateExporter.ComputeGridLayout(_spriteRenderer.gameObject, _host);
+                var layout = GetCanonicalLayout();
                 if (layout.HasValue)
                 {
                     _host.Log("[CustomSkins] '" + fileName + "' live grid layout: " + layout.Value.TexW + "x" + layout.Value.TexH +
@@ -240,26 +238,90 @@ namespace RechargeCustomSkins
 
         private static bool ColorEquals(Color32 a, Color32 b) => a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 
+        // Grid shape is a property of the Animator, not any particular skin
+        // file, so it's computed once. Also builds the vanilla-sprite
+        // reverse lookup CloneSkinApplier needs.
+        private SkinGridLayout? GetCanonicalLayout()
+        {
+            if (_canonicalLayout.HasValue) return _canonicalLayout;
+            if (!EnsurePlayer()) return null;
+
+            var layout = TemplateExporter.ComputeGridLayout(_spriteRenderer.gameObject, _host);
+            if (!layout.HasValue) return null;
+            _canonicalLayout = layout;
+
+            _vanillaSpriteEntries = new Dictionary<Sprite, List<(int, int, bool)>>();
+            for (int r = 0; r < layout.Value.RowFrameSprites.Count; r++)
+            {
+                var frames = layout.Value.RowFrameSprites[r];
+                var flips = layout.Value.RowFrameFlipY[r];
+                for (int f = 0; f < frames.Count; f++)
+                {
+                    if (frames[f] == null) continue;
+                    if (!_vanillaSpriteEntries.TryGetValue(frames[f], out var list))
+                    {
+                        list = new List<(int, int, bool)>();
+                        _vanillaSpriteEntries[frames[f]] = list;
+                    }
+                    list.Add((r, f, flips[f]));
+                }
+            }
+            _host.Log("[CustomSkins] built vanilla sprite->(row,frame) map: " + _vanillaSpriteEntries.Count + " distinct sprite(s) across " + layout.Value.RowClips.Count + " clips");
+            return _canonicalLayout;
+        }
+
+        // Prefers an exact (sprite, flipY) match, falling back to any
+        // (row, frame) that uses this sprite at all.
+        public bool TryGetVanillaRowFrame(Sprite vanillaSprite, bool currentFlipY, out (int row, int frame, bool flipY) match)
+        {
+            GetCanonicalLayout();
+            match = default;
+            if (vanillaSprite == null || _vanillaSpriteEntries == null) return false;
+            if (!_vanillaSpriteEntries.TryGetValue(vanillaSprite, out var list) || list.Count == 0) return false;
+
+            foreach (var entry in list)
+            {
+                if (entry.Item3 == currentFlipY) { match = entry; return true; }
+            }
+            match = list[0];
+            return true;
+        }
+
+        public Sprite GetCustomCellSprite(SkinRuntime runtime, int row, int frame)
+        {
+            row = Mathf.Clamp(row, 0, runtime.Layout.RowClips.Count - 1);
+            int frameCount = Mathf.Max(1, runtime.Layout.RowClips[row].frameCount);
+            frame = Mathf.Clamp(frame, 0, frameCount - 1);
+
+            var key = (row, frame);
+            if (runtime.Cache.TryGetValue(key, out var cached)) return cached;
+
+            var layout = runtime.Layout;
+            int rowFromBottom = layout.Rows - 1 - row;
+            int cellOriginX = layout.Gutter + frame * (layout.CellW + layout.Gutter);
+            int cellOriginY = layout.Gutter + rowFromBottom * (layout.CellH + layout.Gutter);
+            var rect = new Rect(cellOriginX, cellOriginY, layout.CellW, layout.CellH);
+            var sprite = Sprite.Create(runtime.Texture, rect, new Vector2(0.5f, 0.5f), _originalPixelsPerUnit);
+            runtime.Cache[key] = sprite;
+            return sprite;
+        }
+
         private int _loggedRow = -1;
         private Animator _animator;
         private readonly List<AnimatorClipInfo> _clipInfoBuffer = new List<AnimatorClipInfo>();
 
         private Sprite PickSheetSprite(SkinRuntime runtime)
         {
-            // GetCurrentAnimatorClipInfo(layer) allocates a new array every
-            // call - this runs every LateUpdate while a sheet skin is active,
-            // so reuse a buffer via the List overload instead (a real,
-            // reproducible per-frame GC cost otherwise, confirmed as a lag
-            // spike source alongside the heartbeat's own tile enumeration).
+            // Runs every LateUpdate, so use the List overload to avoid the
+            // per-call array allocation GetCurrentAnimatorClipInfo(layer) does.
             if (_animator == null) _animator = _spriteRenderer.GetComponent<Animator>();
             var animator = _animator;
             int row = 0;
             _clipInfoBuffer.Clear();
             if (animator != null) animator.GetCurrentAnimatorClipInfo(0, _clipInfoBuffer);
 
-            // Idle (and similar) can be a blend tree reporting several
-            // simultaneously-weighted sub-clips - clipInfos[0] isn't
-            // guaranteed to be the dominant one, so pick by weight instead.
+            // A blend tree can report several weighted sub-clips at once, so
+            // pick the dominant one by weight rather than assuming index 0.
             AnimatorClipInfo? dominant = null;
             foreach (var ci in _clipInfoBuffer)
             {
@@ -282,17 +344,14 @@ namespace RechargeCustomSkins
             float frac = animator != null ? Mathf.Repeat(stateInfo.normalizedTime, 1f) : 0f;
             int frame = Mathf.Clamp(Mathf.FloorToInt(frac * frameCount), 0, frameCount - 1);
 
-            var key = (row, frame);
-            if (runtime.Cache.TryGetValue(key, out var cached)) return cached;
+            // This cell's orientation is already baked into the exported
+            // texture - cancel the live flipY or it flips a second time.
+            if (row < runtime.Layout.RowFrameFlipY.Count && frame < runtime.Layout.RowFrameFlipY[row].Count && runtime.Layout.RowFrameFlipY[row][frame])
+            {
+                _spriteRenderer.flipY = false;
+            }
 
-            var layout = runtime.Layout;
-            int rowFromBottom = layout.Rows - 1 - row;
-            int cellOriginX = layout.Gutter + frame * (layout.CellW + layout.Gutter);
-            int cellOriginY = layout.Gutter + rowFromBottom * (layout.CellH + layout.Gutter);
-            var rect = new Rect(cellOriginX, cellOriginY, layout.CellW, layout.CellH);
-            var sprite = Sprite.Create(runtime.Texture, rect, new Vector2(0.5f, 0.5f), _originalPixelsPerUnit);
-            runtime.Cache[key] = sprite;
-            return sprite;
+            return GetCustomCellSprite(runtime, row, frame);
         }
 
         private bool EnsurePlayer()
@@ -335,8 +394,8 @@ namespace RechargeCustomSkins
                 {
                     _spriteRenderer.sprite = sprite;
                     _spriteRenderer.material = GetFallbackMaterial();
-                    CloneSkinApplier.Apply(sprite);
                 }
+                CloneSkinApplier.Apply(this, runtime);
             }
             else
             {

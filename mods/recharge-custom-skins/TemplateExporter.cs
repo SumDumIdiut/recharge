@@ -16,6 +16,12 @@ namespace RechargeCustomSkins
         public int TexW;
         public int TexH;
         public List<(string name, int frameCount)> RowClips;
+        // The vanilla Sprite for each (row, frame) cell - doubles as a
+        // reverse lookup for CloneSkinApplier.
+        public List<List<Sprite>> RowFrameSprites;
+        // Some clips reuse one sprite mirrored vertically via
+        // SpriteRenderer.flipY rather than a separate asset.
+        public List<List<bool>> RowFrameFlipY;
     }
 
     internal static class TemplateExporter
@@ -27,10 +33,7 @@ namespace RechargeCustomSkins
             return ComposeTemplate(perClip, outputDir, host);
         }
 
-        // Same real-Animator sampling used by Export, factored out so a skin
-        // sheet re-imported later can recompute the exact same grid geometry
-        // (row order, cell size) without needing to detect it from pixels.
-        private static List<(string name, List<Sprite> frames)> CapturePerClipFrames(GameObject spriteChildTemplate, IRechargeHost host)
+        private static List<(string name, List<Sprite> frames, List<bool> flips)> CapturePerClipFrames(GameObject spriteChildTemplate, IRechargeHost host)
         {
             var templateAnimator = spriteChildTemplate.GetComponent<Animator>();
             if (templateAnimator == null || templateAnimator.runtimeAnimatorController == null)
@@ -56,10 +59,11 @@ namespace RechargeCustomSkins
             var cloneAnimator = clone.GetComponent<Animator>();
             var cloneRenderer = clone.GetComponent<SpriteRenderer>();
 
-            var perClip = new List<(string name, List<Sprite> frames)>();
+            var perClip = new List<(string name, List<Sprite> frames, List<bool> flips)>();
             foreach (var clip in clips)
             {
                 var frames = new List<Sprite>();
+                var flips = new List<bool>();
                 int steps = Mathf.Max(1, Mathf.RoundToInt(clip.length * clip.frameRate));
                 for (int i = 0; i <= steps; i++)
                 {
@@ -67,9 +71,14 @@ namespace RechargeCustomSkins
                     cloneAnimator.Play(clip.name, 0, t);
                     cloneAnimator.Update(0f);
                     var s = cloneRenderer.sprite;
-                    if (s != null && (frames.Count == 0 || frames[frames.Count - 1] != s)) frames.Add(s);
+                    bool flip = cloneRenderer.flipY;
+                    if (s != null && (frames.Count == 0 || frames[frames.Count - 1] != s || flips[flips.Count - 1] != flip))
+                    {
+                        frames.Add(s);
+                        flips.Add(flip);
+                    }
                 }
-                if (frames.Count > 0) perClip.Add((clip.name, frames));
+                if (frames.Count > 0) perClip.Add((clip.name, frames, flips));
             }
 
             Object.Destroy(clone);
@@ -84,16 +93,14 @@ namespace RechargeCustomSkins
         }
 
         // Geometry-only version of ComposeTemplate's layout math (no pixel
-        // copying) - lets a re-imported sheet slice cells at the exact same
-        // coordinates Export wrote them to, driven by the live game's own
-        // clips/frame counts rather than by scanning the image for gridlines.
+        // copying), so a re-imported sheet can slice cells the same way.
         public static SkinGridLayout? ComputeGridLayout(GameObject spriteChildTemplate, IRechargeHost host)
         {
             var perClip = CapturePerClipFrames(spriteChildTemplate, host);
             if (perClip == null) return null;
 
             int cellW = 1, cellH = 1;
-            foreach (var (_, frames) in perClip)
+            foreach (var (_, frames, _) in perClip)
             {
                 foreach (var s in frames)
                 {
@@ -117,15 +124,17 @@ namespace RechargeCustomSkins
                 TexW = Gutter + cols * strideW,
                 TexH = Gutter + rows * strideH,
                 RowClips = perClip.Select(p => (p.name, p.frames.Count)).ToList(),
+                RowFrameSprites = perClip.Select(p => p.frames).ToList(),
+                RowFrameFlipY = perClip.Select(p => p.flips).ToList(),
             };
         }
 
         private const int Gutter = 4;
 
-        private static string ComposeTemplate(List<(string name, List<Sprite> frames)> perClip, string outputDir, IRechargeHost host)
+        private static string ComposeTemplate(List<(string name, List<Sprite> frames, List<bool> flips)> perClip, string outputDir, IRechargeHost host)
         {
             int cellW = 1, cellH = 1;
-            foreach (var (_, frames) in perClip)
+            foreach (var (_, frames, _) in perClip)
             {
                 foreach (var s in frames)
                 {
@@ -153,12 +162,13 @@ namespace RechargeCustomSkins
 
             for (int r = 0; r < perClip.Count; r++)
             {
-                var (_, frames) = perClip[r];
+                var (_, frames, flips) = perClip[r];
                 int rowFromBottom = rows - 1 - r;
                 int cellOriginY = Gutter + rowFromBottom * strideH;
                 for (int c = 0; c < frames.Count; c++)
                 {
                     var sprite = frames[c];
+                    bool flip = flips[c];
                     int w = (int)sprite.textureRect.width;
                     int h = (int)sprite.textureRect.height;
                     var pixels = ReadSpritePixels(sprite);
@@ -166,7 +176,10 @@ namespace RechargeCustomSkins
                     int originY = cellOriginY + (cellH - h) / 2;
                     for (int py = 0; py < h; py++)
                     {
-                        int srcRow = py * w;
+                        // Read the source row in reverse for flipped frames so
+                        // the template bakes in the actual on-screen orientation.
+                        int srcPy = flip ? (h - 1 - py) : py;
+                        int srcRow = srcPy * w;
                         int destRow = (originY + py) * texW + cellOriginX;
                         for (int px = 0; px < w; px++) buf[destRow + px] = pixels[srcRow + px];
                     }
