@@ -1,9 +1,367 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
+using Recharge.ModApi;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using Object = UnityEngine.Object;
+
+internal class MpChatKeybindRow : MonoBehaviour
+{
+	private TMP_Text _keyText;
+
+	public void Init(TMP_Text keyText, Button keyButton)
+	{
+		_keyText = keyText;
+		keyButton.onClick.RemoveAllListeners();
+		keyButton.onClick.AddListener(MpInGameChatHud.BeginRebind);
+	}
+
+	private void Update()
+	{
+		if (_keyText == null) return;
+		_keyText.text = MpInGameChatHud.IsRebinding ? "..." : MpInGameChatHud.ChatKeyName.ToUpperInvariant();
+	}
+}
+
+internal class MpInGameChatHud : MonoBehaviour
+{
+	private const string ChatKeyPrefsKey = "MpChatKeyBind";
+
+	private Canvas _canvas;
+	private CanvasGroup _logGroup;
+	private Transform _logRowsContainer;
+	private readonly List<GameObject> _logRows = new List<GameObject>();
+	private GameObject _inputRow;
+	private TMP_InputField _input;
+	private int _lastChatLineCount = -1;
+	private float _lastMessageAt = -999f;
+	private const float LogFadeDelay = 15f;
+	private const float LogFadeDuration = 0.5f;
+	private bool _chatOpen;
+	private int _openedFrame = -1;
+	private int _closedFrame = -1;
+
+	private static Key _chatKey = LoadChatKey();
+	public static bool IsRebinding { get; private set; }
+
+	public bool ForceShow;
+
+	private const int MaxVisibleLines = 6;
+
+	public static string ChatKeyName => _chatKey.ToString();
+
+	public static void BeginRebind() => IsRebinding = true;
+
+	private static readonly System.Reflection.FieldInfo MoveActionField =
+		typeof(Movement).GetField("moveAction", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+	private static readonly System.Reflection.FieldInfo JumpActionField =
+		typeof(Movement).GetField("jumpAction", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+	private static readonly System.Reflection.FieldInfo DashActionField =
+		typeof(Movement).GetField("dashAction", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+	private static readonly System.Reflection.FieldInfo ResetActionField =
+		typeof(Movement).GetField("resetAction", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+	private static void SetPlayerInputEnabled(bool enabled)
+	{
+		var player = MpNetworkManager.LocalPlayer;
+		if (player == null) return;
+		SetActionEnabled(MoveActionField, player, enabled);
+		SetActionEnabled(JumpActionField, player, enabled);
+		SetActionEnabled(DashActionField, player, enabled);
+		SetActionEnabled(ResetActionField, player, enabled);
+	}
+
+	private static void SetActionEnabled(System.Reflection.FieldInfo field, Movement player, bool enabled)
+	{
+		if (field?.GetValue(player) is InputAction action)
+		{
+			if (enabled) action.Enable(); else action.Disable();
+		}
+	}
+
+	private static Key LoadChatKey()
+	{
+		var name = PlayerPrefs.GetString(ChatKeyPrefsKey, "Enter");
+		return Enum.TryParse<Key>(name, out var k) ? k : Key.Enter;
+	}
+
+	private static void SetChatKey(Key key)
+	{
+		_chatKey = key;
+		PlayerPrefs.SetString(ChatKeyPrefsKey, key.ToString());
+		PlayerPrefs.Save();
+	}
+
+	private void Awake()
+	{
+		BuildUi();
+		Debug.Log("[MpInGameChatHud] built, canvas=" + (_canvas != null));
+	}
+
+	private void BuildUi()
+	{
+		var canvasGo = new GameObject("MpChatHud", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+		canvasGo.transform.SetParent(transform, false);
+		_canvas = canvasGo.GetComponent<Canvas>();
+		_canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+		_canvas.sortingOrder = 400;
+		var scaler = canvasGo.GetComponent<CanvasScaler>();
+		scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+		scaler.referenceResolution = new Vector2(1920, 1080);
+		scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+		scaler.matchWidthOrHeight = 0.5f;
+
+		var logGo = new GameObject("LogPanel", typeof(RectTransform), typeof(CanvasGroup), typeof(Image));
+		logGo.transform.SetParent(canvasGo.transform, false);
+		var logRt = (RectTransform)logGo.transform;
+		logRt.anchorMin = new Vector2(1, 1);
+		logRt.anchorMax = new Vector2(1, 1);
+		logRt.pivot = new Vector2(1, 1);
+		logRt.anchoredPosition = new Vector2(-20, -20);
+		logRt.sizeDelta = new Vector2(460, 150);
+		logGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.45f);
+		logGo.AddComponent<RectMask2D>();
+		_logGroup = logGo.GetComponent<CanvasGroup>();
+		_logGroup.alpha = 0f;
+		_logGroup.blocksRaycasts = false;
+		_logGroup.interactable = false;
+
+		var logRowsGo = new GameObject("LogRows", typeof(RectTransform));
+		logRowsGo.transform.SetParent(logGo.transform, false);
+		var logRowsRt = (RectTransform)logRowsGo.transform;
+		logRowsRt.anchorMin = Vector2.zero;
+		logRowsRt.anchorMax = Vector2.one;
+		logRowsRt.offsetMin = new Vector2(10, 8);
+		logRowsRt.offsetMax = new Vector2(-10, -8);
+		_logRowsContainer = logRowsGo.transform;
+
+		_inputRow = new GameObject("ChatInputRow", typeof(RectTransform), typeof(Image));
+		_inputRow.transform.SetParent(canvasGo.transform, false);
+		var inputRt = (RectTransform)_inputRow.transform;
+		inputRt.anchorMin = new Vector2(1, 1);
+		inputRt.anchorMax = new Vector2(1, 1);
+		inputRt.pivot = new Vector2(1, 1);
+		inputRt.anchoredPosition = new Vector2(-20, -176);
+		inputRt.sizeDelta = new Vector2(460, 34);
+		_inputRow.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.6f);
+
+		var textArea = new GameObject("Text Area", typeof(RectTransform));
+		textArea.transform.SetParent(_inputRow.transform, false);
+		var textAreaRt = (RectTransform)textArea.transform;
+		textAreaRt.anchorMin = Vector2.zero;
+		textAreaRt.anchorMax = Vector2.one;
+		textAreaRt.offsetMin = new Vector2(8, 2);
+		textAreaRt.offsetMax = new Vector2(-8, -2);
+		textArea.AddComponent<RectMask2D>();
+
+		var textGo = new GameObject("Text", typeof(RectTransform));
+		textGo.transform.SetParent(textArea.transform, false);
+		var textRt = (RectTransform)textGo.transform;
+		textRt.anchorMin = Vector2.zero;
+		textRt.anchorMax = Vector2.one;
+		textRt.offsetMin = Vector2.zero;
+		textRt.offsetMax = Vector2.zero;
+		var text = textGo.AddComponent<TextMeshProUGUI>();
+		text.fontSize = 18;
+		text.color = Color.white;
+		text.alignment = TextAlignmentOptions.MidlineLeft;
+		text.enableWordWrapping = false;
+
+		var placeholderGo = new GameObject("Placeholder", typeof(RectTransform));
+		placeholderGo.transform.SetParent(textArea.transform, false);
+		var placeholderRt = (RectTransform)placeholderGo.transform;
+		placeholderRt.anchorMin = Vector2.zero;
+		placeholderRt.anchorMax = Vector2.one;
+		placeholderRt.offsetMin = Vector2.zero;
+		placeholderRt.offsetMax = Vector2.zero;
+		var placeholderText = placeholderGo.AddComponent<TextMeshProUGUI>();
+		placeholderText.text = "Say something...";
+		placeholderText.fontSize = 18;
+		placeholderText.color = new Color(1f, 1f, 1f, 0.4f);
+		placeholderText.fontStyle = FontStyles.Italic;
+		placeholderText.alignment = TextAlignmentOptions.MidlineLeft;
+
+		_input = _inputRow.AddComponent<TMP_InputField>();
+		_input.textViewport = textAreaRt;
+		_input.textComponent = text;
+		_input.placeholder = placeholderText;
+		_input.text = "";
+		_input.onSubmit.AddListener(_ => SendAndClose());
+		_inputRow.SetActive(false);
+	}
+
+	private void Update()
+	{
+		if (IsRebinding)
+		{
+			var kbd = Keyboard.current;
+			if (kbd != null)
+			{
+				foreach (var control in kbd.allKeys)
+				{
+					if (control.wasPressedThisFrame)
+					{
+						SetChatKey(control.keyCode);
+						IsRebinding = false;
+						break;
+					}
+				}
+			}
+			return;
+		}
+
+		var mgr = MpNetworkManager.Instance;
+		bool inLobby = mgr != null && mgr.InLobby;
+		bool pauseMenuOpen = Time.timeScale <= 0f;
+		bool inMainMenu = SceneManager.GetActiveScene().name == "MainMenu";
+		bool shouldShow = inLobby && !inMainMenu && (!pauseMenuOpen || ForceShow);
+
+		_canvas.enabled = shouldShow;
+		if (!shouldShow)
+		{
+			if (_chatOpen) CloseInput();
+			return;
+		}
+
+		if (mgr.ChatLines.Count != _lastChatLineCount)
+		{
+			RefreshChatLog(mgr.ChatLines);
+			_lastMessageAt = Time.unscaledTime;
+		}
+
+		var kb = Keyboard.current;
+		if (kb != null && !_chatOpen && kb[_chatKey].wasPressedThisFrame && Time.frameCount != _closedFrame)
+		{
+			OpenInput();
+		}
+		else if (kb != null && _chatOpen)
+		{
+			bool backspaceOnEmpty = kb.backspaceKey.wasPressedThisFrame && string.IsNullOrEmpty(_input.text);
+			if (kb.escapeKey.wasPressedThisFrame || backspaceOnEmpty) CloseInput();
+		}
+
+		if (_chatOpen && Time.frameCount != _openedFrame && !_input.isFocused)
+		{
+			CloseInput();
+		}
+
+		bool sinceMessageFresh = Time.unscaledTime - _lastMessageAt < LogFadeDelay;
+		float targetAlpha = (_chatOpen || sinceMessageFresh) ? 1f : 0f;
+		_logGroup.alpha = Mathf.MoveTowards(_logGroup.alpha, targetAlpha, Time.unscaledDeltaTime / LogFadeDuration);
+	}
+
+	private const float LogRowHeight = 22f;
+	private const int LogMaxMessageLines = 2;
+	private const float LogNameColumnWidth = 140f;
+	private const float LogColumnSpacing = 10f;
+
+	private void RefreshChatLog(List<string> chatLines)
+	{
+		_lastChatLineCount = chatLines.Count;
+		foreach (var row in _logRows) UnityEngine.Object.Destroy(row);
+		_logRows.Clear();
+		if (chatLines.Count == 0) return;
+
+		var start = Mathf.Max(0, chatLines.Count - MaxVisibleLines);
+		var visible = chatLines.GetRange(start, chatLines.Count - start);
+		var containerWidth = ((RectTransform)_logRowsContainer).rect.width;
+		var messageColumnWidth = Mathf.Max(0, containerWidth - LogNameColumnWidth - LogColumnSpacing);
+
+		float y = 2f;
+		for (int i = visible.Count - 1; i >= 0; i--)
+		{
+			var line = visible[i];
+			var colonIdx = line.IndexOf(": ", StringComparison.Ordinal);
+			var namePart = colonIdx >= 0 ? line.Substring(0, colonIdx) : line;
+			var messagePart = colonIdx >= 0 ? line.Substring(colonIdx + 2) : "";
+
+			var rowGo = new GameObject("ChatRow", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+			rowGo.transform.SetParent(_logRowsContainer, false);
+			var rowRt = (RectTransform)rowGo.transform;
+			rowRt.anchorMin = new Vector2(0, 0);
+			rowRt.anchorMax = new Vector2(1, 0);
+			rowRt.pivot = new Vector2(0.5f, 0f);
+			var hlg = rowGo.GetComponent<HorizontalLayoutGroup>();
+			hlg.childAlignment = TextAnchor.UpperLeft;
+			hlg.childControlWidth = true;
+			hlg.childControlHeight = true;
+			hlg.childForceExpandWidth = false;
+			hlg.childForceExpandHeight = true;
+			hlg.spacing = LogColumnSpacing;
+
+			var nameGo = new GameObject("Name", typeof(RectTransform), typeof(LayoutElement));
+			nameGo.transform.SetParent(rowGo.transform, false);
+			nameGo.GetComponent<LayoutElement>().preferredWidth = LogNameColumnWidth;
+			var nameTmp = nameGo.AddComponent<TextMeshProUGUI>();
+			nameTmp.fontSize = 17;
+			nameTmp.alignment = TextAlignmentOptions.TopLeft;
+			nameTmp.enableWordWrapping = false;
+			nameTmp.overflowMode = TextOverflowModes.Ellipsis;
+			nameTmp.color = Color.white;
+			nameTmp.outlineWidth = 0.18f;
+			nameTmp.outlineColor = new Color32(0, 0, 0, 255);
+			nameTmp.text = namePart;
+
+			var msgGo = new GameObject("Message", typeof(RectTransform), typeof(LayoutElement));
+			msgGo.transform.SetParent(rowGo.transform, false);
+			msgGo.GetComponent<LayoutElement>().flexibleWidth = 1f;
+			var msgTmp = msgGo.AddComponent<TextMeshProUGUI>();
+			msgTmp.fontSize = 17;
+			msgTmp.alignment = TextAlignmentOptions.TopRight;
+			msgTmp.enableWordWrapping = true;
+			msgTmp.overflowMode = TextOverflowModes.Ellipsis;
+			msgTmp.maxVisibleLines = LogMaxMessageLines;
+			msgTmp.color = Color.white;
+			msgTmp.outlineWidth = 0.18f;
+			msgTmp.outlineColor = new Color32(0, 0, 0, 255);
+			msgTmp.text = messagePart;
+
+			var neededHeight = msgTmp.GetPreferredValues(messagePart, messageColumnWidth, 0f).y;
+			var rowHeight = Mathf.Clamp(neededHeight, LogRowHeight, LogRowHeight * LogMaxMessageLines);
+
+			rowRt.anchoredPosition = new Vector2(0, y);
+			rowRt.sizeDelta = new Vector2(0, rowHeight);
+			y += rowHeight;
+
+			_logRows.Add(rowGo);
+		}
+	}
+
+	private void OpenInput()
+	{
+		_chatOpen = true;
+		_openedFrame = Time.frameCount;
+		_inputRow.SetActive(true);
+		_input.text = "";
+		_input.ActivateInputField();
+		EventSystem.current.SetSelectedGameObject(_input.gameObject);
+		SetPlayerInputEnabled(false);
+	}
+
+	private void CloseInput()
+	{
+		_chatOpen = false;
+		_closedFrame = Time.frameCount;
+		_input.DeactivateInputField();
+		_inputRow.SetActive(false);
+		if (EventSystem.current != null && EventSystem.current.currentSelectedGameObject == _input.gameObject)
+			EventSystem.current.SetSelectedGameObject(null);
+		SetPlayerInputEnabled(true);
+	}
+
+	private void SendAndClose()
+	{
+		if (Time.frameCount == _openedFrame) return;
+		var text = _input.text;
+		CloseInput();
+		if (!string.IsNullOrWhiteSpace(text)) MpNetworkManager.Instance?.SendChat(text);
+	}
+}
 
 internal class MpPanelUI : MonoBehaviour
 {
@@ -36,6 +394,10 @@ internal class MpPanelUI : MonoBehaviour
 	private TMP_Text _connectButtonLabel;
 
 	private GameObject _inLobbyRow;
+	private TMP_Text _leaveLabel;
+	private bool _leaveConfirmArmed;
+	private float _leaveConfirmArmedAt;
+	private const float LeaveConfirmTimeout = 3f;
 	private TMP_Text _inLobbyLabel;
 	private TMP_Text _playersLabel;
 	private GameObject _chatBox;
@@ -118,9 +480,9 @@ internal class MpPanelUI : MonoBehaviour
 
 		BuildChatSection(_inLobbyRow.transform);
 		var leaveGo = CloneButton(_inLobbyRow.transform, "Leave Lobby", new Vector2(-150, -160), new Vector2(270, 60));
+		_leaveLabel = leaveGo.GetComponentInChildren<TMP_Text>();
 		leaveGo.GetComponent<Button>().onClick.AddListener(OnLeaveClicked);
 
-		// HostPanelController hooks its own button into this row via LatestInLobbyRow.
 		MpNetworkManager.LatestInLobbyRow = _inLobbyRow;
 
 		BuildAppearanceSection(root);
@@ -183,8 +545,6 @@ internal class MpPanelUI : MonoBehaviour
 		_appearanceSection.SetActive(false);
 	}
 
-	// A hover/select tint on a tiny button reads as a whole different colour
-	// once its own background is this small - keep it visually static instead.
 	private static void LockButtonColor(Button btn)
 	{
 		var cb = btn.colors;
@@ -396,10 +756,6 @@ internal class MpPanelUI : MonoBehaviour
 		_listContent = new GameObject("LobbyListContent", typeof(RectTransform));
 		_listContent.transform.SetParent(_listBox.transform, false);
 
-		// more than LobbyPageSize lobbies overflowed the box outright before (tried a
-		// RectMask2D scroll view first - for reasons never fully pinned down it clipped
-		// away every row instead of just the overflow, even though the geometry behind
-		// it measured out fine). Paging avoids the whole masking question.
 		var prevGo = CloneButton(_listBox.transform, "PrevPage", new Vector2(-230, -68), new Vector2(100, 30), "< Prev");
 		_prevPageButton = prevGo.GetComponent<Button>();
 		_prevPageButton.navigation = new Navigation { mode = Navigation.Mode.None };
@@ -447,7 +803,6 @@ internal class MpPanelUI : MonoBehaviour
 		{
 			img.sprite = sprite;
 			img.type = Image.Type.Sliced;
-			// thinner border than the sprite's native 30px bevel
 			img.pixelsPerUnitMultiplier = 2.2f;
 		}
 		img.color = tint;
@@ -511,7 +866,7 @@ internal class MpPanelUI : MonoBehaviour
 
 	private void OnEnable()
 	{
-		_refreshAccumulator = 999f; // force an immediate refresh next Update
+		_refreshAccumulator = 999f;
 		_lobbyListPollAccumulator = 999f;
 		RefreshMapPicker();
 	}
@@ -564,6 +919,15 @@ internal class MpPanelUI : MonoBehaviour
 
 	private void OnLeaveClicked()
 	{
+		if (!_leaveConfirmArmed)
+		{
+			_leaveConfirmArmed = true;
+			_leaveConfirmArmedAt = Time.unscaledTime;
+			if (_leaveLabel != null) _leaveLabel.text = "Click again to confirm";
+			return;
+		}
+		_leaveConfirmArmed = false;
+		if (_leaveLabel != null) _leaveLabel.text = "Leave Lobby";
 		MpNetworkManager.GetOrCreate().LeaveLobby();
 	}
 
@@ -580,6 +944,12 @@ internal class MpPanelUI : MonoBehaviour
 		var mgr = MpNetworkManager.GetOrCreate();
 		bool connected = mgr.IsConnected;
 		bool inLobby = mgr.InLobby;
+
+		if (_leaveConfirmArmed && Time.unscaledTime - _leaveConfirmArmedAt >= LeaveConfirmTimeout)
+		{
+			_leaveConfirmArmed = false;
+			if (_leaveLabel != null) _leaveLabel.text = "Leave Lobby";
+		}
 
 		if (connected && !inLobby)
 		{
@@ -671,12 +1041,6 @@ internal class MpPanelUI : MonoBehaviour
 		const float containerWidth = 560f;
 		const float containerHeight = 178f;
 
-		// walk backward from the newest message, keeping whatever actually fits
-		// within the box's real height - measured directly against a known fixed
-		// width instead of trusting a shared TMP component's own rect to already
-		// be laid out by the time it's queried. That mismatch was letting too
-		// much text through, pushing the newest messages past the bottom of the
-		// (masked) box where they rendered invisibly instead of scrolling.
 		var kept = new List<(string line, float height)>();
 		float used = 0f;
 		for (int i = chatLines.Count - 1; i >= 0; i--)
@@ -719,22 +1083,10 @@ internal class MpPanelUI : MonoBehaviour
 		int pageCount = Mathf.Max(1, Mathf.CeilToInt(lobbies.Count / (float)LobbyPageSize));
 		_lobbyPageIndex = Mathf.Clamp(_lobbyPageIndex, 0, pageCount - 1);
 
-		// this gets called on a fixed ~0.2s timer regardless of whether the lobby
-		// list actually changed - rebuilding unconditionally destroyed and recreated
-		// every row that often, which flickered any currently-hovered row's tint off
-		// and back on repeatedly even while the mouse sat still
 		if (lobbies == _lastRenderedLobbies && _lobbyPageIndex == _lastRenderedPageIndex) return;
 		_lastRenderedLobbies = lobbies;
 		_lastRenderedPageIndex = _lobbyPageIndex;
 
-		// rows get destroyed and rebuilt below - if one of them was the selected UI
-		// object (mouse clicks set this in Unity even with navigation off) that
-		// reference goes stale and can leave a hover/selected tint stuck on whatever
-		// happens to end up in the same spot next. Only clear selection when it's
-		// actually one of these rows though - this runs on the same ~1.5s poll that
-		// keeps the lobby list fresh while the Host row (with its own Lobby name
-		// input field) is visible, and blindly clearing selection was kicking that
-		// field's focus out from under anyone mid-typing.
 		if (EventSystem.current != null)
 		{
 			var selected = EventSystem.current.currentSelectedGameObject;
@@ -796,13 +1148,11 @@ internal class MpPanelUI : MonoBehaviour
 	{
 		var go = Object.Instantiate(_buttonTemplate, parent);
 		go.name = "LobbyRow";
-		go.SetActive(true); // see CloneButton's own comment - runtime clones can inherit an inactive template
+		go.SetActive(true);
 		var rt = (RectTransform)go.transform;
 		rt.anchoredPosition = anchoredPos;
 		rt.sizeDelta = size;
 
-		// the cloned template's own background image is a plain opaque box - not wanted
-		// here, the row should show nothing but text until it's actually hovered
 		var baseImg = go.GetComponent<Image>();
 		if (baseImg != null) baseImg.color = new Color(0f, 0f, 0f, 0f);
 
@@ -812,7 +1162,6 @@ internal class MpPanelUI : MonoBehaviour
 		var label = go.transform.Find("Text (TMP)");
 		if (label != null)
 		{
-			// keep only the font; .color came back white on this button, so use an explicit orange instead
 			var existingTmp = label.GetComponent<TMP_Text>();
 			if (existingTmp != null) font = existingTmp.font;
 			Object.Destroy(label.gameObject);
@@ -824,7 +1173,7 @@ internal class MpPanelUI : MonoBehaviour
 		nameRt.anchorMin = Vector2.zero;
 		nameRt.anchorMax = Vector2.one;
 		nameRt.offsetMin = new Vector2(20f, 0f);
-		nameRt.offsetMax = new Vector2(-140f, 0f); // leaves room for the right-aligned count column
+		nameRt.offsetMax = new Vector2(-140f, 0f);
 		var nameTmp = nameGo.AddComponent<TextMeshProUGUI>();
 		nameTmp.font = font;
 		nameTmp.color = nameColor;
@@ -882,11 +1231,6 @@ internal class MpPanelUI : MonoBehaviour
 	{
 		var go = Object.Instantiate(_buttonTemplate, parent);
 		go.name = name;
-		// Instantiate copies the source's own activeSelf - harmless for the rows built
-		// once up front during Build() (mainBitPublic is still showing then), but any
-		// button cloned later at runtime (e.g. from a click while a sub-panel is open)
-		// clones from a template whose ancestor is currently hidden, and comes out
-		// inactive-and-stuck that way even after reparenting under a visible section.
 		go.SetActive(true);
 		var rt = (RectTransform)go.transform;
 		rt.anchoredPosition = anchoredPos;
@@ -988,5 +1332,79 @@ internal class MpPanelUI : MonoBehaviour
 		input.placeholder = placeholderText;
 		input.text = "";
 		return input;
+	}
+}
+
+internal static class MpMenuBuilder
+{
+	public static void Install(pauseMenuScript menu)
+	{
+		MpNetworkManager.GetOrCreate();
+
+		if (menu.mainBitPublic == null || menu.settingsBitPublic == null) return;
+
+		var mpPanel = BuildPanel(menu, backTarget: menu.mainBitPublic);
+		PauseMenuHelper.AddRow(menu, "Multiplayer", "DOTnet", () => mpPanel.SetActive(true));
+
+		MpNetworkManager.LatestMainBit = menu.mainBitPublic;
+		MpNetworkManager.LatestMpPanel = mpPanel;
+	}
+
+	private static void SetButtonLabel(GameObject buttonGo, string text)
+	{
+		var label = buttonGo.transform.Find("Text (TMP)");
+		if (label == null) return;
+		var loc = label.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
+		if (loc != null) Object.DestroyImmediate(loc);
+		var tmp = label.GetComponent<TMP_Text>();
+		if (tmp != null) tmp.text = text;
+	}
+
+	private static GameObject BuildPanel(pauseMenuScript menu, GameObject backTarget)
+	{
+		var existing = menu.settingsBitPublic.transform.parent.Find("MultiplayerBit");
+		if (existing != null) return existing.gameObject;
+
+		var clone = Object.Instantiate(menu.settingsBitPublic, menu.settingsBitPublic.transform.parent);
+		clone.name = "MultiplayerBit";
+		clone.SetActive(false);
+
+		var settingsScript = clone.GetComponent<SettingsScript>();
+		if (settingsScript != null) Object.Destroy(settingsScript);
+
+		Transform title = null;
+		var toDestroy = new List<GameObject>();
+		foreach (Transform child in clone.transform)
+		{
+			if (child.name == "Settings") { title = child; continue; }
+			toDestroy.Add(child.gameObject);
+		}
+		foreach (var go in toDestroy) Object.Destroy(go);
+
+		TMP_FontAsset font = null;
+		if (title != null)
+		{
+			var titleTmp = title.GetComponent<TMP_Text>();
+			if (titleTmp != null) { titleTmp.text = "DOTnet"; font = titleTmp.font; }
+			var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
+			if (loc != null) Object.DestroyImmediate(loc);
+
+			var closeBtn = title.Find("Close");
+			if (closeBtn != null)
+			{
+				SetButtonLabel(closeBtn.gameObject, "Back");
+				var btn = closeBtn.GetComponent<Button>();
+				btn.onClick = new Button.ButtonClickedEvent();
+				btn.onClick.AddListener(() =>
+				{
+					clone.SetActive(false);
+					backTarget.SetActive(true);
+				});
+			}
+		}
+
+		var ui = clone.AddComponent<MpPanelUI>();
+		ui.Build(clone, font, settingsButtonTemplate: menu.mainBitPublic.transform.Find("Settings").gameObject, menu);
+		return clone;
 	}
 }

@@ -1,5 +1,11 @@
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
+using System.Net;
+using System.Net.WebSockets;
+using System.Text;
 using System.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -7,6 +13,499 @@ using Steamworks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using Object = UnityEngine.Object;
+
+internal class MpStateMsg
+{
+	public string type = "state";
+	public float x;
+	public float y;
+	public bool facingRight;
+	public int animState;
+	public float animSpeed;
+	public bool isPaused;
+	public string name;
+	public string nameColor;
+	public string dotColor;
+}
+
+public class MpPlayerState
+{
+	public int id;
+	public float x;
+	public float y;
+	public bool facingRight;
+	public int animState;
+	public float animSpeed;
+	public bool isPaused;
+	public string name;
+	public string nameColor;
+	public string dotColor;
+}
+
+internal class MpSnapshotMsg
+{
+	public string type;
+	public List<MpPlayerState> players;
+}
+
+internal class MpHostMsg
+{
+	public string type = "host";
+	public string name;
+	public string playerName;
+	public string mapHubId;
+	public string mapName;
+	public bool hard;
+	public string token;
+}
+
+internal class MpJoinLobbyMsg
+{
+	public string type = "join_lobby";
+	public int lobbyId;
+	public string playerName;
+}
+
+public class MpLobbyInfo
+{
+	public int id;
+	public string name;
+	public string hostName;
+	public string hostColor;
+	public int count;
+	public string mapHubId;
+	public string mapName;
+	public bool hard;
+}
+
+internal class MpLobbyListMsg
+{
+	public string type;
+	public List<MpLobbyInfo> lobbies;
+}
+
+internal class MpChatMsg
+{
+	public string type = "chat";
+	public string text;
+}
+
+internal class MpChatHistoryEntry
+{
+	public string from;
+	public string fromColor;
+	public string text;
+}
+
+internal class MpNetClient : IDisposable
+{
+	public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open && _running;
+	public string LastError { get; private set; }
+
+	private ClientWebSocket _ws;
+	private Thread _readThread;
+	private Thread _writeThread;
+	private volatile bool _running;
+	private readonly ConcurrentQueue<string> _incoming = new ConcurrentQueue<string>();
+	private readonly ConcurrentQueue<string> _outgoing = new ConcurrentQueue<string>();
+	private readonly SemaphoreSlim _outgoingSignal = new SemaphoreSlim(0);
+
+	public void Connect(string host, int port)
+	{
+		Disconnect();
+		try
+		{
+			var uri = BuildUri(host, port);
+			_ws = new ClientWebSocket();
+			_ws.ConnectAsync(uri, CancellationToken.None).GetAwaiter().GetResult();
+			_running = true;
+			_readThread = new Thread(ReadLoop) { IsBackground = true };
+			_readThread.Start();
+			_writeThread = new Thread(WriteLoop) { IsBackground = true };
+			_writeThread.Start();
+			LastError = null;
+		}
+		catch (Exception e)
+		{
+			LastError = e.Message;
+			Disconnect();
+		}
+	}
+
+	private static Uri BuildUri(string host, int port)
+		=> port == 443 ? new Uri($"wss://{host}/dotnet") : new Uri($"ws://{host}:{port}/");
+
+	private void ReadLoop()
+	{
+		var buf = new byte[8192];
+		try
+		{
+			while (_running)
+			{
+				var sb = new StringBuilder();
+				WebSocketReceiveResult result;
+				do
+				{
+					result = _ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None).GetAwaiter().GetResult();
+					if (result.MessageType == WebSocketMessageType.Close) { _running = false; break; }
+					sb.Append(Encoding.UTF8.GetString(buf, 0, result.Count));
+				} while (!result.EndOfMessage);
+				if (_running && sb.Length > 0) _incoming.Enqueue(sb.ToString());
+			}
+		}
+		catch (Exception e)
+		{
+			LastError = e.Message;
+		}
+		_running = false;
+	}
+
+	private void WriteLoop()
+	{
+		try
+		{
+			while (_running)
+			{
+				_outgoingSignal.Wait(200);
+				while (_running && _outgoing.TryDequeue(out var json))
+				{
+					var bytes = Encoding.UTF8.GetBytes(json);
+					_ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).GetAwaiter().GetResult();
+				}
+			}
+		}
+		catch (Exception e)
+		{
+			LastError = e.Message;
+			_running = false;
+		}
+	}
+
+	public bool TryDequeue(out string line) => _incoming.TryDequeue(out line);
+
+	public void Send(string json)
+	{
+		if (!IsConnected) return;
+		_outgoing.Enqueue(json);
+		_outgoingSignal.Release();
+	}
+
+	public void Disconnect()
+	{
+		_running = false;
+		try { _ws?.Abort(); } catch { }
+		try { _ws?.Dispose(); } catch { }
+		_ws = null;
+		_readThread = null;
+		_writeThread = null;
+		while (_incoming.TryDequeue(out _)) { }
+		while (_outgoing.TryDequeue(out _)) { }
+	}
+
+	public void Dispose() => Disconnect();
+}
+
+internal static class MpGhostManager
+{
+	private class GhostEntry
+	{
+		public GameObject Root;
+		public Transform SpriteTransform;
+		public Vector3 TargetPos;
+		public bool TargetFacingRight;
+		public float LastSeenTime;
+		public Animator Anim;
+		public TextMesh Label;
+		public GameObject PausedIndicator;
+	}
+
+	private static readonly Dictionary<int, GhostEntry> _ghosts = new Dictionary<int, GhostEntry>();
+	private static Transform _spriteTemplate;
+	private static float _lastSnapshotLogTime = -999f;
+
+	public static void SetTemplate(Transform playerSprite)
+	{
+		_spriteTemplate = playerSprite;
+	}
+
+	public static GameObject GetGhostRoot(int id) => _ghosts.TryGetValue(id, out var g) ? g.Root : null;
+
+	public static void ApplySnapshot(List<MpPlayerState> players)
+	{
+		bool doLog = Time.unscaledTime - _lastSnapshotLogTime > 2f;
+		if (doLog) _lastSnapshotLogTime = Time.unscaledTime;
+
+		var seen = new HashSet<int>();
+		foreach (var p in players)
+		{
+			if (doLog) Debug.Log($"[MpGhost] snapshot id={p.id} name={p.name} pos=({p.x:F1},{p.y:F1}) paused={p.isPaused}");
+			seen.Add(p.id);
+			var pos = new Vector3(p.x, p.y, 0f);
+			var dotColor = ParseColorOr(p.dotColor, new Color(0.4f, 0.6f, 1f, 0.9f));
+			var nameColor = ParseColorOr(p.nameColor, new Color(1f, 1f, 1f, 0.9f));
+			if (!_ghosts.TryGetValue(p.id, out var g))
+			{
+				g = Spawn(p.name, pos, dotColor, nameColor);
+				_ghosts[p.id] = g;
+			}
+			else
+			{
+				ApplyColors(g, dotColor, nameColor);
+			}
+			g.TargetPos = pos;
+			g.TargetFacingRight = p.facingRight;
+			g.LastSeenTime = Time.unscaledTime;
+			if (g.Anim != null)
+			{
+				g.Anim.SetInteger("Animation", p.animState);
+				g.Anim.speed = p.animSpeed;
+			}
+			if (g.PausedIndicator != null) g.PausedIndicator.SetActive(p.isPaused);
+		}
+
+		var stale = new List<int>();
+		foreach (var kv in _ghosts)
+			if (!seen.Contains(kv.Key)) stale.Add(kv.Key);
+		foreach (var id in stale) Remove(id);
+	}
+
+	public static void Tick(float dt)
+	{
+		const float staleTimeout = 6f;
+		var stale = new List<int>();
+		foreach (var kv in _ghosts)
+		{
+			var g = kv.Value;
+			if (g.Root == null) { stale.Add(kv.Key); continue; }
+			if (Time.unscaledTime - g.LastSeenTime > staleTimeout) { stale.Add(kv.Key); continue; }
+
+			var t = g.Root.transform;
+			t.position = Vector3.Lerp(t.position, g.TargetPos, 1f - Mathf.Exp(-14f * dt));
+
+			if (g.SpriteTransform != null)
+			{
+				var scale = g.SpriteTransform.localScale;
+				var sign = g.TargetFacingRight ? 1f : -1f;
+				scale.x = Mathf.Abs(scale.x) * sign;
+				g.SpriteTransform.localScale = scale;
+			}
+		}
+		foreach (var id in stale) Remove(id);
+	}
+
+	private static Color ParseColorOr(string hex, Color fallback)
+	{
+		if (!string.IsNullOrEmpty(hex) && ColorUtility.TryParseHtmlString(hex, out var c))
+		{
+			c.a = fallback.a;
+			return c;
+		}
+		return fallback;
+	}
+
+	private static void ApplyColors(GhostEntry g, Color dotColor, Color nameColor)
+	{
+		if (g.Root != null)
+			foreach (var partSr in g.Root.GetComponentsInChildren<SpriteRenderer>(true))
+				partSr.color = dotColor;
+		if (g.Label != null) g.Label.color = nameColor;
+	}
+
+	private static GhostEntry Spawn(string name, Vector3 spawnPos, Color dotColor, Color nameColor)
+	{
+		var root = new GameObject("MPGhost_" + (string.IsNullOrEmpty(name) ? "?" : name));
+		Object.DontDestroyOnLoad(root);
+		root.transform.position = spawnPos;
+
+		SpriteRenderer sr = null;
+		Animator anim = null;
+		Transform spriteTransform = null;
+
+		if (_spriteTemplate != null)
+		{
+			var spriteGo = Object.Instantiate(_spriteTemplate.gameObject, root.transform);
+			spriteGo.name = "Sprite";
+			spriteGo.transform.localPosition = Vector3.zero;
+			foreach (var comp in spriteGo.GetComponentsInChildren<Component>())
+			{
+				if (comp is Transform || comp is SpriteRenderer || comp is Animator) continue;
+				Object.Destroy(comp);
+			}
+			sr = spriteGo.GetComponent<SpriteRenderer>();
+			anim = spriteGo.GetComponent<Animator>();
+			if (anim != null) anim.updateMode = AnimatorUpdateMode.UnscaledTime;
+			spriteTransform = spriteGo.transform;
+		}
+		else
+		{
+			sr = root.AddComponent<SpriteRenderer>();
+			spriteTransform = root.transform;
+		}
+
+		var unlitShader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default")
+			?? Shader.Find("Sprites/Default");
+		foreach (var partSr in root.GetComponentsInChildren<SpriteRenderer>(true))
+		{
+			if (unlitShader != null) partSr.material = new Material(unlitShader);
+			partSr.color = dotColor;
+		}
+
+		var labelGo = new GameObject("Label");
+		labelGo.transform.SetParent(root.transform, false);
+		labelGo.transform.localPosition = new Vector3(0f, 75f, 0f);
+		var tm = labelGo.AddComponent<TextMesh>();
+		tm.text = string.IsNullOrEmpty(name) ? "?" : name;
+		tm.fontSize = 48;
+		tm.characterSize = 8f;
+		tm.anchor = TextAnchor.MiddleCenter;
+		tm.alignment = TextAlignment.Center;
+		tm.color = nameColor;
+
+		var pausedGo = new GameObject("PausedIndicator");
+		pausedGo.transform.SetParent(root.transform, false);
+		pausedGo.transform.localPosition = new Vector3(0f, 105f, 0f);
+		var pausedTm = pausedGo.AddComponent<TextMesh>();
+		pausedTm.text = "PAUSED";
+		pausedTm.fontSize = 48;
+		pausedTm.characterSize = 6f;
+		pausedTm.anchor = TextAnchor.MiddleCenter;
+		pausedTm.alignment = TextAlignment.Center;
+		pausedTm.color = new Color(1f, 0.85f, 0.2f);
+		pausedGo.SetActive(false);
+
+		return new GhostEntry
+		{
+			Root = root,
+			SpriteTransform = spriteTransform,
+			Label = tm,
+			Anim = anim,
+			PausedIndicator = pausedGo,
+			TargetPos = spawnPos,
+			LastSeenTime = Time.unscaledTime,
+		};
+	}
+
+	private static void Remove(int id)
+	{
+		if (_ghosts.TryGetValue(id, out var g))
+		{
+			if (g.Root != null) Object.Destroy(g.Root);
+			_ghosts.Remove(id);
+		}
+	}
+
+	public static void Clear()
+	{
+		foreach (var g in _ghosts.Values)
+			if (g.Root != null) Object.Destroy(g.Root);
+		_ghosts.Clear();
+	}
+}
+
+public static class MpMapLibrary
+{
+	private const string HubBase = "https://codecade.co.za/recharge";
+
+	public static string MapsDir => Path.Combine(Path.GetDirectoryName(Application.dataPath) ?? ".", "Recharge", "Mods", "recharge.maps", "maps");
+
+	public struct HostableMap
+	{
+		public string LocalId;
+		public string HubId;
+		public string Name;
+	}
+
+	public static List<(string Id, string Name)> GetLocalMaps()
+	{
+		var result = new List<(string, string)>();
+		if (!Directory.Exists(MapsDir)) return result;
+		foreach (var dir in Directory.GetDirectories(MapsDir))
+		{
+			var mapJsonPath = Path.Combine(dir, "map.json");
+			if (!File.Exists(mapJsonPath)) continue;
+			try
+			{
+				var obj = JObject.Parse(File.ReadAllText(mapJsonPath));
+				var name = (string)obj["name"];
+				if (string.IsNullOrEmpty(name)) continue;
+				result.Add((Path.GetFileName(dir), name));
+			}
+			catch (Exception e) { Debug.LogWarning("[DOTnet] couldn't read " + mapJsonPath + ": " + e.Message); }
+		}
+		return result;
+	}
+
+	public static List<HostableMap> GetHostableMaps()
+	{
+		var result = new List<HostableMap>();
+		List<(string Id, string Name)> hubMaps;
+		try
+		{
+			using (var wc = new WebClient())
+			{
+				var json = wc.DownloadString(HubBase + "/api/maps");
+				var arr = JArray.Parse(json);
+				hubMaps = new List<(string, string)>();
+				foreach (var item in arr)
+				{
+					var id = (string)item["id"];
+					var name = (string)item["name"];
+					if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) hubMaps.Add((id, name));
+				}
+			}
+		}
+		catch (Exception e)
+		{
+			Debug.LogWarning("[DOTnet] couldn't reach Recharge Hub for the map library: " + e.Message);
+			return result;
+		}
+
+		foreach (var local in GetLocalMaps())
+		{
+			foreach (var hub in hubMaps)
+			{
+				if (hub.Name == local.Name)
+				{
+					result.Add(new HostableMap { LocalId = local.Id, HubId = hub.Id, Name = local.Name });
+					break;
+				}
+			}
+		}
+		return result;
+	}
+
+	public static bool IsDownloaded(string hubId) => !string.IsNullOrEmpty(hubId) && Directory.Exists(Path.Combine(MapsDir, hubId));
+
+	public static void DownloadAndExtract(string hubId)
+	{
+		byte[] bytes;
+		using (var wc = new WebClient())
+		{
+			bytes = wc.DownloadData(HubBase + "/api/maps/" + Uri.EscapeDataString(hubId) + "/file");
+		}
+
+		var target = Path.Combine(MapsDir, hubId);
+		var tmp = target + ".downloading";
+		if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
+		Directory.CreateDirectory(tmp);
+
+		using (var stream = new MemoryStream(bytes))
+		using (var archive = new ZipArchive(stream, ZipArchiveMode.Read))
+		{
+			foreach (var entry in archive.Entries)
+			{
+				if (string.IsNullOrEmpty(entry.Name)) continue;
+				var destPath = Path.Combine(tmp, entry.FullName);
+				Directory.CreateDirectory(Path.GetDirectoryName(destPath));
+				entry.ExtractToFile(destPath, overwrite: true);
+			}
+		}
+
+		if (Directory.Exists(target)) Directory.Delete(target, true);
+		Directory.Move(tmp, target);
+	}
+}
 
 public class MpNetworkManager : MonoBehaviour
 {
@@ -27,9 +526,6 @@ public class MpNetworkManager : MonoBehaviour
 	public string MapDownloadError;
 	public string PendingLocalMapId;
 	public bool? PendingBaseGameHard;
-	// "base"/"bside" - the host's map choice from MpPanelUI's host-creation screen,
-	// consumed once by HostPanelController to seed its own round-start map picker
-	// (Start Playing) instead of loading the scene immediately on auto-ready.
 	public string PendingHostMapKind;
 	public readonly List<string> ChatLines = new List<string>();
 	private const int MaxChatLines = 50;
@@ -178,7 +674,7 @@ public class MpNetworkManager : MonoBehaviour
 			if (name == "QuickReset") quickRestartTf = item.transform;
 			else if (name == "SwapCurrencyDisplay") swapHudTf = item.transform;
 		}
-		if (quickRestartTf == null) return false; // action refs not resolved yet - retry next frame
+		if (quickRestartTf == null) return false;
 		float spacing = 60f;
 		if (swapHudTf != null) spacing = swapHudTf.localPosition.y - quickRestartTf.localPosition.y;
 		float newY = quickRestartTf.localPosition.y - spacing;

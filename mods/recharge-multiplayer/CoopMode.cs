@@ -6,7 +6,6 @@ using System.Reflection;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
-// Host-authoritative shared economy for Host Panel's Co-op mode.
 internal class CoopManager
 {
 	private const string SaveRoot = "/SavedataCoop";
@@ -22,15 +21,17 @@ internal class CoopManager
 	private readonly List<(courseScript course, int originalBaseReward)> _scaledRewards = new List<(courseScript, int)>();
 	private readonly List<(upgradeBox box, double originalBaseCost)> _scaledUpgradeCosts = new List<(upgradeBox, double)>();
 
-	// courseScript.baseReward is private - reflection is the established pattern in
-	// this codebase for touching a real base-game field with no public accessor.
 	private static readonly FieldInfo BaseRewardField =
 		typeof(courseScript).GetField("baseReward", BindingFlags.NonPublic | BindingFlags.Instance);
+	private static readonly MethodInfo DeactivateMethod =
+		typeof(upgradeBox).GetMethod("deactivate", BindingFlags.NonPublic | BindingFlags.Instance);
 
 	private float _syncAccumulator;
 	private float _saveAccumulator;
 	private float _abilityResendAccumulator;
+	private float _deltaAccumulator;
 	private const float AbilityResendInterval = 3f;
+	private const float DeltaInterval = 0.25f;
 
 	private readonly Dictionary<globalStats.Currencies, double> _lastCurrency = new Dictionary<globalStats.Currencies, double>();
 	private readonly Dictionary<globalStats.globalUpgradeSet, double> _lastGlobalUpgrade = new Dictionary<globalStats.globalUpgradeSet, double>();
@@ -38,6 +39,10 @@ internal class CoopManager
 	private readonly Dictionary<int, int[]> _lastTimesUsed = new Dictionary<int, int[]>();
 	private bool _lastDash, _lastWallJump, _lastDoubleJump, _lastBlockSwap;
 	private int _playerCount;
+	private Saveloader _realSaveloader;
+
+	private readonly List<upgradeBox> _hiddenCloneBoxes = new List<upgradeBox>();
+	private readonly List<courseScript> _blankedCloneMultCourses = new List<courseScript>();
 
 	public void Begin(bool isHost, int playerCount, Movement localMovement, string saveName)
 	{
@@ -46,9 +51,11 @@ internal class CoopManager
 		_localMovement = localMovement;
 		_syncAccumulator = 0f;
 		_saveAccumulator = 0f;
+		_deltaAccumulator = 0f;
 
 		var saveloader = UnityEngine.Object.FindFirstObjectByType<Saveloader>();
 		if (saveloader != null) saveloader.CancelInvoke("autosave");
+		_realSaveloader = saveloader;
 
 		_courses.Clear();
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
@@ -66,6 +73,7 @@ internal class CoopManager
 			}
 			else
 			{
+				ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 				ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
 				ModeSaveFile.DeleteAndRecreateFolder(_saveFolder);
 				ModeSaveFile.Save(_saveFolder, _localMovement, _courses);
@@ -73,34 +81,31 @@ internal class CoopManager
 		}
 		else
 		{
-			// non-host: zero the local view until the host's first sync arrives
+			ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 			ModeSaveFile.ResetEconomyToZero(_localMovement, _courses);
 		}
 
-		// After Load/ResetEconomyToZero (both can touch reward/baseReward), so every
-		// client ends up with the same host-broadcast-playerCount-scaled values.
 		ScaleBaseRewards(playerCount);
 		ScaleMovementUpgradeCosts(playerCount);
 
 		CaptureBaseline();
 	}
 
-	// A scene load after Begin() destroys every Movement/courseScript captured
-	// above - called from HostPanelController once it re-finds the local player,
-	// so sync comparisons stop targeting dead references.
 	public void RefreshSceneReferences(Movement localMovement)
 	{
 		if (!Active) return;
 		_localMovement = localMovement;
-		// A freshly spawned Movement starts from the real single-player save, not
-		// this session's progress - reapply the session's own tracked state.
+		_realSaveloader = UnityEngine.Object.FindFirstObjectByType<Saveloader>();
+		if (_realSaveloader != null) _realSaveloader.CancelInvoke("autosave");
+		_courses.Clear();
+		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+		ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 		_localMovement.dashUnlocked = _lastDash;
 		_localMovement.wallJumpUnlocked = _lastWallJump;
 		_localMovement.doubleJumpUnlocked = _lastDoubleJump;
 		_localMovement.blockSwapUnlocked = _lastBlockSwap;
-		_courses.Clear();
-		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
-		// Same leak, same fix, for course-level upgrades and TimesUsed.
+		if (_lastDash && _localMovement.maxAirDashes < 1) _localMovement.maxAirDashes = 1;
+		if (_lastDoubleJump && _localMovement.maxAirJumps < 1) _localMovement.maxAirJumps = 1;
 		foreach (var course in _courses)
 		{
 			if (course?.localUpgradesScript == null) continue;
@@ -116,6 +121,7 @@ internal class CoopManager
 				{
 					boxes[i].TimesUsed = lastTimes[i];
 					boxes[i].CalcBoxCost();
+					ApplyBoxCapState(boxes[i]);
 				}
 			}
 		}
@@ -126,9 +132,13 @@ internal class CoopManager
 
 	private static List<upgradeBox> GetUpgradeBoxes(courseScript course) => ModeSaveFile.GetUpgradeBoxes(course);
 
-	// Movement-type boxes only (Wall Jump/Double Jump/Dash/Block Swap/Dash Swap),
-	// not endDemo and not any regular localUpgrade/globalUpgrade box. Scale
-	// baseUpgradeCost, not upgradeCost - CalcBoxCost() derives the latter from it.
+	private static void ApplyBoxCapState(upgradeBox box)
+	{
+		bool shouldBeCapped = box.upgrade == localUpgrades.localUpgradeSet.Movement ? box.TimesUsed >= 1 : box.TimesUsed >= box.Cap;
+		if (shouldBeCapped && box.isActive) DeactivateMethod?.Invoke(box, null);
+		else if (!shouldBeCapped && !box.isActive) box.isActive = true;
+	}
+
 	private void ScaleMovementUpgradeCosts(int playerCount)
 	{
 		_scaledUpgradeCosts.Clear();
@@ -138,13 +148,14 @@ internal class CoopManager
 			foreach (var box in GetUpgradeBoxes(course))
 			{
 				if (box == null) continue;
-				if (box.upgrade != localUpgrades.localUpgradeSet.Movement) continue;
-				if (box.movementUpgrade == upgradeBox.movementUpgrades.endDemo) continue;
-
-				var original = box.baseUpgradeCost;
-				_scaledUpgradeCosts.Add((box, original));
-				box.baseUpgradeCost = original / 5.0 * playerCount;
-				box.CalcBoxCost();
+				if (box.upgrade == localUpgrades.localUpgradeSet.Movement)
+				{
+					if (box.movementUpgrade == upgradeBox.movementUpgrades.endDemo) continue;
+					var original = box.baseUpgradeCost;
+					_scaledUpgradeCosts.Add((box, original));
+					box.baseUpgradeCost = original / 5.0 * playerCount;
+					box.CalcBoxCost();
+				}
 			}
 		}
 	}
@@ -169,10 +180,9 @@ internal class CoopManager
 		foreach (var c in UnityEngine.Object.FindObjectsByType<clonesScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
 		{
 			if (!c.enabled) continue;
-			// enabled=false alone leaves stale clones/cloneCount from the real save
 			c.onPrestige(true);
 			c.enabled = false;
-			c.gameObject.SetActive(false); // hide the purchase kiosk itself - disabled-but-visible looked broken, not disabled
+			c.gameObject.SetActive(false);
 			_disabledClones.Add(c);
 		}
 	}
@@ -212,14 +222,18 @@ private void CaptureBaseline()
 	{
 		if (!Active) return;
 
+		_realSaveloader?.CancelInvoke("manualSave");
+
 		if (!isHost)
 		{
-			var delta = BuildDelta();
-			if (delta != null) sendGameMessage(delta);
+			_deltaAccumulator += unscaledDt;
+			if (_deltaAccumulator >= DeltaInterval)
+			{
+				_deltaAccumulator = 0f;
+				var delta = BuildDelta();
+				if (delta != null) sendGameMessage(delta);
+			}
 
-			// BuildDelta sends abilities only once on change, and a dropped coopDelta
-			// loses it permanently - periodically resend full state instead; safe
-			// since ApplyAbilities OR-merges rather than overwriting.
 			_abilityResendAccumulator += unscaledDt;
 			if (_abilityResendAccumulator >= AbilityResendInterval)
 			{
@@ -331,7 +345,6 @@ private void CaptureBaseline()
 				{
 					if (!Enum.TryParse<global::localUpgrades.localUpgradeSet>(kv.Key, out var key)) continue;
 					var current = course.localUpgradesScript.localUpgradeDict.TryGetValue(key, out var v) ? v : 0.0;
-					// Same stale-full-sync race as globalUpgradeDict below.
 					course.localUpgradesScript.localUpgradeDict[key] = additive ? Math.Max(0, current + kv.Value.Value<double>()) : Math.Max(current, kv.Value.Value<double>());
 				}
 			}
@@ -343,8 +356,8 @@ private void CaptureBaseline()
 					if (!int.TryParse(kv.Key, out var boxIndex) || boxIndex < 0 || boxIndex >= boxes.Count) continue;
 					var box = boxes[boxIndex];
 					box.TimesUsed = additive ? Math.Max(0, box.TimesUsed + kv.Value.Value<int>()) : Math.Max(box.TimesUsed, kv.Value.Value<int>());
-					// TimesUsed synced but upgradeCost didn't - recompute it too
 					box.CalcBoxCost();
+					ApplyBoxCapState(box);
 				}
 			}
 		}
@@ -426,7 +439,6 @@ private void CaptureBaseline()
 			abilities["blockSwap"] = _localMovement.blockSwapUnlocked;
 		}
 		var courses = BuildCoursesFullSync();
-		// re-baseline so the host doesn't immediately read its own broadcast back as a new delta next tick
 		CaptureBaseline();
 		return new JObject { ["k"] = "coopSync", ["currencies"] = currencies, ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
 	}
@@ -440,9 +452,6 @@ private void CaptureBaseline()
 		if (payload["upgrades"] is JObject upgrades)
 			foreach (var kv in upgrades)
 				if (Enum.TryParse<globalStats.globalUpgradeSet>(kv.Key, out var u))
-					// A periodic full sync can be stale relative to a purchase this client
-					// just applied locally - take whichever value is higher instead of
-					// blindly trusting the incoming one (upgrade levels only ever go up).
 					globalStats.globalUpgradeDict[u] = additive
 						? Math.Max(0, globalStats.globalUpgradeDict[u] + kv.Value.Value<double>())
 						: Math.Max(globalStats.globalUpgradeDict[u], kv.Value.Value<double>());
@@ -451,12 +460,12 @@ private void CaptureBaseline()
 	private void ApplyAbilities(JObject payload)
 	{
 		if (!(payload["abilities"] is JObject abilities) || _localMovement == null) return;
-		// OR, never overwrite - abilities only ever get unlocked, never revoked, so a
-		// stale "false" must never un-set one another client already has.
 		if (abilities["dash"] != null) _localMovement.dashUnlocked |= abilities["dash"].Value<bool>();
 		if (abilities["wallJump"] != null) _localMovement.wallJumpUnlocked |= abilities["wallJump"].Value<bool>();
 		if (abilities["doubleJump"] != null) _localMovement.doubleJumpUnlocked |= abilities["doubleJump"].Value<bool>();
 		if (abilities["blockSwap"] != null) _localMovement.blockSwapUnlocked |= abilities["blockSwap"].Value<bool>();
+		if (_localMovement.dashUnlocked && _localMovement.maxAirDashes < 1) _localMovement.maxAirDashes = 1;
+		if (_localMovement.doubleJumpUnlocked && _localMovement.maxAirJumps < 1) _localMovement.maxAirJumps = 1;
 	}
 
 	private void ApplyDelta(JObject payload)
@@ -476,6 +485,46 @@ private void CaptureBaseline()
 
 	private void PersistSave() { if (_saveFolder != null) ModeSaveFile.Save(_saveFolder, _localMovement, _courses); }
 
+	private static bool IsCloneUpgrade(localUpgrades.localUpgradeSet upgrade) => upgrade switch
+	{
+		localUpgrades.localUpgradeSet.cloneCount => true,
+		localUpgrades.localUpgradeSet.cloneMult => true,
+		localUpgrades.localUpgradeSet.fastCloneChance => true,
+		localUpgrades.localUpgradeSet.bigCloneChance => true,
+		localUpgrades.localUpgradeSet.GreenCloneRewardBase => true,
+		localUpgrades.localUpgradeSet.enableCloneDustGeneration => true,
+		_ => false,
+	};
+
+	public void HideCloneUpgradeBoxes()
+	{
+		foreach (var b in UnityEngine.Object.FindObjectsByType<upgradeBox>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+		{
+			if (!IsCloneUpgrade(b.upgrade) || !b.gameObject.activeSelf) continue;
+			b.gameObject.SetActive(false);
+			if (!_hiddenCloneBoxes.Contains(b)) _hiddenCloneBoxes.Add(b);
+		}
+		foreach (var c in UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+		{
+			if (c.personalBonusDisplay == null || c.personalBonusDisplay.text.Length == 0) continue;
+			c.personalBonusDisplay.text = "";
+			if (!_blankedCloneMultCourses.Contains(c)) _blankedCloneMultCourses.Add(c);
+
+			if (c.currentTimeDisplay != null && c.currentTimeDisplay.text.Contains("Clone"))
+				c.currentTimeDisplay.text = "";
+		}
+	}
+
+	public void RestoreCloneUpgradeBoxes()
+	{
+		foreach (var b in _hiddenCloneBoxes)
+			if (b != null) b.gameObject.SetActive(true);
+		_hiddenCloneBoxes.Clear();
+		foreach (var c in _blankedCloneMultCourses)
+			if (c != null) c.updateCloneMultBonus();
+		_blankedCloneMultCourses.Clear();
+	}
+
 	public void End(bool isHost)
 	{
 		if (!Active) return;
@@ -486,14 +535,10 @@ private void CaptureBaseline()
 		foreach (var c in _disabledClones) if (c != null) { c.gameObject.SetActive(true); c.enabled = true; }
 		_disabledClones.Clear();
 
-		// baseReward isn't part of the save format, so Restore() below never touches
-		// it - without this the scaled value leaks into the real single-player save.
 		foreach (var (course, original) in _scaledRewards)
 			if (course != null) BaseRewardField.SetValue(course, original);
 		_scaledRewards.Clear();
 
-		// baseUpgradeCost isn't saved either (see ScaleMovementUpgradeCosts) - same
-		// leak risk into the real single-player save without an explicit restore.
 		foreach (var (box, original) in _scaledUpgradeCosts)
 			if (box != null) { box.baseUpgradeCost = original; box.CalcBoxCost(); }
 		_scaledUpgradeCosts.Clear();
@@ -508,4 +553,96 @@ private void CaptureBaseline()
 			saveloader.InvokeRepeating("autosave", 10f, 10f);
 		}
 	}
+}
+
+internal static class ModeSaveFile
+{
+	public static List<upgradeBox> GetUpgradeBoxes(courseScript course)
+	{
+		var list = new List<upgradeBox>();
+		var t = course?.localUpgradesScript?.transform;
+		if (t == null) return list;
+		for (int i = 0; i < t.childCount; i++)
+		{
+			var box = t.GetChild(i).GetComponent<upgradeBox>();
+			if (box != null) list.Add(box);
+		}
+		return list;
+	}
+
+	public static void ResetEconomyToZero(Movement localMovement, List<courseScript> courses)
+	{
+		foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
+			globalStats.currencyLookup[c] = 0.0;
+		foreach (globalStats.globalUpgradeSet u in Enum.GetValues(typeof(globalStats.globalUpgradeSet)))
+			globalStats.globalUpgradeDict[u] = 0.0;
+		if (localMovement != null)
+		{
+			localMovement.dashUnlocked = false;
+			localMovement.wallJumpUnlocked = false;
+			localMovement.doubleJumpUnlocked = false;
+			localMovement.blockSwapUnlocked = false;
+		}
+		foreach (var course in courses)
+		{
+			if (course?.localUpgradesScript == null) continue;
+			foreach (var key in course.localUpgradesScript.localUpgradeDict.Keys.ToList())
+				course.localUpgradesScript.localUpgradeDict[key] = 0.0;
+			foreach (var box in GetUpgradeBoxes(course))
+			{
+				box.reactivateAndReset();
+				box.CalcBoxCost();
+			}
+		}
+	}
+
+	public static void DeleteAndRecreateFolder(string saveFolder)
+	{
+		var path = Application.persistentDataPath + saveFolder;
+		try { if (Directory.Exists(path)) Directory.Delete(path, true); } catch (Exception e) { Debug.LogError("[ModeSaveFile] delete failed: " + e); }
+		Directory.CreateDirectory(path);
+	}
+
+	public static bool Exists(string saveFolder) => File.Exists(Application.persistentDataPath + saveFolder + "/playerdata.txt");
+
+	public static void Load(string saveFolder, Movement localMovement, List<courseScript> courses)
+	{
+		if (localMovement != null)
+		{
+			try { localMovement.load(saveFolder); } catch (Exception e) { Debug.LogError("[ModeSaveFile] load failed: " + e); }
+		}
+		foreach (var c in courses)
+		{
+			if (c == null) continue;
+			try { c.load(saveFolder); } catch { }
+			foreach (var box in GetUpgradeBoxes(c)) box.CalcBoxCost();
+		}
+	}
+
+	public static void Save(string saveFolder, Movement localMovement, List<courseScript> courses)
+	{
+		if (localMovement == null) return;
+		try
+		{
+			localMovement.save(saveFolder);
+			foreach (var c in courses) c.save(saveFolder);
+		}
+		catch (Exception e) { Debug.LogError("[ModeSaveFile] save failed: " + e); }
+	}
+
+	public static void Restore(string realFolder, Movement localMovement, List<courseScript> courses)
+	{
+		if (localMovement != null)
+		{
+			try { localMovement.load(realFolder); } catch (Exception e) { Debug.LogError("[ModeSaveFile] restore failed: " + e); }
+		}
+		foreach (var c in courses)
+		{
+			if (c == null) continue;
+			try { c.load(realFolder); } catch { }
+			foreach (var box in GetUpgradeBoxes(c)) box.CalcBoxCost();
+		}
+	}
+
+	public static string RealSaveFolder() => "/Savedata" + (globalStats.difficultyLevel == 1 ? "hard" : "");
 }

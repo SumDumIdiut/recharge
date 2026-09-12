@@ -17,7 +17,6 @@ public class RechargeMultiplayerMod : IRechargeMod
         var hostPanel = hostPanelGo.AddComponent<HostPanelController>();
         hostPanel.Init(host);
 
-        // Every scene load creates a fresh, undecorated pauseMenuScript - reinstall each time.
         host.Events.On(RechargeEvents.SceneLoaded, _ =>
         {
             var menu = UnityEngine.Object.FindFirstObjectByType<pauseMenuScript>();
