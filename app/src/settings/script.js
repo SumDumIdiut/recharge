@@ -240,8 +240,9 @@ async function refreshLauncherStatus() {
   try {
     const info = await invoke('check_launcher_update');
     launcherUpdateInfo = info;
-    if (info.updateAvailable) {
+    if (info.appUpdateAvailable) {
       status.innerHTML = `v${info.currentVersion} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span>`;
+      updateBtn.textContent = 'Update Now';
       updateBtn.hidden = false;
       if (info.notes) {
         notes.textContent = info.notes;
@@ -249,6 +250,12 @@ async function refreshLauncherStatus() {
       } else {
         notes.hidden = true;
       }
+    } else if (info.mapsUpdateAvailable) {
+      status.textContent = `v${info.currentVersion} (up to date)`;
+      notes.textContent = `Maps mod needs redeploying to your game: bundled v${info.bundledMapsVersion}, game has v${info.deployedMapsVersion}.`;
+      notes.hidden = false;
+      updateBtn.textContent = 'Redeploy Maps';
+      updateBtn.hidden = false;
     } else {
       status.textContent = `v${info.currentVersion} (up to date)`;
       updateBtn.hidden = true;
@@ -263,20 +270,32 @@ window.__launcherUpdate = async function () {
   const { invoke } = window.__TAURI__.core;
   const btn = document.getElementById('launcher-update-btn');
   const progress = document.getElementById('launcher-update-progress');
-  if (!launcherUpdateInfo?.downloadUrl) {
-    window.__TAURI__.opener.openUrl(launcherUpdateInfo?.url);
+
+  if (launcherUpdateInfo?.appUpdateAvailable) {
+    if (!launcherUpdateInfo.downloadUrl) {
+      window.__TAURI__.opener.openUrl(launcherUpdateInfo.url);
+      return;
+    }
+    btn.disabled = true;
+    progress.hidden = false;
+    progress.textContent = 'Starting…';
+    try {
+      // On success this process is closed by the backend before it ever
+      // returns - there's no "finished" state to show here, only failure.
+      await invoke('install_launcher_update', { url: launcherUpdateInfo.downloadUrl });
+    } catch (err) {
+      btn.disabled = false;
+      progress.textContent = String(err);
+    }
     return;
   }
-  btn.disabled = true;
-  progress.hidden = false;
-  progress.textContent = 'Starting…';
-  try {
-    // On success this process is closed by the backend before it ever
-    // returns - there's no "finished" state to show here, only failure.
-    await invoke('install_launcher_update', { url: launcherUpdateInfo.downloadUrl });
-  } catch (err) {
-    btn.disabled = false;
-    progress.textContent = String(err);
+
+  if (launcherUpdateInfo?.mapsUpdateAvailable) {
+    // Same underlying redeploy as the RechargeLoader "Install/Update"
+    // button above (rebuilds+redeploys every bundled mod, Maps included) -
+    // just reached from here too, since that's genuinely what fixes this.
+    await window.__loaderInstall();
+    await refreshLauncherStatus();
   }
 };
 

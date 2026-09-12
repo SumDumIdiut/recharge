@@ -225,44 +225,75 @@ async function checkForLauncherUpdate() {
   }
   if (!info.updateAvailable) return;
 
-  logLine(`update available: <b>v${info.latestVersion}</b>`);
   const overlay = document.getElementById('update-overlay');
   const body = document.getElementById('update-body');
   const progress = document.getElementById('update-progress');
   const laterBtn = document.getElementById('update-later');
   const nowBtn = document.getElementById('update-now');
-  body.innerHTML = `<p>Recharge <b>v${info.latestVersion}</b> is available (you're on v${info.currentVersion}).</p>${info.notes ? `<p>${escapeForHtml(info.notes)}</p>` : ''}`;
   progress.hidden = true;
   nowBtn.disabled = false;
   laterBtn.disabled = false;
   overlay.hidden = false;
 
-  event.listen('launcher-update-progress', (e) => {
-    progress.hidden = false;
-    progress.textContent = e.payload;
-  });
+  if (info.appUpdateAvailable) {
+    logLine(`update available: <b>v${info.latestVersion}</b>`);
+    body.innerHTML = `<p>Recharge <b>v${info.latestVersion}</b> is available (you're on v${info.currentVersion}).</p>${info.notes ? `<p>${escapeForHtml(info.notes)}</p>` : ''}`;
+    nowBtn.textContent = 'Update Now';
 
-  laterBtn.onclick = () => { overlay.hidden = true; };
-  nowBtn.onclick = async () => {
-    if (!info.downloadUrl) {
-      window.__TAURI__.opener.openUrl(info.url);
-      overlay.hidden = true;
-      return;
-    }
-    nowBtn.disabled = true;
-    laterBtn.disabled = true;
-    progress.hidden = false;
-    progress.textContent = 'Starting…';
-    try {
-      // On success this process is closed by the backend before it ever
-      // returns - there's no "finished" state to show here, only failure.
-      await invoke('install_launcher_update', { url: info.downloadUrl });
-    } catch (err) {
-      nowBtn.disabled = false;
-      laterBtn.disabled = false;
-      progress.textContent = String(err);
-    }
-  };
+    event.listen('launcher-update-progress', (e) => {
+      progress.hidden = false;
+      progress.textContent = e.payload;
+    });
+
+    laterBtn.onclick = () => { overlay.hidden = true; };
+    nowBtn.onclick = async () => {
+      if (!info.downloadUrl) {
+        window.__TAURI__.opener.openUrl(info.url);
+        overlay.hidden = true;
+        return;
+      }
+      nowBtn.disabled = true;
+      laterBtn.disabled = true;
+      progress.hidden = false;
+      progress.textContent = 'Starting…';
+      try {
+        // On success this process is closed by the backend before it ever
+        // returns - there's no "finished" state to show here, only failure.
+        await invoke('install_launcher_update', { url: info.downloadUrl });
+      } catch (err) {
+        nowBtn.disabled = false;
+        laterBtn.disabled = false;
+        progress.textContent = String(err);
+      }
+    };
+  } else if (info.mapsUpdateAvailable) {
+    logLine(`Maps mod update available: <b>v${info.bundledMapsVersion}</b> (game has v${info.deployedMapsVersion})`);
+    body.innerHTML = `<p>The Maps mod needs redeploying to your game: bundled <b>v${info.bundledMapsVersion}</b>, game currently has <b>v${info.deployedMapsVersion}</b>.</p>`;
+    nowBtn.textContent = 'Redeploy Now';
+
+    event.listen('loader-progress', (e) => {
+      progress.hidden = false;
+      progress.textContent = e.payload;
+    });
+
+    laterBtn.onclick = () => { overlay.hidden = true; };
+    nowBtn.onclick = async () => {
+      nowBtn.disabled = true;
+      laterBtn.disabled = true;
+      progress.hidden = false;
+      progress.textContent = 'Starting…';
+      try {
+        await invoke('install_or_update_loader');
+        progress.textContent = 'Done.';
+      } catch (err) {
+        progress.textContent = String(err);
+      } finally {
+        nowBtn.disabled = false;
+        laterBtn.disabled = false;
+        overlay.hidden = true;
+      }
+    };
+  }
 }
 
 function escapeForHtml(s) {

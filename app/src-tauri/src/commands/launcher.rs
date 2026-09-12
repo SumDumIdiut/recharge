@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::Command;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+
+use super::settings;
 
 // Distinct from RechargeLoader's own version (loader.rs's LOADER_VERSION,
 // the mod-framework contract mods build against) - this is Recharge the
@@ -31,8 +34,12 @@ pub struct LauncherUpdateInfo {
     pub current_version: String,
     #[serde(rename = "latestVersion")]
     pub latest_version: String,
+    // True if either the app itself or the bundled Maps mod has something
+    // newer - drives whether the frontend shows a prompt/button at all.
     #[serde(rename = "updateAvailable")]
     pub update_available: bool,
+    #[serde(rename = "appUpdateAvailable")]
+    pub app_update_available: bool,
     pub notes: String,
     pub url: String,
     // The release's own Setup.exe asset - present whenever a real release
@@ -41,6 +48,42 @@ pub struct LauncherUpdateInfo {
     // this is ever missing, e.g. a manually-created release with no asset.
     #[serde(rename = "downloadUrl")]
     pub download_url: Option<String>,
+    // recharge.maps ships bundled with Recharge (not distributed through the
+    // Hub) - its updates only ever reach a user's actual game via the
+    // RechargeLoader "Install/Update" redeploy, so a stale deployed copy
+    // can't self-heal just from the app updating. Comparing the version
+    // bundled in this install against what's actually deployed in the game
+    // folder catches that gap even when the app itself is already current.
+    #[serde(rename = "mapsUpdateAvailable")]
+    pub maps_update_available: bool,
+    #[serde(rename = "bundledMapsVersion")]
+    pub bundled_maps_version: Option<String>,
+    #[serde(rename = "deployedMapsVersion")]
+    pub deployed_maps_version: Option<String>,
+}
+
+fn read_manifest_version(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    json.get("version")?.as_str().map(|s| s.to_string())
+}
+
+fn bundled_maps_version(app: &AppHandle) -> Option<String> {
+    let path = app
+        .path()
+        .resolve("mods/recharge-maps/mod.json", tauri::path::BaseDirectory::Resource)
+        .ok()?;
+    read_manifest_version(&path)
+}
+
+fn deployed_maps_version(app: &AppHandle) -> Option<String> {
+    let game_path = settings::get_game_path(app.clone())?;
+    let path = PathBuf::from(game_path)
+        .join("Recharge")
+        .join("Mods")
+        .join("recharge.maps")
+        .join("mod.json");
+    read_manifest_version(&path)
 }
 
 // Plain numeric-segment compare ("0.10.0" > "0.9.0") - matches the same
@@ -79,13 +122,28 @@ pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, Strin
         .find(|a| a.name.ends_with("_Setup.exe"))
         .map(|a| a.browser_download_url.clone());
 
+    let app_update_available = is_newer(&latest_version, &current_version);
+
+    let bundled_maps_version = bundled_maps_version(&app);
+    let deployed_maps_version = deployed_maps_version(&app);
+    let maps_update_available = match (&bundled_maps_version, &deployed_maps_version) {
+        (Some(bundled), Some(deployed)) => is_newer(bundled, deployed),
+        // Not deployed at all yet isn't a "maps needs updating" case - that's
+        // the separate "RechargeLoader isn't installed" onboarding flow.
+        _ => false,
+    };
+
     Ok(LauncherUpdateInfo {
-        update_available: is_newer(&latest_version, &current_version),
+        update_available: app_update_available || maps_update_available,
+        app_update_available,
         latest_version,
         current_version,
         notes: release.body,
         url: release.html_url,
         download_url,
+        maps_update_available,
+        bundled_maps_version,
+        deployed_maps_version,
     })
 }
 
