@@ -122,48 +122,52 @@ function logLine(html) {
   log.prepend(line);
 }
 
-function setPlaying(isPlaying) {
-  document.querySelectorAll('.home-tile').forEach((el) => (el.disabled = isPlaying));
-  document.getElementById('home-play-status').textContent = isPlaying ? 'Launching…' : '';
+function setPlayStatus(status) {
+  document.querySelectorAll('.home-tile').forEach((el) => (el.disabled = status != null));
+  document.getElementById('home-play-status').textContent =
+    status === 'launching' ? 'Launching…' : status === 'running' ? 'Running' : '';
 }
 
 async function pollRunning() {
   const { invoke } = window.__TAURI__.core;
   const running = await invoke('is_game_running');
-  if (!running) {
-    clearInterval(pollHandle);
-    pollHandle = null;
-    setPlaying(false);
-    logLine('game process exited');
-    // The modded swap is a real file on disk, not a launch-time-only trick -
-    // it's still deployed for whatever runs the game next, Steam-direct
-    // included. Put it back to vanilla the moment the modded session ends so
-    // "just running the game through Steam" is never silently modded.
-    if (lastLaunchMode === 'modded') {
-      lastLaunchMode = null;
-      try {
-        await invoke('restore_vanilla_build');
-        logLine('switched back to <b>vanilla</b>');
-      } catch (err) {
-        logLine(`couldn't switch back to vanilla: ${String(err)}`);
-      }
+  if (running) {
+    setPlayStatus('running');
+    return;
+  }
+  clearInterval(pollHandle);
+  pollHandle = null;
+  setPlayStatus(null);
+  logLine('game process exited');
+  // The modded swap is a real file on disk, not a launch-time-only trick -
+  // it's still deployed for whatever runs the game next, Steam-direct
+  // included. Put it back to vanilla the moment the modded session ends so
+  // "just running the game through Steam" is never silently modded.
+  if (lastLaunchMode === 'modded') {
+    lastLaunchMode = null;
+    try {
+      await invoke('restore_vanilla_build');
+      logLine('switched back to <b>vanilla</b>');
+    } catch (err) {
+      logLine(`couldn't switch back to vanilla: ${String(err)}`);
     }
   }
 }
 
 window.__homeLaunch = async function (mode) {
   const { invoke } = window.__TAURI__.core;
-  setPlaying(true);
+  setPlayStatus('launching');
   logLine(`launching <b>${mode.toUpperCase()}</b>…`);
   try {
     await invoke('launch_game', { modded: mode === 'modded' });
     lastLaunchMode = mode;
     logLine(`process started (${mode})`);
+    setPlayStatus('running');
     if (!pollHandle) pollHandle = setInterval(pollRunning, 2000);
   } catch (err) {
     document.getElementById('home-play-status').textContent = String(err);
     logLine(`launch failed: ${String(err)}`);
-    setPlaying(false);
+    setPlayStatus(null);
   }
 };
 
@@ -247,7 +251,7 @@ export async function initHome() {
   }
 
   if (await invoke('is_game_running')) {
-    setPlaying(true);
+    setPlayStatus('running');
     pollHandle = setInterval(pollRunning, 2000);
     logLine('game process already running');
   } else {
