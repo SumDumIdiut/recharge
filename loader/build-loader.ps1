@@ -282,7 +282,12 @@ $refXml
         $deployModDir = Join-Path $gameDir "Recharge\Mods\$($manifest.id)"
         New-Item -ItemType Directory -Force -Path $deployModDir | Out-Null
         Copy-Item $modBuilt $deployModDir -Force
-        Copy-Item $manifestPath $deployModDir -Force
+        $deployedManifestPath = Join-Path $deployModDir 'mod.json'
+        if (Test-Path $deployedManifestPath) {
+            $deployedManifest = Get-Content $deployedManifestPath -Raw | ConvertFrom-Json
+            if ($null -ne $deployedManifest.enabled) { $manifest.enabled = $deployedManifest.enabled }
+        }
+        $manifest | ConvertTo-Json -Depth 10 | Set-Content -NoNewline -Path $deployedManifestPath
         # A mod creates whatever data subfolders it needs itself at runtime
         # (see IRechargeHost.ModDataDir) - the loader doesn't need to guess.
     }
