@@ -1,13 +1,5 @@
-// The catalog used to be a hardcoded local file - now it's fetched from
-// Recharge Hub, so a new mod shows up here the moment it's approved there,
-// with no app update needed. See app/src-tauri/src/commands/hub.rs for the
-// actual download+install this tab's Install button triggers.
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
-// recharge.maps is infrastructure the Maps tab always needs, not an optional
-// feature a user picks - it shows up in Installed (so it's not a mystery
-// what's running), styled distinctly and without an uninstall option, but
-// never appears in Browse/the hub catalog since it isn't something to install.
 const PROTECTED_MOD_IDS = new Set(['recharge.maps']);
 
 let currentSubtab = 'installed';
@@ -41,9 +33,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Numeric-segment compare ("1.10.0" > "1.9.0", unlike a plain string compare)
-// - good enough for the plain "major.minor.patch" versions this project
-// actually uses, not a full semver parser (no pre-release/build metadata).
 function isNewerVersion(a, b) {
   const pa = String(a).split('.').map(Number);
   const pb = String(b).split('.').map(Number);
@@ -144,10 +133,6 @@ function renderBrowse() {
 }
 
 function render() {
-  // A hub-beam install re-fetches this tab's view.html from scratch (see
-  // app.js's refreshTab), which resets the subtab buttons' "active" class
-  // to their hardcoded markup default regardless of currentSubtab - resync
-  // it here so the pill never disagrees with which grid is actually shown.
   document.querySelectorAll('#view-mods .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('mods-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('mods-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
@@ -180,13 +165,6 @@ window.__modToggle = async function (el) {
   }
 };
 
-// Walks entry.dependencies transitively (a required mod can itself require
-// another), splitting into: alreadyInstalled (nothing to do), missing (in
-// the catalog, not installed - offer to install alongside), and unavailable
-// (required but not in the catalog at all - this mod genuinely can't work,
-// matching the loader's own real "requires X, which is not installed"
-// runtime check in RechargeLoaderBootstrap - this is the same rule, just
-// caught before install instead of discovered later in Player.log).
 function resolveMissingDependencies(entry) {
   const missing = [];
   const unavailable = [];
@@ -252,9 +230,6 @@ window.__modInstall = async function (id, btn) {
 
 async function doInstall(ids, btn) {
   const { invoke } = window.__TAURI__.core;
-  // The circular card badge gets the spinner->tick treatment; the plain
-  // rectangular "Install" button on the detail page just swaps its text -
-  // there's no "dot" there for a circle to live inside.
   const isBadge = btn && btn.classList.contains('browse-card-badge');
   if (btn) {
     btn.disabled = true;
@@ -267,9 +242,6 @@ async function doInstall(ids, btn) {
     }
   }
   try {
-    // Each id is downloaded and dropped into place individually - a real
-    // per-mod install (not a full local rebuild), so this works without the
-    // mod's source ever being bundled with the app.
     for (const id of ids) {
       await invoke('install_from_hub_cmd', { kind: 'mods', id });
     }
@@ -298,18 +270,10 @@ async function doInstall(ids, btn) {
 }
 
 window.__modOpenDetail = function (id) {
-  // "id" may be a hub catalog id (opened from Browse) or a real installed
-  // mod id (opened from Installed) - those are different id spaces now that
-  // a hub submission carries its own arbitrary UUID separate from the mod's
-  // own mod.json id (see loadCatalog's "modId").
   let entry = catalog.find((c) => c.id === id);
   let installedMod = installedCache.find((m) => m.id === id);
   if (!entry && installedMod) entry = catalog.find((c) => c.modId === installedMod.id);
   if (!installedMod && entry?.modId) installedMod = installedCache.find((m) => m.id === entry.modId);
-  // A mod can be installed without being in the catalog at all (built and
-  // dropped in locally, ahead of ever being published) - fall back to
-  // whatever the real manifest itself has rather than refusing to show
-  // anything, so it's still reachable to disable/uninstall.
   if (!entry && !installedMod) return;
   const installed = !!installedMod;
   const hubId = entry?.id;

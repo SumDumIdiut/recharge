@@ -17,28 +17,10 @@ pub struct LoaderStatus {
     pub version: String,
 }
 
-fn managed_dir(game_path: &str) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(game_path).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = path.file_name()?.to_string_lossy().to_string();
-        if name.ends_with("_Data") {
-            let managed = path.join("Managed");
-            if managed.is_dir() {
-                return Some(managed);
-            }
-        }
-    }
-    None
-}
-
 #[tauri::command]
 pub fn loader_status(app: AppHandle) -> LoaderStatus {
     let installed = settings_game_path(&app)
-        .and_then(|p| managed_dir(&p))
+        .and_then(|p| super::steam::managed_dir(std::path::Path::new(&p)))
         .map(|managed| managed.join("Recharge.ModApi.dll").is_file())
         .unwrap_or(false);
 
@@ -50,6 +32,33 @@ pub fn loader_status(app: AppHandle) -> LoaderStatus {
 
 fn settings_game_path(app: &AppHandle) -> Option<String> {
     super::settings::get_game_path(app.clone())
+}
+
+#[cfg(windows)]
+fn powershell_command() -> Result<Command, String> {
+    Ok(Command::new("powershell.exe"))
+}
+
+#[cfg(not(windows))]
+fn powershell_command() -> Result<Command, String> {
+    if which_on_path("pwsh").is_none() {
+        return Err(
+            "PowerShell (pwsh) isn't installed - RechargeLoader's build/install pipeline needs it. \
+             Install it from your package manager (e.g. `sudo pacman -S powershell` on Arch, \
+             or see https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux) \
+             and try again."
+                .to_string(),
+        );
+    }
+    Ok(Command::new("pwsh"))
+}
+
+#[cfg(not(windows))]
+fn which_on_path(bin: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(bin))
+        .find(|p| p.is_file())
 }
 
 fn find_build_script(app: &AppHandle) -> Result<PathBuf, String> {
@@ -65,20 +74,27 @@ fn find_build_script(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
-    let game_path = settings_game_path(&app)
-        .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
-    let script = find_build_script(&app)?;
+pub async fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
+    let emit_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || install_or_update_loader_blocking(&app))
+        .await
+        .map_err(|e| format!("installer task panicked: {e}"))
+        .and_then(|r| r);
+    let _ = emit_app.emit("loader-install-finished", result.is_ok());
+    result
+}
 
-    // Steam's own appid for the Demo vs. Playtest branches differs - read it
-    // from the real appmanifest rather than guessing, so steam_appid.txt (see
-    // build-loader.ps1) always matches whichever one is actually installed.
+fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
+    let game_path = settings_game_path(app)
+        .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
+    let script = find_build_script(app)?;
+
     let appid = super::steam::info_for_path(std::path::Path::new(&game_path)).and_then(|i| i.appid);
 
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);
 
-    let mut cmd = Command::new("powershell.exe");
+    let mut cmd = powershell_command()?;
     cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .args(["-GameDir", &game_path])
@@ -121,11 +137,34 @@ pub fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
         });
     }
 
-    let managed = managed_dir(&game_path)
+    let managed = super::steam::managed_dir(std::path::Path::new(&game_path))
         .ok_or_else(|| "Install script exited cleanly but Managed folder is missing.".to_string())?;
     if !managed.join("Recharge.ModApi.dll").is_file() {
         return Err("Install script exited cleanly but Recharge.ModApi.dll wasn't deployed.".into());
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn uninstall_loader(app: AppHandle) -> Result<(), String> {
+    let game_path = settings_game_path(&app)
+        .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
+    let managed = super::steam::managed_dir(std::path::Path::new(&game_path))
+        .ok_or_else(|| "Couldn't find the game's Managed folder.".to_string())?;
+
+    let backup = managed.join("Assembly-CSharp.ORIGINAL.dll");
+    if backup.is_file() {
+        std::fs::copy(&backup, managed.join("Assembly-CSharp.dll"))
+            .map_err(|e| format!("Failed to restore the original assembly: {e}"))?;
+        let _ = std::fs::remove_file(&backup);
+    }
+    let _ = std::fs::remove_file(managed.join("Assembly-CSharp.RECHARGE.dll"));
+    let _ = std::fs::remove_file(managed.join("Recharge.ModApi.dll"));
+
+    let mods_dir = PathBuf::from(&game_path).join("Recharge").join("Mods");
+    if mods_dir.is_dir() {
+        std::fs::remove_dir_all(&mods_dir).map_err(|e| format!("Failed to remove deployed mods: {e}"))?;
+    }
     Ok(())
 }

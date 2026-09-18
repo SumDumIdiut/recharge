@@ -1,5 +1,3 @@
-// Two starting points (base color sets) - everything else is picked freely
-// per-attribute and layered on top as CSS variable overrides.
 export const PRESETS = [
   {
     id: 'dark',
@@ -45,8 +43,6 @@ function rgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// Perceived brightness (ITU-R BT.601) - decides whether native form controls
-/// scrollbars should render themselves light-on-dark or dark-on-light.
 function isDark(hex) {
   const { r, g, b } = hexToRgb(hex);
   return (r * 299 + g * 587 + b * 114) / 1000 < 128;
@@ -82,18 +78,11 @@ export function applyPreset(id) {
   applyColors({ ...preset });
 }
 
-// Background texture - a user-uploaded image layered over the flat --bg
-// color (see body's background-image in style.css). Stored as a data URL
-// so it survives a relaunch with no extra Tauri command needed to read it
-// back off disk.
 export function getBgTexture() {
   try { return localStorage.getItem(TEXTURE_KEY) || ''; } catch (e) { return ''; }
 }
 
 export function applyBgTexture(dataUrl) {
-  // Persist first - if a large image blows localStorage's quota, throw
-  // before touching the visible property at all. Applying it anyway would
-  // look like it worked right up until the next relaunch silently drops it.
   try {
     if (dataUrl) localStorage.setItem(TEXTURE_KEY, dataUrl);
     else localStorage.removeItem(TEXTURE_KEY);
@@ -103,9 +92,6 @@ export function applyBgTexture(dataUrl) {
   document.documentElement.style.setProperty('--bg-image', dataUrl ? `url("${dataUrl}")` : 'none');
 }
 
-// Custom CSS - injected last (after style.css and every tab's own
-// stylesheet) so it can freely override anything, including the
-// --bg/--panel/etc. custom properties applyColors sets inline.
 const CUSTOM_CSS_ELEMENT_ID = 'recharge-custom-css';
 
 export function getCustomCss() {
@@ -128,11 +114,6 @@ export function applyCustomCss(css) {
   el.textContent = css || '';
 }
 
-// Home's procedural waveform banner - persisted here (not just in-memory in
-// home.js) so it survives a relaunch, matching every other Appearance
-// control on this page. home.js reads these via getWaveSettings() each time
-// it (re)builds the waveform; this module doesn't touch the DOM for it
-// directly since the waveform is generated SVG geometry, not a CSS property.
 export const WAVE_DEFAULTS = { enabled: true, speed: 90, amplitude: 20, density: 300 };
 
 export function getWaveSettings() {

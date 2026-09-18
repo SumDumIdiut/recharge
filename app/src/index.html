@@ -86,13 +86,9 @@
         <div class="home-grid">
           <div class="home-panel">
             <div class="home-panel-title">Installation</div>
-            <div class="home-install-row">
-              <div>
-                <div class="home-install-label" id="home-install-label">Detecting…</div>
-                <div class="home-install-sub" id="home-install-sub"></div>
-              </div>
+            <div class="home-install-list" id="home-install-list">
+              <div class="home-install-sub">Detecting…</div>
             </div>
-            <button class="btn" onclick="navigate('settings')">Manage</button>
           </div>
 
           <div class="home-menu-col">
@@ -135,6 +131,11 @@
 
     <div id="toast-container"></div>
 
+    <button class="global-progress" id="global-progress" onclick="navigate('settings')" hidden>
+      <div class="global-progress-text" id="global-progress-text"></div>
+      <div class="progress-track"><div class="progress-fill" id="global-progress-fill"></div></div>
+    </button>
+
     <div class="mods-modal-overlay" id="onboard-overlay" hidden>
       <div class="mods-modal">
         <div class="mods-modal-title">Get Set Up</div>
@@ -142,6 +143,16 @@
         <div class="mods-modal-actions">
           <button class="btn" id="onboard-dismiss">Not Now</button>
           <button class="btn btn-primary" id="onboard-go">Go to Settings</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mods-modal-overlay" id="install-picker-overlay" hidden>
+      <div class="mods-modal">
+        <div class="mods-modal-title">Multiple Installs Found</div>
+        <div class="mods-modal-body">
+          <p>Recharge found more than one IGTAP install. Pick which one to use - you can change this later in Settings.</p>
+          <div class="install-picker-list" id="install-picker-list"></div>
         </div>
       </div>
     </div>

@@ -23,8 +23,6 @@ window.navigate = async function navigate(tab) {
 
   document.getElementById('crumb-bar').hidden = tab === 'home';
 
-  // A path picked in Settings > Browse (or a Settings visit in general)
-  // should be reflected the moment you're back, not just after restarting.
   if (tab === 'home') refreshInstallStatus({ log: false });
 };
 
@@ -43,23 +41,38 @@ function showToast(html) {
   }, 4000);
 }
 
-// A tab already loaded once is cached (see ensureTab) and won't re-fetch its
-// view/re-run init on its own - drop the cache entry so a beamed install is
-// reflected next time the tab is opened, or immediately if it's the one
-// currently on screen.
 async function refreshTab(tab) {
   delete _tabLoaded[tab];
   if (tab === curTab) await ensureTab(tab);
 }
 
-// A "Beam to Client" click on the recharge-hub web viewer hits a local HTTP
-// endpoint this app runs (see src-tauri/src/commands/hub.rs), which installs
-// the mod/map and emits this event once done.
 window.__TAURI__.event.listen('hub-beam-installed', (event) => {
   const { kind, name } = event.payload;
   showToast(`Installed <strong>${name}</strong> from the Recharge Library`);
   refreshTab(kind === 'mods' ? 'mods' : 'maps');
 });
+
+(function initGlobalLoaderProgress() {
+  const el = document.getElementById('global-progress');
+  const textEl = document.getElementById('global-progress-text');
+  const fillEl = document.getElementById('global-progress-fill');
+  if (!el) return;
+
+  window.__TAURI__.event.listen('loader-progress', (event) => {
+    const text = event.payload;
+    el.hidden = false;
+    textEl.textContent = text;
+    const match = text.match(/^(\d+)\/(\d+):/);
+    fillEl.style.width = match ? (parseInt(match[1], 10) / parseInt(match[2], 10)) * 100 + '%' : '0%';
+  });
+
+  window.__TAURI__.event.listen('loader-install-finished', (event) => {
+    const ok = event.payload;
+    textEl.textContent = ok ? 'RechargeLoader: done' : 'RechargeLoader: install failed - see Settings';
+    fillEl.style.width = ok ? '100%' : fillEl.style.width;
+    setTimeout(() => { el.hidden = true; }, ok ? 2000 : 4000);
+  });
+})();
 
 window.addEventListener('keydown', async (e) => {
   if (e.key !== 'F11') return;
@@ -72,10 +85,6 @@ window.addEventListener('keydown', async (e) => {
 
 initHome();
 
-// curTab/the loaded-tab cache above are just in-memory JS state - a reload
-// (Ctrl+R, or the webview's own devtools reload) wipes them, which otherwise
-// always lands back on the hardcoded Home default regardless of which tab
-// was actually open. Restore it from where navigate() last saved it.
 try {
   const savedTab = localStorage.getItem('rechargeCurrentTab');
   if (savedTab && savedTab !== 'home') window.navigate(savedTab);

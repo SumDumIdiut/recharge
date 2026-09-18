@@ -12,11 +12,36 @@ pub struct InstallInfo {
     pub appid: Option<String>,
 }
 
+#[cfg(windows)]
 fn default_steam_dirs() -> Vec<PathBuf> {
     vec![
         PathBuf::from("C:\\Program Files (x86)\\Steam"),
         PathBuf::from("C:\\Program Files\\Steam"),
     ]
+}
+
+#[cfg(not(windows))]
+fn default_steam_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join(".steam").join("steam"));
+        dirs.push(home.join(".steam").join("root"));
+        dirs.push(home.join(".local").join("share").join("Steam"));
+        dirs.push(
+            home.join(".var")
+                .join("app")
+                .join("com.valvesoftware.Steam")
+                .join(".local")
+                .join("share")
+                .join("Steam"),
+        );
+    }
+    dirs
+}
+
+fn push_canonical(roots: &mut Vec<PathBuf>, path: &Path) {
+    roots.push(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
 }
 
 fn library_roots() -> Vec<PathBuf> {
@@ -25,11 +50,11 @@ fn library_roots() -> Vec<PathBuf> {
         if !steam_dir.is_dir() {
             continue;
         }
-        roots.push(steam_dir.clone());
+        push_canonical(&mut roots, &steam_dir);
         let vdf_path = steam_dir.join("steamapps").join("libraryfolders.vdf");
         if let Ok(text) = std::fs::read_to_string(&vdf_path) {
             for lib_path in vdf::library_paths(&text) {
-                roots.push(PathBuf::from(lib_path));
+                push_canonical(&mut roots, &PathBuf::from(lib_path));
             }
         }
     }
@@ -38,7 +63,7 @@ fn library_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn find_assembly_csharp(game_dir: &Path) -> Option<PathBuf> {
+pub fn managed_dir(game_dir: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(game_dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -46,15 +71,30 @@ fn find_assembly_csharp(game_dir: &Path) -> Option<PathBuf> {
             continue;
         }
         let name = path.file_name()?.to_string_lossy().to_string();
-        if !name.ends_with("_Data") {
-            continue;
-        }
-        let dll = path.join("Managed").join("Assembly-CSharp.dll");
-        if dll.is_file() {
-            return Some(dll);
+        if name.ends_with("_Data") {
+            let managed = path.join("Managed");
+            if managed.is_dir() {
+                return Some(managed);
+            }
         }
     }
     None
+}
+
+fn find_assembly_csharp(game_dir: &Path) -> Option<PathBuf> {
+    let dll = managed_dir(game_dir)?.join("Assembly-CSharp.dll");
+    dll.is_file().then_some(dll)
+}
+
+fn variant_for_name(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    if lower.contains("demo") {
+        "Demo"
+    } else if lower.contains("playtest") {
+        "Playtest"
+    } else {
+        "Full Game"
+    }
 }
 
 fn find_appid(steamapps_dir: &Path, installdir_name: &str) -> Option<String> {
@@ -91,52 +131,58 @@ fn find_appid(steamapps_dir: &Path, installdir_name: &str) -> Option<String> {
     None
 }
 
-fn scan_library(common_dir: &Path, steamapps_dir: &Path) -> Option<InstallInfo> {
-    let entries = std::fs::read_dir(common_dir).ok()?;
+fn scan_library_all(common_dir: &Path, steamapps_dir: &Path) -> Vec<InstallInfo> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(common_dir) else {
+        return found;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        let name = path.file_name()?.to_string_lossy().to_string();
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
         if !name.to_uppercase().starts_with("IGTAP") {
             continue;
         }
         if find_assembly_csharp(&path).is_none() {
             continue;
         }
-        let variant = if name.to_lowercase().contains("demo") {
-            "Demo"
-        } else {
-            "Playtest"
-        };
-        return Some(InstallInfo {
+        let variant = variant_for_name(&name);
+        found.push(InstallInfo {
             variant: variant.to_string(),
             appid: find_appid(steamapps_dir, &name),
             path: path.to_string_lossy().to_string(),
         });
     }
-    None
+    found
 }
 
-pub fn detect() -> Option<InstallInfo> {
+pub fn detect_all() -> Vec<InstallInfo> {
+    let mut found = Vec::new();
     for root in library_roots() {
         let steamapps = root.join("steamapps");
         let common = steamapps.join("common");
-        if let Some(found) = scan_library(&common, &steamapps) {
-            return Some(found);
-        }
+        found.extend(scan_library_all(&common, &steamapps));
     }
-    None
+    found
 }
 
-// Builds an InstallInfo directly from a known folder (a manually browsed-to
-// path isn't necessarily found by the steamapps/common scan `detect()` does -
-// e.g. a non-standard Steam library location, or the game moved).
+pub fn detect() -> Option<InstallInfo> {
+    detect_all().into_iter().next()
+}
+
+#[tauri::command]
+pub fn detect_all_igtap_installs() -> Vec<InstallInfo> {
+    detect_all()
+}
+
 pub fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
     find_assembly_csharp(game_dir)?;
     let name = game_dir.file_name()?.to_string_lossy().to_string();
-    let variant = if name.to_lowercase().contains("demo") { "Demo" } else { "Playtest" };
+    let variant = variant_for_name(&name);
     let appid = game_dir
         .parent() // .../steamapps/common
         .and_then(|common| common.parent()) // .../steamapps
@@ -150,10 +196,6 @@ pub fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
 
 #[tauri::command]
 pub fn detect_igtap_install(app: AppHandle) -> Option<InstallInfo> {
-    // A manually-set path (Settings > Browse) must win over auto-scan - it's
-    // there specifically because the user picked it, often because auto-detect
-    // couldn't find it on its own. Previously this ignored that entirely, so
-    // Browse looked broken: it saved the path, but Home never showed it.
     if let Some(path) = settings::get_game_path(app) {
         if let Some(info) = info_for_path(Path::new(&path)) {
             return Some(info);

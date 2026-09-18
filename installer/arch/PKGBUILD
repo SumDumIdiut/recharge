@@ -1,0 +1,44 @@
+# Maintainer: SumDumIdiut
+#
+# Builds Recharge for Arch by letting Tauri produce its own .deb (which
+# already lays files out FHS-correctly - binary, desktop entry, icons, and
+# bundle.resources under a per-app data dir) and re-packaging that payload
+# under pacman instead of reinventing the same layout by hand.
+#
+# After bumping pkgver, regenerate sha256sums with `updpkgsums` (this repo's
+# release tags aren't reproducible-download-tested from here, so it's left as
+# SKIP until then).
+pkgname=recharge
+pkgver=1.4.3
+pkgrel=1
+pkgdesc="Mod manager for IGTAP - installs/enables/removes RechargeLoader mods and maps"
+arch=('x86_64')
+url="https://codecade.co.za/recharge"
+license=('custom')
+depends=('webkit2gtk-4.1' 'gtk3' 'steam')
+optdepends=('powershell-bin: install/update RechargeLoader from within the app (AUR)')
+makedepends=('rust' 'nodejs' 'npm' 'dpkg')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/SumDumIdiut/recharge/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "recharge-$pkgver/app"
+  npm ci || npm install
+  npm run tauri build -- --bundles deb
+}
+
+package() {
+  cd "recharge-$pkgver/app"
+  local deb
+  deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' | head -n1)
+  if [ -z "$deb" ]; then
+    echo "no .deb produced by tauri build - check the build log above" >&2
+    return 1
+  fi
+
+  local extract="$srcdir/deb-payload"
+  rm -rf "$extract"
+  mkdir -p "$extract"
+  dpkg-deb -x "$deb" "$extract"
+  cp -a "$extract"/usr "$pkgdir"/
+}

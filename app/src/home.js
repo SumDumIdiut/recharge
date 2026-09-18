@@ -1,15 +1,15 @@
 import { getWaveSettings } from '/theme.js';
+import { renderInstallList } from '/install-list.js';
 
 let pollHandle = null;
 let lastLaunchMode = null;
+const LAUNCH_GRACE_MS = { direct: 5000, steam: 60000 };
+let launchGraceMs = LAUNCH_GRACE_MS.direct;
+let seenRunning = false;
+let launchStartedAt = 0;
 
-// ── Procedural waveform: randomized spikes, beat synced to what's on screen ──
 const BEAT_SHAPES = ['single', 'double', 'sharp'];
 
-// Bumped every time startWaveform() (re)builds the banner, so a stale
-// requestAnimationFrame loop from a previous build can tell it's obsolete
-// and stop recursing - without this, calling startWaveform() again to pick
-// up a settings change would run two competing loops on the same polyline.
 let waveGeneration = 0;
 
 function shapePoints(shape, x0, width, height, baseY) {
@@ -34,10 +34,6 @@ function peakFraction(shape) {
   return shape === 'sharp' ? 0.2 : shape === 'double' ? 0.62 : 0.65;
 }
 
-// amplitude/density come from the user's saved waveform settings - amplitude
-// is the average peak height, density is the average distance between beats
-// (both jittered the same +/-40%/+/-25% the original hardcoded ranges used,
-// just centered on the configured value instead of a fixed constant).
 function buildWaveform(minTotalWidth, amplitude, density) {
   const units = [];
   let x = 0;
@@ -65,13 +61,6 @@ export function startWaveform() {
   const containerWidth = banner.clientWidth || 900;
   const { units, totalWidth } = buildWaveform(Math.max(containerWidth * 3, 6000), settings.amplitude, settings.density);
 
-  // The banner/SVG height used to be a flat 44px regardless of amplitude -
-  // fine at the original fixed height=12-28 range, but the editable slider
-  // goes up to 40, and a peak can swing up to ~0.7x the jittered height
-  // (itself up to 1.4x the configured amplitude) off the centerline. Left
-  // at 44px, a high amplitude setting just got its peaks clipped off top
-  // and bottom. Size the banner to the WORST CASE for the current setting
-  // instead, so nothing this waveform can draw is ever cut off.
   const maxPeakDeviation = settings.amplitude * 1.4 * 0.7;
   const svgHeight = Math.max(44, Math.ceil(maxPeakDeviation * 2 + 8));
   const baseY = svgHeight / 2;
@@ -132,17 +121,17 @@ async function pollRunning() {
   const { invoke } = window.__TAURI__.core;
   const running = await invoke('is_game_running');
   if (running) {
+    seenRunning = true;
     setPlayStatus('running');
+    return;
+  }
+  if (!seenRunning && Date.now() - launchStartedAt < launchGraceMs) {
     return;
   }
   clearInterval(pollHandle);
   pollHandle = null;
   setPlayStatus(null);
-  logLine('game process exited');
-  // The modded swap is a real file on disk, not a launch-time-only trick -
-  // it's still deployed for whatever runs the game next, Steam-direct
-  // included. Put it back to vanilla the moment the modded session ends so
-  // "just running the game through Steam" is never silently modded.
+  logLine(seenRunning ? 'game process exited' : "game never started (Steam didn't launch it in time)");
   if (lastLaunchMode === 'modded') {
     lastLaunchMode = null;
     try {
@@ -159,8 +148,11 @@ window.__homeLaunch = async function (mode) {
   setPlayStatus('launching');
   logLine(`launching <b>${mode.toUpperCase()}</b>…`);
   try {
-    await invoke('launch_game', { modded: mode === 'modded' });
+    const via = await invoke('launch_game', { modded: mode === 'modded' });
     lastLaunchMode = mode;
+    launchGraceMs = LAUNCH_GRACE_MS[via] ?? LAUNCH_GRACE_MS.steam;
+    seenRunning = false;
+    launchStartedAt = Date.now();
     logLine(`process started (${mode})`);
     setPlayStatus('running');
     if (!pollHandle) pollHandle = setInterval(pollRunning, 2000);
@@ -171,34 +163,52 @@ window.__homeLaunch = async function (mode) {
   }
 };
 
-// Re-run whenever Home becomes visible again (not just at startup) - a path
-// picked via Settings > Browse (or auto-detect finally succeeding) otherwise
-// never shows up here until the whole app restarts, which looks exactly like
-// Browse silently not working.
 export async function refreshInstallStatus(opts = {}) {
-  const { invoke } = window.__TAURI__.core;
-  const label = document.getElementById('home-install-label');
-  const sub = document.getElementById('home-install-sub');
-  if (!label || !sub) return;
+  return renderInstallList(document.getElementById('home-install-list'), {
+    emptyHtml: `<div class="home-install-label">IGTAP not found</div><div class="home-install-sub">Set the path in Settings.</div>`,
+    onError: (err) => { if (opts.log !== false) logLine(`install detection failed: ${String(err)}`); },
+    onEmpty: () => { if (opts.log !== false) logLine('no installation detected'); },
+    onSelect: (install) => logLine(`switched active install to <b>IGTAP (${install.variant})</b>`),
+    onSelectError: (err) => logLine(`couldn't switch install: ${String(err)}`),
+    onRendered: (installs, active) => {
+      if (opts.log === false) return;
+      logLine(active
+        ? `installation detected: <b>IGTAP (${active.variant})</b>`
+        : `${installs.length} install${installs.length === 1 ? '' : 's'} found`);
+    },
+  });
+}
 
-  try {
-    const install = await invoke('detect_igtap_install');
-    if (install) {
-      label.textContent = `IGTAP (${install.variant})`;
-      sub.textContent = install.path;
-      if (opts.log !== false) logLine(`installation detected: <b>IGTAP (${install.variant})</b>`);
-    } else {
-      label.textContent = 'IGTAP not found';
-      sub.textContent = 'Set the path in Settings.';
-      if (opts.log !== false) logLine('no installation detected');
+async function maybePromptInstallChoice() {
+  const { invoke } = window.__TAURI__.core;
+  const saved = await invoke('get_saved_game_path').catch(() => null);
+  if (saved) return;
+
+  const installs = await invoke('detect_all_igtap_installs').catch(() => []);
+  if (installs.length < 2) return;
+
+  const overlay = document.getElementById('install-picker-overlay');
+  const list = document.getElementById('install-picker-list');
+  if (!overlay || !list) return;
+
+  await new Promise((resolve) => {
+    list.innerHTML = '';
+    for (const install of installs) {
+      const row = document.createElement('button');
+      row.className = 'install-picker-row';
+      row.innerHTML = `<div class="install-picker-variant">IGTAP (${install.variant})</div><div class="install-picker-path">${escapeForHtml(install.path)}</div>`;
+      row.onclick = async () => {
+        try {
+          await invoke('set_game_path', { path: install.path });
+        } finally {
+          overlay.hidden = true;
+          resolve();
+        }
+      };
+      list.appendChild(row);
     }
-    return install;
-  } catch (err) {
-    label.textContent = 'IGTAP not found';
-    sub.textContent = String(err);
-    if (opts.log !== false) logLine(`install detection failed: ${String(err)}`);
-    return null;
-  }
+    overlay.hidden = false;
+  });
 }
 
 function showOnboarding(html) {
@@ -257,8 +267,6 @@ async function checkForLauncherUpdate() {
       progress.hidden = false;
       progress.textContent = 'Starting…';
       try {
-        // On success this process is closed by the backend before it ever
-        // returns - there's no "finished" state to show here, only failure.
         await invoke('install_launcher_update', { url: info.downloadUrl });
       } catch (err) {
         nowBtn.disabled = false;
@@ -305,6 +313,7 @@ export async function initHome() {
 
   logLine('recharge started');
 
+  await maybePromptInstallChoice();
   const install = await refreshInstallStatus();
 
   let loaderInstalled = false;
@@ -327,8 +336,6 @@ export async function initHome() {
        <p>Go to Settings and click <b>Install / Update</b> under RechargeLoader to finish setup.</p>`
     );
   } else {
-    // Only nag about updating Recharge itself once first-run setup is out
-    // of the way - no point stacking this on top of the onboarding overlay.
     checkForLauncherUpdate();
   }
 
@@ -341,15 +348,12 @@ export async function initHome() {
   }
 
   if (await invoke('is_game_running')) {
+    seenRunning = true;
     setPlayStatus('running');
     pollHandle = setInterval(pollRunning, 2000);
     logLine('game process already running');
   } else {
     logLine('no active game process');
-    // Covers the case where Recharge (or the whole PC) closed mid-modded-
-    // session and never got to run pollRunning's own restore-on-exit - the
-    // game isn't running right now, so it's safe to force the at-rest state
-    // back to vanilla before anything launches it directly from Steam.
     try {
       await invoke('restore_vanilla_build');
     } catch { /* no install detected yet, or nothing to restore - fine */ }

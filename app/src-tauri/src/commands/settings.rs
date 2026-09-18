@@ -34,19 +34,52 @@ pub fn get_game_path(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
+pub fn get_saved_game_path(app: AppHandle) -> Option<String> {
+    load(&app).game_path
+}
+
+#[tauri::command]
 pub fn set_game_path(app: AppHandle, path: String) {
     let mut settings = load(&app);
     settings.game_path = Some(path);
     save(&app, &settings);
 }
 
-// Settings' "Browse..." button - not a picker, just reveals the current
-// (auto-detected only) game folder in the real Windows Explorer for viewing.
+#[tauri::command]
+pub fn auto_detect_game_path(app: AppHandle) -> Result<String, String> {
+    let info = steam::detect().ok_or("Couldn't find an IGTAP install in any Steam library.")?;
+    set_game_path(app, info.path.clone());
+    Ok(info.path)
+}
+
 #[tauri::command]
 pub fn open_game_folder_in_explorer(app: AppHandle) -> Result<(), String> {
     let path = get_game_path(app).ok_or("no installation detected")?;
+    open_in_file_manager(&path)
+}
+
+#[cfg(windows)]
+fn open_in_file_manager(path: &str) -> Result<(), String> {
     std::process::Command::new("explorer")
-        .arg(&path)
+        .arg(path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_in_file_manager(path: &str) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_in_file_manager(path: &str) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())

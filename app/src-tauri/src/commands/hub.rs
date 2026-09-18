@@ -6,12 +6,6 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::settings;
 
-// The recharge-hub web viewer's "Beam to Client" button fetch()es this port
-// directly from https://codecade.co.za - 127.0.0.1/localhost are treated as
-// potentially-trustworthy origins by browsers, so an https page can call a
-// plain http:// localhost server without a mixed-content block. This avoids
-// needing a custom URL-protocol handler (NSIS/registry changes that are hard
-// to verify without a real fresh install).
 pub const BEAM_PORT: u16 = 39284;
 const HUB_ORIGIN: &str = "https://codecade.co.za";
 const HUB_BASE: &str = "https://codecade.co.za/recharge";
@@ -61,14 +55,6 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-// Extracted into a temp folder first because the real install dir name is
-// the mod's own manifest id, not the recharge-hub submission id - those two
-// only happen to match by coincidence.
-// Requests are handled one at a time on a single background thread (see
-// start_beam_server), but a queue on the web side can still fire the next
-// install before this thread is done cleaning up after the previous one -
-// a bare process-id tmp name would collide across requests, so each one
-// gets its own counter value too.
 static NEXT_TMP_ID: AtomicU64 = AtomicU64::new(0);
 
 fn install_mod_zip(app: &AppHandle, bytes: Vec<u8>) -> Result<(), String> {
@@ -97,8 +83,6 @@ fn install_mod_zip(app: &AppHandle, bytes: Vec<u8>) -> Result<(), String> {
     Ok(())
 }
 
-// Maps have no manifest-driven id of their own yet, so the recharge-hub
-// submission id (already unique) is used as the install folder name.
 fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), String> {
     let dir = maps_dir(app).ok_or("game path not set")?;
     let target = dir.join(hub_id);
@@ -113,8 +97,6 @@ fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), 
     Ok(())
 }
 
-// Downloads one approved submission from recharge-hub and installs it in
-// place. Shared by the local beam HTTP endpoint below.
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
     if kind != "mods" && kind != "maps" {
         return Err("kind must be 'mods' or 'maps'".to_string());
@@ -150,9 +132,6 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
     Ok(meta.name)
 }
 
-// The app's own Mods/Maps > Browse tabs call this directly via invoke() -
-// same underlying logic the local beam HTTP endpoint below exposes to the
-// external web viewer, just reached the normal way for in-app JS.
 #[tauri::command]
 pub fn install_from_hub_cmd(app: AppHandle, kind: String, id: String) -> Result<String, String> {
     install_from_hub(&app, &kind, &id)
@@ -216,8 +195,6 @@ fn handle_beam_request(app: &AppHandle, url: &str) -> (u16, String) {
     }
 }
 
-// Minimal percent-decoding for query values - the only characters the
-// browser's encodeURIComponent(id) can actually produce for a UUID/slug id.
 fn url_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

@@ -18,6 +18,12 @@
 # Ad-hoc verification screenshots from tools/game-input.ps1
 /tools/shot-*.png
 
+# makepkg build output (installer/arch/PKGBUILD) - .SRCINFO stays tracked,
+# it's the machine-readable metadata an AUR submission would need.
+/installer/arch/pkg/
+/installer/arch/src/
+/installer/arch/*.pkg.tar.*
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

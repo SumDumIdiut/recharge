@@ -1,11 +1,5 @@
 * { box-sizing: border-box; }
 
-/* ── Colors ───────────────────────────────────────────────────────────
-   Every visual color in this app reads from these custom properties.
-   The values below are the "Dark" preset and the fallback before any
-   custom pick is saved - actual overrides are applied inline on
-   documentElement by /theme.js (see applyColors), since per-attribute
-   pickers can't be expressed as a fixed set of CSS blocks. */
 :root {
   --bg:      #141414;
   --panel:   #1c1c1c;
@@ -46,7 +40,6 @@ body {
     repeating-linear-gradient(90deg, var(--grid-line) 0 1px, transparent 1px 30px);
 }
 
-/* ── Waveform banner ─────────────────────────────────────────────────── */
 #wave-banner {
   margin: 8px -36px 0;
   height: 44px;
@@ -77,7 +70,6 @@ body {
   100% { stroke-width: 2; filter: drop-shadow(0 0 0 transparent); }
 }
 
-/* ── Crumb bar ────────────────────────────────────────────────────────── */
 .crumb-bar {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -101,7 +93,6 @@ body {
 }
 .crumb-back:hover { color: var(--text); }
 
-/* ── View system ─────────────────────────────────────────────────────── */
 .view {
   position: fixed;
   left: 0; right: 0; bottom: 0;
@@ -115,10 +106,8 @@ body {
 .view.v-on { display: block; }
 #view-home.v-on { display: flex; flex-direction: column; padding-bottom: 0; }
 
-/* ── Sub-page shared wrapper ─────────────────────────────────────────── */
 .page { width: 100%; }
 
-/* ── Home ─────────────────────────────────────────────────────────────── */
 .home-page { width: 100%; flex: 1; display: flex; flex-direction: column; }
 
 .home-header { margin-bottom: 34px; }
@@ -136,9 +125,23 @@ body {
   padding: 28px;
 }
 .home-panel-title { font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
-.home-install-row { margin: 10px 0; }
-.home-install-label { font-size: 24px; text-transform: uppercase; }
-.home-install-sub { font-size: 15px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; word-break: break-word; }
+.home-install-list { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; }
+.home-install-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.home-install-row:last-child { border-bottom: none; padding-bottom: 0; }
+.home-install-row .btn { width: 100%; margin-top: 0; }
+.home-install-label { font-size: 19px; text-transform: uppercase; }
+.home-install-row-active .home-install-label { color: var(--green); }
+.home-install-sub { font-size: 13px; color: var(--text-dim); margin-top: 4px; line-height: 1.4; word-break: break-word; }
+
+.settings-install-list .home-install-row { flex-direction: row; align-items: center; justify-content: space-between; }
+.settings-install-list .home-install-row .btn { width: 140px; flex-shrink: 0; text-align: center; }
 
 .home-menu-col { display: flex; flex-direction: column; gap: 16px; max-width: none; flex: 2 1 380px; min-width: 380px; }
 
@@ -187,20 +190,25 @@ body {
 }
 .home-menu-row:hover { border-color: var(--line-hi); background: rgba(249, 255, 228, 0.05); }
 
-/* ── Sub-pages ────────────────────────────────────────────────────────── */
 .page-header { font-size: 26px; color: var(--text); margin-bottom: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
 
 .btn {
+  appearance: none;
+  -webkit-appearance: none;
   background: none;
   border: 1px solid var(--line);
   color: var(--text);
   font: inherit;
   font-size: 18px;
+  line-height: 1.2;
   text-transform: uppercase;
   padding: 13px 18px;
+  height: 48px;
+  box-sizing: border-box;
   cursor: pointer;
 }
 .btn:hover { border-color: var(--line-hi); }
+.btn:disabled { cursor: default; }
 .btn-primary { border-color: var(--green-dim); color: var(--green); }
 .btn-primary:hover { border-color: var(--green); }
 
@@ -273,3 +281,27 @@ body {
 }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast strong { color: var(--green); }
+
+.global-progress {
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 100;
+  width: 280px;
+  background: var(--panel);
+  border: 1px solid var(--line-hi);
+  color: var(--text);
+  padding: 12px 16px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+.global-progress[hidden] { display: none; }
+.global-progress-text {
+  font-size: 15px;
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -4,6 +4,7 @@ import {
   getWaveSettings, saveWaveSettings,
 } from '/theme.js';
 import { startWaveform } from '/home.js';
+import { renderInstallList } from '/install-list.js';
 
 function renderAppearance() {
   const presetsEl = document.getElementById('theme-presets');
@@ -99,8 +100,6 @@ function initCustomCss() {
     }
   };
 
-  // Applied live as you type, not just on an explicit save - matches every
-  // other Appearance control on this page (color pickers apply on input too).
   textarea.oninput = apply;
 
   fileInput.onchange = async () => {
@@ -136,9 +135,6 @@ function initWaveform() {
   densityEl.value = settings.density;
   slidersEl.style.opacity = settings.enabled ? '1' : '0.4';
 
-  // Live-applies against the actual Home banner (always present in the DOM,
-  // Home is never lazy-unloaded) rather than needing a restart to see the
-  // effect of a slider drag.
   function apply() {
     const next = {
       enabled: enabledEl.checked,
@@ -157,14 +153,11 @@ function initWaveform() {
   densityEl.oninput = apply;
 }
 
-// Opens a real folder picker so a wrong or failed auto-detect can be
-// corrected by hand - previously this button only revealed the already-set
-// path in Explorer with no way to actually change it.
 window.__settingsBrowse = async function () {
-  const { invoke } = window.__TAURI__.core;
-  const { open } = window.__TAURI__.dialog;
-  const currentPath = document.getElementById('settings-game-path').value || undefined;
   try {
+    const { invoke } = window.__TAURI__.core;
+    const { open } = window.__TAURI__.dialog;
+    const currentPath = document.getElementById('settings-game-path').value || undefined;
     const chosen = await open({
       directory: true,
       multiple: false,
@@ -176,6 +169,20 @@ window.__settingsBrowse = async function () {
     await refreshStatus();
   } catch (err) {
     alert(String(err));
+  }
+};
+
+window.__settingsAutoDetect = async function () {
+  const { invoke } = window.__TAURI__.core;
+  const btn = document.getElementById('settings-autodetect-btn');
+  btn.disabled = true;
+  try {
+    await invoke('auto_detect_game_path');
+    await refreshStatus();
+  } catch (err) {
+    alert(String(err));
+  } finally {
+    btn.disabled = false;
   }
 };
 
@@ -213,6 +220,27 @@ window.__loaderInstall = async function () {
   }
 };
 
+window.__loaderUninstall = async function () {
+  const { invoke } = window.__TAURI__.core;
+  if (!confirm('Remove RechargeLoader and all deployed mods, and restore the original game assembly?')) return;
+  const btn = document.getElementById('loader-uninstall-btn');
+  btn.disabled = true;
+  try {
+    await invoke('uninstall_loader');
+  } catch (err) {
+    alert(String(err));
+  } finally {
+    btn.disabled = false;
+    refreshStatus();
+  }
+};
+
+async function refreshInstallList() {
+  await renderInstallList(document.getElementById('settings-install-list'), {
+    onSelectError: (err) => alert(String(err)),
+  });
+}
+
 async function refreshStatus() {
   const { invoke } = window.__TAURI__.core;
   const status = document.getElementById('loader-status');
@@ -222,14 +250,13 @@ async function refreshStatus() {
     if (path) pathInput.value = path;
     const loader = await invoke('loader_status');
     status.textContent = loader.installed ? `Installed (v${loader.version})` : 'Not installed';
+    document.getElementById('loader-uninstall-btn').hidden = !loader.installed;
   } catch (err) {
     status.textContent = String(err);
   }
+  refreshInstallList();
 }
 
-// Recharge's own version vs. the real GitHub releases feed - distinct from
-// RechargeLoader above, which is the mod-framework contract mods build
-// against, not the app itself.
 let launcherUpdateInfo = null;
 
 async function refreshLauncherStatus() {
@@ -274,15 +301,13 @@ window.__launcherUpdate = async function () {
   if (launcherUpdateInfo?.appUpdateAvailable) {
     if (!launcherUpdateInfo.downloadUrl) {
       progress.hidden = false;
-      progress.textContent = "This release has no installer attached - can't update in-app.";
+      progress.innerHTML = `Can't auto-update this install - grab the new version from <a href="${launcherUpdateInfo.url}" target="_blank" rel="noopener">the release page</a> (or your package manager, if you installed via pacman/AUR).`;
       return;
     }
     btn.disabled = true;
     progress.hidden = false;
     progress.textContent = 'Starting…';
     try {
-      // On success this process is closed by the backend before it ever
-      // returns - there's no "finished" state to show here, only failure.
       await invoke('install_launcher_update', { url: launcherUpdateInfo.downloadUrl });
     } catch (err) {
       btn.disabled = false;
@@ -292,9 +317,6 @@ window.__launcherUpdate = async function () {
   }
 
   if (launcherUpdateInfo?.mapsUpdateAvailable) {
-    // Same underlying redeploy as the RechargeLoader "Install/Update"
-    // button above (rebuilds+redeploys every bundled mod, Maps included) -
-    // just reached from here too, since that's genuinely what fixes this.
     await window.__loaderInstall();
     await refreshLauncherStatus();
   }
