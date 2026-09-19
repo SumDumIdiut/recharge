@@ -146,6 +146,20 @@ to have it write its current phase (`"N/total: <message>"`, finishing with
 `"Done."` or `"Failed: <message>"`) to a file a GUI can poll — this is exactly
 how Recharge's own Settings tab drives it (see `app/src-tauri/src/commands/loader.rs`).
 
+`tools/ilspycmd/` (the decompiler `build-loader.ps1` shells out to) is
+gitignored - a third-party tool, not repo source - so a fresh clone needs it
+reinstalled once before the first build or `tauri build` (which bundles it
+as an app resource). `dotnet tool install --tool-path` installs a shim +
+a nested `.store/` tree rather than the flat DLL folder expected here, so
+the actual tool files need copying up from wherever dotnet put them:
+
+```bash
+dotnet tool install ilspycmd --tool-path /tmp/ilspycmd-install
+mkdir -p loader/tools/ilspycmd
+cp -r "$(dirname "$(find /tmp/ilspycmd-install/.store -name ilspycmd.dll)")"/* loader/tools/ilspycmd/
+rm -rf /tmp/ilspycmd-install
+```
+
 Every run:
 
 - Rebuilds `Recharge.ModApi.dll` and the patched `Assembly-CSharp.dll` from

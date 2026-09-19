@@ -37,6 +37,26 @@ jobs:
         with:
           node-version: lts/*
 
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Gitignored (a third-party tool, not repo source) - the app bundles it
+      # as a resource so RechargeLoader can decompile the game on end-user
+      # machines without them needing the .NET SDK themselves. `--tool-path`
+      # installs a shim + a nested .store/ tree, not the flat DLL folder
+      # build-loader.ps1 expects, so the actual tool files get copied up
+      # from wherever dotnet put them.
+      - name: Install ilspycmd (bundled decompiler tool)
+        shell: bash
+        run: |
+          dotnet tool install ilspycmd --tool-path .ilspycmd-install-tmp
+          mkdir -p loader/tools/ilspycmd
+          src=$(dirname "$(find .ilspycmd-install-tmp/.store -name ilspycmd.dll)")
+          cp -r "$src"/* loader/tools/ilspycmd/
+          rm -rf .ilspycmd-install-tmp
+
       - name: Install frontend dependencies
         working-directory: app
         run: npm install
