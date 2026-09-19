@@ -129,10 +129,17 @@ unrelated path — nothing here stops it, and nothing here requires it.
 ## Building
 
 ```powershell
+# Windows
 pwsh loader/build-loader.ps1 -GameDir "C:\Program Files (x86)\Steam\steamapps\common\<game folder>"
+
+# Linux (game still runs under Proton, but the on-disk layout is identical)
+pwsh loader/build-loader.ps1 -GameDir "$HOME/.local/share/Steam/steamapps/common/<game folder>"
 ```
 
-Requires a .NET 6+ SDK. If none is found on `PATH`, the script downloads a
+Requires `pwsh` (PowerShell Core - on Windows, Windows PowerShell's bundled
+`powershell.exe` also works; on Linux install it via your package manager,
+e.g. `sudo pacman -S powershell`) and a .NET 6+ SDK. If none is found on
+`PATH`, the script downloads a
 portable one into `loader/.dotnet-sdk/` automatically (one-time, ~200 MB) —
 pass `-NoSdkDownload` to fail instead of downloading. Pass `-StatusFile <path>`
 to have it write its current phase (`"N/total: <message>"`, finishing with

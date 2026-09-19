@@ -26,6 +26,19 @@ pub struct MapSummary {
 }
 
 #[tauri::command]
+pub fn uninstall_map(app: AppHandle, id: String) -> Result<(), String> {
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return Err(format!("invalid id: '{id}'"));
+    }
+    let dir = maps_dir(&app).ok_or("game path not set")?;
+    let target = dir.join(&id);
+    if !target.is_dir() {
+        return Err(format!("map '{id}' not found"));
+    }
+    std::fs::remove_dir_all(&target).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     let mut maps = Vec::new();
     let Some(dir) = maps_dir(&app) else {

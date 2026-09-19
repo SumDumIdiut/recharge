@@ -34,9 +34,23 @@ fn maps_dir(app: &AppHandle) -> Option<PathBuf> {
     )
 }
 
+fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
+    let game_path = settings::get_game_path(app.clone())?;
+    Some(
+        PathBuf::from(game_path)
+            .join("Recharge")
+            .join("Mods")
+            .join("recharge.customskins")
+            .join("data")
+            .join("skins"),
+    )
+}
+
 #[derive(Deserialize)]
 struct HubItem {
     name: String,
+    #[serde(rename = "fileName")]
+    file_name: String,
 }
 
 #[derive(Deserialize)]
@@ -97,9 +111,39 @@ fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), 
     Ok(())
 }
 
+fn slugify(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn install_skin_file(app: &AppHandle, bytes: Vec<u8>, meta: &HubItem) -> Result<(), String> {
+    let dir = skins_dir(app).ok_or("game path not set")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let ext = PathBuf::from(&meta.file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+    let slug = slugify(&meta.name);
+    let filename = format!("{}.{ext}", if slug.is_empty() { "skin".to_string() } else { slug });
+
+    std::fs::write(dir.join(filename), &bytes).map_err(|e| e.to_string())
+}
+
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
-    if kind != "mods" && kind != "maps" {
-        return Err("kind must be 'mods' or 'maps'".to_string());
+    if kind != "mods" && kind != "maps" && kind != "skins" {
+        return Err("kind must be 'mods', 'maps' or 'skins'".to_string());
     }
     sanitize_id(id)?;
 
@@ -116,8 +160,10 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
 
     if kind == "mods" {
         install_mod_zip(app, bytes)?;
-    } else {
+    } else if kind == "maps" {
         install_map_zip(app, bytes, id)?;
+    } else {
+        install_skin_file(app, bytes, &meta)?;
     }
 
     if let Some(w) = app.get_webview_window("main") {
@@ -135,6 +181,52 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
 #[tauri::command]
 pub fn install_from_hub_cmd(app: AppHandle, kind: String, id: String) -> Result<String, String> {
     install_from_hub(&app, &kind, &id)
+}
+
+#[derive(serde::Deserialize)]
+struct SubmitResult {
+    id: String,
+}
+
+#[tauri::command]
+pub fn submit_skin_cmd(token: String, file_path: String, display_name: String, author: String) -> Result<String, String> {
+    if display_name.trim().is_empty() || author.trim().is_empty() {
+        return Err("name and author are required".to_string());
+    }
+    let path = PathBuf::from(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{file_path}' not found"));
+    }
+
+    let form = ureq::unversioned::multipart::Form::new()
+        .text("kind", "skin")
+        .text("name", &display_name)
+        .text("author", &author)
+        .text("modId", "recharge.customskins")
+        .file("file", &path)
+        .map_err(|e| e.to_string())?;
+
+    let result: SubmitResult = ureq::post(&format!("{HUB_BASE}/api/submit"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send(form)
+        .map_err(|e| format!("upload failed: {e}"))?
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_json()
+        .map_err(|e| format!("bad response from library: {e}"))?;
+
+    Ok(result.id)
+}
+
+#[tauri::command]
+pub fn delete_hub_submission_cmd(token: String, id: String) -> Result<(), String> {
+    sanitize_id(&id)?;
+    ureq::delete(&format!("{HUB_BASE}/api/submissions/{id}"))
+        .header("Authorization", format!("Bearer {token}"))
+        .call()
+        .map_err(|e| format!("delete failed: {e}"))?;
+    Ok(())
 }
 
 pub fn start_beam_server(app: AppHandle) {

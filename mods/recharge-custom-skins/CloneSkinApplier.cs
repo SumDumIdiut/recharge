@@ -6,10 +6,7 @@ namespace RechargeCustomSkins
 {
     internal static class CloneSkinApplier
     {
-        // cloneSprites is real save data (courseScript.save() looks each
-        // entry up in spriteLookup.lookup) and must stay untouched or
-        // autosave throws. Reskin activeSpriteRenderers instead, from
-        // LateUpdate (after clonesScript.Update() assigns them each frame).
+        // cloneSprites is real save data and must stay untouched or autosave throws.
         private static readonly FieldInfo ActiveSpriteRenderersField =
             typeof(clonesScript).GetField("activeSpriteRenderers", BindingFlags.NonPublic | BindingFlags.Instance);
 
@@ -40,9 +37,6 @@ namespace RechargeCustomSkins
                         if (controller.TryGetVanillaRowFrame(sr.sprite, sr.flipY, out var m))
                         {
                             sr.sprite = controller.GetCustomCellSprite(runtime, m.row, m.frame);
-                            // The matched cell's real orientation is already
-                            // baked into the custom texture - cancel any live
-                            // flip so it isn't flipped a second time.
                             if (m.flipY) sr.flipY = false;
                             matched++;
                         }
@@ -65,7 +59,6 @@ namespace RechargeCustomSkins
 
         public static void RestoreVanilla()
         {
-            // No-op: cloneSprites was never modified.
         }
     }
 }

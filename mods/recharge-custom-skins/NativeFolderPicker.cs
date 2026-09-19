@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -33,6 +34,14 @@ namespace RechargeCustomSkins
 
         public static string PickFolder(string title)
         {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return PickFolderWindows(title);
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return PickFolderLinux(title);
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return PickFolderMac(title);
+            return null;
+        }
+
+        private static string PickFolderWindows(string title)
+        {
             var displayNameBuffer = Marshal.AllocHGlobal(520);
             try
             {
@@ -63,6 +72,49 @@ namespace RechargeCustomSkins
             finally
             {
                 Marshal.FreeHGlobal(displayNameBuffer);
+            }
+        }
+
+        private static string PickFolderLinux(string title)
+        {
+            var candidates = new (string exe, string args)[]
+            {
+                ("zenity", $"--file-selection --directory --title=\"{title}\""),
+                ("kdialog", $"--getexistingdirectory --title \"{title}\""),
+            };
+            foreach (var (exe, args) in candidates)
+            {
+                var result = RunPickerProcess(exe, args);
+                if (result != null) return result;
+            }
+            return null;
+        }
+
+        private static string PickFolderMac(string title)
+        {
+            var script = $"POSIX path of (choose folder with prompt \"{title}\")";
+            return RunPickerProcess("osascript", $"-e '{script}'");
+        }
+
+        private static string RunPickerProcess(string exe, string args)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(exe, args)
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using var proc = Process.Start(psi);
+                if (proc == null) return null;
+                string output = proc.StandardOutput.ReadToEnd().Trim();
+                proc.WaitForExit();
+                return proc.ExitCode == 0 && output.Length > 0 ? output : null;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return null;
             }
         }
     }

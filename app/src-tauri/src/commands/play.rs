@@ -80,13 +80,41 @@ fn is_process_running(exe_name: &str) -> bool {
         .contains(&exe_name.to_lowercase())
 }
 
+// pgrep -f matches a zombie (already-exited, not yet reaped by its parent)
+// the same as a live one, so a game that exited cleanly could still read as
+// "running" indefinitely - confirmed live: Player.log showed a normal exit
+// (proper Physics/Input shutdown sequence, no crash), but `ps` still listed
+// the process as `<defunct>` and Recharge kept showing Running. Filtering
+// those out via /proc/[pid]/stat's state field is what a zombie-aware check
+// needs, since pgrep itself has no flag for it.
 #[cfg(not(windows))]
 fn is_process_running(exe_name: &str) -> bool {
-    Command::new("pgrep")
+    let Ok(output) = Command::new("pgrep")
         .args(["-f", "-i", &regex_escape_literal(exe_name)])
         .output()
-        .map(|out| out.status.success() && !out.stdout.is_empty())
-        .unwrap_or(false)
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .any(|pid| !is_zombie(pid))
+}
+
+#[cfg(not(windows))]
+fn is_zombie(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // Format: "pid (comm) state ...". comm can itself contain spaces/parens,
+    // so the state field is found relative to the *last* ')', not the first.
+    match stat.rfind(')') {
+        Some(idx) => stat[idx + 1..].trim_start().starts_with('Z'),
+        None => false,
+    }
 }
 
 #[cfg(not(windows))]

@@ -1,6 +1,6 @@
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
-const PROTECTED_MOD_IDS = new Set(['recharge.maps']);
+const PROTECTED_MOD_IDS = new Set(['recharge.maps', 'recharge.customskins']);
 
 let currentSubtab = 'installed';
 let searchTerm = '';

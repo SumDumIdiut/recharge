@@ -5,4 +5,5 @@ pub mod maps;
 pub mod mods;
 pub mod play;
 pub mod settings;
+pub mod skins;
 pub mod steam;

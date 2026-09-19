@@ -1,0 +1,36 @@
+.skins-upload-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.skins-upload-label:last-child { margin-bottom: 0; }
+.skins-upload-input {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  text-transform: none;
+  padding: 10px 12px;
+}
+.skins-upload-input:focus { outline: none; border-color: var(--line-hi); }
+
+.skins-upload-browse-row { display: flex; align-items: center; gap: 10px; }
+.skins-upload-browse-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 16px;
+  text-transform: none;
+  padding: 10px 12px;
+}
+.skins-upload-browse-row .btn { height: auto; padding: 10px 16px; font-size: 15px; }

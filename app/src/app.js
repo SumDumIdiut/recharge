@@ -49,7 +49,7 @@ async function refreshTab(tab) {
 window.__TAURI__.event.listen('hub-beam-installed', (event) => {
   const { kind, name } = event.payload;
   showToast(`Installed <strong>${name}</strong> from the Recharge Library`);
-  refreshTab(kind === 'mods' ? 'mods' : 'maps');
+  refreshTab(kind === 'mods' ? 'mods' : kind === 'skins' ? 'skins' : 'maps');
 });
 
 (function initGlobalLoaderProgress() {

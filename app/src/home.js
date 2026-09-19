@@ -1,5 +1,9 @@
 import { getWaveSettings } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
+import { isLoggedIn, getUsername, setSession } from '/auth.js';
+
+const HUB_BASE = 'https://codecade.co.za/recharge';
+let loginMode = 'login';
 
 let pollHandle = null;
 let lastLaunchMode = null;
@@ -163,7 +167,78 @@ window.__homeLaunch = async function (mode) {
   }
 };
 
+export function updateAccountBadge() {
+  const badge = document.getElementById('home-account-badge');
+  const menuRow = document.getElementById('home-account-menu-row');
+  if (!badge) return;
+  const loggedIn = isLoggedIn();
+  badge.textContent = loggedIn ? getUsername() : 'Log In';
+  badge.classList.toggle('is-logged-in', loggedIn);
+  if (menuRow) menuRow.style.display = loggedIn ? '' : 'none';
+}
+
+function setLoginMode(mode) {
+  loginMode = mode;
+  document.getElementById('login-title').textContent = mode === 'login' ? 'Log In' : 'Register';
+  document.getElementById('login-submit').textContent = mode === 'login' ? 'Log In' : 'Register';
+  document.getElementById('login-toggle-mode').textContent =
+    mode === 'login' ? 'Need an account? Register' : 'Already have an account? Log In';
+  document.getElementById('login-error').hidden = true;
+}
+
+function openLoginModal() {
+  setLoginMode('login');
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-overlay').hidden = false;
+}
+
+function closeLoginModal() {
+  document.getElementById('login-overlay').hidden = true;
+}
+
+async function submitLoginForm() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errorEl = document.getElementById('login-error');
+  errorEl.hidden = true;
+  if (!username || !password) {
+    errorEl.textContent = 'Username and password are required.';
+    errorEl.hidden = false;
+    return;
+  }
+
+  const btn = document.getElementById('login-submit');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${HUB_BASE}/api/${loginMode === 'login' ? 'login' : 'register'}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'something went wrong');
+    setSession(body.token, body.username);
+    closeLoginModal();
+    updateAccountBadge();
+  } catch (err) {
+    errorEl.textContent = String(err.message || err);
+    errorEl.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+window.__homeAccountBadgeClick = function () {
+  if (isLoggedIn()) {
+    window.navigate('account');
+  } else {
+    openLoginModal();
+  }
+};
+
 export async function refreshInstallStatus(opts = {}) {
+  updateAccountBadge();
   return renderInstallList(document.getElementById('home-install-list'), {
     emptyHtml: `<div class="home-install-label">IGTAP not found</div><div class="home-install-sub">Set the path in Settings.</div>`,
     onError: (err) => { if (opts.log !== false) logLine(`install detection failed: ${String(err)}`); },
@@ -310,6 +385,10 @@ function escapeForHtml(s) {
 
 export async function initHome() {
   const { invoke } = window.__TAURI__.core;
+
+  document.getElementById('login-toggle-mode').addEventListener('click', () => setLoginMode(loginMode === 'login' ? 'register' : 'login'));
+  document.getElementById('login-submit').addEventListener('click', submitLoginForm);
+  document.getElementById('login-cancel').addEventListener('click', closeLoginModal);
 
   logLine('recharge started');
 

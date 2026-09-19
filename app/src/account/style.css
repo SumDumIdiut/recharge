@@ -1,0 +1,16 @@
+.account-toggle-link {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 14px 0 0;
+}
+.account-toggle-link:hover { color: var(--text); }
+.account-error { color: oklch(75% 0.19 25); font-size: 14px; margin-top: 6px; }
+
+.account-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.account-username { font-size: 20px; color: var(--green); text-transform: uppercase; }
+.account-sub-header { font-size: 18px; margin-bottom: 16px; }

@@ -16,11 +16,7 @@ namespace RechargeCustomSkins
         public int TexW;
         public int TexH;
         public List<(string name, int frameCount)> RowClips;
-        // The vanilla Sprite for each (row, frame) cell - doubles as a
-        // reverse lookup for CloneSkinApplier.
         public List<List<Sprite>> RowFrameSprites;
-        // Some clips reuse one sprite mirrored vertically via
-        // SpriteRenderer.flipY rather than a separate asset.
         public List<List<bool>> RowFrameFlipY;
     }
 
@@ -92,33 +88,57 @@ namespace RechargeCustomSkins
             return perClip;
         }
 
-        // Geometry-only version of ComposeTemplate's layout math (no pixel
-        // copying), so a re-imported sheet can slice cells the same way.
+        private struct CellLayoutInfo
+        {
+            public int CellW, CellH;
+            public float AnchorX, AnchorY;
+        }
+
+        private static CellLayoutInfo ComputeCellLayout(List<(string name, List<Sprite> frames, List<bool> flips)> perClip)
+        {
+            float maxLeft = 0f, maxRight = 0f, maxBottom = 0f, maxTop = 0f;
+            foreach (var (_, frames, flips) in perClip)
+            {
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    var s = frames[i];
+                    float w = s.textureRect.width;
+                    float h = s.textureRect.height;
+                    float pivotX = s.pivot.x;
+                    float pivotY = flips[i] ? (h - s.pivot.y) : s.pivot.y;
+                    maxLeft = Mathf.Max(maxLeft, pivotX);
+                    maxRight = Mathf.Max(maxRight, w - pivotX);
+                    maxBottom = Mathf.Max(maxBottom, pivotY);
+                    maxTop = Mathf.Max(maxTop, h - pivotY);
+                }
+            }
+            float halfW = Mathf.Max(maxLeft, maxRight);
+            float halfH = Mathf.Max(maxBottom, maxTop);
+            return new CellLayoutInfo
+            {
+                CellW = Mathf.Max(1, Mathf.CeilToInt(halfW * 2f)),
+                CellH = Mathf.Max(1, Mathf.CeilToInt(halfH * 2f)),
+                AnchorX = halfW,
+                AnchorY = halfH,
+            };
+        }
+
         public static SkinGridLayout? ComputeGridLayout(GameObject spriteChildTemplate, IRechargeHost host)
         {
             var perClip = CapturePerClipFrames(spriteChildTemplate, host);
             if (perClip == null) return null;
 
-            int cellW = 1, cellH = 1;
-            foreach (var (_, frames, _) in perClip)
-            {
-                foreach (var s in frames)
-                {
-                    cellW = Mathf.Max(cellW, Mathf.CeilToInt(s.textureRect.width));
-                    cellH = Mathf.Max(cellH, Mathf.CeilToInt(s.textureRect.height));
-                }
-            }
-
+            var cell = ComputeCellLayout(perClip);
             int cols = perClip.Max(p => p.frames.Count);
             int rows = perClip.Count;
-            int strideW = cellW + Gutter;
-            int strideH = cellH + Gutter;
+            int strideW = cell.CellW + Gutter;
+            int strideH = cell.CellH + Gutter;
 
             return new SkinGridLayout
             {
                 Gutter = Gutter,
-                CellW = cellW,
-                CellH = cellH,
+                CellW = cell.CellW,
+                CellH = cell.CellH,
                 Cols = cols,
                 Rows = rows,
                 TexW = Gutter + cols * strideW,
@@ -129,19 +149,12 @@ namespace RechargeCustomSkins
             };
         }
 
-        private const int Gutter = 4;
+        private const int Gutter = 2;
 
         private static string ComposeTemplate(List<(string name, List<Sprite> frames, List<bool> flips)> perClip, string outputDir, IRechargeHost host)
         {
-            int cellW = 1, cellH = 1;
-            foreach (var (_, frames, _) in perClip)
-            {
-                foreach (var s in frames)
-                {
-                    cellW = Mathf.Max(cellW, Mathf.CeilToInt(s.textureRect.width));
-                    cellH = Mathf.Max(cellH, Mathf.CeilToInt(s.textureRect.height));
-                }
-            }
+            var cell = ComputeCellLayout(perClip);
+            int cellW = cell.CellW, cellH = cell.CellH;
 
             int cols = perClip.Max(p => p.frames.Count);
             int rows = perClip.Count;
@@ -172,12 +185,11 @@ namespace RechargeCustomSkins
                     int w = (int)sprite.textureRect.width;
                     int h = (int)sprite.textureRect.height;
                     var pixels = ReadSpritePixels(sprite);
-                    int cellOriginX = Gutter + c * strideW + (cellW - w) / 2;
-                    int originY = cellOriginY + (cellH - h) / 2;
+                    float pivotY = flip ? (h - sprite.pivot.y) : sprite.pivot.y;
+                    int cellOriginX = Gutter + c * strideW + Mathf.RoundToInt(cell.AnchorX - sprite.pivot.x);
+                    int originY = cellOriginY + Mathf.RoundToInt(cell.AnchorY - pivotY);
                     for (int py = 0; py < h; py++)
                     {
-                        // Read the source row in reverse for flipped frames so
-                        // the template bakes in the actual on-screen orientation.
                         int srcPy = flip ? (h - 1 - py) : py;
                         int srcRow = srcPy * w;
                         int destRow = (originY + py) * texW + cellOriginX;

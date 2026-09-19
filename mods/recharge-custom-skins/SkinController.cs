@@ -20,6 +20,8 @@ namespace RechargeCustomSkins
         public SkinGridLayout Layout;
         public Dictionary<string, int> RowByClip;
         public readonly Dictionary<(int row, int frame), Sprite> Cache = new Dictionary<(int, int), Sprite>();
+        public int FileCellW, FileCellH;
+        public int FileYOffset;
     }
 
     internal class SkinController : MonoBehaviour
@@ -38,8 +40,6 @@ namespace RechargeCustomSkins
         private string _exportDir;
 
         private SkinGridLayout? _canonicalLayout;
-        // A sprite can be reused both normal and vertically mirrored across
-        // clips, so it maps to every (row, frame, flipY) triple that uses it.
         private Dictionary<Sprite, List<(int row, int frame, bool flipY)>> _vanillaSpriteEntries;
 
         public void Init(IRechargeHost host)
@@ -170,10 +170,6 @@ namespace RechargeCustomSkins
             }
         }
 
-        // A skin file is either a flat image or a multi-clip sheet exported
-        // by ExportTemplate - detected by recomputing the real grid the
-        // game's clips/frame-counts would produce and matching it against
-        // the file (size + magenta gutter pixels).
         private SkinRuntime EnsureRuntime(int index)
         {
             var (fileName, bytes, runtime) = _skins[index];
@@ -198,8 +194,18 @@ namespace RechargeCustomSkins
                         " (file is " + tex.width + "x" + tex.height + "), rows=[" +
                         string.Join(", ", layout.Value.RowClips.Select((c, i) => i + ":" + c.name + "x" + c.frameCount)) + "]");
                 }
-                if (layout.HasValue && tex.width == layout.Value.TexW && tex.height == layout.Value.TexH && LooksLikeGrid(tex, layout.Value))
+                if (layout.HasValue && LooksLikeGrid(tex, layout.Value, out var fileCellW, out var fileCellH))
                 {
+                    runtime.FileCellW = fileCellW;
+                    runtime.FileCellH = fileCellH;
+                    int formulaH = layout.Value.Gutter + layout.Value.Rows * (fileCellH + layout.Value.Gutter);
+                    runtime.FileYOffset = Mathf.Max(0, tex.height - formulaH);
+                    if (tex.width != layout.Value.TexW || tex.height != layout.Value.TexH)
+                    {
+                        _host.Log("[CustomSkins] '" + fileName + "' is " + tex.width + "x" + tex.height +
+                            " (cell " + fileCellW + "x" + fileCellH + "), live grid is " + layout.Value.TexW + "x" + layout.Value.TexH +
+                            " (cell " + layout.Value.CellW + "x" + layout.Value.CellH + ") - masking per-cell onto the live sprite");
+                    }
                     runtime.IsSheet = true;
                     runtime.Layout = layout.Value;
                     runtime.RowByClip = new Dictionary<string, int>();
@@ -207,7 +213,7 @@ namespace RechargeCustomSkins
                 }
                 else if (layout.HasValue)
                 {
-                    _host.LogWarning("[CustomSkins] '" + fileName + "' did not match the live grid (size or gutter mismatch) - using flat image");
+                    _host.LogWarning("[CustomSkins] '" + fileName + "' did not match the live grid (not a recognizable exported sheet) - using flat image");
                 }
             }
 
@@ -222,25 +228,27 @@ namespace RechargeCustomSkins
 
         private static readonly Color32 GridLineColor = new Color32(255, 0, 220, 255);
 
-        private static bool LooksLikeGrid(Texture2D tex, SkinGridLayout layout)
+        private static bool LooksLikeGrid(Texture2D tex, SkinGridLayout layout, out int fileCellW, out int fileCellH)
         {
+            int gutter = layout.Gutter;
+            fileCellW = layout.Cols > 0 ? (tex.width - gutter) / layout.Cols - gutter : layout.CellW;
+            fileCellH = layout.Rows > 0 ? (tex.height - gutter) / layout.Rows - gutter : layout.CellH;
+            if (fileCellW <= 0 || fileCellH <= 0) return false;
+
             var pixels = tex.GetPixels32();
             int w = tex.width;
             if (!ColorEquals(pixels[0], GridLineColor)) return false;
             if (!ColorEquals(pixels[(tex.height - 1) * w], GridLineColor)) return false;
             if (layout.Cols > 1)
             {
-                int xDivider = layout.Gutter + layout.CellW;
-                if (!ColorEquals(pixels[xDivider], GridLineColor)) return false;
+                int xDivider = gutter + fileCellW;
+                if (xDivider >= w || !ColorEquals(pixels[xDivider], GridLineColor)) return false;
             }
             return true;
         }
 
         private static bool ColorEquals(Color32 a, Color32 b) => a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 
-        // Grid shape is a property of the Animator, not any particular skin
-        // file, so it's computed once. Also builds the vanilla-sprite
-        // reverse lookup CloneSkinApplier needs.
         private SkinGridLayout? GetCanonicalLayout()
         {
             if (_canonicalLayout.HasValue) return _canonicalLayout;
@@ -267,11 +275,17 @@ namespace RechargeCustomSkins
                 }
             }
             _host.Log("[CustomSkins] built vanilla sprite->(row,frame) map: " + _vanillaSpriteEntries.Count + " distinct sprite(s) across " + layout.Value.RowClips.Count + " clips");
+            for (int r = 0; r < layout.Value.RowFrameFlipY.Count; r++)
+            {
+                for (int f = 0; f < layout.Value.RowFrameFlipY[r].Count; f++)
+                {
+                    if (layout.Value.RowFrameFlipY[r][f])
+                        _host.Log("[CustomSkins] flip cell: row=" + r + " (" + layout.Value.RowClips[r].name + ") frame=" + f);
+                }
+            }
             return _canonicalLayout;
         }
 
-        // Prefers an exact (sprite, flipY) match, falling back to any
-        // (row, frame) that uses this sprite at all.
         public bool TryGetVanillaRowFrame(Sprite vanillaSprite, bool currentFlipY, out (int row, int frame, bool flipY) match)
         {
             GetCanonicalLayout();
@@ -297,11 +311,64 @@ namespace RechargeCustomSkins
             if (runtime.Cache.TryGetValue(key, out var cached)) return cached;
 
             var layout = runtime.Layout;
+            Sprite vanillaSprite = row < layout.RowFrameSprites.Count && frame < layout.RowFrameSprites[row].Count
+                ? layout.RowFrameSprites[row][frame] : null;
+            if (vanillaSprite == null) return null;
+            bool flip = row < layout.RowFrameFlipY.Count && frame < layout.RowFrameFlipY[row].Count && layout.RowFrameFlipY[row][frame];
+
+            int canvasW = Mathf.Max(1, Mathf.RoundToInt(vanillaSprite.textureRect.width));
+            int canvasH = Mathf.Max(1, Mathf.RoundToInt(vanillaSprite.textureRect.height));
+
             int rowFromBottom = layout.Rows - 1 - row;
-            int cellOriginX = layout.Gutter + frame * (layout.CellW + layout.Gutter);
-            int cellOriginY = layout.Gutter + rowFromBottom * (layout.CellH + layout.Gutter);
-            var rect = new Rect(cellOriginX, cellOriginY, layout.CellW, layout.CellH);
-            var sprite = Sprite.Create(runtime.Texture, rect, new Vector2(0.5f, 0.5f), _originalPixelsPerUnit);
+            int cellOriginX = layout.Gutter + frame * (runtime.FileCellW + layout.Gutter);
+            int cellOriginY = runtime.FileYOffset + layout.Gutter + rowFromBottom * (runtime.FileCellH + layout.Gutter);
+            var customColors = runtime.Texture.GetPixels(cellOriginX, cellOriginY, runtime.FileCellW, runtime.FileCellH);
+
+            // The exported cell is padded to a shared, worst-case size across
+            // every frame in the sheet - this frame's actual art only fills
+            // part of it, so find that tight sub-rectangle before mapping it
+            // onto the (much smaller) live mask.
+            int tightX0 = runtime.FileCellW, tightY0 = runtime.FileCellH, tightX1 = -1, tightY1 = -1;
+            for (int y = 0; y < runtime.FileCellH; y++)
+            {
+                int rowBase = y * runtime.FileCellW;
+                for (int x = 0; x < runtime.FileCellW; x++)
+                {
+                    if (customColors[rowBase + x].a == 0) continue;
+                    if (x < tightX0) tightX0 = x;
+                    if (x > tightX1) tightX1 = x;
+                    if (y < tightY0) tightY0 = y;
+                    if (y > tightY1) tightY1 = y;
+                }
+            }
+
+            var outPixels = new Color32[canvasW * canvasH];
+            if (tightX1 >= tightX0 && tightY1 >= tightY0)
+            {
+                int tightW = tightX1 - tightX0 + 1;
+                int tightH = tightY1 - tightY0 + 1;
+                for (int y = 0; y < canvasH; y++)
+                {
+                    int sampleY = flip ? (canvasH - 1 - y) : y;
+                    int srcY = tightY0 + (canvasH <= 1 ? 0 : Mathf.Clamp(sampleY * tightH / canvasH, 0, tightH - 1));
+                    for (int x = 0; x < canvasW; x++)
+                    {
+                        int srcX = tightX0 + (canvasW <= 1 ? 0 : Mathf.Clamp(x * tightW / canvasW, 0, tightW - 1));
+                        var c = customColors[srcY * runtime.FileCellW + srcX];
+                        if (c.a > 0) outPixels[y * canvasW + x] = c;
+                    }
+                }
+            }
+            var canvas = new Texture2D(canvasW, canvasH, TextureFormat.RGBA32, false);
+            canvas.SetPixels32(outPixels);
+            canvas.Apply();
+
+            float rawPivotX = vanillaSprite.pivot.x - vanillaSprite.textureRectOffset.x;
+            float rawPivotY = vanillaSprite.pivot.y - vanillaSprite.textureRectOffset.y;
+            float pivotX = rawPivotX;
+            float pivotY = flip ? (canvasH - rawPivotY) : rawPivotY;
+            var sprite = Sprite.Create(canvas, new Rect(0, 0, canvasW, canvasH),
+                new Vector2(pivotX / canvasW, pivotY / canvasH), vanillaSprite.pixelsPerUnit);
             runtime.Cache[key] = sprite;
             return sprite;
         }
@@ -312,16 +379,12 @@ namespace RechargeCustomSkins
 
         private Sprite PickSheetSprite(SkinRuntime runtime)
         {
-            // Runs every LateUpdate, so use the List overload to avoid the
-            // per-call array allocation GetCurrentAnimatorClipInfo(layer) does.
             if (_animator == null) _animator = _spriteRenderer.GetComponent<Animator>();
             var animator = _animator;
             int row = 0;
             _clipInfoBuffer.Clear();
             if (animator != null) animator.GetCurrentAnimatorClipInfo(0, _clipInfoBuffer);
 
-            // A blend tree can report several weighted sub-clips at once, so
-            // pick the dominant one by weight rather than assuming index 0.
             AnimatorClipInfo? dominant = null;
             foreach (var ci in _clipInfoBuffer)
             {
@@ -344,8 +407,6 @@ namespace RechargeCustomSkins
             float frac = animator != null ? Mathf.Repeat(stateInfo.normalizedTime, 1f) : 0f;
             int frame = Mathf.Clamp(Mathf.FloorToInt(frac * frameCount), 0, frameCount - 1);
 
-            // This cell's orientation is already baked into the exported
-            // texture - cancel the live flipY or it flips a second time.
             if (row < runtime.Layout.RowFrameFlipY.Count && frame < runtime.Layout.RowFrameFlipY[row].Count && runtime.Layout.RowFrameFlipY[row][frame])
             {
                 _spriteRenderer.flipY = false;
@@ -393,7 +454,8 @@ namespace RechargeCustomSkins
                 if (sprite != null)
                 {
                     _spriteRenderer.sprite = sprite;
-                    _spriteRenderer.material = GetFallbackMaterial();
+                    var fallback = GetFallbackMaterial();
+                    if (_spriteRenderer.sharedMaterial != fallback) _spriteRenderer.material = fallback;
                 }
                 CloneSkinApplier.Apply(this, runtime);
             }

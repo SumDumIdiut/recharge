@@ -1,0 +1,42 @@
+<main class="page">
+  <div class="page-header">Skins</div>
+
+  <div class="browser-toolbar">
+    <div class="browser-subtabs">
+      <button class="subtab-btn active" data-subtab="installed" onclick="window.__skinsSubtab('installed')">Installed</button>
+      <button class="subtab-btn" data-subtab="browse" onclick="window.__skinsSubtab('browse')">Browse</button>
+      <button class="subtab-btn" id="skins-upload-btn" onclick="window.__skinOpenUpload()">Upload</button>
+    </div>
+    <input class="browser-search" id="skins-search" type="text" placeholder="Search skins…" oninput="window.__skinsSearch(this.value)" />
+  </div>
+
+  <div id="skins-installed-view" class="browser-grid"></div>
+  <div id="skins-browse-view" class="browser-grid" style="display:none;"></div>
+</main>
+
+<div class="mods-modal-overlay" id="skins-upload-overlay" hidden>
+  <div class="mods-modal">
+    <div class="mods-modal-title">Upload a Skin</div>
+    <div class="mods-modal-body">
+      <label class="skins-upload-label">
+        Skin file
+        <div class="skins-upload-browse-row">
+          <span class="skins-upload-browse-path" id="skins-upload-path">No file chosen</span>
+          <button class="btn" id="skins-upload-browse-btn" type="button">Browse…</button>
+        </div>
+      </label>
+      <label class="skins-upload-label">
+        Name
+        <input class="skins-upload-input" id="skins-upload-name" type="text" placeholder="e.g. Googly Eyes" />
+      </label>
+      <label class="skins-upload-label">
+        Author
+        <input class="skins-upload-input" id="skins-upload-author" type="text" placeholder="Your name" />
+      </label>
+    </div>
+    <div class="mods-modal-actions">
+      <button class="btn" id="skins-upload-cancel">Cancel</button>
+      <button class="btn btn-primary" id="skins-upload-confirm">Upload</button>
+    </div>
+  </div>
+</div>
