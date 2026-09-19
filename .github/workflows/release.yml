@@ -42,12 +42,8 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # Gitignored (a third-party tool, not repo source) - the app bundles it
-      # as a resource so RechargeLoader can decompile the game on end-user
-      # machines without them needing the .NET SDK themselves. `--tool-path`
-      # installs a shim + a nested .store/ tree, not the flat DLL folder
-      # build-loader.ps1 expects, so the actual tool files get copied up
-      # from wherever dotnet put them.
+      # --tool-path installs a shim + nested .store/, not the flat DLL folder
+      # build-loader.ps1 expects, so the real files get copied up from there.
       - name: Install ilspycmd (bundled decompiler tool)
         shell: bash
         run: |
