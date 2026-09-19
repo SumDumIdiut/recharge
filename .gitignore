@@ -1,0 +1,46 @@
+# Rust / Tauri
+/app/src-tauri/target/
+/app/src-tauri/gen/schemas/
+
+# Node
+/app/node_modules/
+*.log
+
+# .NET mod projects
+**/bin/
+**/obj/
+
+# Third-party toolchains staged locally, not part of the repo - see
+# loader/README.md for how to re-acquire them.
+/loader/.dotnet-sdk/
+/loader/tools/ilspycmd/
+
+# Ad-hoc verification screenshots from tools/game-input.ps1
+/tools/shot-*.png
+
+# makepkg build output (installer/arch/PKGBUILD) - .SRCINFO stays tracked,
+# it's the machine-readable metadata an AUR submission would need.
+/installer/arch/pkg/
+/installer/arch/src/
+/installer/arch/*.pkg.tar.*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# Secrets - never commit
+.env
+.env.local
+!.env.example
+*.pem
+*.key
+*.token
+*_token
+.admin_token
+*secret*
+*credential*
+session*.json
+.sessions/
+*cookie*
