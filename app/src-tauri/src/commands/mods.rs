@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::settings;
 
@@ -100,4 +100,34 @@ pub fn uninstall_mod(app: AppHandle, id: String) -> Result<(), String> {
         return Ok(());
     }
     Err(format!("mod '{id}' not found"))
+}
+
+#[tauri::command]
+pub fn export_example_mod(app: AppHandle, dest_dir: String) -> Result<(), String> {
+    let src = app
+        .path()
+        .resolve("mods/recharge-example", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("example mod resource not found: {e}"))?;
+    let dest = PathBuf::from(dest_dir).join("recharge-example");
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    copy_dir_skipping_build_output(&src, &dest)
+}
+
+fn copy_dir_skipping_build_output(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        if name == "bin" || name == "obj" {
+            continue;
+        }
+        let src_path = entry.path();
+        let dest_path = dest.join(&name);
+        if src_path.is_dir() {
+            std::fs::create_dir_all(&dest_path).map_err(|e| e.to_string())?;
+            copy_dir_skipping_build_output(&src_path, &dest_path)?;
+        } else {
+            std::fs::copy(&src_path, &dest_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }

@@ -151,6 +151,19 @@ window.__modsSearch = function (value) {
   render();
 };
 
+window.__modExportExample = async function () {
+  const { open } = window.__TAURI__.dialog;
+  const { invoke } = window.__TAURI__.core;
+  const dir = await open({ directory: true, multiple: false, title: 'Export Example Mod to…' });
+  if (!dir) return;
+  try {
+    await invoke('export_example_mod', { destDir: dir });
+    alert('Exported to ' + dir + '/recharge-example');
+  } catch (err) {
+    alert(String(err));
+  }
+};
+
 window.__modToggle = async function (el) {
   const { invoke } = window.__TAURI__.core;
   const enabled = !el.classList.contains('on');

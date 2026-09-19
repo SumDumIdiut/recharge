@@ -35,6 +35,7 @@ pub fn run() {
             mods::list_installed_mods,
             mods::set_mod_enabled,
             mods::uninstall_mod,
+            mods::export_example_mod,
             hub::install_from_hub_cmd,
             hub::submit_skin_cmd,
             hub::delete_hub_submission_cmd,
