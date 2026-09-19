@@ -5,6 +5,7 @@
     <div class="browser-subtabs">
       <button class="subtab-btn active" data-subtab="installed" onclick="window.__mapsSubtab('installed')">Installed</button>
       <button class="subtab-btn" data-subtab="browse" onclick="window.__mapsSubtab('browse')">Browse</button>
+      <button class="subtab-btn" id="maps-upload-btn" onclick="window.__mapOpenUpload()" style="display:none;">Upload</button>
     </div>
     <input class="browser-search" id="maps-search" type="text" placeholder="Search maps…" oninput="window.__mapsSearch(this.value)" />
   </div>
@@ -12,3 +13,30 @@
   <div id="maps-installed-view" class="browser-grid"></div>
   <div id="maps-browse-view" class="browser-grid" style="display:none;"></div>
 </main>
+
+<div class="mods-modal-overlay" id="maps-upload-overlay" hidden>
+  <div class="mods-modal">
+    <div class="mods-modal-title">Upload a Map</div>
+    <div class="mods-modal-body">
+      <label class="skins-upload-label">
+        Map file
+        <div class="skins-upload-browse-row">
+          <span class="skins-upload-browse-path" id="maps-upload-path">No file chosen</span>
+          <button class="btn" id="maps-upload-browse-btn" type="button">Browse…</button>
+        </div>
+      </label>
+      <label class="skins-upload-label">
+        Name
+        <input class="skins-upload-input" id="maps-upload-name" type="text" placeholder="e.g. Death by Lolo" />
+      </label>
+      <label class="skins-upload-label">
+        Description
+        <input class="skins-upload-input" id="maps-upload-description" type="text" placeholder="Optional" />
+      </label>
+    </div>
+    <div class="mods-modal-actions">
+      <button class="btn" id="maps-upload-cancel">Cancel</button>
+      <button class="btn btn-primary" id="maps-upload-confirm">Upload</button>
+    </div>
+  </div>
+</div>

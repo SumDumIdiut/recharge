@@ -1,3 +1,5 @@
+import { getToken, getUsername, isLoggedIn } from '../auth.js';
+
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
 let currentSubtab = 'installed';
@@ -5,6 +7,8 @@ let searchTerm = '';
 let installedCache = [];
 let catalog = [];
 let catalogError = false;
+let chosenUploadPath = null;
+let myUploadIds = new Set();
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -46,6 +50,22 @@ async function loadCatalog() {
   } catch (err) {
     catalog = [];
     catalogError = true;
+  }
+}
+
+async function loadMyUploadIds() {
+  if (!isLoggedIn()) {
+    myUploadIds = new Set();
+    return;
+  }
+  try {
+    const res = await fetch(`${HUB_BASE}/api/me/submissions`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    const rows = res.ok ? await res.json() : [];
+    myUploadIds = new Set(rows.filter((r) => r.kind === 'map').map((r) => r.id));
+  } catch {
+    myUploadIds = new Set();
   }
 }
 
@@ -99,6 +119,7 @@ function renderBrowse() {
       const badge = installed
         ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__mapInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
+      const mine = myUploadIds.has(entry.id);
       return `
     <div class="browse-card">
       ${thumb(entry, badge)}
@@ -107,6 +128,11 @@ function renderBrowse() {
         <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
       </div>
       <div class="browse-card-desc">${escapeHtml(entry.description || '')}</div>
+      ${mine ? `<div class="browse-card-actions">
+        <div class="browse-card-actions-right">
+          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="window.__mapConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+        </div>
+      </div>` : ''}
     </div>`;
     })
     .join('');
@@ -116,6 +142,7 @@ function render() {
   document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('maps-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('maps-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
+  document.getElementById('maps-upload-btn').style.display = isLoggedIn() ? '' : 'none';
   renderInstalled();
   renderBrowse();
 }
@@ -167,6 +194,79 @@ window.__mapConfirmUninstall = function (id, name) {
     .catch((err) => alert(String(err)));
 };
 
+window.__mapOpenUpload = function () {
+  if (!isLoggedIn()) {
+    alert('Log in first to upload a map.');
+    window.navigate('account');
+    return;
+  }
+  chosenUploadPath = null;
+  document.getElementById('maps-upload-path').textContent = 'No file chosen';
+  document.getElementById('maps-upload-name').value = '';
+  document.getElementById('maps-upload-description').value = '';
+  document.getElementById('maps-upload-overlay').hidden = false;
+};
+
+window.__mapConfirmDeleteFromHub = function (id, name) {
+  if (!confirm(`Remove "${name}" from the Recharge Library? This can't be undone.`)) return;
+  const { invoke } = window.__TAURI__.core;
+  invoke('delete_hub_submission_cmd', { token: getToken(), id })
+    .then(async () => {
+      await loadCatalog();
+      await loadMyUploadIds();
+      render();
+    })
+    .catch((err) => alert(String(err)));
+};
+
+async function browseForMapFile() {
+  const { open } = window.__TAURI__.dialog;
+  const chosen = await open({ directory: false, multiple: false, title: 'Choose a map file' });
+  if (!chosen) return;
+  chosenUploadPath = chosen;
+  document.getElementById('maps-upload-path').textContent = chosen.split(/[\\/]/).pop();
+}
+
+function closeUploadModal() {
+  document.getElementById('maps-upload-overlay').hidden = true;
+}
+
+async function submitUpload() {
+  const name = document.getElementById('maps-upload-name').value.trim();
+  const description = document.getElementById('maps-upload-description').value.trim();
+  if (!chosenUploadPath) {
+    alert('Choose a map file first.');
+    return;
+  }
+  if (!name) {
+    alert('Name is required.');
+    return;
+  }
+
+  const confirmBtn = document.getElementById('maps-upload-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Uploading…';
+  const { invoke } = window.__TAURI__.core;
+  try {
+    await invoke('submit_map_cmd', {
+      token: getToken(),
+      filePath: chosenUploadPath,
+      displayName: name,
+      author: getUsername(),
+      description,
+    });
+    closeUploadModal();
+    await loadCatalog();
+    await loadMyUploadIds();
+    render();
+  } catch (err) {
+    alert(String(err));
+  } finally {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Upload';
+  }
+}
+
 async function refresh() {
   const { invoke } = window.__TAURI__.core;
   installedCache = await invoke('list_maps');
@@ -174,7 +274,10 @@ async function refresh() {
 }
 
 export async function init() {
+  document.getElementById('maps-upload-cancel').addEventListener('click', closeUploadModal);
+  document.getElementById('maps-upload-confirm').addEventListener('click', submitUpload);
+  document.getElementById('maps-upload-browse-btn').addEventListener('click', browseForMapFile);
   render();
-  await Promise.all([loadCatalog(), refresh()]);
+  await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
 }

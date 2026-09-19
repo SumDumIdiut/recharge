@@ -220,6 +220,128 @@ pub fn submit_skin_cmd(token: String, file_path: String, display_name: String, a
 }
 
 #[tauri::command]
+pub fn submit_map_cmd(token: String, file_path: String, display_name: String, author: String, description: String) -> Result<String, String> {
+    if display_name.trim().is_empty() || author.trim().is_empty() {
+        return Err("name and author are required".to_string());
+    }
+    let path = PathBuf::from(&file_path);
+    if !path.is_file() {
+        return Err(format!("'{file_path}' not found"));
+    }
+
+    let form = ureq::unversioned::multipart::Form::new()
+        .text("kind", "map")
+        .text("name", &display_name)
+        .text("author", &author)
+        .text("description", &description)
+        .text("modId", "recharge.maps")
+        .file("file", &path)
+        .map_err(|e| e.to_string())?;
+
+    let result: SubmitResult = ureq::post(&format!("{HUB_BASE}/api/submit"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send(form)
+        .map_err(|e| format!("upload failed: {e}"))?
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_json()
+        .map_err(|e| format!("bad response from library: {e}"))?;
+
+    Ok(result.id)
+}
+
+#[derive(serde::Deserialize)]
+struct ModManifestForUpload {
+    id: String,
+    #[serde(default = "default_mod_version")]
+    version: String,
+}
+
+fn default_mod_version() -> String {
+    "1.0.0".to_string()
+}
+
+fn zip_folder_excluding_build_output(folder: &std::path::Path) -> Result<Vec<u8>, String> {
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    let options = zip::write::SimpleFileOptions::default();
+    add_dir_to_zip(&mut writer, folder, folder, options)?;
+    let cursor = writer.finish().map_err(|e| e.to_string())?;
+    Ok(cursor.into_inner())
+}
+
+fn add_dir_to_zip<W: std::io::Write + std::io::Seek>(
+    writer: &mut zip::ZipWriter<W>,
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    options: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        if name == "bin" || name == "obj" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            add_dir_to_zip(writer, base, &path, options)?;
+        } else {
+            let rel = path.strip_prefix(base).map_err(|e| e.to_string())?;
+            writer
+                .start_file(rel.to_string_lossy(), options)
+                .map_err(|e| e.to_string())?;
+            std::io::Write::write_all(writer, &std::fs::read(&path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn submit_mod_cmd(token: String, folder_path: String, display_name: String, author: String) -> Result<String, String> {
+    if display_name.trim().is_empty() || author.trim().is_empty() {
+        return Err("name and author are required".to_string());
+    }
+    let folder = PathBuf::from(&folder_path);
+    if !folder.is_dir() {
+        return Err(format!("'{folder_path}' is not a folder"));
+    }
+    let manifest_text = std::fs::read_to_string(folder.join("mod.json"))
+        .map_err(|_| "the selected folder doesn't have a mod.json in it".to_string())?;
+    let manifest: ModManifestForUpload = serde_json::from_str(&manifest_text).map_err(|e| e.to_string())?;
+
+    let zip_bytes = zip_folder_excluding_build_output(&folder)?;
+    let tmp_id = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("recharge-mod-upload-{}-{tmp_id}.igtap", std::process::id()));
+    std::fs::write(&tmp, &zip_bytes).map_err(|e| e.to_string())?;
+
+    let form = ureq::unversioned::multipart::Form::new()
+        .text("kind", "mod")
+        .text("name", &display_name)
+        .text("author", &author)
+        .text("modId", &manifest.id)
+        .text("version", &manifest.version)
+        .file("file", &tmp)
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<SubmitResult, String> = (|| {
+        ureq::post(&format!("{HUB_BASE}/api/submit"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send(form)
+            .map_err(|e| format!("upload failed: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(1024 * 1024)
+            .read_json()
+            .map_err(|e| format!("bad response from library: {e}"))
+    })();
+    let _ = std::fs::remove_file(&tmp);
+
+    Ok(result?.id)
+}
+
+#[tauri::command]
 pub fn delete_hub_submission_cmd(token: String, id: String) -> Result<(), String> {
     sanitize_id(&id)?;
     ureq::delete(&format!("{HUB_BASE}/api/submissions/{id}"))

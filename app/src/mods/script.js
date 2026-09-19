@@ -1,3 +1,5 @@
+import { getToken, getUsername, isLoggedIn } from '../auth.js';
+
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
 const PROTECTED_MOD_IDS = new Set(['recharge.maps', 'recharge.customskins']);
@@ -7,6 +9,8 @@ let searchTerm = '';
 let installedCache = [];
 let catalog = [];
 let catalogError = false;
+let chosenUploadPath = null;
+let myUploadIds = new Set();
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -66,6 +70,22 @@ async function loadCatalog() {
   }
 }
 
+async function loadMyUploadIds() {
+  if (!isLoggedIn()) {
+    myUploadIds = new Set();
+    return;
+  }
+  try {
+    const res = await fetch(`${HUB_BASE}/api/me/submissions`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    const rows = res.ok ? await res.json() : [];
+    myUploadIds = new Set(rows.filter((r) => r.kind === 'mod').map((r) => r.id));
+  } catch {
+    myUploadIds = new Set();
+  }
+}
+
 function renderInstalled() {
   const list = document.getElementById('mods-installed-view');
   const filtered = installedCache
@@ -120,6 +140,7 @@ function renderBrowse() {
       const badge = installed
         ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
+      const mine = myUploadIds.has(entry.id);
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(entry.id)}')">
       ${thumb(entry, badge)}
@@ -127,6 +148,11 @@ function renderBrowse() {
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
         <div class="browse-card-meta">${escapeHtml(entry.author)} &middot; v${escapeHtml(entry.version)}</div>
       </div>
+      ${mine ? `<div class="browse-card-actions">
+        <div class="browse-card-actions-right">
+          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__modConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+        </div>
+      </div>` : ''}
     </div>`;
     })
     .join('');
@@ -136,6 +162,7 @@ function render() {
   document.querySelectorAll('#view-mods .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('mods-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('mods-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
+  document.getElementById('mods-upload-btn').style.display = isLoggedIn() ? '' : 'none';
   renderInstalled();
   renderBrowse();
 }
@@ -163,6 +190,76 @@ window.__modExportExample = async function () {
     alert(String(err));
   }
 };
+
+window.__modOpenUpload = function () {
+  if (!isLoggedIn()) {
+    alert('Log in first to upload a mod.');
+    window.navigate('account');
+    return;
+  }
+  chosenUploadPath = null;
+  document.getElementById('mods-upload-path').textContent = 'No folder chosen';
+  document.getElementById('mods-upload-name').value = '';
+  document.getElementById('mods-upload-overlay').hidden = false;
+};
+
+window.__modConfirmDeleteFromHub = function (id, name) {
+  if (!confirm(`Remove "${name}" from the Recharge Library? This can't be undone.`)) return;
+  const { invoke } = window.__TAURI__.core;
+  invoke('delete_hub_submission_cmd', { token: getToken(), id })
+    .then(async () => {
+      await loadCatalog();
+      await loadMyUploadIds();
+      render();
+    })
+    .catch((err) => alert(String(err)));
+};
+
+async function browseForModFolder() {
+  const { open } = window.__TAURI__.dialog;
+  const chosen = await open({ directory: true, multiple: false, title: 'Choose a mod folder' });
+  if (!chosen) return;
+  chosenUploadPath = chosen;
+  document.getElementById('mods-upload-path').textContent = chosen.split(/[\\/]/).pop();
+}
+
+function closeUploadModal() {
+  document.getElementById('mods-upload-overlay').hidden = true;
+}
+
+async function submitUpload() {
+  const name = document.getElementById('mods-upload-name').value.trim();
+  if (!chosenUploadPath) {
+    alert('Choose a mod folder first.');
+    return;
+  }
+  if (!name) {
+    alert('Name is required.');
+    return;
+  }
+
+  const confirmBtn = document.getElementById('mods-upload-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Uploading…';
+  const { invoke } = window.__TAURI__.core;
+  try {
+    await invoke('submit_mod_cmd', {
+      token: getToken(),
+      folderPath: chosenUploadPath,
+      displayName: name,
+      author: getUsername(),
+    });
+    closeUploadModal();
+    await loadCatalog();
+    await loadMyUploadIds();
+    render();
+  } catch (err) {
+    alert(String(err));
+  } finally {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Upload';
+  }
+}
 
 window.__modToggle = async function (el) {
   const { invoke } = window.__TAURI__.core;
@@ -363,7 +460,10 @@ async function refresh() {
 
 export async function init() {
   document.getElementById('mods-dep-cancel').addEventListener('click', closeDepModal);
+  document.getElementById('mods-upload-cancel').addEventListener('click', closeUploadModal);
+  document.getElementById('mods-upload-confirm').addEventListener('click', submitUpload);
+  document.getElementById('mods-upload-browse-btn').addEventListener('click', browseForModFolder);
   render();
-  await Promise.all([loadCatalog(), refresh()]);
+  await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
 }

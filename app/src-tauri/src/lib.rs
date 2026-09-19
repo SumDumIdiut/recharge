@@ -38,6 +38,8 @@ pub fn run() {
             mods::export_example_mod,
             hub::install_from_hub_cmd,
             hub::submit_skin_cmd,
+            hub::submit_map_cmd,
+            hub::submit_mod_cmd,
             hub::delete_hub_submission_cmd,
             maps::list_maps,
             maps::uninstall_map,
