@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Reference Include="Recharge.ModApi"><HintPath>$(ManagedDir)\Recharge.ModApi.dll</HintPath></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(ManagedDir)\UnityEngine.ParticleSystemModule.dll</HintPath></Reference>
     <Reference Include="UnityEngine.AudioModule"><HintPath>$(ManagedDir)\UnityEngine.AudioModule.dll</HintPath></Reference>
