@@ -165,6 +165,7 @@ function render() {
   document.querySelectorAll('#view-skins .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('skins-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('skins-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
+  document.getElementById('skins-upload-btn').style.display = isLoggedIn() ? '' : 'none';
   renderInstalled();
   renderBrowse();
 }
