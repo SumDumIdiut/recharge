@@ -224,7 +224,6 @@ window.__skinOpenUpload = function () {
   chosenUploadPath = null;
   document.getElementById('skins-upload-path').textContent = 'No file chosen';
   document.getElementById('skins-upload-name').value = '';
-  document.getElementById('skins-upload-author').value = getUsername() || '';
   document.getElementById('skins-upload-overlay').hidden = false;
 };
 
@@ -263,13 +262,12 @@ function closeUploadModal() {
 
 async function submitUpload() {
   const name = document.getElementById('skins-upload-name').value.trim();
-  const author = document.getElementById('skins-upload-author').value.trim();
   if (!chosenUploadPath) {
     alert('Choose a skin file first.');
     return;
   }
-  if (!name || !author) {
-    alert('Name and author are required.');
+  if (!name) {
+    alert('Name is required.');
     return;
   }
 
@@ -278,7 +276,7 @@ async function submitUpload() {
   confirmBtn.textContent = 'Uploading…';
   const { invoke } = window.__TAURI__.core;
   try {
-    await invoke('submit_skin_cmd', { token: getToken(), filePath: chosenUploadPath, displayName: name, author });
+    await invoke('submit_skin_cmd', { token: getToken(), filePath: chosenUploadPath, displayName: name, author: getUsername() });
     closeUploadModal();
     await loadCatalog();
     await loadMyUploadIds();
