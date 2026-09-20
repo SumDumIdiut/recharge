@@ -49,8 +49,6 @@ fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
 #[derive(Deserialize)]
 struct HubItem {
     name: String,
-    #[serde(rename = "fileName")]
-    file_name: String,
 }
 
 #[derive(Deserialize)]
@@ -111,34 +109,18 @@ fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), 
     Ok(())
 }
 
-fn slugify(name: &str) -> String {
-    let mut slug = String::new();
-    let mut last_dash = false;
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            slug.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            slug.push('-');
-            last_dash = true;
-        }
-    }
-    slug.trim_matches('-').to_string()
-}
-
-fn install_skin_file(app: &AppHandle, bytes: Vec<u8>, meta: &HubItem) -> Result<(), String> {
+fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), String> {
     let dir = skins_dir(app).ok_or("game path not set")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let target = dir.join(hub_id);
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
 
-    let ext = PathBuf::from(&meta.file_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png")
-        .to_string();
-    let slug = slugify(&meta.name);
-    let filename = format!("{}.{ext}", if slug.is_empty() { "skin".to_string() } else { slug });
-
-    std::fs::write(dir.join(filename), &bytes).map_err(|e| e.to_string())
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid package: {e}"))?;
+    archive
+        .extract(&target)
+        .map_err(|e| format!("couldn't extract package: {e}"))?;
+    Ok(())
 }
 
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
@@ -163,7 +145,7 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
     } else if kind == "maps" {
         install_map_zip(app, bytes, id)?;
     } else {
-        install_skin_file(app, bytes, &meta)?;
+        install_skin_zip(app, bytes, id)?;
     }
 
     if let Some(w) = app.get_webview_window("main") {
@@ -189,34 +171,42 @@ struct SubmitResult {
 }
 
 #[tauri::command]
-pub fn submit_skin_cmd(token: String, file_path: String, display_name: String, author: String) -> Result<String, String> {
+pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String, author: String) -> Result<String, String> {
     if display_name.trim().is_empty() || author.trim().is_empty() {
         return Err("name and author are required".to_string());
     }
-    let path = PathBuf::from(&file_path);
-    if !path.is_file() {
-        return Err(format!("'{file_path}' not found"));
+    let folder = PathBuf::from(&folder_path);
+    if !folder.is_dir() {
+        return Err(format!("'{folder_path}' is not a folder"));
     }
+
+    let zip_bytes = zip_folder_excluding_build_output(&folder)?;
+    let tmp_id = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("recharge-skin-upload-{}-{tmp_id}.zip", std::process::id()));
+    std::fs::write(&tmp, &zip_bytes).map_err(|e| e.to_string())?;
 
     let form = ureq::unversioned::multipart::Form::new()
         .text("kind", "skin")
         .text("name", &display_name)
         .text("author", &author)
         .text("modId", "recharge.customskins")
-        .file("file", &path)
+        .file("file", &tmp)
         .map_err(|e| e.to_string())?;
 
-    let result: SubmitResult = ureq::post(&format!("{HUB_BASE}/api/submit"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send(form)
-        .map_err(|e| format!("upload failed: {e}"))?
-        .body_mut()
-        .with_config()
-        .limit(1024 * 1024)
-        .read_json()
-        .map_err(|e| format!("bad response from library: {e}"))?;
+    let result: Result<SubmitResult, String> = (|| {
+        ureq::post(&format!("{HUB_BASE}/api/submit"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send(form)
+            .map_err(|e| format!("upload failed: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(1024 * 1024)
+            .read_json()
+            .map_err(|e| format!("bad response from library: {e}"))
+    })();
+    let _ = std::fs::remove_file(&tmp);
 
-    Ok(result.id)
+    Ok(result?.id)
 }
 
 #[tauri::command]

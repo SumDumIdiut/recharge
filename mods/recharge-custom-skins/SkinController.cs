@@ -28,7 +28,7 @@ namespace RechargeCustomSkins
     {
         private IRechargeHost _host;
         private string _skinsDir;
-        private readonly List<(string fileName, byte[] bytes, SkinRuntime runtime)> _skins = new List<(string, byte[], SkinRuntime)>();
+        private readonly List<(string folderName, byte[] imageBytes, SkinRuntime runtime)> _skins = new List<(string, byte[], SkinRuntime)>();
         private int _currentIndex = -1;
 
         private Movement _movement;
@@ -56,7 +56,7 @@ namespace RechargeCustomSkins
             var save = host.LoadConfig<SkinSave>(RechargeCustomSkinsMod.ModId);
             _currentIndex = save.CurrentSkinFile == null
                 ? -1
-                : _skins.FindIndex(s => s.fileName == save.CurrentSkinFile);
+                : _skins.FindIndex(s => s.folderName == save.CurrentSkinFile);
             _exportDir = string.IsNullOrEmpty(save.ExportDir) ? DefaultExportDir : save.ExportDir;
             StartCoroutine(HeartbeatLog());
         }
@@ -81,7 +81,7 @@ namespace RechargeCustomSkins
         private void LogHeartbeat()
         {
             bool hasPlayer = EnsurePlayer();
-            var skinName = _currentIndex >= 0 && _currentIndex < _skins.Count ? _skins[_currentIndex].fileName : "Vanilla";
+            var skinName = _currentIndex >= 0 && _currentIndex < _skins.Count ? _skins[_currentIndex].folderName : "Vanilla";
             var animator = hasPlayer ? _spriteRenderer.GetComponent<Animator>() : null;
             string clipInfo = "n/a";
             if (animator != null)
@@ -121,7 +121,7 @@ namespace RechargeCustomSkins
             get
             {
                 var names = new List<string> { "Vanilla" };
-                names.AddRange(_skins.Select(s => Path.GetFileNameWithoutExtension(s.fileName)));
+                names.AddRange(_skins.Select(s => s.folderName));
                 return names;
             }
         }
@@ -137,21 +137,20 @@ namespace RechargeCustomSkins
         {
             _host.SaveConfig(RechargeCustomSkinsMod.ModId, new SkinSave
             {
-                CurrentSkinFile = _currentIndex >= 0 ? _skins[_currentIndex].fileName : null,
+                CurrentSkinFile = _currentIndex >= 0 ? _skins[_currentIndex].folderName : null,
                 ExportDir = _exportDir == DefaultExportDir ? null : _exportDir,
             });
         }
 
+        private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg" };
+
         private void LoadSkinsFromDisk()
         {
             _skins.Clear();
-            IEnumerable<string> files;
+            IEnumerable<string> folders;
             try
             {
-                files = Directory.EnumerateFiles(_skinsDir)
-                    .Where(f => f.EndsWith(".png", System.StringComparison.OrdinalIgnoreCase)
-                             || f.EndsWith(".jpg", System.StringComparison.OrdinalIgnoreCase)
-                             || f.EndsWith(".jpeg", System.StringComparison.OrdinalIgnoreCase))
+                folders = Directory.EnumerateDirectories(_skinsDir)
                     .OrderBy(f => f, System.StringComparer.OrdinalIgnoreCase);
             }
             catch (System.Exception e)
@@ -160,31 +159,46 @@ namespace RechargeCustomSkins
                 return;
             }
 
-            foreach (var path in files)
+            foreach (var folder in folders)
             {
+                var folderName = Path.GetFileName(folder);
+                var imagePath = FindImageFile(folder);
+                if (imagePath == null)
+                {
+                    _host.LogWarning($"[CustomSkins] '{folderName}' has no image file (png/jpg/jpeg) in it - skipping");
+                    continue;
+                }
                 try
                 {
-                    var bytes = File.ReadAllBytes(path);
-                    _skins.Add((Path.GetFileName(path), bytes, null));
+                    var bytes = File.ReadAllBytes(imagePath);
+                    _skins.Add((folderName, bytes, null));
                 }
                 catch (System.Exception e)
                 {
-                    _host.LogError($"[CustomSkins] couldn't load '{path}': {e}");
+                    _host.LogError($"[CustomSkins] couldn't load '{imagePath}': {e}");
                 }
             }
         }
 
+        private static string FindImageFile(string folder)
+        {
+            return Directory.EnumerateFiles(folder)
+                .FirstOrDefault(f => ImageExtensions.Contains(Path.GetExtension(f), System.StringComparer.OrdinalIgnoreCase));
+        }
+
+        private string SoundsDir(int index) => Path.Combine(_skinsDir, _skins[index].folderName, "sounds");
+
         private SkinRuntime EnsureRuntime(int index)
         {
-            var (fileName, bytes, runtime) = _skins[index];
+            var (folderName, bytes, runtime) = _skins[index];
             if (runtime != null) return runtime;
 
             runtime = new SkinRuntime();
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
             if (!ImageConversion.LoadImage(tex, bytes))
             {
-                _host.LogError("[CustomSkins] couldn't decode '" + fileName + "'");
-                _skins[index] = (fileName, bytes, runtime);
+                _host.LogError("[CustomSkins] couldn't decode '" + folderName + "'");
+                _skins[index] = (folderName, bytes, runtime);
                 return runtime;
             }
             runtime.Texture = tex;
@@ -194,7 +208,7 @@ namespace RechargeCustomSkins
                 var layout = GetCanonicalLayout();
                 if (layout.HasValue)
                 {
-                    _host.Log("[CustomSkins] '" + fileName + "' live grid layout: " + layout.Value.TexW + "x" + layout.Value.TexH +
+                    _host.Log("[CustomSkins] '" + folderName + "' live grid layout: " + layout.Value.TexW + "x" + layout.Value.TexH +
                         " (file is " + tex.width + "x" + tex.height + "), rows=[" +
                         string.Join(", ", layout.Value.RowClips.Select((c, i) => i + ":" + c.name + "x" + c.frameCount)) + "]");
                 }
@@ -206,7 +220,7 @@ namespace RechargeCustomSkins
                     runtime.FileYOffset = Mathf.Max(0, tex.height - formulaH);
                     if (tex.width != layout.Value.TexW || tex.height != layout.Value.TexH)
                     {
-                        _host.Log("[CustomSkins] '" + fileName + "' is " + tex.width + "x" + tex.height +
+                        _host.Log("[CustomSkins] '" + folderName + "' is " + tex.width + "x" + tex.height +
                             " (cell " + fileCellW + "x" + fileCellH + "), live grid is " + layout.Value.TexW + "x" + layout.Value.TexH +
                             " (cell " + layout.Value.CellW + "x" + layout.Value.CellH + ") - masking per-cell onto the live sprite");
                     }
@@ -217,7 +231,7 @@ namespace RechargeCustomSkins
                 }
                 else if (layout.HasValue)
                 {
-                    _host.LogWarning("[CustomSkins] '" + fileName + "' did not match the live grid (not a recognizable exported sheet) - using flat image");
+                    _host.LogWarning("[CustomSkins] '" + folderName + "' did not match the live grid (not a recognizable exported sheet) - using flat image");
                 }
             }
 
@@ -226,7 +240,7 @@ namespace RechargeCustomSkins
                 runtime.FlatSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), _originalPixelsPerUnit);
             }
 
-            _skins[index] = (fileName, bytes, runtime);
+            _skins[index] = (folderName, bytes, runtime);
             return runtime;
         }
 
@@ -451,6 +465,8 @@ namespace RechargeCustomSkins
         private void LateUpdate()
         {
             if (!EnsurePlayer()) return;
+            GlobalAudioApplier.CaptureOriginals();
+
             bool skinActive = _currentIndex >= 0 && _currentIndex < _skins.Count;
             if (skinActive)
             {
@@ -464,18 +480,17 @@ namespace RechargeCustomSkins
                 }
                 CloneSkinApplier.Apply(this, runtime);
 
-                var sfxDir = Path.Combine(_skinsDir, Path.GetFileNameWithoutExtension(_skins[_currentIndex].fileName));
+                var soundsDir = SoundsDir(_currentIndex);
                 if (_movement != _audioForMovement || _currentIndex != _audioForIndex)
                 {
-                    SkinAudioApplier.Apply(this, _host, _movement, sfxDir);
+                    SkinAudioApplier.Apply(this, _host, _movement, soundsDir);
                     _audioForMovement = _movement;
                     _audioForIndex = _currentIndex;
                 }
 
-                GlobalAudioApplier.CaptureOriginals();
                 if (_currentIndex != _globalAudioForIndex)
                 {
-                    GlobalAudioApplier.Apply(this, _host, sfxDir);
+                    GlobalAudioApplier.Apply(this, _host, soundsDir);
                     _globalAudioForIndex = _currentIndex;
                 }
             }
@@ -515,7 +530,7 @@ namespace RechargeCustomSkins
         {
             if (_skins.Count == 0) return "Skin: none found";
             var current = _currentIndex >= 0 && _currentIndex < _skins.Count
-                ? Path.GetFileNameWithoutExtension(_skins[_currentIndex].fileName)
+                ? _skins[_currentIndex].folderName
                 : "Vanilla";
             return $"Skin: {current}";
         }

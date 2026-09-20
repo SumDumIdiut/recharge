@@ -20,15 +20,14 @@ function matchesSearch(haystack) {
   return haystack.toLowerCase().includes(searchTerm.toLowerCase());
 }
 
-function displayName(fileName) {
-  return fileName
-    .replace(/\.[^.]+$/, '')
+function displayName(folderName) {
+  return folderName
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function suggestUploadName(fileName) {
-  return displayName(fileName).replace(/\s+Skin\d*$/i, '');
+function suggestUploadName(folderName) {
+  return displayName(folderName).replace(/\s+Skin\d*$/i, '');
 }
 
 function thumb(src, badge) {
@@ -55,7 +54,6 @@ async function loadCatalog() {
       id: row.id,
       name: row.name,
       author: row.author,
-      fileName: row.fileName,
       image: row.gallery?.length ? `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
     }));
     catalogError = false;
@@ -85,11 +83,11 @@ async function loadThumbnails() {
   const { invoke } = window.__TAURI__.core;
   await Promise.all(
     installedCache.map(async (s) => {
-      if (thumbCache.has(s.fileName)) return;
+      if (thumbCache.has(s.folderName)) return;
       try {
-        thumbCache.set(s.fileName, await invoke('read_skin_thumbnail', { fileName: s.fileName }));
+        thumbCache.set(s.folderName, await invoke('read_skin_thumbnail', { folderName: s.folderName }));
       } catch {
-        thumbCache.set(s.fileName, null);
+        thumbCache.set(s.folderName, null);
       }
     })
   );
@@ -98,8 +96,8 @@ async function loadThumbnails() {
 function renderInstalled() {
   const list = document.getElementById('skins-installed-view');
   const filtered = installedCache
-    .filter((s) => matchesSearch(displayName(s.fileName)))
-    .sort((a, b) => displayName(a.fileName).localeCompare(displayName(b.fileName), undefined, { sensitivity: 'base' }));
+    .filter((s) => matchesSearch(displayName(s.folderName)))
+    .sort((a, b) => displayName(a.folderName).localeCompare(displayName(b.folderName), undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = installedCache.length
       ? '<div class="empty-state">No skins match your search.</div>'
@@ -110,13 +108,13 @@ function renderInstalled() {
     .map(
       (s) => `
     <div class="browse-card">
-      ${thumb(thumbCache.get(s.fileName))}
+      ${thumb(thumbCache.get(s.folderName))}
       <div class="browse-card-info">
-        <div class="browse-card-name">${escapeHtml(displayName(s.fileName))}</div>
+        <div class="browse-card-name">${escapeHtml(displayName(s.folderName))}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Delete" onclick="window.__skinConfirmDelete('${escapeHtml(s.fileName)}')">${ICON_TRASH}</button>
+          <button class="browse-card-icon-btn" title="Delete" onclick="window.__skinConfirmDelete('${escapeHtml(s.folderName)}')">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`
@@ -139,7 +137,7 @@ function renderBrowse() {
   }
   list.innerHTML = filtered
     .map((entry) => {
-      const installed = installedCache.some((s) => s.fileName === entry.fileName);
+      const installed = installedCache.some((s) => s.folderName === entry.id);
       const badge = installed
         ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
@@ -180,10 +178,10 @@ window.__skinsSearch = function (value) {
   render();
 };
 
-window.__skinConfirmDelete = function (fileName) {
-  if (!confirm(`Delete "${displayName(fileName)}"? This can't be undone.`)) return;
+window.__skinConfirmDelete = function (folderName) {
+  if (!confirm(`Delete "${displayName(folderName)}"? This can't be undone.`)) return;
   const { invoke } = window.__TAURI__.core;
-  invoke('delete_skin', { fileName })
+  invoke('delete_skin', { folderName })
     .then(refresh)
     .catch((err) => alert(String(err)));
 };
@@ -223,7 +221,7 @@ window.__skinOpenUpload = function () {
     return;
   }
   chosenUploadPath = null;
-  document.getElementById('skins-upload-path').textContent = 'No file chosen';
+  document.getElementById('skins-upload-path').textContent = 'No folder chosen';
   document.getElementById('skins-upload-name').value = '';
   document.getElementById('skins-upload-overlay').hidden = false;
 };
@@ -240,20 +238,15 @@ window.__skinConfirmDeleteFromHub = function (id, name) {
     .catch((err) => alert(String(err)));
 };
 
-async function browseForSkinFile() {
+async function browseForSkinFolder() {
   const { open } = window.__TAURI__.dialog;
-  const chosen = await open({
-    directory: false,
-    multiple: false,
-    title: 'Choose a skin image',
-    filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg'] }],
-  });
+  const chosen = await open({ directory: true, multiple: false, title: 'Choose a skin folder' });
   if (!chosen) return;
   chosenUploadPath = chosen;
-  const fileName = chosen.split(/[\\/]/).pop();
-  document.getElementById('skins-upload-path').textContent = fileName;
+  const folderName = chosen.split(/[\\/]/).pop();
+  document.getElementById('skins-upload-path').textContent = folderName;
   if (!document.getElementById('skins-upload-name').value) {
-    document.getElementById('skins-upload-name').value = suggestUploadName(fileName);
+    document.getElementById('skins-upload-name').value = suggestUploadName(folderName);
   }
 }
 
@@ -264,7 +257,7 @@ function closeUploadModal() {
 async function submitUpload() {
   const name = document.getElementById('skins-upload-name').value.trim();
   if (!chosenUploadPath) {
-    alert('Choose a skin file first.');
+    alert('Choose a skin folder first.');
     return;
   }
   if (!name) {
@@ -277,7 +270,7 @@ async function submitUpload() {
   confirmBtn.textContent = 'Uploading…';
   const { invoke } = window.__TAURI__.core;
   try {
-    await invoke('submit_skin_cmd', { token: getToken(), filePath: chosenUploadPath, displayName: name, author: getUsername() });
+    await invoke('submit_skin_cmd', { token: getToken(), folderPath: chosenUploadPath, displayName: name, author: getUsername() });
     closeUploadModal();
     await loadCatalog();
     await loadMyUploadIds();
@@ -300,7 +293,7 @@ async function refresh() {
 export async function init() {
   document.getElementById('skins-upload-cancel').addEventListener('click', closeUploadModal);
   document.getElementById('skins-upload-confirm').addEventListener('click', submitUpload);
-  document.getElementById('skins-upload-browse-btn').addEventListener('click', browseForSkinFile);
+  document.getElementById('skins-upload-browse-btn').addEventListener('click', browseForSkinFolder);
   render();
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();

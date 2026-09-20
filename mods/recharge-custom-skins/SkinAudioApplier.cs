@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Recharge.ModApi;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -31,6 +32,15 @@ namespace RechargeCustomSkins
             }
             _capturedFor = movement;
             host.Log("[CustomSkins] captured vanilla player SFX from a fresh Movement instance.");
+        }
+
+        // Used by TemplateExporter to bundle a real, playable starting point
+        // for each slot rather than leaving the sounds/ folder empty.
+        public static AudioClip GetVanillaClip(string slotName)
+        {
+            var slot = System.Array.Find(PlayerSoundSlots.All, s => s.Name == slotName);
+            if (slot.Name == null || !Originals.TryGetValue(slot.FieldName, out var original)) return null;
+            return slot.IsArray ? (original as AudioClip[])?.FirstOrDefault() : original as AudioClip;
         }
 
         public static void RestoreVanilla(Movement movement)

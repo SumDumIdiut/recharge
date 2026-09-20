@@ -208,6 +208,10 @@ namespace RechargeCustomSkins
             var pngPath = Path.Combine(outputDir, "skin-template.png");
             File.WriteAllBytes(pngPath, png);
 
+            var soundsDir = Path.Combine(outputDir, "sounds");
+            Directory.CreateDirectory(soundsDir);
+            int soundsExported = ExportReferenceSounds(soundsDir, host);
+
             var legend = new System.Text.StringBuilder();
             legend.AppendLine("Recharge Custom Skins - template layout");
             legend.AppendLine($"Grid: {rows} row(s) x {cols} column(s), cell size {cellW}x{cellH}px, {Gutter}px magenta guide lines between cells.");
@@ -218,21 +222,52 @@ namespace RechargeCustomSkins
             legend.AppendLine("Edit any cell's artwork, keep the same cell grid, then import the whole");
             legend.AppendLine("sheet back as a skin - the mod slices it back out along these same lines.");
             legend.AppendLine();
-            legend.AppendLine("Custom sounds (optional):");
-            legend.AppendLine($"Save your finished skin as \"MySkin.png\" in {skinsDir}");
-            legend.AppendLine("To also override this skin's sounds, add a folder next to it with the");
-            legend.AppendLine("same name (no extension) - e.g. \"MySkin\\\" - containing any of:");
+            legend.AppendLine("Sounds:");
+            legend.AppendLine("The sounds/ folder next to this file already has the vanilla sound for");
+            legend.AppendLine($"every overridable slot ({soundsExported} exported) - replace whichever ones");
+            legend.AppendLine("you want to change, or delete a file to leave that slot vanilla:");
             foreach (var slot in PlayerSoundSlots.All)
-                legend.AppendLine($"  {slot.Name}.wav  (.ogg and .mp3 also work)");
-            legend.AppendLine("  MetalFootstep.wav / GrassFootstep.wav  - footsteps on hard/grass ground");
-            legend.AppendLine("  MetalLand.wav  - landing on hard ground (landing on grass reuses GrassFootstep)");
-            legend.AppendLine("  Tired.wav  - the low-stamina warning when a buffered jump/dash gets cancelled");
-            legend.AppendLine("Any sound you don't provide plays the vanilla clip as normal.");
+                legend.AppendLine($"  {slot.Name}.wav");
+            foreach (var slot in GlobalSoundSlots.All)
+                legend.AppendLine($"  {slot.Name}.wav");
+            legend.AppendLine("  (MetalLand plays on hard ground; landing on grass reuses GrassFootstep.");
+            legend.AppendLine("   Tired plays when a buffered jump/dash gets cancelled from stamina.)");
+            legend.AppendLine();
+            legend.AppendLine("To install: make a folder in");
+            legend.AppendLine($"  {skinsDir}");
+            legend.AppendLine("named whatever you want the skin called, put your finished");
+            legend.AppendLine("skin-template.png in it (any name works, e.g. skin.png), and put this");
+            legend.AppendLine("sounds/ folder in it too (or skip it to keep the vanilla sounds).");
             var legendPath = Path.Combine(outputDir, "skin-template-README.txt");
             File.WriteAllText(legendPath, legend.ToString());
 
-            host.LogError($"[CustomSkins] exported skin template: {rows} clips, {cols} max frames, {texW}x{texH}px -> {pngPath}");
+            host.LogError($"[CustomSkins] exported skin template: {rows} clips, {cols} max frames, {texW}x{texH}px, {soundsExported} reference sound(s) -> {pngPath}");
             return pngPath;
+        }
+
+        private static int ExportReferenceSounds(string soundsDir, IRechargeHost host)
+        {
+            int count = 0;
+            foreach (var slot in PlayerSoundSlots.All)
+                count += TryExportOne(soundsDir, slot.Name, SkinAudioApplier.GetVanillaClip(slot.Name), host);
+            foreach (var slot in GlobalSoundSlots.All)
+                count += TryExportOne(soundsDir, slot.Name, GlobalAudioApplier.GetVanillaClip(slot.Name), host);
+            return count;
+        }
+
+        private static int TryExportOne(string soundsDir, string slotName, AudioClip clip, IRechargeHost host)
+        {
+            if (clip == null) return 0;
+            try
+            {
+                File.WriteAllBytes(Path.Combine(soundsDir, slotName + ".wav"), WavEncoder.Encode(clip));
+                return 1;
+            }
+            catch (System.Exception e)
+            {
+                host.LogWarning($"[CustomSkins] couldn't export reference sound '{slotName}': {e}");
+                return 0;
+            }
         }
 
         private static void DrawVerticalBand(Color32[] buf, int texW, int texH, int startX, int width, Color32 color)

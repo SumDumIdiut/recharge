@@ -5,6 +5,7 @@ use tauri::AppHandle;
 use super::settings;
 
 const CUSTOM_SKINS_MOD_ID: &str = "recharge.customskins";
+const IMAGE_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
 
 fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
     let game_path = settings::get_game_path(app.clone())?;
@@ -33,7 +34,7 @@ fn config_path(app: &AppHandle) -> Option<PathBuf> {
 #[derive(Serialize, Deserialize, Default)]
 struct SkinConfig {
     #[serde(rename = "CurrentSkinFile")]
-    current_skin_file: Option<String>,
+    current_skin_folder: Option<String>,
     #[serde(rename = "ExportDir", default)]
     export_dir: Option<String>,
 }
@@ -57,17 +58,29 @@ fn write_config(app: &AppHandle, config: &SkinConfig) -> Result<(), String> {
     std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
-fn sanitize_file_name(name: &str) -> Result<(), String> {
+fn sanitize_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
-        return Err(format!("invalid file name: '{name}'"));
+        return Err(format!("invalid name: '{name}'"));
     }
     Ok(())
 }
 
+fn find_image_file(skin_folder: &std::path::Path) -> Option<PathBuf> {
+    std::fs::read_dir(skin_folder).ok()?.flatten().find_map(|e| {
+        let path = e.path();
+        let is_image = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| IMAGE_EXTENSIONS.contains(&s.to_ascii_lowercase().as_str()))
+            .unwrap_or(false);
+        is_image.then_some(path)
+    })
+}
+
 #[derive(Serialize)]
 pub struct SkinEntry {
-    #[serde(rename = "fileName")]
-    pub file_name: String,
+    #[serde(rename = "folderName")]
+    pub folder_name: String,
     pub enabled: bool,
 }
 
@@ -79,18 +92,8 @@ pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
         Some(
             entries
                 .flatten()
-                .filter_map(|e| {
-                    let path = e.path();
-                    let is_image = path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|s| matches!(s.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg"))
-                        .unwrap_or(false);
-                    if !is_image {
-                        return None;
-                    }
-                    path.file_name().map(|n| n.to_string_lossy().to_string())
-                })
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
                 .collect::<Vec<_>>(),
         )
     })()
@@ -100,20 +103,20 @@ pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
     let config = read_config(&app);
     names
         .into_iter()
-        .map(|file_name| {
-            let enabled = config.current_skin_file.as_deref() == Some(file_name.as_str());
-            SkinEntry { file_name, enabled }
+        .map(|folder_name| {
+            let enabled = config.current_skin_folder.as_deref() == Some(folder_name.as_str());
+            SkinEntry { folder_name, enabled }
         })
         .collect()
 }
 
 #[tauri::command]
-pub fn set_active_skin(app: AppHandle, file_name: Option<String>) -> Result<(), String> {
-    if let Some(name) = &file_name {
-        sanitize_file_name(name)?;
+pub fn set_active_skin(app: AppHandle, folder_name: Option<String>) -> Result<(), String> {
+    if let Some(name) = &folder_name {
+        sanitize_name(name)?;
     }
     let mut config = read_config(&app);
-    config.current_skin_file = file_name;
+    config.current_skin_folder = folder_name;
     write_config(&app, &config)
 }
 
@@ -133,11 +136,12 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 #[tauri::command]
-pub fn read_skin_thumbnail(app: AppHandle, file_name: String) -> Result<String, String> {
-    sanitize_file_name(&file_name)?;
+pub fn read_skin_thumbnail(app: AppHandle, folder_name: String) -> Result<String, String> {
+    sanitize_name(&folder_name)?;
     let dir = skins_dir(&app).ok_or("game path not set")?;
-    let bytes = std::fs::read(dir.join(&file_name)).map_err(|e| e.to_string())?;
-    let mime = match file_name.rsplit('.').next().map(|s| s.to_ascii_lowercase()) {
+    let image_path = find_image_file(&dir.join(&folder_name)).ok_or("no image file in this skin's folder")?;
+    let bytes = std::fs::read(&image_path).map_err(|e| e.to_string())?;
+    let mime = match image_path.extension().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase()) {
         Some(ref ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg",
         _ => "image/png",
     };
@@ -145,14 +149,14 @@ pub fn read_skin_thumbnail(app: AppHandle, file_name: String) -> Result<String, 
 }
 
 #[tauri::command]
-pub fn delete_skin(app: AppHandle, file_name: String) -> Result<(), String> {
-    sanitize_file_name(&file_name)?;
+pub fn delete_skin(app: AppHandle, folder_name: String) -> Result<(), String> {
+    sanitize_name(&folder_name)?;
     let dir = skins_dir(&app).ok_or("game path not set")?;
-    std::fs::remove_file(dir.join(&file_name)).map_err(|e| e.to_string())?;
+    std::fs::remove_dir_all(dir.join(&folder_name)).map_err(|e| e.to_string())?;
 
     let mut config = read_config(&app);
-    if config.current_skin_file.as_deref() == Some(file_name.as_str()) {
-        config.current_skin_file = None;
+    if config.current_skin_folder.as_deref() == Some(folder_name.as_str()) {
+        config.current_skin_folder = None;
         write_config(&app, &config)?;
     }
     Ok(())
