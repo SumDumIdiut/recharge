@@ -13,25 +13,48 @@ namespace RechargeCustomSkins
     // and restores the vanilla clips for any slot the active skin doesn't
     // supply. Decoding runs through UnityWebRequestMultimedia so WAV/OGG/MP3
     // all work without hand-rolling a decoder.
+    //
+    // The array-type slots (BigJump/SmallJump/Dash/AirJump/Death) are all
+    // one-shots played through Movement's single shared audioSource, which a
+    // second trigger interrupts - so those go through LayeredSfxPlayer (a
+    // silent per-slot placeholder in the real field, detected via polling,
+    // with the actual clip played on its own independent AudioSource) so a
+    // custom clip of any length always plays out in full. The two single-
+    // clip slots (MetalSlide/GrassSlide) are loops, which already have no
+    // interruption problem, so they're set directly.
     internal static class SkinAudioApplier
     {
         private static readonly Dictionary<string, object> Originals = new Dictionary<string, object>();
         private static readonly Dictionary<string, AudioClip> ClipCache = new Dictionary<string, AudioClip>();
+        private static readonly Dictionary<string, AudioClip> ActiveLayeredClip = new Dictionary<string, AudioClip>();
         private static Movement _capturedFor;
+        private static Movement _pollTarget;
+        private static bool _pollRegistered;
+        private static bool _wasPlaying;
 
         public static void CaptureOriginals(IRechargeHost host, Movement movement)
         {
-            if (_capturedFor == movement) return;
-            Originals.Clear();
-            ClipCache.Clear();
-            foreach (var slot in PlayerSoundSlots.All)
+            if (_capturedFor != movement)
             {
-                Originals[slot.FieldName] = slot.IsArray
-                    ? (object)Reflect.GetField<AudioClip[]>(movement, slot.FieldName)
-                    : Reflect.GetField<AudioClip>(movement, slot.FieldName);
+                Originals.Clear();
+                ClipCache.Clear();
+                ActiveLayeredClip.Clear();
+                foreach (var slot in PlayerSoundSlots.All)
+                {
+                    Originals[slot.FieldName] = slot.IsArray
+                        ? (object)Reflect.GetField<AudioClip[]>(movement, slot.FieldName)
+                        : Reflect.GetField<AudioClip>(movement, slot.FieldName);
+                }
+                _capturedFor = movement;
+                host.Log("[CustomSkins] captured vanilla player SFX from a fresh Movement instance.");
             }
-            _capturedFor = movement;
-            host.Log("[CustomSkins] captured vanilla player SFX from a fresh Movement instance.");
+
+            _pollTarget = movement;
+            if (!_pollRegistered)
+            {
+                _pollRegistered = true;
+                host.OnUpdate += PollForLayeredTrigger;
+            }
         }
 
         // Used by TemplateExporter to bundle a real, playable starting point
@@ -51,6 +74,7 @@ namespace RechargeCustomSkins
                 if (Originals.TryGetValue(slot.FieldName, out var original))
                     Reflect.SetField(movement, slot.FieldName, original);
             }
+            ActiveLayeredClip.Clear();
         }
 
         public static void Apply(MonoBehaviour coroutineHost, IRechargeHost host, Movement movement, string sfxDir)
@@ -64,6 +88,7 @@ namespace RechargeCustomSkins
                 {
                     if (Originals.TryGetValue(slot.FieldName, out var original))
                         Reflect.SetField(movement, slot.FieldName, original);
+                    ActiveLayeredClip.Remove(slot.FieldName);
                     continue;
                 }
 
@@ -79,8 +104,36 @@ namespace RechargeCustomSkins
 
         private static void ApplySlotClip(Movement movement, PlayerSoundSlot slot, AudioClip clip)
         {
-            if (slot.IsArray) Reflect.SetField(movement, slot.FieldName, new[] { clip });
-            else Reflect.SetField(movement, slot.FieldName, clip);
+            if (slot.IsArray)
+            {
+                // One-shot slot - point the real field at a silent placeholder
+                // and remember the real clip so PollForLayeredTrigger can play
+                // it independently the moment the game triggers that placeholder.
+                ActiveLayeredClip[slot.FieldName] = clip;
+                Reflect.SetField(movement, slot.FieldName, new[] { LayeredSfxPlayer.PlaceholderFor(slot.FieldName) });
+            }
+            else
+            {
+                // Looping slot (wall slide) - no shared-AudioSource interruption
+                // problem to work around, any length already plays fine as-is.
+                Reflect.SetField(movement, slot.FieldName, clip);
+            }
+        }
+
+        private static void PollForLayeredTrigger()
+        {
+            var movement = _pollTarget;
+            var source = movement != null ? movement.audioSource : null;
+            if (source == null) return;
+
+            var playingNow = source.isPlaying;
+            if (playingNow && !_wasPlaying)
+            {
+                var slotName = LayeredSfxPlayer.SlotNameForPlaceholder(source.clip);
+                if (slotName != null && ActiveLayeredClip.TryGetValue(slotName, out var realClip) && realClip != null)
+                    LayeredSfxPlayer.PlayLayered(realClip, source.pitch, source.volume);
+            }
+            _wasPlaying = playingNow;
         }
 
         private static IEnumerator LoadAndApply(IRechargeHost host, Movement movement, PlayerSoundSlot slot, string path)
