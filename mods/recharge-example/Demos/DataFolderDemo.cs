@@ -24,10 +24,7 @@ internal static class DataFolderDemo
 
         File.WriteAllText(tempPath, JsonConvert.SerializeObject(scores, Formatting.Indented));
 
-        // A crash or power loss mid-write leaves scores.json untouched and the
-        // half-written data sitting in .tmp instead of corrupting the real
-        // file - File.Replace is atomic on the same volume, a direct
-        // File.WriteAllText(finalPath, ...) is not.
+        // File.Replace is atomic on the same volume; File.WriteAllText(finalPath, ...) directly is not.
         if (File.Exists(finalPath)) File.Replace(tempPath, finalPath, null);
         else File.Move(tempPath, finalPath);
     }

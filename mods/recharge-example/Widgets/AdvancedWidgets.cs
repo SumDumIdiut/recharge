@@ -4,13 +4,9 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-// Reusable, stateless UI-building blocks beyond what ExamplePanelUI.cs shows
-// (button/label/divider/input field) - a real Toggle, a real Slider, an
-// expandable choice list (a hand-built alternative to TMP_Dropdown, which
-// needs a fairly involved template hierarchy to work at all), and a
-// scrolling log built from ScrollRect + a layout-driven Content child.
-// AddPanelRow's blank panel is the only starting point every one of these
-// gets parented under - there's no drag-and-drop editor at runtime.
+// A real Toggle, a real Slider, an expandable choice list (a hand-built
+// alternative to TMP_Dropdown, which needs a fairly involved template
+// hierarchy to work at all), and a ScrollRect-backed scrolling log.
 internal static class AdvancedWidgets
 {
     public static Toggle CreateToggle(Transform parent, TMP_FontAsset font, Vector2 pos, string label, bool initial, Action<bool> onChanged)

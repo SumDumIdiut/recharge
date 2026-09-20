@@ -2,9 +2,8 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Recharge.ModApi;
 
-// SceneManager.sceneLoaded directly - the same event RechargeEvents.SceneLoaded
-// is itself built on - versus the loader's wrapped, string-only version, plus
-// spawning and cleaning up a real world-space object across scene loads.
+// SceneManager.sceneLoaded directly, versus the loader's wrapped, string-only
+// RechargeEvents.SceneLoaded, plus spawning/cleaning up a world-space object.
 internal class SceneDemo
 {
     private readonly IRechargeHost _host;
@@ -13,10 +12,6 @@ internal class SceneDemo
     public SceneDemo(IRechargeHost host)
     {
         _host = host;
-
-        // Subscribing directly is useful when you need the Scene struct
-        // itself (buildIndex, LoadSceneMode) rather than just its name - the
-        // wrapped RechargeEvents.SceneLoaded payload is a bare string.
         SceneManager.sceneLoaded += OnSceneLoadedDirect;
     }
 
@@ -38,9 +33,7 @@ internal class SceneDemo
         spriteRenderer.sprite = sprite;
         spriteRenderer.sortingOrder = 100;
 
-        // Deliberately NOT DontDestroyOnLoad - CleanUpMarker() runs on the very
-        // next scene load (above), demonstrating "cleans itself up" rather
-        // than "survives forever unless someone remembers to destroy it."
+        // Deliberately not DontDestroyOnLoad - OnSceneLoadedDirect above cleans it up.
         _host.Log($"Spawned a world-space marker at {origin}.");
     }
 

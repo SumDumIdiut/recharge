@@ -1,7 +1,4 @@
-// A tiny public contract another mod could compile against directly, or
-// reach without a compile-time reference at all via
-// host.GetModApi<IExampleModApi>("recharge.example") so long as it knows the
-// shape - implemented directly by ExampleMod in ExampleMod.cs.
+// A contract another mod could reach via host.GetModApi<IExampleModApi>("recharge.example").
 public interface IExampleModApi
 {
     int ClickCount { get; }

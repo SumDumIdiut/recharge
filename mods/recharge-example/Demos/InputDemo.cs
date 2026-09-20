@@ -3,12 +3,8 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using Recharge.ModApi;
 
-// Deeper Input System usage than UpdateLoopDemo's single wasPressedThisFrame
-// check: reading the mouse every frame, detecting whether a gamepad is
-// connected at all, and a real rebindable-keybind pattern (press a button to
-// arm rebinding, then the next key pressed becomes the new bind and gets
-// persisted to config) - the same trick recharge-multiplayer's chat keybind
-// uses for real.
+// Mouse/gamepad reads, plus a rebindable keybind persisted to config - the
+// same trick recharge-multiplayer's chat keybind uses for real.
 internal class InputDemo
 {
     internal class InputConfig

@@ -2,10 +2,8 @@ using System;
 using System.Collections.Generic;
 using Recharge.ModApi;
 
-// Deeper config patterns than the one-int MyConfig in ExampleMod.cs itself -
-// nested objects, lists, dictionaries, enums, and a schema-version-driven
-// migration so the config's shape can change across mod versions without
-// losing a player's existing settings.
+// Nested objects, lists, dictionaries, enums, and a schema-version-driven
+// migration so the config's shape can change across mod versions.
 internal static class LoggingConfigDemo
 {
     internal enum Difficulty

@@ -1,11 +1,9 @@
 using UnityEngine;
 using Recharge.ModApi;
 
-// Finding the player two ways (the RechargeEvents.PlayerSpawned payload vs a
-// manual on-demand GameObject.FindGameObjectWithTag lookup - the same tag
-// check the loader itself uses to fire that event), reading live Rigidbody2D
-// state every couple of seconds, and reusing ReflectionDemo.ToggleIcyPhysics
-// to flip a real gameplay-affecting private field.
+// Finding the player two ways (the PlayerSpawned payload vs a manual
+// FindGameObjectWithTag lookup), reading live Rigidbody2D state, and
+// reusing ReflectionDemo.ToggleIcyPhysics on it.
 internal class PlayerPhysicsDemo
 {
     private readonly IRechargeHost _host;

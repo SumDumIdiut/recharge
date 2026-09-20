@@ -2,12 +2,10 @@ using UnityEngine;
 using UnityEngine.UI;
 using DG.Tweening;
 
-// DOTween is already a dependency of the base game (every mod's Managed dir
-// carries DOTween.dll), so no extra bundling is needed to use it here. Only
-// the core module is linked into this build - not the UI/Sprite/Audio
-// convenience modules - so a Graphic's color is animated through the fully
-// generic DOTween.To(getter, setter, target, duration) instead of a
-// shortcut like Image.DOFade/DOColor, which aren't available.
+// DOTween.dll ships with every mod's Managed dir already, no bundling needed.
+// Only the core module is linked in this build though - not UI/Sprite/Audio -
+// so a Graphic's color is faded via the generic DOTween.To instead of the
+// unavailable Image.DOFade/DOColor shortcuts.
 internal static class TweenDemo
 {
     public static void Punch(Transform target)

@@ -1,11 +1,9 @@
 using System;
 using Recharge.ModApi;
 
-// Deeper Events usage than the two On() calls in ExampleMod.cs itself:
-// unsubscribing, a typed payload class instead of a bare object, a crude
-// "request/response" pattern built on top of the same bus, and GetModApi<T>
-// for a compile-time-typed cross-mod call (see IExampleModApi.cs for the
-// interface ExampleMod itself implements).
+// Deeper Events usage: unsubscribing, a typed payload class, a
+// request/response pattern on top of the bus, and GetModApi<T> (see
+// IExampleModApi.cs for the interface ExampleMod itself implements).
 internal class EventsDemo
 {
     public class ScorePayload
@@ -28,10 +26,7 @@ internal class EventsDemo
         };
         host.Events.On("recharge.example.score", _scoreHandler);
 
-        // Nothing in IEventBus knows about "requests" specifically - this is
-        // just a convention built on Emit/On like any other: the request
-        // carries its own answer callback as its payload, and whoever
-        // handles it invokes that callback directly.
+        // A "request" is just a convention: its payload IS the answer callback.
         _pingRequestHandler = payload =>
         {
             if (payload is Action<string> respond) respond("pong from ExampleMod");
@@ -61,8 +56,6 @@ internal class EventsDemo
 
     public void LookUpOwnApiTypedByOtherMods()
     {
-        // Any OTHER mod could do exactly this against "recharge.example" -
-        // GetModApi<T> is GetMod() plus an `as T` cast, in one call.
         var api = _host.GetModApi<IExampleModApi>("recharge.example");
         if (api != null) _host.Log($"Talked to ourselves via IExampleModApi: {api.ClickCount} click(s) recorded so far.");
     }

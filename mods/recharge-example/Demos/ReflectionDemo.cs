@@ -2,13 +2,11 @@ using System;
 using UnityEngine;
 using Recharge.ModApi;
 
-// Every Reflect.* method at least once. GetField/TryGetField/SetField target
-// real, already-proven-stable game fields (mainBit/settingsBit are what
-// PauseMenuHelper itself reflects into; framesToReachTopSpeed is the exact
-// field recharge-icy-physics ships tweaking for real). InvokeMethod/
-// GetStaticField/NestedType instead target a private nested type declared
-// right here, since those three specifically invite a typo that only fails
-// at runtime - the mechanism they demonstrate is identical either way.
+// Every Reflect.* method. GetField/TryGetField/SetField target real game
+// fields (mainBit/settingsBit, and framesToReachTopSpeed - the same field
+// recharge-icy-physics tweaks for real); InvokeMethod/GetStaticField/
+// NestedType target a private nested type declared right here instead, so a
+// typo fails at compile time rather than only at runtime.
 internal static class ReflectionDemo
 {
     private class PrivateTarget

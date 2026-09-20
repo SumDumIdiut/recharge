@@ -2,10 +2,8 @@ using System;
 using UnityEngine;
 using Recharge.ModApi;
 
-// Several ways to end up with a Sprite through host.LoadSprite, all starting
-// from a procedurally-built Texture2D so this file doesn't need to bundle any
-// binary assets. A real mod would usually just File.ReadAllBytes a real .png
-// from its own folder or data dir instead and skip straight to LoadSprite.
+// Several procedurally-built Texture2Ds fed through host.LoadSprite, so this
+// file needs no bundled binary assets.
 internal static class SpriteDemo
 {
     public static readonly string[] StyleNames = { "Solid", "Checkerboard", "Gradient", "Vignette", "Noise" };

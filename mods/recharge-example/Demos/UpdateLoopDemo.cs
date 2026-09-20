@@ -3,11 +3,8 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using Recharge.ModApi;
 
-// OnUpdate/OnLateUpdate/OnFixedUpdate patterns beyond the "log the first
-// tick" one-liners in ExampleMod.cs itself: a tiny state machine driven
-// purely by polling (no coroutines, no extra GameObject needed), a fixed-step
-// tick counter, and reading the new Input System directly for a keybind the
-// pause menu doesn't need to know about.
+// A tiny state machine driven purely by OnUpdate polling, a fixed-step tick
+// counter, and an Input System keybind the pause menu doesn't need to know about.
 internal class UpdateLoopDemo
 {
     internal enum State

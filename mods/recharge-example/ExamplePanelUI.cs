@@ -5,11 +5,8 @@ using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Recharge.ModApi;
 
-// The contents of the Example Mod's pause-menu panel - a self-contained demo
-// of building real UGUI controls by hand (there's no drag-and-drop editor at
-// runtime) and wiring them up to the ModApi. AddPanelRow only hands back a
-// blank panel with a title and a Close button; everything below is built the
-// same way any real mod builds its own panel contents.
+// AddPanelRow only hands back a blank panel with a title and a Close button -
+// everything else here is built by hand, the same way any real mod does it.
 internal class ExamplePanelUI : MonoBehaviour
 {
     private TMP_FontAsset _font;
@@ -34,7 +31,6 @@ internal class ExamplePanelUI : MonoBehaviour
 
         CreateDivider(root, new Vector2(0, 100), 560);
 
-        // --- A button built from scratch, then styled via PauseMenuHelper's own public helpers ---
         var clickGo = CreateButton(root, "ClickMe", new Vector2(0, 55), new Vector2(220, 54), $"Click me ({config.TimesClicked})", 20f, Color.white);
         PauseMenuHelper.ScaleButtonFontSize(clickGo, 1.1f);
         PauseMenuHelper.SetButtonTextColor(clickGo, new Color(1f, 0.85f, 0.4f));
@@ -50,7 +46,6 @@ internal class ExamplePanelUI : MonoBehaviour
 
         CreateDivider(root, new Vector2(0, 10), 560);
 
-        // --- A text field + button pair, feeding into a custom event other mods could listen for ---
         var sayHeader = CreateLabel(root, "SayHeader", new Vector2(0, -20), new Vector2(560, 26), "Say something");
         sayHeader.fontSize = 18;
         sayHeader.color = new Color(1f, 1f, 1f, 0.65f);
@@ -78,7 +73,6 @@ internal class ExamplePanelUI : MonoBehaviour
 
         CreateDivider(root, new Vector2(0, -130), 560);
 
-        // --- A custom image: generated at runtime and decoded through host.LoadSprite ---
         var imageHeader = CreateLabel(root, "ImageHeader", new Vector2(0, -160), new Vector2(560, 26), "Custom image (host.LoadSprite)");
         imageHeader.fontSize = 18;
         imageHeader.color = new Color(1f, 1f, 1f, 0.65f);

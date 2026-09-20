@@ -1,10 +1,7 @@
 using UnityEngine;
 using Recharge.ModApi;
 
-// A beep synthesized entirely in memory - no bundled .wav/.ogg needed. A real
-// mod would usually ship an actual audio file and decode real bytes instead,
-// but the AudioClip/AudioSource half of the pipeline below is identical
-// either way - only where the float samples come from differs.
+// A beep synthesized entirely in memory - no bundled .wav/.ogg needed.
 internal static class AudioDemo
 {
     public static void PlayBeep(IRechargeHost host, float frequencyHz = 440f, float durationSeconds = 0.25f)

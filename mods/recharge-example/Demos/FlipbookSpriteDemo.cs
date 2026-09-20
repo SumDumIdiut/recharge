@@ -2,10 +2,8 @@ using UnityEngine;
 using UnityEngine.UI;
 using Recharge.ModApi;
 
-// A tiny sprite-sheet-free animation: several procedurally generated frames
-// (reusing SpriteDemo's generators with a rotating hue) cycled onto a UI
-// Image via host.OnUpdate on a fixed interval - the same technique as a real
-// flipbook animation, just with generated frames instead of an imported strip.
+// Several procedurally generated frames cycled onto a UI Image on a fixed
+// interval via host.OnUpdate - a sprite-sheet-free flipbook animation.
 internal class FlipbookSpriteDemo
 {
     private readonly IRechargeHost _host;

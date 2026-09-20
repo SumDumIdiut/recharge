@@ -3,11 +3,9 @@ using UnityEngine;
 using UnityEngine.UI;
 using Recharge.ModApi;
 
-// The second pause-menu panel ExampleMod installs - every Demos/*.cs class
+// The second pause-menu panel ExampleMod installs - most Demos/*.cs classes
 // wired to a real widget from Widgets/AdvancedWidgets.cs, with a live
-// scrolling log at the bottom so clicking things shows something happening
-// without needing to tail Player.log. ExamplePanelUI.cs is the simple/
-// approachable panel; this one is the "everything else" panel.
+// scrolling log at the bottom.
 internal class AdvancedPanelUI : MonoBehaviour
 {
     private IRechargeHost _host;

@@ -1,9 +1,8 @@
 using UnityEngine;
 using Recharge.ModApi;
 
-// Small math helpers real gameplay/UI mods reach for constantly, plus the
-// "world position -> screen-space UI element" conversion a floating marker
-// or health bar over an object's head always needs.
+// Small math helpers gameplay/UI mods reach for constantly, plus a
+// world-to-screen-space conversion for floating markers/health bars.
 internal static class MathAndCameraDemo
 {
     public static float EaseOutCubic(float t) => 1f - Mathf.Pow(1f - Mathf.Clamp01(t), 3f);
@@ -33,15 +32,14 @@ internal static class MathAndCameraDemo
         screenPosition = Vector2.zero;
         if (camera == null) return false;
         var point = camera.WorldToScreenPoint(worldPosition);
-        if (point.z < 0f) return false; // behind the camera
+        if (point.z < 0f) return false;
         screenPosition = point;
         return true;
     }
 }
 
-// Keeps a UI RectTransform (a marker, a name tag, a health bar - anything)
-// pinned above a moving world Transform, converting world -> screen ->
-// canvas-local space every frame. Add via AddComponent and call Follow().
+// Pins a UI RectTransform above a moving world Transform. Add via
+// AddComponent, then call Follow().
 internal class WorldToUiFollower : MonoBehaviour
 {
     private RectTransform _uiTarget;

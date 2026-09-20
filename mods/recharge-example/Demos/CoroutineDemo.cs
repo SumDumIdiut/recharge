@@ -3,11 +3,8 @@ using System.Collections;
 using UnityEngine;
 using Recharge.ModApi;
 
-// host.OnUpdate/OnLateUpdate/OnFixedUpdate cover "every frame forever," but a
-// one-off sequence of waits is still easiest as a real Unity coroutine - that
-// needs a live MonoBehaviour to run on, which a mod doesn't otherwise have
-// (IRechargeMod is a plain class, not a Component). CoroutineRunner below is
-// the one-GameObject trick every mod that needs coroutines ends up writing.
+// IRechargeMod is a plain class, not a Component, so it has nothing to run a
+// coroutine on - this is the one-GameObject trick every mod that needs one ends up writing.
 internal class CoroutineRunner : MonoBehaviour
 {
     private static CoroutineRunner _instance;
@@ -55,9 +52,6 @@ internal static class CoroutineDemo
         onDone();
     }
 
-    // WaitUntil is the coroutine equivalent of a polling loop that only ever
-    // checks one condition - handy for "block until the player exists"
-    // without hand-rolling that check inside an OnUpdate handler.
     public static void RunWhenPlayerExists(IRechargeHost host, Action<GameObject> onFound)
     {
         CoroutineRunner.Instance.StartCoroutine(WaitForPlayerRoutine(host, onFound));
