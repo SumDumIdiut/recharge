@@ -214,6 +214,19 @@ window.__skinInstall = async function (id, btn) {
   }
 };
 
+window.__skinExportTemplate = async function () {
+  const { open } = window.__TAURI__.dialog;
+  const { invoke } = window.__TAURI__.core;
+  const dir = await open({ directory: true, multiple: false, title: 'Export Skin Template to…' });
+  if (!dir) return;
+  try {
+    await invoke('download_skin_template_cmd', { destDir: dir });
+    alert('Exported to ' + dir + '/SkinTemplate');
+  } catch (err) {
+    alert(String(err));
+  }
+};
+
 window.__skinOpenUpload = function () {
   if (!isLoggedIn()) {
     alert('Log in first to upload a skin.');

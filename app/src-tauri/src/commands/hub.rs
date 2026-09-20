@@ -123,6 +123,21 @@ fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+pub fn download_skin_template_cmd(dest_dir: String) -> Result<(), String> {
+    let bytes = download(&format!("{HUB_BASE}/api/skin-template"))
+        .map_err(|_| "no skin template has been exported from the game yet".to_string())?;
+
+    let target = PathBuf::from(dest_dir).join("SkinTemplate");
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid package: {e}"))?;
+    archive
+        .extract(&target)
+        .map_err(|e| format!("couldn't extract package: {e}"))?;
+    Ok(())
+}
+
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
     if kind != "mods" && kind != "maps" && kind != "skins" {
         return Err("kind must be 'mods', 'maps' or 'skins'".to_string());

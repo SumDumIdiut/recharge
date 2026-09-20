@@ -37,6 +37,7 @@ pub fn run() {
             mods::uninstall_mod,
             mods::export_example_mod,
             hub::install_from_hub_cmd,
+            hub::download_skin_template_cmd,
             hub::submit_skin_cmd,
             hub::submit_map_cmd,
             hub::submit_mod_cmd,

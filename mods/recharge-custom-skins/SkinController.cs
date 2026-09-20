@@ -522,7 +522,15 @@ namespace RechargeCustomSkins
                 return false;
             }
             var result = TemplateExporter.Export(_spriteRenderer.gameObject, _exportDir, _skinsDir, _host);
-            message = result != null ? $"Exported to {_exportDir}" : "Export failed - see Player.log";
+            if (result != null)
+            {
+                HubTemplateUploader.Upload(this, _host, result, Path.Combine(_exportDir, "sounds"));
+                message = $"Exported to {_exportDir} and uploaded to the hub.";
+            }
+            else
+            {
+                message = "Export failed - see Player.log";
+            }
             return result != null;
         }
 
