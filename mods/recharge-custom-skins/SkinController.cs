@@ -44,6 +44,7 @@ namespace RechargeCustomSkins
 
         private Movement _audioForMovement;
         private int _audioForIndex = int.MinValue;
+        private int _globalAudioForIndex = int.MinValue;
 
         public void Init(IRechargeHost host)
         {
@@ -463,12 +464,19 @@ namespace RechargeCustomSkins
                 }
                 CloneSkinApplier.Apply(this, runtime);
 
+                var sfxDir = Path.Combine(_skinsDir, Path.GetFileNameWithoutExtension(_skins[_currentIndex].fileName));
                 if (_movement != _audioForMovement || _currentIndex != _audioForIndex)
                 {
-                    var sfxDir = Path.Combine(_skinsDir, Path.GetFileNameWithoutExtension(_skins[_currentIndex].fileName));
                     SkinAudioApplier.Apply(this, _host, _movement, sfxDir);
                     _audioForMovement = _movement;
                     _audioForIndex = _currentIndex;
+                }
+
+                GlobalAudioApplier.CaptureOriginals();
+                if (_currentIndex != _globalAudioForIndex)
+                {
+                    GlobalAudioApplier.Apply(this, _host, sfxDir);
+                    _globalAudioForIndex = _currentIndex;
                 }
             }
             else
@@ -481,6 +489,12 @@ namespace RechargeCustomSkins
                     SkinAudioApplier.RestoreVanilla(_movement);
                     _audioForMovement = _movement;
                     _audioForIndex = -1;
+                }
+
+                if (_globalAudioForIndex != -1)
+                {
+                    GlobalAudioApplier.RestoreVanilla();
+                    _globalAudioForIndex = -1;
                 }
             }
         }

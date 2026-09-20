@@ -224,6 +224,9 @@ namespace RechargeCustomSkins
             legend.AppendLine("same name (no extension) - e.g. \"MySkin\\\" - containing any of:");
             foreach (var slot in PlayerSoundSlots.All)
                 legend.AppendLine($"  {slot.Name}.wav  (.ogg and .mp3 also work)");
+            legend.AppendLine("  MetalFootstep.wav / GrassFootstep.wav  - footsteps on hard/grass ground");
+            legend.AppendLine("  MetalLand.wav  - landing on hard ground (landing on grass reuses GrassFootstep)");
+            legend.AppendLine("  Tired.wav  - the low-stamina warning when a buffered jump/dash gets cancelled");
             legend.AppendLine("Any sound you don't provide plays the vanilla clip as normal.");
             var legendPath = Path.Combine(outputDir, "skin-template-README.txt");
             File.WriteAllText(legendPath, legend.ToString());

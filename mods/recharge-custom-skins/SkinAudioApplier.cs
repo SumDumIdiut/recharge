@@ -16,7 +16,6 @@ namespace RechargeCustomSkins
     {
         private static readonly Dictionary<string, object> Originals = new Dictionary<string, object>();
         private static readonly Dictionary<string, AudioClip> ClipCache = new Dictionary<string, AudioClip>();
-        private static readonly string[] Extensions = { ".wav", ".ogg", ".mp3" };
         private static Movement _capturedFor;
 
         public static void CaptureOriginals(IRechargeHost host, Movement movement)
@@ -50,7 +49,7 @@ namespace RechargeCustomSkins
 
             foreach (var slot in PlayerSoundSlots.All)
             {
-                var path = FindSlotFile(sfxDir, slot.Name);
+                var path = SfxFileResolver.FindSlotFile(sfxDir, slot.Name);
                 if (path == null)
                 {
                     if (Originals.TryGetValue(slot.FieldName, out var original))
@@ -76,7 +75,7 @@ namespace RechargeCustomSkins
 
         private static IEnumerator LoadAndApply(IRechargeHost host, Movement movement, PlayerSoundSlot slot, string path)
         {
-            var type = AudioTypeFor(path);
+            var type = SfxFileResolver.AudioTypeFor(path);
             using var req = UnityWebRequestMultimedia.GetAudioClip("file://" + path, type);
             yield return req.SendWebRequest();
 
@@ -93,29 +92,6 @@ namespace RechargeCustomSkins
             if (movement == null || _capturedFor != movement) yield break; // moved on while this loaded
             ApplySlotClip(movement, slot, clip);
             host.Log($"[CustomSkins] applied custom {slot.Name} sound: {clip.name}");
-        }
-
-        private static string FindSlotFile(string sfxDir, string slotName)
-        {
-            if (string.IsNullOrEmpty(sfxDir) || !Directory.Exists(sfxDir)) return null;
-            foreach (var file in Directory.EnumerateFiles(sfxDir))
-            {
-                var name = Path.GetFileNameWithoutExtension(file);
-                var ext = Path.GetExtension(file).ToLowerInvariant();
-                if (string.Equals(name, slotName, System.StringComparison.OrdinalIgnoreCase) && System.Array.IndexOf(Extensions, ext) >= 0)
-                    return file;
-            }
-            return null;
-        }
-
-        private static AudioType AudioTypeFor(string path)
-        {
-            switch (Path.GetExtension(path).ToLowerInvariant())
-            {
-                case ".ogg": return AudioType.OGGVORBIS;
-                case ".mp3": return AudioType.MPEG;
-                default: return AudioType.WAV;
-            }
         }
     }
 }
