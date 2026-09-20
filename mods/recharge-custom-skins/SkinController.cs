@@ -42,6 +42,9 @@ namespace RechargeCustomSkins
         private SkinGridLayout? _canonicalLayout;
         private Dictionary<Sprite, List<(int row, int frame, bool flipY)>> _vanillaSpriteEntries;
 
+        private Movement _audioForMovement;
+        private int _audioForIndex = int.MinValue;
+
         public void Init(IRechargeHost host)
         {
             _host = host;
@@ -429,6 +432,7 @@ namespace RechargeCustomSkins
             {
                 _originalMaterial = _spriteRenderer.sharedMaterial;
                 if (_spriteRenderer.sprite != null) _originalPixelsPerUnit = _spriteRenderer.sprite.pixelsPerUnit;
+                SkinAudioApplier.CaptureOriginals(_host, _movement);
             }
             return _spriteRenderer != null;
         }
@@ -458,11 +462,26 @@ namespace RechargeCustomSkins
                     if (_spriteRenderer.sharedMaterial != fallback) _spriteRenderer.material = fallback;
                 }
                 CloneSkinApplier.Apply(this, runtime);
+
+                if (_movement != _audioForMovement || _currentIndex != _audioForIndex)
+                {
+                    var sfxDir = Path.Combine(_skinsDir, Path.GetFileNameWithoutExtension(_skins[_currentIndex].fileName));
+                    SkinAudioApplier.Apply(this, _host, _movement, sfxDir);
+                    _audioForMovement = _movement;
+                    _audioForIndex = _currentIndex;
+                }
             }
             else
             {
                 if (_spriteRenderer.sharedMaterial != _originalMaterial) _spriteRenderer.material = _originalMaterial;
                 CloneSkinApplier.RestoreVanilla();
+
+                if (_movement != _audioForMovement || _audioForIndex != -1)
+                {
+                    SkinAudioApplier.RestoreVanilla(_movement);
+                    _audioForMovement = _movement;
+                    _audioForIndex = -1;
+                }
             }
         }
 
@@ -473,7 +492,7 @@ namespace RechargeCustomSkins
                 message = "Get into a course first, then export.";
                 return false;
             }
-            var result = TemplateExporter.Export(_spriteRenderer.gameObject, _exportDir, _host);
+            var result = TemplateExporter.Export(_spriteRenderer.gameObject, _exportDir, _skinsDir, _host);
             message = result != null ? $"Exported to {_exportDir}" : "Export failed - see Player.log";
             return result != null;
         }

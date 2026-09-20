@@ -22,11 +22,11 @@ namespace RechargeCustomSkins
 
     internal static class TemplateExporter
     {
-        public static string Export(GameObject spriteChildTemplate, string outputDir, IRechargeHost host)
+        public static string Export(GameObject spriteChildTemplate, string outputDir, string skinsDir, IRechargeHost host)
         {
             var perClip = CapturePerClipFrames(spriteChildTemplate, host);
             if (perClip == null) return null;
-            return ComposeTemplate(perClip, outputDir, host);
+            return ComposeTemplate(perClip, outputDir, skinsDir, host);
         }
 
         private static List<(string name, List<Sprite> frames, List<bool> flips)> CapturePerClipFrames(GameObject spriteChildTemplate, IRechargeHost host)
@@ -151,7 +151,7 @@ namespace RechargeCustomSkins
 
         private const int Gutter = 2;
 
-        private static string ComposeTemplate(List<(string name, List<Sprite> frames, List<bool> flips)> perClip, string outputDir, IRechargeHost host)
+        private static string ComposeTemplate(List<(string name, List<Sprite> frames, List<bool> flips)> perClip, string outputDir, string skinsDir, IRechargeHost host)
         {
             var cell = ComputeCellLayout(perClip);
             int cellW = cell.CellW, cellH = cell.CellH;
@@ -217,6 +217,14 @@ namespace RechargeCustomSkins
             legend.AppendLine();
             legend.AppendLine("Edit any cell's artwork, keep the same cell grid, then import the whole");
             legend.AppendLine("sheet back as a skin - the mod slices it back out along these same lines.");
+            legend.AppendLine();
+            legend.AppendLine("Custom sounds (optional):");
+            legend.AppendLine($"Save your finished skin as \"MySkin.png\" in {skinsDir}");
+            legend.AppendLine("To also override this skin's sounds, add a folder next to it with the");
+            legend.AppendLine("same name (no extension) - e.g. \"MySkin\\\" - containing any of:");
+            foreach (var slot in PlayerSoundSlots.All)
+                legend.AppendLine($"  {slot.Name}.wav  (.ogg and .mp3 also work)");
+            legend.AppendLine("Any sound you don't provide plays the vanilla clip as normal.");
             var legendPath = Path.Combine(outputDir, "skin-template-README.txt");
             File.WriteAllText(legendPath, legend.ToString());
 
