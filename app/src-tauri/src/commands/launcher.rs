@@ -125,10 +125,36 @@ fn is_installed_via_deb() -> bool {
 pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, String> {
     let current_version = app.package_info().version.to_string();
 
-    let release: GithubRelease = ureq::get(RELEASES_API)
-        .header("User-Agent", "Recharge")
-        .call()
-        .map_err(|e| format!("couldn't reach GitHub: {e}"))?
+    let bundled_maps_version = bundled_maps_version(&app);
+    let deployed_maps_version = deployed_maps_version(&app);
+    let maps_update_available = match (&bundled_maps_version, &deployed_maps_version) {
+        (Some(bundled), Some(deployed)) => is_newer(bundled, deployed),
+        _ => false, // not deployed yet - onboarding flow, not an update
+    };
+
+    let no_release_info = || LauncherUpdateInfo {
+        update_available: maps_update_available,
+        app_update_available: false,
+        latest_version: current_version.clone(),
+        current_version: current_version.clone(),
+        notes: String::new(),
+        url: "https://github.com/SumDumIdiut/recharge/releases".to_string(),
+        download_url: None,
+        maps_update_available,
+        bundled_maps_version: bundled_maps_version.clone(),
+        deployed_maps_version: deployed_maps_version.clone(),
+    };
+
+    let mut response = match ureq::get(RELEASES_API).header("User-Agent", "Recharge").call() {
+        // No release has been published yet (only drafts, or none at all) -
+        // GitHub's "latest" endpoint 404s in that case. That's a normal
+        // state, not something worth surfacing as an error.
+        Err(ureq::Error::StatusCode(404)) => return Ok(no_release_info()),
+        Err(e) => return Err(format!("couldn't reach GitHub: {e}")),
+        Ok(r) => r,
+    };
+
+    let release: GithubRelease = response
         .body_mut()
         .with_config()
         .limit(1024 * 1024)
@@ -139,13 +165,6 @@ pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, Strin
     let download_url = self_update_asset_url(&release.assets);
 
     let app_update_available = is_newer(&latest_version, &current_version);
-
-    let bundled_maps_version = bundled_maps_version(&app);
-    let deployed_maps_version = deployed_maps_version(&app);
-    let maps_update_available = match (&bundled_maps_version, &deployed_maps_version) {
-        (Some(bundled), Some(deployed)) => is_newer(bundled, deployed),
-        _ => false, // not deployed yet - onboarding flow, not an update
-    };
 
     Ok(LauncherUpdateInfo {
         update_available: app_update_available || maps_update_available,
