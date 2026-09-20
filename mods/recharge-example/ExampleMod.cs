@@ -4,11 +4,13 @@ using TMPro;
 using UnityEngine;
 using Recharge.ModApi;
 
-// Demonstrates every IRechargeHost/IRechargeMod capability at least once,
-// including a real interactive pause-menu panel (button, input field,
-// procedurally-generated image). Copy this folder to start a real mod -
-// delete whatever you don't need. See ExamplePanelUI.cs for the UI half.
-public class ExampleMod : IRechargeMod
+// Demonstrates every IRechargeHost/IRechargeMod capability, plus real game
+// interaction (player/physics/scene/audio/tweening/coroutines/input) across
+// three interactive pause-menu panels. Copy this folder to start a real mod -
+// delete whatever you don't need. Each Demos/*.cs file is a self-contained
+// deep dive into one topic; this file just wires them together and owns the
+// mod's lifecycle.
+public class ExampleMod : IRechargeMod, IExampleModApi
 {
     public string Id => "recharge.example";
     public string DisplayName => "Example Mod";
@@ -22,7 +24,19 @@ public class ExampleMod : IRechargeMod
 
     private IRechargeHost _host;
     private MyConfig _config;
+    private LoggingConfigDemo.ExtendedConfig _extendedConfig;
     private Action<object> _pingHandler;
+
+    private EventsDemo _eventsDemo;
+    private PlayerPhysicsDemo _playerPhysicsDemo;
+    private UpdateLoopDemo _updateLoopDemo;
+    private SceneDemo _sceneDemo;
+    private InputDemo _inputDemo;
+
+    // IExampleModApi - what another mod sees via
+    // host.GetModApi<IExampleModApi>("recharge.example").
+    public int ClickCount => _config.TimesClicked;
+    public void Ping() => _host.Events.Emit("recharge.example.ping", "hello from IExampleModApi.Ping()");
 
     public void OnLoad(IRechargeHost host)
     {
@@ -33,17 +47,23 @@ public class ExampleMod : IRechargeMod
         host.LogWarning("This is a warning-level log line.");
         host.LogError("This is an error-level log line (not a real error).");
 
-        // --- Config: JSON-backed, stored under this mod's own data folder ---
+        // --- Config: the simple one-JSON-file case ---
         _config = host.LoadConfig<MyConfig>(Id);
         _config.TimesLoaded++;
         host.SaveConfig(Id, _config);
         host.Log($"Loaded {_config.TimesLoaded} time(s), clicked the demo button {_config.TimesClicked} time(s) so far.");
 
-        // --- Data folder: for anything that isn't the JSON config - the mod owns this folder outright ---
+        // --- Config: nested types, lists, dictionaries, enums, schema migration ---
+        _extendedConfig = LoggingConfigDemo.LoadAndMigrate(host, Id);
+
+        // --- Data folder: raw file I/O beyond LoadConfig/SaveConfig ---
         var notesPath = Path.Combine(host.ModDataDir(Id), "notes.txt");
         File.AppendAllText(notesPath, $"Loaded at {DateTime.Now:O}\n");
+        DataFolderDemo.AppendDemoScore(host, Id);
+        DataFolderDemo.RoundTripBinaryBlob(host, Id);
+        DataFolderDemo.ListDataFiles(host, Id);
 
-        // --- Events: react to the loader's own lifecycle events ---
+        // --- Events: built-in lifecycle events ---
         host.Events.On(RechargeEvents.ModsReady, _ =>
         {
             host.Log("Every mod has now loaded.");
@@ -60,17 +80,30 @@ public class ExampleMod : IRechargeMod
         host.Events.On("recharge.example.ping", _pingHandler);
         host.Events.Emit("recharge.example.ping", "hello from OnLoad");
 
+        // --- Events: deeper patterns (typed payloads, request/response, cross-mod API) ---
+        _eventsDemo = new EventsDemo(host);
+
         // --- Per-frame hooks - no need for your own GameObject/Update() ---
         int updates = 0, lateUpdates = 0, fixedUpdates = 0;
         host.OnUpdate += () => { if (++updates == 1) host.Log("First OnUpdate tick."); };
         host.OnLateUpdate += () => { if (++lateUpdates == 1) host.Log("First OnLateUpdate tick."); };
         host.OnFixedUpdate += () => { if (++fixedUpdates == 1) host.Log("First OnFixedUpdate tick."); };
 
-        // --- Reflection: reaching the game's private fields ---
-        var mainBit = Reflect.GetField<GameObject>(host.PauseMenu, "mainBit");
-        host.Log($"Reflected pauseMenuScript.mainBit: {(mainBit != null ? mainBit.name : "null")}");
-        var settingsBit = Reflect.TryGetField<GameObject>(host.PauseMenu, "settingsBit", fallback: null);
-        host.Log($"Reflected pauseMenuScript.settingsBit (via TryGetField, falls back instead of throwing): {(settingsBit != null ? settingsBit.name : "null")}");
+        // --- Deeper per-frame patterns: a polling state machine and a direct Input System keybind ---
+        _updateLoopDemo = new UpdateLoopDemo(host);
+
+        // --- Finding and reading the live player/physics state ---
+        _playerPhysicsDemo = new PlayerPhysicsDemo(host);
+        _updateLoopDemo.IcyPhysicsToggleRequested += icy => _playerPhysicsDemo.SetIcyPhysics(icy);
+
+        // --- SceneManager access beyond the wrapped RechargeEvents.SceneLoaded, and spawning a world object ---
+        _sceneDemo = new SceneDemo(host);
+
+        // --- Deeper Input System usage: mouse/gamepad reads and a persisted, rebindable keybind ---
+        _inputDemo = new InputDemo(host, Id);
+
+        // --- Reflection: every Reflect.* method at least once ---
+        ReflectionDemo.Run(host);
 
         // --- Pause-menu integration ---
         // mainBit/settingsBit get destroyed and rebuilt on every scene load, so
@@ -93,20 +126,48 @@ public class ExampleMod : IRechargeMod
             _host.Events.Emit("recharge.example.ping", "hello from the pause menu");
         });
 
-        // A row that opens its own sub-panel. MenuPanelRegistry hands back the
-        // same GameObject on every later call (for this scene and every scene
-        // after it), so only Build its contents once.
+        // Three rows that each open their own sub-panel. MenuPanelRegistry
+        // hands back the same GameObject on every later call (for this scene
+        // and every scene after it), so only Build each panel's contents once.
+        InstallSimplePanel(menu);
+        InstallAdvancedPanel(menu);
+        InstallExtraPanel(menu);
+    }
+
+    private void InstallSimplePanel(pauseMenuScript menu)
+    {
         var panel = PauseMenuHelper.AddPanelRow(menu, "ExamplePanel", DisplayName);
-        if (panel != null && panel.GetComponent<ExamplePanelUI>() == null)
-        {
-            var title = panel.transform.Find("Settings") ?? (panel.transform.childCount > 0 ? panel.transform.GetChild(0) : null);
-            var font = title != null ? title.GetComponent<TMP_Text>()?.font : null;
-            panel.AddComponent<ExamplePanelUI>().Build(panel, font, _host, _config, Id);
-        }
+        if (panel == null || panel.GetComponent<ExamplePanelUI>() != null) return;
+        var font = FindTitleFont(panel);
+        panel.AddComponent<ExamplePanelUI>().Build(panel, font, _host, _config, Id);
+    }
+
+    private void InstallAdvancedPanel(pauseMenuScript menu)
+    {
+        var panel = PauseMenuHelper.AddPanelRow(menu, "ExampleAdvancedPanel", "Example Mod: Advanced");
+        if (panel == null || panel.GetComponent<AdvancedPanelUI>() != null) return;
+        var font = FindTitleFont(panel);
+        panel.AddComponent<AdvancedPanelUI>().Build(panel, font, _host, Id, _playerPhysicsDemo, _updateLoopDemo, _sceneDemo, _eventsDemo, _extendedConfig);
+    }
+
+    private void InstallExtraPanel(pauseMenuScript menu)
+    {
+        var panel = PauseMenuHelper.AddPanelRow(menu, "ExampleExtraPanel", "Example Mod: Extra");
+        if (panel == null || panel.GetComponent<ExtraPanelUI>() != null) return;
+        var font = FindTitleFont(panel);
+        panel.AddComponent<ExtraPanelUI>().Build(panel, font, _host, Id, _inputDemo);
+    }
+
+    private static TMP_FontAsset FindTitleFont(GameObject panel)
+    {
+        var title = panel.transform.Find("Settings") ?? (panel.transform.childCount > 0 ? panel.transform.GetChild(0) : null);
+        return title != null ? title.GetComponent<TMP_Text>()?.font : null;
     }
 
     public void OnUnload()
     {
         if (_pingHandler != null) _host.Events.Off("recharge.example.ping", _pingHandler);
+        _eventsDemo?.Dispose();
+        _sceneDemo?.Dispose();
     }
 }
