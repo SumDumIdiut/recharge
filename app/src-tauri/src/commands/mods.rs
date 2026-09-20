@@ -86,9 +86,6 @@ pub fn uninstall_mod(app: AppHandle, id: String) -> Result<(), String> {
     if id == "recharge.maps" {
         return Err("recharge.maps is required by the Maps tab and can't be uninstalled here".to_string());
     }
-    if id == "recharge.customskins" {
-        return Err("recharge.customskins is required by the Skins tab and can't be uninstalled here".to_string());
-    }
     for (manifest_path, manifest) in each_manifest(&app) {
         if manifest.id != id {
             continue;

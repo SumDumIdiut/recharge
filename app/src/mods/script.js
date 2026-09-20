@@ -2,7 +2,7 @@ import { getToken, getUsername, isLoggedIn } from '../auth.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
-const PROTECTED_MOD_IDS = new Set(['recharge.maps', 'recharge.customskins']);
+const PROTECTED_MOD_IDS = new Set(['recharge.maps']);
 
 let currentSubtab = 'installed';
 let searchTerm = '';
