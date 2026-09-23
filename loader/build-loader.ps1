@@ -112,9 +112,22 @@ try {
     if (-not (Test-Path $deployed)) {
         throw "No Assembly-CSharp.dll found at $deployed - is GameDir correct?"
     }
-    if (-not (Test-Path $backup)) {
-        Set-Status "Backing up original Assembly-CSharp.dll..."
-        Copy-Item $deployed $backup
+
+    # $deployed is whatever the last run of this script left behind: either
+    # our own patched build (== $rechargeCache) or our own restored backup
+    # (== $backup). If it matches NEITHER, Steam must have dropped a fresh
+    # file there since - a real game update (or the very first install) -
+    # and the old $backup is now stale. Decompiling a stale backup would
+    # patch an out-of-date class layout onto the new build's scene/level
+    # data, which Unity reports as the level data being "corrupted" rather
+    # than as a clear version-mismatch error - so always re-derive $backup
+    # from whatever Steam currently has deployed, not just once ever.
+    $deployedHash = (Get-FileHash $deployed -Algorithm SHA256).Hash
+    $backupHash = if (Test-Path $backup) { (Get-FileHash $backup -Algorithm SHA256).Hash } else { $null }
+    $rechargeHash = if (Test-Path $rechargeCache) { (Get-FileHash $rechargeCache -Algorithm SHA256).Hash } else { $null }
+    if ($deployedHash -ne $backupHash -and $deployedHash -ne $rechargeHash) {
+        Set-Status $(if (Test-Path $backup) { "Detected a game update - refreshing the backed-up original assembly..." } else { "Backing up original Assembly-CSharp.dll..." })
+        Copy-Item $deployed $backup -Force
     }
 
     Set-Status "1/$($totalPhases): Building Recharge.ModApi.dll..."

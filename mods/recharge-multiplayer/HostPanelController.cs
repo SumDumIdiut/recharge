@@ -105,7 +105,7 @@ internal class HostPanelController : MonoBehaviour
 		_mainContent = new GameObject("HostPanel_MainContent", typeof(RectTransform));
 		_mainContent.transform.SetParent(panel.transform, false);
 
-		CreateDivider(_mainContent.transform, new Vector2(0, 125), 420);
+		PanelWidgets.CreateDivider(_mainContent.transform, new Vector2(0, 125), 420);
 
 		var abilityCaptionGo = Object.Instantiate(template, _mainContent.transform);
 		abilityCaptionGo.name = "HostPanel_AbilityCaption";
@@ -157,7 +157,7 @@ internal class HostPanelController : MonoBehaviour
 			_abilityButtons.Add((key, btn));
 		}
 
-		CreateDivider(_mainContent.transform, new Vector2(0, 15), 420);
+		PanelWidgets.CreateDivider(_mainContent.transform, new Vector2(0, 15), 420);
 
 		var rosterBoxGo = new GameObject("HostPanelRosterBox", typeof(RectTransform), typeof(Image));
 		rosterBoxGo.transform.SetParent(_mainContent.transform, false);
@@ -209,55 +209,31 @@ internal class HostPanelController : MonoBehaviour
 		_hostPanel.SetActive(true);
 	}
 
+	// Not a top-level pause-menu row - only reachable via the "Host Panel"
+	// toggle button installed inside the DOTnet panel (InstallMenuRow
+	// below), so its Back button/Escape return there rather than to the
+	// main pause menu.
 	private GameObject BuildStandalonePanel(pauseMenuScript menu)
 	{
-		var existing = menu.settingsBitPublic.transform.parent.Find("HostPanelBit");
-		if (existing != null) { _hostPanel = existing.gameObject; return _hostPanel; }
+		var panel = PauseMenuHelper.GetOrCreatePanel(menu, "HostPanel", "Host Panel", backTarget: MpNetworkManager.LatestMpPanel);
+		if (panel == null) return null;
 
-		var clone = Object.Instantiate(menu.settingsBitPublic, menu.settingsBitPublic.transform.parent);
-		clone.name = "HostPanelBit";
-		clone.SetActive(false);
-
-		var settingsScript = clone.GetComponent<SettingsScript>();
-		if (settingsScript != null) Object.Destroy(settingsScript);
-
-		Transform title = null;
-		foreach (Transform child in clone.transform)
+		var closer = panel.GetComponent<PanelEscapeCloser>();
+		if (closer != null)
 		{
-			if (child.name != "Settings") continue;
-			title = child;
-			break;
-		}
-		if (title == null && clone.transform.childCount > 0) title = clone.transform.GetChild(0);
-
-		var toDestroy = new List<GameObject>();
-		foreach (Transform child in clone.transform)
-			if (child != title) toDestroy.Add(child.gameObject);
-		foreach (var go in toDestroy) Object.Destroy(go);
-
-		if (title != null)
-		{
-			var titleTmp = title.GetComponent<TMP_Text>();
-			if (titleTmp != null) titleTmp.text = "Host Panel";
-			var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-			if (loc != null) Object.DestroyImmediate(loc);
-
-			var closeBtn = title.Find("Close");
-			if (closeBtn != null)
+			// Escape backs out of an open map/save picker first (same as
+			// hitting its own Cancel button), and only closes the whole
+			// Host Panel once no picker is open.
+			closer.ConsumeEscapeFirst = () =>
 			{
-				PauseMenuHelper.SetButtonLabel(closeBtn.gameObject, "Back");
-				var btn = closeBtn.GetComponent<Button>();
-				btn.onClick = new Button.ButtonClickedEvent();
-				btn.onClick.AddListener(() =>
-				{
-					clone.SetActive(false);
-					if (MpNetworkManager.LatestMpPanel != null) MpNetworkManager.LatestMpPanel.SetActive(true);
-				});
-			}
+				if (_activePicker == PickerKind.None) return false;
+				_activePicker = PickerKind.None;
+				return true;
+			};
 		}
 
-		_hostPanel = clone;
-		return clone;
+		_hostPanel = panel;
+		return panel;
 	}
 
 	private void OnCycleModeClicked()
@@ -434,16 +410,6 @@ internal class HostPanelController : MonoBehaviour
 		btn.onClick = new Button.ButtonClickedEvent();
 		btn.onClick.AddListener(() => onClick());
 		return go;
-	}
-
-	private static void CreateDivider(Transform parent, Vector2 pos, float width)
-	{
-		var go = new GameObject("Divider", typeof(RectTransform));
-		go.transform.SetParent(parent, false);
-		var rt = (RectTransform)go.transform;
-		rt.anchoredPosition = pos;
-		rt.sizeDelta = new Vector2(width, 2);
-		go.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.15f);
 	}
 
 	private static Button BuildActionButton(Transform parent, GameObject template, string label, Vector2 pos, System.Action onClick, float width = 260, float height = 60, float fontSize = 24f)

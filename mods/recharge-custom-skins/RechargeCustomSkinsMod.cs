@@ -10,7 +10,7 @@ namespace RechargeCustomSkins
         public const string ModId = "recharge.customskins";
 
         public string Id => ModId;
-        public string DisplayName => "Custom Skins";
+        public string DisplayName => "Skinmod";
         public Version Version => new Version(1, 0, 0);
 
         private SkinController _controller;
@@ -32,7 +32,7 @@ namespace RechargeCustomSkins
         private void InstallMenuRow(pauseMenuScript menu)
         {
             if (menu.mainBitPublic == null) return;
-            var panel = PauseMenuHelper.AddPanelRow(menu, "CustomSkins", "Custom Skins");
+            var panel = PauseMenuHelper.AddPanelRow(menu, "CustomSkins", "Skinmod");
             if (panel == null) return;
             if (panel.GetComponent<SkinPanelUI>() != null) return;
 

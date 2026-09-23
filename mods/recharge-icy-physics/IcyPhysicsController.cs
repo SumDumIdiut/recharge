@@ -11,19 +11,27 @@ using Recharge.ModApi;
 internal class IcyPhysicsController : MonoBehaviour
 {
     private const float IcyFramesToReachTopSpeed = 50f;
+    private const float DefaultFramesToReachTopSpeed = 2f;
     private const string FramesFieldName = "framesToReachTopSpeed";
 
+    public bool Enabled { get; set; } = true;
+
     private Movement _movement;
+    private bool? _appliedEnabled;
 
     private void Update()
     {
-        if (_movement != null) return;
+        if (_movement == null)
+        {
+            var playerGo = GameObject.FindGameObjectWithTag("Player");
+            if (playerGo == null) return;
+            _movement = playerGo.GetComponent<Movement>();
+            if (_movement == null) return;
+            _appliedEnabled = null;
+        }
 
-        var playerGo = GameObject.FindGameObjectWithTag("Player");
-        if (playerGo == null) return;
-        _movement = playerGo.GetComponent<Movement>();
-        if (_movement == null) return;
-
-        Reflect.SetField(_movement, FramesFieldName, IcyFramesToReachTopSpeed);
+        if (_appliedEnabled == Enabled) return;
+        Reflect.SetField(_movement, FramesFieldName, Enabled ? IcyFramesToReachTopSpeed : DefaultFramesToReachTopSpeed);
+        _appliedEnabled = Enabled;
     }
 }

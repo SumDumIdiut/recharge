@@ -2,7 +2,7 @@
   "id": "recharge.example",
   "displayName": "Example Mod",
   "version": "1.0.0",
-  "author": "Recharge",
+  "author": "Flipped",
   "entryAssembly": "RechargeExample.dll",
   "minLoaderVersion": "1.0.0",
   "enabled": true

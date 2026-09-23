@@ -11,6 +11,7 @@ let catalog = [];
 let catalogError = false;
 let chosenUploadPath = null;
 let myUploadIds = new Set();
+let openDetailId = null;
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -61,8 +62,7 @@ async function loadCatalog() {
         description: row.description,
         image: row.gallery?.length ? `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
         dependencies: [],
-      }))
-      .filter((c) => !PROTECTED_MOD_IDS.has(c.modId));
+      }));
     catalogError = false;
   } catch (err) {
     catalog = [];
@@ -100,14 +100,15 @@ function renderInstalled() {
   list.innerHTML = filtered
     .map((m) => {
       const entry = catalog.find((c) => c.modId === m.id);
-      const hasUpdate = entry && isNewerVersion(entry.version, m.version);
       const protectedMod = PROTECTED_MOD_IDS.has(m.id);
+      const hasUpdate = entry && !protectedMod && isNewerVersion(entry.version, m.version);
+      const author = entry?.author || m.author;
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
       ${thumb(entry, hasUpdate ? `<button class="browse-card-badge browse-card-badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
         <div class="browse-card-name${protectedMod ? ' browse-card-name-protected' : ''}">${escapeHtml(m.displayName)}</div>
-        <div class="browse-card-meta">${m.author ? escapeHtml(m.author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="mod-update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
+        <div class="browse-card-meta">${author ? escapeHtml(author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="mod-update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
       </div>
       <div class="browse-card-actions">
         <span class="browse-card-meta">${m.enabled ? 'Enabled' : 'Disabled'}</span>
@@ -128,6 +129,7 @@ function renderBrowse() {
     return;
   }
   const filtered = catalog
+    .filter((m) => !PROTECTED_MOD_IDS.has(m.modId))
     .filter((m) => matchesSearch(m.name + ' ' + m.description + ' ' + m.author))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
@@ -385,6 +387,7 @@ window.__modOpenDetail = function (id) {
   if (!entry && installedMod) entry = catalog.find((c) => c.modId === installedMod.id);
   if (!installedMod && entry?.modId) installedMod = installedCache.find((m) => m.id === entry.modId);
   if (!entry && !installedMod) return;
+  openDetailId = id;
   const installed = !!installedMod;
   const hubId = entry?.id;
   const realId = installedMod?.id;
@@ -450,6 +453,7 @@ window.__modConfirmUninstall = function (id, name) {
 window.__modCloseDetail = function () {
   document.getElementById('mods-detail').style.display = 'none';
   document.getElementById('mods-list').style.display = 'block';
+  openDetailId = null;
 };
 
 async function refresh() {
@@ -464,6 +468,11 @@ export async function init() {
   document.getElementById('mods-upload-confirm').addEventListener('click', submitUpload);
   document.getElementById('mods-upload-browse-btn').addEventListener('click', browseForModFolder);
   render();
+  await onShow();
+}
+
+export async function onShow() {
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
+  if (openDetailId) window.__modOpenDetail(openDetailId);
 }

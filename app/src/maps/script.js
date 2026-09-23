@@ -278,6 +278,10 @@ export async function init() {
   document.getElementById('maps-upload-confirm').addEventListener('click', submitUpload);
   document.getElementById('maps-upload-browse-btn').addEventListener('click', browseForMapFile);
   render();
+  await onShow();
+}
+
+export async function onShow() {
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
 }

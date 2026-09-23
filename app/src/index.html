@@ -101,19 +101,20 @@
               <button class="home-tile" onclick="window.__homeLaunch('vanilla')">
                 <span>&gt; Vanilla</span>
               </button>
-              <button class="home-tile" onclick="window.__homeLaunch('modded')">
+              <button class="home-tile" id="home-modded-tile" onclick="window.__homeLaunch('modded')">
                 <span>&gt; Modded</span>
               </button>
             </div>
             <div class="home-play-status" id="home-play-status"></div>
+            <div class="home-install-sub" id="home-demo-note" style="display:none;">The demo only supports vanilla - mods aren't available on it.</div>
 
-            <button class="home-menu-row" onclick="navigate('mods')">
+            <button class="home-menu-row" id="home-mods-row" onclick="navigate('mods')">
               <span>&gt; Mods</span>
             </button>
-            <button class="home-menu-row" onclick="navigate('maps')">
+            <button class="home-menu-row" id="home-maps-row" onclick="navigate('maps')">
               <span>&gt; Maps</span>
             </button>
-            <button class="home-menu-row" onclick="navigate('skins')">
+            <button class="home-menu-row" id="home-skins-row" onclick="navigate('skins')">
               <span>&gt; Skins</span>
             </button>
             <button class="home-menu-row" id="home-account-menu-row" onclick="navigate('account')" style="display:none;">

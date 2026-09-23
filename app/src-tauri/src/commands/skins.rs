@@ -77,11 +77,33 @@ fn find_image_file(skin_folder: &std::path::Path) -> Option<PathBuf> {
     })
 }
 
+// Written alongside a skin installed from the hub, since the folder itself
+// is named after a readable slug of the skin's name (not the hub id) - this
+// is what lets the Browse tab still recognize "already installed" and lets
+// the Installed tab show the real name instead of guessing from the folder.
+pub const HUB_META_FILE: &str = ".recharge-hub-meta.json";
+
+#[derive(Serialize, Deserialize)]
+pub struct SkinHubMeta {
+    #[serde(rename = "hubId")]
+    pub hub_id: String,
+    pub name: String,
+}
+
 #[derive(Serialize)]
 pub struct SkinEntry {
     #[serde(rename = "folderName")]
     pub folder_name: String,
     pub enabled: bool,
+    #[serde(rename = "hubId", skip_serializing_if = "Option::is_none")]
+    pub hub_id: Option<String>,
+    #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+pub fn read_hub_meta(skin_folder: &std::path::Path) -> Option<SkinHubMeta> {
+    let text = std::fs::read_to_string(skin_folder.join(HUB_META_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 #[tauri::command]
@@ -101,11 +123,18 @@ pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
     names.sort_by_key(|n| n.to_ascii_lowercase());
 
     let config = read_config(&app);
+    let dir = skins_dir(&app);
     names
         .into_iter()
         .map(|folder_name| {
             let enabled = config.current_skin_folder.as_deref() == Some(folder_name.as_str());
-            SkinEntry { folder_name, enabled }
+            let meta = dir.as_ref().and_then(|d| read_hub_meta(&d.join(&folder_name)));
+            SkinEntry {
+                folder_name,
+                enabled,
+                hub_id: meta.as_ref().map(|m| m.hub_id.clone()),
+                display_name: meta.map(|m| m.name),
+            }
         })
         .collect()
 }

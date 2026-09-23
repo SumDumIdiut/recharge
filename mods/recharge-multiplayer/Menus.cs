@@ -442,9 +442,23 @@ internal class MpPanelUI : MonoBehaviour
 		_menu = menu;
 		var root = panel.transform;
 
-		CreateDivider(root, new Vector2(-140, 188), 300);
+		// Escape backs out of an open colour/map-picker overlay first (same
+		// as their own Done/Cancel buttons), and only closes the whole
+		// panel once neither overlay is open.
+		var closer = panel.GetComponent<Recharge.ModApi.PanelEscapeCloser>();
+		if (closer != null)
+		{
+			closer.ConsumeEscapeFirst = () =>
+			{
+				if (_showingAppearance) { _showingAppearance = false; return true; }
+				if (_showingMapPicker) { _showingMapPicker = false; return true; }
+				return false;
+			};
+		}
 
-		_status = CreateLabel(root, "Status", new Vector2(0, 165), new Vector2(600, 34), "Not connected");
+		PanelWidgets.CreateDivider(root, new Vector2(-140, 188), 300);
+
+		_status = PanelWidgets.CreateLabel(root, _font, new Vector2(0, 165), new Vector2(600, 34), "Not connected");
 		_status.alignment = TextAlignmentOptions.Center;
 		_status.fontSize = 22;
 		_status.enableWordWrapping = false;
@@ -471,8 +485,8 @@ internal class MpPanelUI : MonoBehaviour
 
 		_inLobbyRow = new GameObject("InLobbyRow", typeof(RectTransform));
 		_inLobbyRow.transform.SetParent(root, false);
-		_inLobbyLabel = CreateLabel(_inLobbyRow.transform, "InLobbyLabel", new Vector2(0, 160), new Vector2(560, 34), "");
-		_playersLabel = CreateLabel(_inLobbyRow.transform, "PlayersLabel", new Vector2(0, 133), new Vector2(560, 24), "");
+		_inLobbyLabel = PanelWidgets.CreateLabel(_inLobbyRow.transform, _font, new Vector2(0, 160), new Vector2(560, 34), "");
+		_playersLabel = PanelWidgets.CreateLabel(_inLobbyRow.transform, _font, new Vector2(0, 133), new Vector2(560, 24), "");
 		_playersLabel.fontSize = 16;
 		_playersLabel.enableWordWrapping = false;
 		_playersLabel.overflowMode = TextOverflowModes.Ellipsis;
@@ -493,7 +507,7 @@ internal class MpPanelUI : MonoBehaviour
 		_appearanceSection = new GameObject("AppearanceSection", typeof(RectTransform));
 		_appearanceSection.transform.SetParent(root, false);
 
-		var header = CreateLabel(_appearanceSection.transform, "ColourHeader", new Vector2(0, 165), new Vector2(400, 34), "Colour");
+		var header = PanelWidgets.CreateLabel(_appearanceSection.transform, _font, new Vector2(0, 165), new Vector2(400, 34), "Colour");
 		header.alignment = TextAlignmentOptions.Center;
 		header.fontSize = 22;
 
@@ -522,7 +536,7 @@ internal class MpPanelUI : MonoBehaviour
 		nextBtn.onClick.AddListener(() => ChangePresetPage(1));
 		LockButtonColor(nextBtn);
 
-		_presetPageLabel = CreateLabel(_appearanceSection.transform, "PresetPage", new Vector2(0, -5), new Vector2(160, 20), "");
+		_presetPageLabel = PanelWidgets.CreateLabel(_appearanceSection.transform, _font, new Vector2(0, -5), new Vector2(160, 20), "");
 		_presetPageLabel.alignment = TextAlignmentOptions.Center;
 		_presetPageLabel.fontSize = 13;
 		_presetPageLabel.color = new Color(1f, 1f, 1f, 0.6f);
@@ -573,7 +587,7 @@ internal class MpPanelUI : MonoBehaviour
 		container.transform.SetParent(parent, false);
 		((RectTransform)container.transform).anchoredPosition = pos;
 
-		var labelTmp = CreateLabel(container.transform, "Label", new Vector2(-270, 0), new Vector2(30, 30), label);
+		var labelTmp = PanelWidgets.CreateLabel(container.transform, _font, new Vector2(-270, 0), new Vector2(30, 30), label);
 		labelTmp.alignment = TextAlignmentOptions.MidlineLeft;
 		labelTmp.fontSize = 22;
 		labelTmp.color = trackColor;
@@ -741,7 +755,7 @@ internal class MpPanelUI : MonoBehaviour
 		var boxImg = _listBox.AddComponent<Image>();
 		ApplyRoundedBoxStyle(boxImg, Color.white);
 
-		var header = CreateLabel(_listBox.transform, "ListHeader", new Vector2(-90, 70), new Vector2(380, 26), "Open lobbies");
+		var header = PanelWidgets.CreateLabel(_listBox.transform, _font, new Vector2(-90, 70), new Vector2(380, 26), "Open lobbies");
 		header.fontSize = 20;
 		header.color = new Color(1f, 1f, 1f, 0.65f);
 		header.alignment = TextAlignmentOptions.MidlineLeft;
@@ -763,7 +777,7 @@ internal class MpPanelUI : MonoBehaviour
 		var prevLabel = prevGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (prevLabel != null) prevLabel.fontSize = 16f;
 
-		_pageLabel = CreateLabel(_listBox.transform, "PageLabel", new Vector2(0, -68), new Vector2(160, 28), "");
+		_pageLabel = PanelWidgets.CreateLabel(_listBox.transform, _font, new Vector2(0, -68), new Vector2(160, 28), "");
 		_pageLabel.fontSize = 18;
 		_pageLabel.color = new Color(1f, 1f, 1f, 0.6f);
 
@@ -813,7 +827,7 @@ internal class MpPanelUI : MonoBehaviour
 		_directConnectSection = new GameObject("DirectConnectSection", typeof(RectTransform));
 		_directConnectSection.transform.SetParent(root, false);
 
-		var header = CreateLabel(_directConnectSection.transform, "DirectConnectHeader", new Vector2(0, -128), new Vector2(560, 26), "Direct Connect");
+		var header = PanelWidgets.CreateLabel(_directConnectSection.transform, _font, new Vector2(0, -128), new Vector2(560, 26), "Direct Connect");
 		header.fontSize = 20;
 		header.color = new Color(1f, 1f, 1f, 0.65f);
 
@@ -826,7 +840,7 @@ internal class MpPanelUI : MonoBehaviour
 		_mapPickerSection = new GameObject("MapPickerSection", typeof(RectTransform));
 		_mapPickerSection.transform.SetParent(root, false);
 
-		var header = CreateLabel(_mapPickerSection.transform, "MapPickerHeader", new Vector2(0, 165), new Vector2(400, 34), "Choose a Map");
+		var header = PanelWidgets.CreateLabel(_mapPickerSection.transform, _font, new Vector2(0, 165), new Vector2(400, 34), "Choose a Map");
 		header.alignment = TextAlignmentOptions.Center;
 		header.fontSize = 22;
 
@@ -1107,7 +1121,7 @@ internal class MpPanelUI : MonoBehaviour
 
 		if (lobbies.Count == 0)
 		{
-			var emptyGo = CreateLabel(_listContent.transform, "EmptyLabel", new Vector2(0, 4), new Vector2(500, 30), "(no open lobbies yet)").gameObject;
+			var emptyGo = PanelWidgets.CreateLabel(_listContent.transform, _font, new Vector2(0, 4), new Vector2(500, 30), "(no open lobbies yet)").gameObject;
 			emptyGo.GetComponent<TMP_Text>().color = new Color(1f, 1f, 1f, 0.5f);
 			_lobbyListRows.Add(emptyGo);
 			return;
@@ -1126,23 +1140,12 @@ internal class MpPanelUI : MonoBehaviour
 			_lobbyListRows.Add(rowGo);
 
 			if (i < end - 1)
-				_lobbyListRows.Add(CreateDivider(_listContent.transform, new Vector2(0, y - rowSpacing / 2f)));
+				_lobbyListRows.Add(PanelWidgets.CreateDivider(_listContent.transform, new Vector2(0, y - rowSpacing / 2f), 560));
 
 			y -= rowSpacing;
 		}
 	}
 
-	private GameObject CreateDivider(Transform parent, Vector2 anchoredPos, float width = 560)
-	{
-		var go = new GameObject("Divider", typeof(RectTransform));
-		go.transform.SetParent(parent, false);
-		var rt = (RectTransform)go.transform;
-		rt.anchoredPosition = anchoredPos;
-		rt.sizeDelta = new Vector2(width, 2);
-		var img = go.AddComponent<Image>();
-		img.color = new Color(1f, 1f, 1f, 0.15f);
-		return go;
-	}
 
 	private GameObject CreateLobbyRow(Transform parent, Vector2 anchoredPos, Vector2 size, string lobbyName, int playerCount, string hostColorHex)
 	{
@@ -1262,22 +1265,6 @@ internal class MpPanelUI : MonoBehaviour
 		return go;
 	}
 
-	private TMP_Text CreateLabel(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string text)
-	{
-		var go = new GameObject(name, typeof(RectTransform));
-		go.transform.SetParent(parent, false);
-		var rt = (RectTransform)go.transform;
-		rt.anchoredPosition = anchoredPos;
-		rt.sizeDelta = size;
-		var tmp = go.AddComponent<TextMeshProUGUI>();
-		tmp.font = _font;
-		tmp.fontSize = 24;
-		tmp.alignment = TextAlignmentOptions.Center;
-		tmp.color = Color.white;
-		tmp.text = text;
-		return tmp;
-	}
-
 	private TMP_InputField CreateInputField(Transform parent, Vector2 anchoredPos, Vector2 size, string placeholder)
 	{
 		var go = new GameObject("InputField", typeof(RectTransform));
@@ -1340,71 +1327,25 @@ internal static class MpMenuBuilder
 	public static void Install(pauseMenuScript menu)
 	{
 		MpNetworkManager.GetOrCreate();
-
 		if (menu.mainBitPublic == null || menu.settingsBitPublic == null) return;
 
-		var mpPanel = BuildPanel(menu, backTarget: menu.mainBitPublic);
-		PauseMenuHelper.AddRow(menu, "Multiplayer", "DOTnet", () => mpPanel.SetActive(true));
+		var mpPanel = PauseMenuHelper.AddPanelRow(menu, "Multiplayer", "DOTnet");
+		if (mpPanel == null) return;
+
+		if (mpPanel.GetComponent<MpPanelUI>() == null)
+		{
+			var font = FindTitleFont(mpPanel);
+			var ui = mpPanel.AddComponent<MpPanelUI>();
+			ui.Build(mpPanel, font, settingsButtonTemplate: menu.mainBitPublic.transform.Find("Settings").gameObject, menu);
+		}
 
 		MpNetworkManager.LatestMainBit = menu.mainBitPublic;
 		MpNetworkManager.LatestMpPanel = mpPanel;
 	}
 
-	private static void SetButtonLabel(GameObject buttonGo, string text)
+	private static TMP_FontAsset FindTitleFont(GameObject panel)
 	{
-		var label = buttonGo.transform.Find("Text (TMP)");
-		if (label == null) return;
-		var loc = label.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-		if (loc != null) Object.DestroyImmediate(loc);
-		var tmp = label.GetComponent<TMP_Text>();
-		if (tmp != null) tmp.text = text;
-	}
-
-	private static GameObject BuildPanel(pauseMenuScript menu, GameObject backTarget)
-	{
-		var existing = menu.settingsBitPublic.transform.parent.Find("MultiplayerBit");
-		if (existing != null) return existing.gameObject;
-
-		var clone = Object.Instantiate(menu.settingsBitPublic, menu.settingsBitPublic.transform.parent);
-		clone.name = "MultiplayerBit";
-		clone.SetActive(false);
-
-		var settingsScript = clone.GetComponent<SettingsScript>();
-		if (settingsScript != null) Object.Destroy(settingsScript);
-
-		Transform title = null;
-		var toDestroy = new List<GameObject>();
-		foreach (Transform child in clone.transform)
-		{
-			if (child.name == "Settings") { title = child; continue; }
-			toDestroy.Add(child.gameObject);
-		}
-		foreach (var go in toDestroy) Object.Destroy(go);
-
-		TMP_FontAsset font = null;
-		if (title != null)
-		{
-			var titleTmp = title.GetComponent<TMP_Text>();
-			if (titleTmp != null) { titleTmp.text = "DOTnet"; font = titleTmp.font; }
-			var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-			if (loc != null) Object.DestroyImmediate(loc);
-
-			var closeBtn = title.Find("Close");
-			if (closeBtn != null)
-			{
-				SetButtonLabel(closeBtn.gameObject, "Back");
-				var btn = closeBtn.GetComponent<Button>();
-				btn.onClick = new Button.ButtonClickedEvent();
-				btn.onClick.AddListener(() =>
-				{
-					clone.SetActive(false);
-					backTarget.SetActive(true);
-				});
-			}
-		}
-
-		var ui = clone.AddComponent<MpPanelUI>();
-		ui.Build(clone, font, settingsButtonTemplate: menu.mainBitPublic.transform.Find("Settings").gameObject, menu);
-		return clone;
+		var title = panel.transform.Find("Settings") ?? (panel.transform.childCount > 0 ? panel.transform.GetChild(0) : null);
+		return title != null ? title.GetComponent<TMP_Text>()?.font : null;
 	}
 }

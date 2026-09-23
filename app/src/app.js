@@ -3,13 +3,22 @@ import { initHome, refreshInstallStatus } from './home.js';
 const _tabLoaded = {};
 let curTab = 'home';
 
+const LIVE_TABS = new Set(['mods', 'maps', 'skins']);
+
 async function ensureTab(tab) {
-  if (tab === 'home' || _tabLoaded[tab]) return;
-  const res = await fetch('/' + tab + '/view.html');
-  document.getElementById('view-' + tab).innerHTML = await res.text();
-  _tabLoaded[tab] = true;
-  const mod = await import('/' + tab + '/script.js');
-  if (mod.init) mod.init();
+  if (tab === 'home') return;
+  if (!_tabLoaded[tab]) {
+    const res = await fetch('/' + tab + '/view.html');
+    document.getElementById('view-' + tab).innerHTML = await res.text();
+    _tabLoaded[tab] = true;
+    const mod = await import('/' + tab + '/script.js');
+    if (mod.init) await mod.init();
+    return;
+  }
+  if (LIVE_TABS.has(tab)) {
+    const mod = await import('/' + tab + '/script.js');
+    if (mod.onShow) await mod.onShow();
+  }
 }
 
 window.navigate = async function navigate(tab) {

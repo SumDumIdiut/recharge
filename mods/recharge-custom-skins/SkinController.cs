@@ -9,19 +9,19 @@ namespace RechargeCustomSkins
     internal class SkinSave
     {
         public string CurrentSkinFile { get; set; }
-        public string ExportDir { get; set; }
     }
 
     internal class SkinRuntime
     {
-        public bool IsSheet;
         public Texture2D Texture;
         public Sprite FlatSprite;
+        public Color TintColor = Color.white;
+
+        public bool IsSheet;
         public SkinGridLayout Layout;
         public Dictionary<string, int> RowByClip;
+        public int CellW, CellH;
         public readonly Dictionary<(int row, int frame), Sprite> Cache = new Dictionary<(int, int), Sprite>();
-        public int FileCellW, FileCellH;
-        public int FileYOffset;
     }
 
     internal class SkinController : MonoBehaviour
@@ -37,10 +37,11 @@ namespace RechargeCustomSkins
         private static Material _fallbackMaterial;
 
         private float _originalPixelsPerUnit = 100f;
-        private string _exportDir;
 
         private SkinGridLayout? _canonicalLayout;
-        private Dictionary<Sprite, List<(int row, int frame, bool flipY)>> _vanillaSpriteEntries;
+        private readonly HashSet<(int, int)> _loggedCropKeys = new HashSet<(int, int)>();
+        private readonly HashSet<(int, int)> _debugDumpKeys = new HashSet<(int, int)>();
+        private Dictionary<Sprite, List<(int row, int frame)>> _vanillaSpriteEntries;
 
         private Movement _audioForMovement;
         private int _audioForIndex = int.MinValue;
@@ -57,61 +58,6 @@ namespace RechargeCustomSkins
             _currentIndex = save.CurrentSkinFile == null
                 ? -1
                 : _skins.FindIndex(s => s.folderName == save.CurrentSkinFile);
-            _exportDir = string.IsNullOrEmpty(save.ExportDir) ? DefaultExportDir : save.ExportDir;
-            StartCoroutine(HeartbeatLog());
-        }
-
-        private System.Collections.IEnumerator HeartbeatLog()
-        {
-            var wait = new WaitForSeconds(10f);
-            while (true)
-            {
-                yield return wait;
-                try
-                {
-                    LogHeartbeat();
-                }
-                catch (System.Exception e)
-                {
-                    _host.LogWarning("[CustomSkins] heartbeat log failed: " + e);
-                }
-            }
-        }
-
-        private void LogHeartbeat()
-        {
-            bool hasPlayer = EnsurePlayer();
-            var skinName = _currentIndex >= 0 && _currentIndex < _skins.Count ? _skins[_currentIndex].folderName : "Vanilla";
-            var animator = hasPlayer ? _spriteRenderer.GetComponent<Animator>() : null;
-            string clipInfo = "n/a";
-            if (animator != null)
-            {
-                var infos = animator.GetCurrentAnimatorClipInfo(0);
-                clipInfo = string.Join(",", infos.Select(c => c.clip.name + ":" + c.weight.ToString("F2")));
-            }
-            string sheetInfo = "n/a";
-            if (_currentIndex >= 0 && _currentIndex < _skins.Count && _skins[_currentIndex].runtime != null)
-            {
-                var rt = _skins[_currentIndex].runtime;
-                sheetInfo = rt.IsSheet ? ("sheet rows=" + rt.Layout.Rows + " cols=" + rt.Layout.Cols) : "flat";
-            }
-            var cloneScripts = UnityEngine.Object.FindObjectsByType<clonesScript>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-            _host.Log("[CustomSkins] === heartbeat: skin=" + skinName + " (" + sheetInfo + ") hasPlayer=" + hasPlayer +
-                " rendererEnabled=" + (hasPlayer ? _spriteRenderer.enabled.ToString() : "n/a") +
-                " material=" + (hasPlayer && _spriteRenderer.sharedMaterial != null ? _spriteRenderer.sharedMaterial.name : "null") +
-                " clips=[" + clipInfo + "] clonesScriptCount=" + cloneScripts.Length + " ===");
-        }
-
-        public string DefaultExportDir => Path.Combine(_host.ModDataDir(RechargeCustomSkinsMod.ModId), "template");
-
-        public string ExportDir
-        {
-            get => _exportDir;
-            set
-            {
-                _exportDir = string.IsNullOrEmpty(value) ? DefaultExportDir : value;
-                SaveState();
-            }
         }
 
         public int CurrentIndex => _currentIndex;
@@ -138,7 +84,6 @@ namespace RechargeCustomSkins
             _host.SaveConfig(RechargeCustomSkinsMod.ModId, new SkinSave
             {
                 CurrentSkinFile = _currentIndex >= 0 ? _skins[_currentIndex].folderName : null,
-                ExportDir = _exportDir == DefaultExportDir ? null : _exportDir,
             });
         }
 
@@ -188,10 +133,21 @@ namespace RechargeCustomSkins
 
         private string SoundsDir(int index) => Path.Combine(_skinsDir, _skins[index].folderName, "sounds");
 
+        private const int Gutter = 2;
+        private const float ReferenceCellSize = 256f; // Downloads/Character frames are 256x256
+
+        // Sheet classification needs the live grid layout, which is computed
+        // asynchronously (see EnsureLayoutComputing) to avoid a synchronous
+        // allocation burst. Until it resolves, a skin's runtime is left
+        // uncached so it's re-evaluated next frame instead of being
+        // permanently misclassified as flat.
         private SkinRuntime EnsureRuntime(int index)
         {
             var (folderName, bytes, runtime) = _skins[index];
             if (runtime != null) return runtime;
+
+            EnsureLayoutComputing();
+            if (_layoutState == LayoutState.Computing) return null;
 
             runtime = new SkinRuntime();
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
@@ -202,37 +158,18 @@ namespace RechargeCustomSkins
                 return runtime;
             }
             runtime.Texture = tex;
+            runtime.TintColor = ComputeTintColor(tex);
 
-            if (EnsurePlayer())
+            if (_layoutState == LayoutState.Ready && LooksLikeGrid(tex, _canonicalLayout.Value, out int cellW, out int cellH))
             {
-                var layout = GetCanonicalLayout();
-                if (layout.HasValue)
-                {
-                    _host.Log("[CustomSkins] '" + folderName + "' live grid layout: " + layout.Value.TexW + "x" + layout.Value.TexH +
-                        " (file is " + tex.width + "x" + tex.height + "), rows=[" +
-                        string.Join(", ", layout.Value.RowClips.Select((c, i) => i + ":" + c.name + "x" + c.frameCount)) + "]");
-                }
-                if (layout.HasValue && LooksLikeGrid(tex, layout.Value, out var fileCellW, out var fileCellH))
-                {
-                    runtime.FileCellW = fileCellW;
-                    runtime.FileCellH = fileCellH;
-                    int formulaH = layout.Value.Gutter + layout.Value.Rows * (fileCellH + layout.Value.Gutter);
-                    runtime.FileYOffset = Mathf.Max(0, tex.height - formulaH);
-                    if (tex.width != layout.Value.TexW || tex.height != layout.Value.TexH)
-                    {
-                        _host.Log("[CustomSkins] '" + folderName + "' is " + tex.width + "x" + tex.height +
-                            " (cell " + fileCellW + "x" + fileCellH + "), live grid is " + layout.Value.TexW + "x" + layout.Value.TexH +
-                            " (cell " + layout.Value.CellW + "x" + layout.Value.CellH + ") - masking per-cell onto the live sprite");
-                    }
-                    runtime.IsSheet = true;
-                    runtime.Layout = layout.Value;
-                    runtime.RowByClip = new Dictionary<string, int>();
-                    for (int r = 0; r < layout.Value.RowClips.Count; r++) runtime.RowByClip[layout.Value.RowClips[r].name] = r;
-                }
-                else if (layout.HasValue)
-                {
-                    _host.LogWarning("[CustomSkins] '" + folderName + "' did not match the live grid (not a recognizable exported sheet) - using flat image");
-                }
+                var layout = _canonicalLayout.Value;
+                runtime.IsSheet = true;
+                runtime.Layout = layout;
+                runtime.CellW = cellW;
+                runtime.CellH = cellH;
+                runtime.RowByClip = new Dictionary<string, int>();
+                for (int r = 0; r < layout.RowClips.Count; r++) runtime.RowByClip[layout.RowClips[r].name] = r;
+                _host.Log($"[CustomSkins] '{folderName}' recognized as a {layout.Rows}x{layout.Cols} sheet (cell {cellW}x{cellH})");
             }
 
             if (!runtime.IsSheet)
@@ -245,76 +182,111 @@ namespace RechargeCustomSkins
         }
 
         private static readonly Color32 GridLineColor = new Color32(255, 0, 220, 255);
+        private const int GridLineSearchRadius = 3;
+        private const int GridLineColorTolerance = 60;
 
-        private static bool LooksLikeGrid(Texture2D tex, SkinGridLayout layout, out int fileCellW, out int fileCellH)
+        // Tolerant of resize/recompress blur - not an exact pixel match.
+        private static bool LooksLikeGrid(Texture2D tex, SkinGridLayout layout, out int cellW, out int cellH)
         {
-            int gutter = layout.Gutter;
-            fileCellW = layout.Cols > 0 ? (tex.width - gutter) / layout.Cols - gutter : layout.CellW;
-            fileCellH = layout.Rows > 0 ? (tex.height - gutter) / layout.Rows - gutter : layout.CellH;
-            if (fileCellW <= 0 || fileCellH <= 0) return false;
+            cellW = (tex.width - Gutter) / layout.Cols - Gutter;
+            cellH = (tex.height - Gutter) / layout.Rows - Gutter;
+            if (cellW <= 0 || cellH <= 0) return false;
 
             var pixels = tex.GetPixels32();
-            int w = tex.width;
-            if (!ColorEquals(pixels[0], GridLineColor)) return false;
-            if (!ColorEquals(pixels[(tex.height - 1) * w], GridLineColor)) return false;
+            int w = tex.width, h = tex.height;
+            if (!HasGridLineNear(pixels, w, h, 0, 0)) return false;
+            if (!HasGridLineNear(pixels, w, h, 0, h - 1)) return false;
             if (layout.Cols > 1)
             {
-                int xDivider = gutter + fileCellW;
-                if (xDivider >= w || !ColorEquals(pixels[xDivider], GridLineColor)) return false;
+                int xDivider = Gutter + cellW;
+                if (xDivider >= w || !HasGridLineNear(pixels, w, h, xDivider, 0)) return false;
             }
             return true;
         }
 
-        private static bool ColorEquals(Color32 a, Color32 b) => a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
-
-        private SkinGridLayout? GetCanonicalLayout()
+        private static bool HasGridLineNear(Color32[] pixels, int w, int h, int x, int y)
         {
-            if (_canonicalLayout.HasValue) return _canonicalLayout;
-            if (!EnsurePlayer()) return null;
+            for (int dy = -GridLineSearchRadius; dy <= GridLineSearchRadius; dy++)
+            {
+                int sy = y + dy;
+                if (sy < 0 || sy >= h) continue;
+                for (int dx = -GridLineSearchRadius; dx <= GridLineSearchRadius; dx++)
+                {
+                    int sx = x + dx;
+                    if (sx < 0 || sx >= w) continue;
+                    if (IsGridLineColor(pixels[sy * w + sx])) return true;
+                }
+            }
+            return false;
+        }
 
-            var layout = TemplateExporter.ComputeGridLayout(_spriteRenderer.gameObject, _host);
-            if (!layout.HasValue) return null;
+        private static bool IsGridLineColor(Color32 c) =>
+            System.Math.Abs(c.r - GridLineColor.r) + System.Math.Abs(c.g - GridLineColor.g) + System.Math.Abs(c.b - GridLineColor.b) <= GridLineColorTolerance
+            && c.a > 200;
+
+        // A skin's average opaque, non-guide-line color - used as a stand-in
+        // tint for clips that have no custom row (e.g. Die, which has no
+        // source art to build a row from at all). Not exact for a
+        // multi-hue skin, but far closer than showing fully vanilla colors.
+        private static Color ComputeTintColor(Texture2D tex)
+        {
+            var pixels = tex.GetPixels32();
+            long r = 0, g = 0, b = 0;
+            int count = 0;
+            foreach (var p in pixels)
+            {
+                if (p.a < 200) continue;
+                if (IsGridLineColor(p)) continue;
+                r += p.r; g += p.g; b += p.b;
+                count++;
+            }
+            if (count == 0) return Color.white;
+            return new Color(r / 255f / count, g / 255f / count, b / 255f / count, 1f);
+        }
+
+        private enum LayoutState { NotStarted, Computing, Ready, Failed }
+        private LayoutState _layoutState = LayoutState.NotStarted;
+
+        private void EnsureLayoutComputing()
+        {
+            if (_layoutState != LayoutState.NotStarted) return;
+            if (!EnsurePlayer()) return;
+            _layoutState = LayoutState.Computing;
+            StartCoroutine(TemplateGrid.ComputeLayoutCoroutine(_spriteRenderer.gameObject, _host, OnLayoutComputed));
+        }
+
+        private void OnLayoutComputed(SkinGridLayout? layout)
+        {
             _canonicalLayout = layout;
+            if (!layout.HasValue)
+            {
+                _layoutState = LayoutState.Failed;
+                return;
+            }
 
-            _vanillaSpriteEntries = new Dictionary<Sprite, List<(int, int, bool)>>();
+            _vanillaSpriteEntries = new Dictionary<Sprite, List<(int, int)>>();
             for (int r = 0; r < layout.Value.RowFrameSprites.Count; r++)
             {
                 var frames = layout.Value.RowFrameSprites[r];
-                var flips = layout.Value.RowFrameFlipY[r];
                 for (int f = 0; f < frames.Count; f++)
                 {
                     if (frames[f] == null) continue;
                     if (!_vanillaSpriteEntries.TryGetValue(frames[f], out var list))
                     {
-                        list = new List<(int, int, bool)>();
+                        list = new List<(int, int)>();
                         _vanillaSpriteEntries[frames[f]] = list;
                     }
-                    list.Add((r, f, flips[f]));
+                    list.Add((r, f));
                 }
             }
-            _host.Log("[CustomSkins] built vanilla sprite->(row,frame) map: " + _vanillaSpriteEntries.Count + " distinct sprite(s) across " + layout.Value.RowClips.Count + " clips");
-            for (int r = 0; r < layout.Value.RowFrameFlipY.Count; r++)
-            {
-                for (int f = 0; f < layout.Value.RowFrameFlipY[r].Count; f++)
-                {
-                    if (layout.Value.RowFrameFlipY[r][f])
-                        _host.Log("[CustomSkins] flip cell: row=" + r + " (" + layout.Value.RowClips[r].name + ") frame=" + f);
-                }
-            }
-            return _canonicalLayout;
+            _layoutState = LayoutState.Ready;
         }
 
-        public bool TryGetVanillaRowFrame(Sprite vanillaSprite, bool currentFlipY, out (int row, int frame, bool flipY) match)
+        public bool TryGetVanillaRowFrame(Sprite vanillaSprite, out (int row, int frame) match)
         {
-            GetCanonicalLayout();
             match = default;
             if (vanillaSprite == null || _vanillaSpriteEntries == null) return false;
             if (!_vanillaSpriteEntries.TryGetValue(vanillaSprite, out var list) || list.Count == 0) return false;
-
-            foreach (var entry in list)
-            {
-                if (entry.Item3 == currentFlipY) { match = entry; return true; }
-            }
             match = list[0];
             return true;
         }
@@ -332,59 +304,69 @@ namespace RechargeCustomSkins
             Sprite vanillaSprite = row < layout.RowFrameSprites.Count && frame < layout.RowFrameSprites[row].Count
                 ? layout.RowFrameSprites[row][frame] : null;
             if (vanillaSprite == null) return null;
-            bool flip = row < layout.RowFrameFlipY.Count && frame < layout.RowFrameFlipY[row].Count && layout.RowFrameFlipY[row][frame];
 
             int canvasW = Mathf.Max(1, Mathf.RoundToInt(vanillaSprite.textureRect.width));
             int canvasH = Mathf.Max(1, Mathf.RoundToInt(vanillaSprite.textureRect.height));
 
-            int rowFromBottom = layout.Rows - 1 - row;
-            int cellOriginX = layout.Gutter + frame * (runtime.FileCellW + layout.Gutter);
-            int cellOriginY = runtime.FileYOffset + layout.Gutter + rowFromBottom * (runtime.FileCellH + layout.Gutter);
-            var customColors = runtime.Texture.GetPixels(cellOriginX, cellOriginY, runtime.FileCellW, runtime.FileCellH);
-
-            // The exported cell is padded to a shared, worst-case size across
-            // every frame in the sheet - this frame's actual art only fills
-            // part of it, so find that tight sub-rectangle before mapping it
-            // onto the (much smaller) live mask.
-            int tightX0 = runtime.FileCellW, tightY0 = runtime.FileCellH, tightX1 = -1, tightY1 = -1;
-            for (int y = 0; y < runtime.FileCellH; y++)
+            if (_loggedCropKeys.Add(key))
             {
-                int rowBase = y * runtime.FileCellW;
-                for (int x = 0; x < runtime.FileCellW; x++)
-                {
-                    if (customColors[rowBase + x].a == 0) continue;
-                    if (x < tightX0) tightX0 = x;
-                    if (x > tightX1) tightX1 = x;
-                    if (y < tightY0) tightY0 = y;
-                    if (y > tightY1) tightY1 = y;
-                }
+                _host.Log($"[CustomSkins] crop diag row={row} frame={frame} vanillaSprite.rect={vanillaSprite.rect} " +
+                    $"textureRect={vanillaSprite.textureRect} textureRectOffset={vanillaSprite.textureRectOffset} " +
+                    $"pivot={vanillaSprite.pivot} pixelsPerUnit={vanillaSprite.pixelsPerUnit} " +
+                    $"cellW={runtime.CellW} cellH={runtime.CellH} canvasW={canvasW} canvasH={canvasH}");
             }
 
+            // A cell holds the FULL, untrimmed sprite bounds (same coordinate
+            // space as vanilla's own sprite.rect - a raw 256x256 source frame
+            // dropped into a cell unmodified already has its content at the
+            // right place). Crop to exactly the trimmed sub-region vanilla
+            // itself uses (textureRectOffset/textureRect) so alignment
+            // matches vanilla exactly instead of being guessed. (An earlier
+            // ad-hoc template used its own bottom-anchored+centered
+            // convention instead, which is why it produced blank/jittery
+            // output here - fix is to build skins that match this
+            // convention, not to keep guessing the template's layout.)
+            int rowFromBottom = layout.Rows - 1 - row;
+            int cellOriginX = Gutter + frame * (runtime.CellW + Gutter);
+            int cellOriginY = Gutter + rowFromBottom * (runtime.CellH + Gutter);
+            var cellColors = runtime.Texture.GetPixels(cellOriginX, cellOriginY, runtime.CellW, runtime.CellH);
+
+            float scale = runtime.CellW / ReferenceCellSize;
             var outPixels = new Color32[canvasW * canvasH];
-            if (tightX1 >= tightX0 && tightY1 >= tightY0)
+            for (int y = 0; y < canvasH; y++)
             {
-                int tightW = tightX1 - tightX0 + 1;
-                int tightH = tightY1 - tightY0 + 1;
-                for (int y = 0; y < canvasH; y++)
+                int srcY = Mathf.RoundToInt((vanillaSprite.textureRectOffset.y + y) * scale);
+                if (srcY < 0 || srcY >= runtime.CellH) continue;
+                int rowBase = srcY * runtime.CellW;
+                for (int x = 0; x < canvasW; x++)
                 {
-                    int sampleY = flip ? (canvasH - 1 - y) : y;
-                    int srcY = tightY0 + (canvasH <= 1 ? 0 : Mathf.Clamp(sampleY * tightH / canvasH, 0, tightH - 1));
-                    for (int x = 0; x < canvasW; x++)
-                    {
-                        int srcX = tightX0 + (canvasW <= 1 ? 0 : Mathf.Clamp(x * tightW / canvasW, 0, tightW - 1));
-                        var c = customColors[srcY * runtime.FileCellW + srcX];
-                        if (c.a > 0) outPixels[y * canvasW + x] = c;
-                    }
+                    int srcX = Mathf.RoundToInt((vanillaSprite.textureRectOffset.x + x) * scale);
+                    if (srcX < 0 || srcX >= runtime.CellW) continue;
+                    outPixels[y * canvasW + x] = cellColors[rowBase + srcX];
                 }
             }
             var canvas = new Texture2D(canvasW, canvasH, TextureFormat.RGBA32, false);
             canvas.SetPixels32(outPixels);
             canvas.Apply();
 
-            float rawPivotX = vanillaSprite.pivot.x - vanillaSprite.textureRectOffset.x;
-            float rawPivotY = vanillaSprite.pivot.y - vanillaSprite.textureRectOffset.y;
-            float pivotX = rawPivotX;
-            float pivotY = flip ? (canvasH - rawPivotY) : rawPivotY;
+            if (_debugDumpKeys.Add(key))
+            {
+                try
+                {
+                    var dumpDir = Path.Combine(_host.ModDataDir(RechargeCustomSkinsMod.ModId), "debug-dump");
+                    Directory.CreateDirectory(dumpDir);
+                    File.WriteAllBytes(Path.Combine(dumpDir, $"cropped_r{row}_f{frame}.png"), canvas.EncodeToPNG());
+                    var fullCellTex = new Texture2D(runtime.CellW, runtime.CellH, TextureFormat.RGBA32, false);
+                    fullCellTex.SetPixels(cellColors);
+                    fullCellTex.Apply();
+                    File.WriteAllBytes(Path.Combine(dumpDir, $"fullcell_r{row}_f{frame}.png"), fullCellTex.EncodeToPNG());
+                    _host.Log($"[CustomSkins] dumped debug PNGs for row={row} frame={frame} to {dumpDir}");
+                }
+                catch (System.Exception e) { _host.LogWarning("[CustomSkins] debug dump failed: " + e); }
+            }
+
+            float pivotX = vanillaSprite.pivot.x - vanillaSprite.textureRectOffset.x;
+            float pivotY = vanillaSprite.pivot.y - vanillaSprite.textureRectOffset.y;
             var sprite = Sprite.Create(canvas, new Rect(0, 0, canvasW, canvasH),
                 new Vector2(pivotX / canvasW, pivotY / canvasH), vanillaSprite.pixelsPerUnit);
             runtime.Cache[key] = sprite;
@@ -399,7 +381,6 @@ namespace RechargeCustomSkins
         {
             if (_animator == null) _animator = _spriteRenderer.GetComponent<Animator>();
             var animator = _animator;
-            int row = 0;
             _clipInfoBuffer.Clear();
             if (animator != null) animator.GetCurrentAnimatorClipInfo(0, _clipInfoBuffer);
 
@@ -408,9 +389,29 @@ namespace RechargeCustomSkins
             {
                 if (dominant == null || ci.weight > dominant.Value.weight) dominant = ci;
             }
-            if (dominant.HasValue && runtime.RowByClip.TryGetValue(dominant.Value.clip.name, out var matchedRow))
+            if (!dominant.HasValue) return null;
+
+            // Vanilla's "Die" clip isn't a real animation - it has exactly one
+            // sprite keyframe, and that sprite is literally Dash_0001 (verified
+            // against the game's own AnimationClip data: same textureRectOffset
+            // and size as Dash row/frame 1). There's no dedicated death artwork
+            // to paint, so every skin's existing Dash row already has the right
+            // cell - just reuse it instead of needing a new row.
+            if (dominant.Value.clip.name == "Die")
             {
-                row = matchedRow;
+                return runtime.RowByClip.TryGetValue("Dash", out var dashRow)
+                    ? GetCustomCellSprite(runtime, dashRow, 1)
+                    : null;
+            }
+
+            // A clip outside SupportedRowClipNames has no row to draw from -
+            // returning null here lets the vanilla Animator-driven
+            // sprite/material show through untouched instead of freezing on
+            // a stale/wrong row (previously defaulted to row 0/Idle, which
+            // silently ate clips like the death animation).
+            if (!runtime.RowByClip.TryGetValue(dominant.Value.clip.name, out var row))
+            {
+                return null;
             }
 
             if (row != _loggedRow)
@@ -424,11 +425,6 @@ namespace RechargeCustomSkins
             var stateInfo = animator != null ? animator.GetCurrentAnimatorStateInfo(0) : default;
             float frac = animator != null ? Mathf.Repeat(stateInfo.normalizedTime, 1f) : 0f;
             int frame = Mathf.Clamp(Mathf.FloorToInt(frac * frameCount), 0, frameCount - 1);
-
-            if (row < runtime.Layout.RowFrameFlipY.Count && frame < runtime.Layout.RowFrameFlipY[row].Count && runtime.Layout.RowFrameFlipY[row][frame])
-            {
-                _spriteRenderer.flipY = false;
-            }
 
             return GetCustomCellSprite(runtime, row, frame);
         }
@@ -471,12 +467,24 @@ namespace RechargeCustomSkins
             if (skinActive)
             {
                 var runtime = EnsureRuntime(_currentIndex);
-                var sprite = runtime.IsSheet ? PickSheetSprite(runtime) : runtime.FlatSprite;
+                var sprite = runtime == null ? null : (runtime.IsSheet ? PickSheetSprite(runtime) : runtime.FlatSprite);
                 if (sprite != null)
                 {
                     _spriteRenderer.sprite = sprite;
                     var fallback = GetFallbackMaterial();
                     if (_spriteRenderer.sharedMaterial != fallback) _spriteRenderer.material = fallback;
+                    if (_spriteRenderer.color != Color.white) _spriteRenderer.color = Color.white;
+                }
+                else
+                {
+                    // No row for the currently playing clip (e.g. Die, which
+                    // has no source art at all) - leave the Animator-driven
+                    // vanilla sprite/material alone, but multiply-tint it
+                    // towards the skin's own color instead of showing fully
+                    // vanilla colors during it.
+                    if (_spriteRenderer.sharedMaterial != _originalMaterial) _spriteRenderer.material = _originalMaterial;
+                    var tint = runtime?.TintColor ?? Color.white;
+                    if (_spriteRenderer.color != tint) _spriteRenderer.color = tint;
                 }
                 CloneSkinApplier.Apply(this, runtime);
 
@@ -497,6 +505,7 @@ namespace RechargeCustomSkins
             else
             {
                 if (_spriteRenderer.sharedMaterial != _originalMaterial) _spriteRenderer.material = _originalMaterial;
+                if (_spriteRenderer.color != Color.white) _spriteRenderer.color = Color.white;
                 CloneSkinApplier.RestoreVanilla();
 
                 if (_movement != _audioForMovement || _audioForIndex != -1)
@@ -512,35 +521,6 @@ namespace RechargeCustomSkins
                     _globalAudioForIndex = -1;
                 }
             }
-        }
-
-        public bool ExportTemplate(out string message)
-        {
-            if (!EnsurePlayer())
-            {
-                message = "Get into a course first, then export.";
-                return false;
-            }
-            var result = TemplateExporter.Export(_spriteRenderer.gameObject, _exportDir, _skinsDir, _host);
-            if (result != null)
-            {
-                HubTemplateUploader.Upload(this, _host, result, Path.Combine(_exportDir, "sounds"));
-                message = $"Exported to {_exportDir} and uploaded to the hub.";
-            }
-            else
-            {
-                message = "Export failed - see Player.log";
-            }
-            return result != null;
-        }
-
-        public string StatusText()
-        {
-            if (_skins.Count == 0) return "Skin: none found";
-            var current = _currentIndex >= 0 && _currentIndex < _skins.Count
-                ? _skins[_currentIndex].folderName
-                : "Vanilla";
-            return $"Skin: {current}";
         }
     }
 }

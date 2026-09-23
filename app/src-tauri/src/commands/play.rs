@@ -185,6 +185,10 @@ pub fn launch_game(app: AppHandle, modded: bool) -> Result<LaunchMethod, String>
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     let game_dir = PathBuf::from(&game_path);
 
+    if modded && super::steam::info_for_path(&game_dir).map(|i| i.variant) == Some("Demo".to_string()) {
+        return Err("The demo can only be played vanilla - mods aren't supported on it.".into());
+    }
+
     let exe = find_exe(&game_dir)
         .ok_or_else(|| format!("Couldn't find a game executable (.exe or .x86_64) in {game_path}"))?;
     if is_process_running(&exe.file_name()) {

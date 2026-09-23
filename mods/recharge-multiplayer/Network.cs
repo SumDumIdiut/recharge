@@ -538,6 +538,7 @@ public class MpNetworkManager : MonoBehaviour
 	private float _stateSendAccumulator;
 	private const float StateSendInterval = 1f / 60f;
 	private bool _chatRowEnsured;
+	private float _nextChatRowCheckTime;
 	private float _lastStateLogTime = -999f;
 
 	private static readonly string FlagPath = System.IO.Path.Combine(Application.persistentDataPath, "mp-test.flag");
@@ -754,7 +755,18 @@ public class MpNetworkManager : MonoBehaviour
 
 	private void Update()
 	{
-		if (!_chatRowEnsured) _chatRowEnsured = EnsureChatKeybindRow();
+		// FindObjectsByType<KeybindSetterItemScript> every frame is wasteful
+		// while the menu isn't even open, and doing this plus the reflection
+		// + Instantiate/Destroy work below in the same frame the keybinds
+		// list first builds piles more allocation onto Unity's own already
+		// reflection-heavy layout pass for that exact menu - throttling to
+		// roughly twice a second keeps this responsive without adding to
+		// that burst every single frame.
+		if (!_chatRowEnsured && Time.unscaledTime >= _nextChatRowCheckTime)
+		{
+			_nextChatRowCheckTime = Time.unscaledTime + 0.5f;
+			_chatRowEnsured = EnsureChatKeybindRow();
+		}
 
 		while (_net.TryDequeue(out var line)) HandleLine(line);
 

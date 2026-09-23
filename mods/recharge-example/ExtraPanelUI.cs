@@ -4,10 +4,8 @@ using UnityEngine;
 using UnityEngine.UI;
 using Recharge.ModApi;
 
-// The third pause-menu panel ExampleMod installs - coroutines, deeper Input
-// System usage, world/screen math, flipbook sprite animation, and a physics
-// raycast, each wired to a button/label pair and echoed into the same kind
-// of scrolling log AdvancedPanelUI uses.
+// Coroutines, Input System, world/screen math, flipbook animation, and a
+// physics raycast, each wired to a button/label pair.
 internal class ExtraPanelUI : MonoBehaviour
 {
     private IRechargeHost _host;
@@ -27,19 +25,15 @@ internal class ExtraPanelUI : MonoBehaviour
     {
         _host = host;
         _inputDemo = inputDemo;
+        _appendLog = msg => host.Log(msg);
 
         var root = panel.transform;
-        var panelRt = panel.GetComponent<RectTransform>();
-        if (panelRt != null) panelRt.sizeDelta = new Vector2(680f, 680f);
-
-        CreateLabel(root, font, new Vector2(0, 290), new Vector2(620, 30), "Extra Demo - coroutines, input, camera math, physics").fontSize = 20;
 
         BuildCoroutineRows(root, font);
         BuildInputRows(root, font);
-        BuildBezierRow(root, font);
+        BuildMotionRow(root, font);
         BuildFlipbookRow(root, font);
         BuildPhysicsAndCameraRows(root, font);
-        BuildLog(root, font);
 
         _flipbook = new FlipbookSpriteDemo(host);
         inputDemo.KeyRebound += key =>
@@ -59,8 +53,12 @@ internal class ExtraPanelUI : MonoBehaviour
 
     private void BuildCoroutineRows(Transform root, TMP_FontAsset font)
     {
-        var countdownBtn = AdvancedWidgets.CreateFlatButton(root, font, "Countdown", new Vector2(-150, 245), new Vector2(220, 34), "Start 3s Countdown");
-        _countdownLabel = CreateLabel(root, font, new Vector2(180, 245), new Vector2(220, 30), "", TextAlignmentOptions.MidlineLeft);
+        const float btnY = 365f;
+        const float labelY = 325f;
+        const float colWidth = 270f;
+
+        var countdownBtn = PanelWidgets.CreateButton(root, font, "Countdown", new Vector2(-280, btnY), new Vector2(colWidth, 36), "Start 3s Countdown");
+        _countdownLabel = PanelWidgets.CreateLabel(root, font, new Vector2(-280, labelY), new Vector2(colWidth, 28), "", fontSize: 15f);
         countdownBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
             CoroutineDemo.RunCountdown(_host, 3,
@@ -68,8 +66,8 @@ internal class ExtraPanelUI : MonoBehaviour
                 () => { _countdownLabel.text = "Go!"; _appendLog("Countdown finished."); });
         });
 
-        var delayedBtn = AdvancedWidgets.CreateFlatButton(root, font, "DelayedAction", new Vector2(-150, 200), new Vector2(220, 34), "Log Something In 3s");
-        _delayedLabel = CreateLabel(root, font, new Vector2(180, 200), new Vector2(220, 30), "", TextAlignmentOptions.MidlineLeft);
+        var delayedBtn = PanelWidgets.CreateButton(root, font, "DelayedAction", new Vector2(0, btnY), new Vector2(colWidth, 36), "Log Something In 3s");
+        _delayedLabel = PanelWidgets.CreateLabel(root, font, new Vector2(0, labelY), new Vector2(colWidth, 28), "", fontSize: 15f);
         delayedBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
             _delayedLabel.text = "Waiting...";
@@ -80,8 +78,8 @@ internal class ExtraPanelUI : MonoBehaviour
             });
         });
 
-        var waitBtn = AdvancedWidgets.CreateFlatButton(root, font, "WaitForPlayer", new Vector2(-150, 155), new Vector2(220, 34), "Wait For Player To Exist");
-        _waitPlayerLabel = CreateLabel(root, font, new Vector2(180, 155), new Vector2(220, 30), "", TextAlignmentOptions.MidlineLeft);
+        var waitBtn = PanelWidgets.CreateButton(root, font, "WaitForPlayer", new Vector2(280, btnY), new Vector2(colWidth, 36), "Wait For Player To Exist");
+        _waitPlayerLabel = PanelWidgets.CreateLabel(root, font, new Vector2(280, labelY), new Vector2(colWidth, 28), "", fontSize: 15f);
         waitBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
             _waitPlayerLabel.text = "Waiting...";
@@ -95,8 +93,8 @@ internal class ExtraPanelUI : MonoBehaviour
 
     private void BuildInputRows(Transform root, TMP_FontAsset font)
     {
-        var rebindBtn = AdvancedWidgets.CreateFlatButton(root, font, "Rebind", new Vector2(-150, 110), new Vector2(220, 34), "Rebind Ping Key");
-        _rebindLabel = CreateLabel(root, font, new Vector2(180, 110), new Vector2(220, 30), $"Current: {_inputDemo?.PingKeyName}", TextAlignmentOptions.MidlineLeft);
+        var rebindBtn = PanelWidgets.CreateButton(root, font, "Rebind", new Vector2(-260, 215), new Vector2(230, 36), "Rebind Ping Key");
+        _rebindLabel = PanelWidgets.CreateLabel(root, font, new Vector2(30, 215), new Vector2(270, 32), $"Current: {_inputDemo?.PingKeyName}", fontSize: 17f, align: TextAlignmentOptions.MidlineLeft);
         rebindBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
             _rebindLabel.text = "Press any key...";
@@ -104,45 +102,56 @@ internal class ExtraPanelUI : MonoBehaviour
             _appendLog("Armed ping-key rebind - press any key.");
         });
 
-        _liveInputLabel = CreateLabel(root, font, new Vector2(0, 65), new Vector2(600, 28), "Mouse: (0, 0)");
-        _liveInputLabel.alignment = TextAlignmentOptions.MidlineLeft;
-        _liveInputLabel.fontSize = 15;
+        _liveInputLabel = PanelWidgets.CreateLabel(root, font, new Vector2(0, 175), new Vector2(780, 30), "Mouse: (0, 0)",
+            fontSize: 16f, align: TextAlignmentOptions.MidlineLeft);
     }
 
-    private void BuildBezierRow(Transform root, TMP_FontAsset font)
-    {
-        var track = new GameObject("BezierTrack", typeof(RectTransform));
-        track.transform.SetParent(root, false);
-        ((RectTransform)track.transform).anchoredPosition = new Vector2(0, 20);
-        ((RectTransform)track.transform).sizeDelta = new Vector2(600, 40);
+    // Picking a PanelMotion.MotionPath and hitting Run animates MotionDot
+    // between the same two endpoints along that curve.
+    private static readonly string[] MotionOptionLabels = { "Bezier Curve", "Linear", "Circular Orbit", "Bounce", "Zigzag", "Wave", "Elastic" };
+    private static readonly MotionPath[] MotionOptionPaths = { MotionPath.QuadraticBezier, MotionPath.Linear, MotionPath.Circular, MotionPath.Bounce, MotionPath.Zigzag, MotionPath.Wave, MotionPath.Elastic };
+    private int _selectedMotionIndex;
 
-        var dotGo = new GameObject("BezierDot", typeof(RectTransform), typeof(Image));
+    private void BuildMotionRow(Transform root, TMP_FontAsset font)
+    {
+        var track = new GameObject("MotionTrack", typeof(RectTransform));
+        track.transform.SetParent(root, false);
+        ((RectTransform)track.transform).anchoredPosition = new Vector2(-160, 25);
+        ((RectTransform)track.transform).sizeDelta = new Vector2(440, 40);
+
+        var dotGo = new GameObject("MotionDot", typeof(RectTransform), typeof(Image));
         dotGo.transform.SetParent(track.transform, false);
         var dotRt = (RectTransform)dotGo.transform;
-        dotRt.sizeDelta = new Vector2(20, 20);
-        dotRt.anchoredPosition = new Vector2(-280, -15);
+        dotRt.sizeDelta = new Vector2(22, 22);
+        dotRt.anchoredPosition = new Vector2(-200, 0);
         dotGo.GetComponent<Image>().color = new Color(1f, 0.6f, 0.2f);
+        var from = new Vector2(-200, 0);
+        var to = new Vector2(200, 0);
 
-        var runBtn = AdvancedWidgets.CreateFlatButton(root, font, "RunBezier", new Vector2(0, -15), new Vector2(220, 30), "Run Bezier Move");
+        var runBtn = PanelWidgets.CreateButton(root, font, "RunMotion", new Vector2(300, 25), new Vector2(240, 38), "Run");
         runBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
-            StopCoroutine(nameof(BezierMoveRoutine));
-            StartCoroutine(BezierMoveRoutine(dotRt, new Vector2(-280, -15), new Vector2(0, 15), new Vector2(280, -15), 1.2f));
-            _appendLog("Running a quadratic-bezier UI move over 1.2s.");
+            StopCoroutine(nameof(MotionRoutine));
+            var path = MotionOptionPaths[_selectedMotionIndex];
+            StartCoroutine(MotionRoutine(dotRt, from, to, 1.2f, path));
+            _appendLog($"Running a {MotionOptionLabels[_selectedMotionIndex]} UI move over 1.2s.");
         });
+
+        PanelWidgets.CreateDropdown(root, font, new Vector2(300, 70), new Vector2(240, 38), MotionOptionLabels, _selectedMotionIndex,
+            index => _selectedMotionIndex = index,
+            onOpenChanged: open => runBtn.SetActive(!open));
     }
 
-    private IEnumerator BezierMoveRoutine(RectTransform dot, Vector2 p0, Vector2 p1, Vector2 p2, float duration)
+    private IEnumerator MotionRoutine(RectTransform dot, Vector2 from, Vector2 to, float duration, MotionPath path)
     {
         var elapsed = 0f;
         while (elapsed < duration)
         {
             elapsed += Time.deltaTime;
-            var t = MathAndCameraDemo.EaseInOutSine(elapsed / duration);
-            dot.anchoredPosition = MathAndCameraDemo.QuadraticBezier(p0, p1, p2, t);
+            dot.anchoredPosition = PanelMotion.Evaluate(path, from, to, elapsed / duration);
             yield return null;
         }
-        dot.anchoredPosition = p2;
+        dot.anchoredPosition = to;
     }
 
     private void BuildFlipbookRow(Transform root, TMP_FontAsset font)
@@ -150,12 +159,12 @@ internal class ExtraPanelUI : MonoBehaviour
         var imgGo = new GameObject("FlipbookImage", typeof(RectTransform), typeof(Image));
         imgGo.transform.SetParent(root, false);
         var imgRt = (RectTransform)imgGo.transform;
-        imgRt.anchoredPosition = new Vector2(-260, -60);
-        imgRt.sizeDelta = new Vector2(48, 48);
+        imgRt.anchoredPosition = new Vector2(-370, -80);
+        imgRt.sizeDelta = new Vector2(52, 52);
         var image = imgGo.GetComponent<Image>();
         image.preserveAspect = true;
 
-        var toggleBtn = AdvancedWidgets.CreateFlatButton(root, font, "FlipbookToggle", new Vector2(-40, -60), new Vector2(220, 34), "Play Flipbook");
+        var toggleBtn = PanelWidgets.CreateButton(root, font, "FlipbookToggle", new Vector2(-150, -80), new Vector2(230, 38), "Play Flipbook");
         var label = toggleBtn.transform.Find("Text (TMP)").GetComponent<TMP_Text>();
         toggleBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
@@ -174,8 +183,8 @@ internal class ExtraPanelUI : MonoBehaviour
 
     private void BuildPhysicsAndCameraRows(Transform root, TMP_FontAsset font)
     {
-        var groundBtn = AdvancedWidgets.CreateFlatButton(root, font, "CheckGround", new Vector2(-150, -105), new Vector2(220, 34), "Check Ground Below Player");
-        _groundLabel = CreateLabel(root, font, new Vector2(180, -105), new Vector2(240, 30), "", TextAlignmentOptions.MidlineLeft);
+        var groundBtn = PanelWidgets.CreateButton(root, font, "CheckGround", new Vector2(-220, -150), new Vector2(270, 38), "Check Ground Below Player");
+        _groundLabel = PanelWidgets.CreateLabel(root, font, new Vector2(-220, -185), new Vector2(330, 28), "", fontSize: 15f);
         groundBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
             var player = GameObject.FindGameObjectWithTag("Player");
@@ -185,8 +194,8 @@ internal class ExtraPanelUI : MonoBehaviour
             _appendLog("Ran a Physics2D.Raycast ground check.");
         });
 
-        var screenBtn = AdvancedWidgets.CreateFlatButton(root, font, "ScreenPos", new Vector2(-150, -150), new Vector2(220, 34), "Player's Screen Position");
-        _screenPosLabel = CreateLabel(root, font, new Vector2(180, -150), new Vector2(240, 30), "", TextAlignmentOptions.MidlineLeft);
+        var screenBtn = PanelWidgets.CreateButton(root, font, "ScreenPos", new Vector2(220, -150), new Vector2(270, 38), "Player's Screen Position");
+        _screenPosLabel = PanelWidgets.CreateLabel(root, font, new Vector2(220, -185), new Vector2(330, 28), "", fontSize: 15f);
         screenBtn.GetComponent<Button>().onClick.AddListener(() =>
         {
             var player = GameObject.FindGameObjectWithTag("Player");
@@ -200,27 +209,5 @@ internal class ExtraPanelUI : MonoBehaviour
                 _screenPosLabel.text = "No player / no camera.";
             }
         });
-    }
-
-    private void BuildLog(Transform root, TMP_FontAsset font)
-    {
-        _appendLog = AdvancedWidgets.CreateScrollableLog(root, font, new Vector2(0, -280), new Vector2(640, 150), out _);
-    }
-
-    private static TMP_Text CreateLabel(Transform parent, TMP_FontAsset font, Vector2 pos, Vector2 size, string text, TextAlignmentOptions align = TextAlignmentOptions.Center)
-    {
-        var go = new GameObject("Label", typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-        var rt = (RectTransform)go.transform;
-        rt.anchoredPosition = pos;
-        rt.sizeDelta = size;
-        var tmp = go.AddComponent<TextMeshProUGUI>();
-        tmp.font = font;
-        tmp.fontSize = 16;
-        tmp.alignment = align;
-        tmp.color = Color.white;
-        tmp.text = text;
-        tmp.enableWordWrapping = false;
-        return tmp;
     }
 }

@@ -160,6 +160,14 @@ fn scan_library_all(common_dir: &Path, steamapps_dir: &Path) -> Vec<InstallInfo>
     found
 }
 
+fn variant_sort_key(variant: &str) -> u8 {
+    match variant {
+        "Full Game" => 0,
+        "Playtest" => 1,
+        _ => 2, // Demo, or anything else
+    }
+}
+
 pub fn detect_all() -> Vec<InstallInfo> {
     let mut found = Vec::new();
     for root in library_roots() {
@@ -167,6 +175,9 @@ pub fn detect_all() -> Vec<InstallInfo> {
         let common = steamapps.join("common");
         found.extend(scan_library_all(&common, &steamapps));
     }
+    // Full Game first - it's the one that actually supports mods, so it's
+    // what most actions here care about.
+    found.sort_by_key(|i| variant_sort_key(&i.variant));
     found
 }
 

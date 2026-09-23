@@ -15,6 +15,8 @@ internal class PauseBufferController : MonoBehaviour
 {
     private const float BufferSeconds = 0.12f;
 
+    public bool Enabled { get; set; } = true;
+
     private Movement _movement;
     private InputAction _jumpAction;
     private InputAction _dashAction;
@@ -39,6 +41,14 @@ internal class PauseBufferController : MonoBehaviour
             _wasMenuOpen = false;
             _pendingJump = false;
             _pendingDash = false;
+        }
+
+        if (!Enabled)
+        {
+            _wasMenuOpen = false;
+            _pendingJump = false;
+            _pendingDash = false;
+            return;
         }
 
         var menuOpen = _movement.pauseMenu != null && _movement.pauseMenu.menuOpen;

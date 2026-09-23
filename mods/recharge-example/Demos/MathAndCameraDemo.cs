@@ -7,16 +7,6 @@ internal static class MathAndCameraDemo
 {
     public static float EaseOutCubic(float t) => 1f - Mathf.Pow(1f - Mathf.Clamp01(t), 3f);
 
-    public static float EaseInOutSine(float t) => -(Mathf.Cos(Mathf.PI * Mathf.Clamp01(t)) - 1f) / 2f;
-
-    public static Vector2 QuadraticBezier(Vector2 p0, Vector2 p1, Vector2 p2, float t)
-    {
-        t = Mathf.Clamp01(t);
-        var a = Vector2.Lerp(p0, p1, t);
-        var b = Vector2.Lerp(p1, p2, t);
-        return Vector2.Lerp(a, b, t);
-    }
-
     // A framerate-independent "catch up to target" smoother - unlike a fixed
     // Lerp(a, b, 0.1f) called every frame, this converges at the same real-
     // world speed regardless of the current frame rate.

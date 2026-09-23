@@ -29,6 +29,10 @@
 !.vscode/extensions.json
 .idea
 .DS_Store
+.claude/
+
+# Personal scratch files (test skins/maps/screenshots), not project content
+/other/
 
 # Secrets - never commit
 .env

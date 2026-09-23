@@ -20,7 +20,13 @@ function matchesSearch(haystack) {
   return haystack.toLowerCase().includes(searchTerm.toLowerCase());
 }
 
-function displayName(folderName) {
+// A hub-installed skin's folder is named after a slug of its real name, not
+// the name itself (see HUB_META_FILE on the Rust side), so prefer the real
+// name it recorded there; only prettify the raw folder name as a fallback
+// for locally-added skins that never went through the hub.
+function displayName(s) {
+  if (typeof s === 'object' && s.displayName) return s.displayName;
+  const folderName = typeof s === 'object' ? s.folderName : s;
   return folderName
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -96,8 +102,8 @@ async function loadThumbnails() {
 function renderInstalled() {
   const list = document.getElementById('skins-installed-view');
   const filtered = installedCache
-    .filter((s) => matchesSearch(displayName(s.folderName)))
-    .sort((a, b) => displayName(a.folderName).localeCompare(displayName(b.folderName), undefined, { sensitivity: 'base' }));
+    .filter((s) => matchesSearch(displayName(s)))
+    .sort((a, b) => displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = installedCache.length
       ? '<div class="empty-state">No skins match your search.</div>'
@@ -110,7 +116,7 @@ function renderInstalled() {
     <div class="browse-card">
       ${thumb(thumbCache.get(s.folderName))}
       <div class="browse-card-info">
-        <div class="browse-card-name">${escapeHtml(displayName(s.folderName))}</div>
+        <div class="browse-card-name">${escapeHtml(displayName(s))}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
@@ -137,7 +143,7 @@ function renderBrowse() {
   }
   list.innerHTML = filtered
     .map((entry) => {
-      const installed = installedCache.some((s) => s.folderName === entry.id);
+      const installed = installedCache.some((s) => s.hubId === entry.id);
       const badge = installed
         ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
@@ -179,7 +185,8 @@ window.__skinsSearch = function (value) {
 };
 
 window.__skinConfirmDelete = function (folderName) {
-  if (!confirm(`Delete "${displayName(folderName)}"? This can't be undone.`)) return;
+  const entry = installedCache.find((s) => s.folderName === folderName);
+  if (!confirm(`Delete "${displayName(entry || folderName)}"? This can't be undone.`)) return;
   const { invoke } = window.__TAURI__.core;
   invoke('delete_skin', { folderName })
     .then(refresh)
@@ -308,6 +315,10 @@ export async function init() {
   document.getElementById('skins-upload-confirm').addEventListener('click', submitUpload);
   document.getElementById('skins-upload-browse-btn').addEventListener('click', browseForSkinFolder);
   render();
+  await onShow();
+}
+
+export async function onShow() {
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
 }

@@ -279,9 +279,9 @@ async function refreshLauncherStatus() {
       }
     } else if (info.mapsUpdateAvailable) {
       status.textContent = `v${info.currentVersion} (up to date)`;
-      notes.textContent = `Maps mod needs redeploying to your game: bundled v${info.bundledMapsVersion}, game has v${info.deployedMapsVersion}.`;
+      notes.textContent = `Navigator mod needs redeploying to your game: bundled v${info.bundledMapsVersion}, game has v${info.deployedMapsVersion}.`;
       notes.hidden = false;
-      updateBtn.textContent = 'Redeploy Maps';
+      updateBtn.textContent = 'Redeploy Navigator';
       updateBtn.hidden = false;
     } else {
       status.textContent = `v${info.currentVersion} (up to date)`;

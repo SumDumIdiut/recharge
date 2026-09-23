@@ -57,15 +57,6 @@ namespace RechargeCustomSkins
             }
         }
 
-        // Used by TemplateExporter to bundle a real, playable starting point
-        // for each slot rather than leaving the sounds/ folder empty.
-        public static AudioClip GetVanillaClip(string slotName)
-        {
-            var slot = System.Array.Find(PlayerSoundSlots.All, s => s.Name == slotName);
-            if (slot.Name == null || !Originals.TryGetValue(slot.FieldName, out var original)) return null;
-            return slot.IsArray ? (original as AudioClip[])?.FirstOrDefault() : original as AudioClip;
-        }
-
         public static void RestoreVanilla(Movement movement)
         {
             if (movement == null || _capturedFor != movement) return;

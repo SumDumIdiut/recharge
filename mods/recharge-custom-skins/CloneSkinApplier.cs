@@ -34,10 +34,9 @@ namespace RechargeCustomSkins
                     totalRenderers++;
                     if (runtime.IsSheet)
                     {
-                        if (controller.TryGetVanillaRowFrame(sr.sprite, sr.flipY, out var m))
+                        if (controller.TryGetVanillaRowFrame(sr.sprite, out var m))
                         {
                             sr.sprite = controller.GetCustomCellSprite(runtime, m.row, m.frame);
-                            if (m.flipY) sr.flipY = false;
                             matched++;
                         }
                     }

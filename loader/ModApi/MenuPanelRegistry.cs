@@ -13,17 +13,22 @@ namespace Recharge.ModApi
     {
         private static readonly Dictionary<string, GameObject> _panels = new Dictionary<string, GameObject>();
 
-        public static GameObject GetOrCreate(pauseMenuScript menu, string rowName, string label)
+        public static GameObject GetOrCreate(pauseMenuScript menu, string rowName, string label, GameObject backTarget = null)
         {
-            var mainBit = MenuReflection.MainBit(menu);
+            // backTarget is only ever a parent panel a mod passes in
+            // explicitly (see PauseMenuHelper.GetOrCreatePanel) - that
+            // reference is stable across scene loads (a settingsBit
+            // sibling, same as this panel), unlike mainBit which is rebuilt
+            // every scene load and so must be looked up fresh each call.
+            var effectiveBackTarget = backTarget != null ? backTarget : MenuReflection.MainBit(menu);
 
             if (_panels.TryGetValue(rowName, out var panel) && panel != null)
             {
-                RewireCloseButton(panel, backTarget: mainBit);
+                RewireCloseButton(panel, backTarget: effectiveBackTarget);
                 return panel;
             }
 
-            panel = BuildBlankPanel(menu, rowName, label, backTarget: mainBit);
+            panel = BuildBlankPanel(menu, rowName, label, backTarget: effectiveBackTarget);
             _panels[rowName] = panel;
             return panel;
         }
@@ -89,6 +94,7 @@ namespace Recharge.ModApi
                         clone.SetActive(false);
                         backTarget.SetActive(true);
                     });
+                    clone.AddComponent<PanelEscapeCloser>().CloseButton = btn;
                 }
             }
 

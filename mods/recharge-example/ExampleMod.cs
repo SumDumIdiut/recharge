@@ -96,39 +96,12 @@ public class ExampleMod : IRechargeMod, IExampleModApi
     {
         if (menu == null) return;
 
-        PauseMenuHelper.AddRow(menu, "ExamplePing", "Example: Send a Ping", () =>
-        {
-            _host.Log("Ping row clicked.");
-            _host.Events.Emit("recharge.example.ping", "hello from the pause menu");
-        });
-
-        InstallSimplePanel(menu);
-        InstallAdvancedPanel(menu);
-        InstallExtraPanel(menu);
-    }
-
-    private void InstallSimplePanel(pauseMenuScript menu)
-    {
         var panel = PauseMenuHelper.AddPanelRow(menu, "ExamplePanel", DisplayName);
-        if (panel == null || panel.GetComponent<ExamplePanelUI>() != null) return;
+        if (panel == null || panel.GetComponent<ExampleHubPanelUI>() != null) return;
         var font = FindTitleFont(panel);
-        panel.AddComponent<ExamplePanelUI>().Build(panel, font, _host, _config, Id);
-    }
-
-    private void InstallAdvancedPanel(pauseMenuScript menu)
-    {
-        var panel = PauseMenuHelper.AddPanelRow(menu, "ExampleAdvancedPanel", "Example Mod: Advanced");
-        if (panel == null || panel.GetComponent<AdvancedPanelUI>() != null) return;
-        var font = FindTitleFont(panel);
-        panel.AddComponent<AdvancedPanelUI>().Build(panel, font, _host, Id, _playerPhysicsDemo, _updateLoopDemo, _sceneDemo, _eventsDemo, _extendedConfig);
-    }
-
-    private void InstallExtraPanel(pauseMenuScript menu)
-    {
-        var panel = PauseMenuHelper.AddPanelRow(menu, "ExampleExtraPanel", "Example Mod: Extra");
-        if (panel == null || panel.GetComponent<ExtraPanelUI>() != null) return;
-        var font = FindTitleFont(panel);
-        panel.AddComponent<ExtraPanelUI>().Build(panel, font, _host, Id, _inputDemo);
+        panel.AddComponent<ExampleHubPanelUI>().Build(
+            panel, font, _host, _config, Id,
+            _playerPhysicsDemo, _updateLoopDemo, _sceneDemo, _eventsDemo, _extendedConfig, _inputDemo);
     }
 
     private static TMP_FontAsset FindTitleFont(GameObject panel)

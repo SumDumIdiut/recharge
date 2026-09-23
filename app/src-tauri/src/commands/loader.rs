@@ -89,7 +89,13 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     let script = find_build_script(app)?;
 
-    let appid = super::steam::info_for_path(std::path::Path::new(&game_path)).and_then(|i| i.appid);
+    let info = super::steam::info_for_path(std::path::Path::new(&game_path));
+    if info.as_ref().map(|i| i.variant.as_str()) == Some("Demo") {
+        return Err(
+            "The demo can't be modded - only the full game supports RechargeLoader. Switch to your full game install first.".into(),
+        );
+    }
+    let appid = info.and_then(|i| i.appid);
 
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);

@@ -237,15 +237,28 @@ window.__homeAccountBadgeClick = function () {
   }
 };
 
+// The demo can't be modded at all - only the full game can. Hides the
+// mod-management entry points and the Modded launch tile rather than
+// leaving them there to fail with a server-side error every time.
+function applyVariantUi(active) {
+  const isDemo = active?.variant === 'Demo';
+  document.getElementById('home-modded-tile').disabled = isDemo;
+  document.getElementById('home-demo-note').style.display = isDemo ? '' : 'none';
+  for (const id of ['home-mods-row', 'home-maps-row', 'home-skins-row']) {
+    document.getElementById(id).style.display = isDemo ? 'none' : '';
+  }
+}
+
 export async function refreshInstallStatus(opts = {}) {
   updateAccountBadge();
   return renderInstallList(document.getElementById('home-install-list'), {
     emptyHtml: `<div class="home-install-label">IGTAP not found</div><div class="home-install-sub">Set the path in Settings.</div>`,
     onError: (err) => { if (opts.log !== false) logLine(`install detection failed: ${String(err)}`); },
-    onEmpty: () => { if (opts.log !== false) logLine('no installation detected'); },
+    onEmpty: () => { if (opts.log !== false) logLine('no installation detected'); applyVariantUi(null); },
     onSelect: (install) => logLine(`switched active install to <b>IGTAP (${install.variant})</b>`),
     onSelectError: (err) => logLine(`couldn't switch install: ${String(err)}`),
     onRendered: (installs, active) => {
+      applyVariantUi(active);
       if (opts.log === false) return;
       logLine(active
         ? `installation detected: <b>IGTAP (${active.variant})</b>`
@@ -350,8 +363,8 @@ async function checkForLauncherUpdate() {
       }
     };
   } else if (info.mapsUpdateAvailable) {
-    logLine(`Maps mod update available: <b>v${info.bundledMapsVersion}</b> (game has v${info.deployedMapsVersion})`);
-    body.innerHTML = `<p>The Maps mod needs redeploying to your game: bundled <b>v${info.bundledMapsVersion}</b>, game currently has <b>v${info.deployedMapsVersion}</b>.</p>`;
+    logLine(`Navigator mod update available: <b>v${info.bundledMapsVersion}</b> (game has v${info.deployedMapsVersion})`);
+    body.innerHTML = `<p>The Navigator mod needs redeploying to your game: bundled <b>v${info.bundledMapsVersion}</b>, game currently has <b>v${info.deployedMapsVersion}</b>.</p>`;
     nowBtn.textContent = 'Redeploy Now';
 
     event.listen('loader-progress', (e) => {

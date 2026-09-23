@@ -109,9 +109,48 @@ fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), 
     Ok(())
 }
 
-fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(), String> {
+fn slugify(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut last_was_dash = false;
+    for c in name.to_ascii_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            last_was_dash = false;
+        } else if !last_was_dash && !out.is_empty() {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+// Installed alongside a slug of the skin's own name (like the hub's own
+// download-filename slug) instead of the raw hub id, so the Installed tab
+// shows a real name rather than a UUID - see HUB_META_FILE for how that
+// mapping is recovered later (folder name alone no longer carries it).
+fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str, name: &str) -> Result<(), String> {
     let dir = skins_dir(app).ok_or("game path not set")?;
-    let target = dir.join(hub_id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let slug = slugify(name);
+    let slug = if slug.is_empty() { hub_id.to_string() } else { slug };
+
+    // A folder already using this slug is fine to overwrite if it's this
+    // same hub skin (a re-install/update); if it belongs to a *different*
+    // hub id (two skins that happen to share a name), fall back to a
+    // suffixed slug instead of clobbering unrelated content.
+    let mut candidate = slug.clone();
+    if dir.join(&candidate).is_dir() {
+        let existing_hub_id = super::skins::read_hub_meta(&dir.join(&candidate)).map(|m| m.hub_id);
+        if existing_hub_id.as_deref() != Some(hub_id) {
+            candidate = format!("{slug}-{}", &hub_id[..8.min(hub_id.len())]);
+        }
+    }
+
+    let target = dir.join(&candidate);
     let _ = std::fs::remove_dir_all(&target);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
 
@@ -120,6 +159,11 @@ fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str) -> Result<(),
     archive
         .extract(&target)
         .map_err(|e| format!("couldn't extract package: {e}"))?;
+
+    let meta = super::skins::SkinHubMeta { hub_id: hub_id.to_string(), name: name.to_string() };
+    if let Ok(json) = serde_json::to_string(&meta) {
+        let _ = std::fs::write(target.join(super::skins::HUB_META_FILE), json);
+    }
     Ok(())
 }
 
@@ -160,7 +204,7 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
     } else if kind == "maps" {
         install_map_zip(app, bytes, id)?;
     } else {
-        install_skin_zip(app, bytes, id)?;
+        install_skin_zip(app, bytes, id, &meta.name)?;
     }
 
     if let Some(w) = app.get_webview_window("main") {
