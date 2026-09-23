@@ -75,13 +75,7 @@ namespace Recharge.ModApi
             return linear + perpendicular * wave * amplitude;
         }
 
-        /// <summary>
-        /// The position along a named <see cref="MotionPath"/> from
-        /// <paramref name="from"/> to <paramref name="to"/> at normalized
-        /// time t (0 = start, 1 = end) - Circular treats from/to as
-        /// diametrically opposite points on one full loop, everything else
-        /// is a straightforward eased or curved path between them.
-        /// </summary>
+        /// <summary>Position along a named <see cref="MotionPath"/> from <paramref name="from"/> to <paramref name="to"/> at normalized time t (0=start, 1=end). Circular treats from/to as opposite points on one full loop.</summary>
         public static Vector2 Evaluate(MotionPath path, Vector2 from, Vector2 to, float t)
         {
             t = Mathf.Clamp01(t);

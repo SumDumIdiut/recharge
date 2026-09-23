@@ -29,12 +29,10 @@ namespace Recharge.ModApi
             return panel;
         }
 
-        // Same blank-panel machinery as AddPanelRow (title, Back button,
-        // Escape-to-close) but without also adding a top-level pause-menu
-        // row - for a panel only reachable from a button inside another mod
-        // panel. backTarget defaults to the main pause menu like
-        // AddPanelRow, but can be a parent panel instead so "Back"/Escape
-        // returns to it rather than skipping past it.
+        // Same blank-panel machinery as AddPanelRow, but without a
+        // top-level pause-menu row - for a panel only reachable from a
+        // button inside another mod panel. backTarget lets "Back"/Escape
+        // return to a parent panel instead of the main pause menu.
         public static GameObject GetOrCreatePanel(pauseMenuScript menu, string rowName, string label, GameObject backTarget = null)
         {
             if (!HasExpectedShape(menu)) return null;
@@ -50,19 +48,12 @@ namespace Recharge.ModApi
         public static void SetButtonTextColor(GameObject buttonGo, Color color) => MenuUiUtil.SetButtonTextColor(buttonGo, color);
 
         /// <summary>
-        /// A panel from AddPanelRow/GetOrCreatePanel is a clone of the
-        /// vanilla Settings screen, which drives its title/Close row through
-        /// an active Unity layout group - setting their anchoredPosition
-        /// directly does nothing, since the group silently reverts it on the
-        /// next layout rebuild (which fires as soon as you add more
-        /// children). Call this once, right after creating a panel you plan
-        /// to fill with custom multi-page or otherwise complex content: it
-        /// strips any LayoutGroup/ContentSizeFitter found under the panel
-        /// and recenters the title to top-center and Close to bottom-center
-        /// at the given Y offsets, so both stay put no matter what you add
-        /// afterward. Not needed for a simple single-page panel - the
-        /// vanilla layout only causes visible problems once enough content
-        /// triggers a rebuild that moves things you never touched.
+        /// A panel from AddPanelRow/GetOrCreatePanel drives its title/Close
+        /// row through a Unity layout group, which silently reverts direct
+        /// anchoredPosition changes on the next rebuild. Call this once
+        /// before filling a panel with custom multi-page content: strips
+        /// any LayoutGroup/ContentSizeFitter and recenters title/Close at
+        /// the given Y offsets so they stay put afterward.
         /// </summary>
         public static void NormalizePanelLayout(GameObject panel, float titleY = 300f, float closeY = -300f) =>
             PanelLayoutHelper.NormalizePanelLayout(panel, titleY, closeY);

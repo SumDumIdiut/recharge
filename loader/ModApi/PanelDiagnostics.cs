@@ -4,29 +4,12 @@ using UnityEngine.UI;
 
 namespace Recharge.ModApi
 {
-    /// <summary>
-    /// Runtime ground-truth for panel layout debugging - the real physical
-    /// screen size, every Canvas in the panel's ancestor chain (render
-    /// mode/scale factor/rect - a panel can end up nested under a smaller,
-    /// non-root Canvas than you'd expect), and every RectTransform under a
-    /// panel's actual measured anchoredPosition/sizeDelta/scale/world
-    /// corners. Prefer this over guessing at fixed pixel values or trusting
-    /// a single Canvas.rect reading - log it once, then read the numbers
-    /// out of Player.log instead of iterating blind.
-    /// </summary>
+    /// <summary>Runtime ground-truth for panel layout debugging - logs real screen size, the Canvas ancestor chain, and a measured RectTransform tree instead of guessing at fixed pixel values.</summary>
     public static class PanelDiagnostics
     {
-        /// <summary>Real, physical screen size in pixels (Screen.width/height) - not canvas-scaled units.</summary>
         public static Vector2 ScreenSize() => new Vector2(Screen.width, Screen.height);
 
-        /// <summary>
-        /// Logs Screen size, every Canvas from the panel up to the root
-        /// (each with renderMode/scaleFactor/rect), and a full RectTransform
-        /// tree dump (anchoredPosition/sizeDelta/pivot/anchors/scale/world
-        /// corners) for the panel and everything under it, three levels
-        /// deep (enough for a panel's own rows/columns without flooding the
-        /// log with every button's internal Text child).
-        /// </summary>
+        /// <summary>Logs Screen size, every ancestor Canvas, and a RectTransform tree dump three levels deep (enough for a panel's own rows/columns without flooding the log with widget internals).</summary>
         public static void LogPanelTree(IRechargeHost host, GameObject panel, string label = null)
         {
             var sb = new StringBuilder();
@@ -66,13 +49,6 @@ namespace Recharge.ModApi
             var corners = new Vector3[4];
             rt.GetWorldCorners(corners);
             var indent = new string(' ', depth * 2);
-            // RectTransformUtility.WorldToScreenPoint is the canonical,
-            // always-correct answer to "what real screen pixel does this
-            // world point land on" for whichever camera actually renders
-            // this canvas - unlike a raw Canvas.rect reading or a manual
-            // InverseTransformPoint, it can't be fooled by ScreenSpaceCamera
-            // positioning, camera FOV/viewport, or DPI/compositor scaling
-            // Unity itself doesn't know about.
             var blPx = RectTransformUtility.WorldToScreenPoint(renderCam, corners[0]);
             var trPx = RectTransformUtility.WorldToScreenPoint(renderCam, corners[2]);
             sb.AppendLine($"{indent}{rt.name} active={rt.gameObject.activeSelf} anchoredPos={rt.anchoredPosition} sizeDelta={rt.sizeDelta} pivot={rt.pivot} anchorMin={rt.anchorMin} anchorMax={rt.anchorMax} localScale={rt.localScale} lossyScale={rt.lossyScale} screenPx=[BL({blPx.x:0.0},{blPx.y:0.0}) TR({trPx.x:0.0},{trPx.y:0.0})]");
