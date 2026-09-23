@@ -12,12 +12,10 @@ namespace RechargeCustomSkins
         private TMP_FontAsset _font;
 
         private readonly List<GameObject> _skinRows = new List<GameObject>();
-        private TMP_Text _pathLabel;
-        private TMP_Text _statusLabel;
         private TMP_Text _pageLabel;
         private Transform _root;
 
-        private const int PageSize = 4;
+        private const int PageSize = 7;
         private int _page;
 
         private Color _orange = new Color(1f, 0.5f, 0f, 1f);
@@ -55,46 +53,22 @@ namespace RechargeCustomSkins
             header.color = new Color(1f, 1f, 1f, 0.65f);
             header.alignment = TextAlignmentOptions.MidlineLeft;
 
-            CreateBox(_root, "SkinsBox", new Vector2(0, 65), new Vector2(580, 190), 2.5f);
+            CreateBox(_root, "SkinsBox", new Vector2(0, BoxCenterY), new Vector2(580, 304), 2.5f);
 
             for (int i = 0; i < PageSize; i++)
             {
                 int slot = i;
-                var row = CreateButton(_root, "SkinRow" + i, new Vector2(0, 128 - slot * 38), new Vector2(540, 32), "", 18f, Color.white, TextAlignmentOptions.Center, false);
+                var row = CreateButton(_root, "SkinRow" + i, new Vector2(0, 122 - slot * 38), new Vector2(540, 32), "", 18f, Color.white, TextAlignmentOptions.Center, false);
                 row.GetComponent<Button>().onClick.AddListener(() => OnSkinRowClicked(slot));
                 _skinRows.Add(row);
             }
 
-            var prevGo = CreateButton(_root, "SkinsPrev", new Vector2(-90, -45), new Vector2(80, 28), "< Prev", 16f, _orange, TextAlignmentOptions.Right, false);
+            var prevGo = CreateButton(_root, "SkinsPrev", new Vector2(-90, -159), new Vector2(80, 28), "< Prev", 16f, _orange, TextAlignmentOptions.Right, false);
             prevGo.GetComponent<Button>().onClick.AddListener(() => ChangePage(-1));
-            var nextGo = CreateButton(_root, "SkinsNext", new Vector2(90, -45), new Vector2(80, 28), "Next >", 16f, _orange, TextAlignmentOptions.Left, false);
+            var nextGo = CreateButton(_root, "SkinsNext", new Vector2(90, -159), new Vector2(80, 28), "Next >", 16f, _orange, TextAlignmentOptions.Left, false);
             nextGo.GetComponent<Button>().onClick.AddListener(() => ChangePage(1));
-            _pageLabel = CreateLabel(_root, "SkinsPage", new Vector2(0, -45), new Vector2(70, 26), "1/1");
+            _pageLabel = CreateLabel(_root, "SkinsPage", new Vector2(0, -159), new Vector2(70, 26), "1/1");
             _pageLabel.fontSize = 15;
-
-            var exportHeader = CreateLabel(_root, "ExportHeader", new Vector2(0, -82), new Vector2(560, 26), "Export skin template");
-            exportHeader.fontSize = 20;
-            exportHeader.color = new Color(1f, 1f, 1f, 0.65f);
-            exportHeader.alignment = TextAlignmentOptions.MidlineLeft;
-
-            CreateBox(_root, "ExportBox", new Vector2(0, -112), new Vector2(580, 34), 10f);
-            _pathLabel = CreateLabel(_root, "ExportPath", new Vector2(0, -112), new Vector2(560, 26), "");
-            _pathLabel.fontSize = 15;
-            _pathLabel.alignment = TextAlignmentOptions.MidlineLeft;
-            _pathLabel.enableWordWrapping = false;
-            _pathLabel.overflowMode = TextOverflowModes.Ellipsis;
-            _pathLabel.color = new Color(0.85f, 0.85f, 0.85f, 1f);
-
-            var browseGo = CreateButton(_root, "Browse", new Vector2(-150, -155), new Vector2(180, 30), "Browse...", 17f, _orange, TextAlignmentOptions.Center, false);
-            browseGo.GetComponent<Button>().onClick.AddListener(OnBrowseClicked);
-            var exportGo = CreateButton(_root, "ExportNow", new Vector2(150, -155), new Vector2(180, 30), "Export", 17f, _orange, TextAlignmentOptions.Center, false);
-            exportGo.GetComponent<Button>().onClick.AddListener(OnExportClicked);
-
-            _statusLabel = CreateLabel(_root, "ExportStatus", new Vector2(0, -188), new Vector2(400, 24), "");
-            _statusLabel.fontSize = 14;
-            _statusLabel.enableWordWrapping = false;
-            _statusLabel.overflowMode = TextOverflowModes.Ellipsis;
-            _statusLabel.color = Green;
 
             Refresh();
         }
@@ -102,7 +76,7 @@ namespace RechargeCustomSkins
         private void OnEnable() => Refresh();
 
         private const float RowSpacing = 38f;
-        private const float BoxCenterY = 65f;
+        private const float BoxCenterY = 8f;
 
         private void Refresh()
         {
@@ -137,8 +111,6 @@ namespace RechargeCustomSkins
                     label.color = isCurrent ? Green : Color.white;
                 }
             }
-
-            _pathLabel.text = _controller.ExportDir;
         }
 
         private void OnSkinRowClicked(int slot)
@@ -146,7 +118,6 @@ namespace RechargeCustomSkins
             int displayIndex = _page * PageSize + slot;
             if (displayIndex >= _controller.SkinDisplayNames.Count) return;
             _controller.SelectDisplayIndex(displayIndex);
-            _statusLabel.text = "";
             Refresh();
         }
 
@@ -154,23 +125,6 @@ namespace RechargeCustomSkins
         {
             _page += delta;
             Refresh();
-        }
-
-        private void OnBrowseClicked()
-        {
-            var picked = NativeFolderPicker.PickFolder("Choose where to save the skin template");
-            if (!string.IsNullOrEmpty(picked))
-            {
-                _controller.ExportDir = picked;
-                Refresh();
-            }
-        }
-
-        private void OnExportClicked()
-        {
-            bool ok = _controller.ExportTemplate(out var message);
-            _statusLabel.text = message;
-            _statusLabel.color = ok ? Green : new Color(1f, 0.6f, 0.6f, 1f);
         }
 
         private GameObject CreateButton(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string label, float fontSize, Color color, TextAlignmentOptions align, bool showBox)

@@ -1,7 +1,7 @@
 {
   "id": "recharge.customskins",
   "displayName": "Custom Skins",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Recharge",
   "entryAssembly": "RechargeCustomSkins.dll",
   "minLoaderVersion": "1.0.0",
