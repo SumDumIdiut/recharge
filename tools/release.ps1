@@ -15,7 +15,7 @@ already created, without re-bumping the version.
 
 This script does not write your commit message or release notes for you -
 you supply them. Run it yourself whenever you want to cut a release without
-going through Claude for each step.
+going through an assistant for each step.
 
 Usage:
   ./tools/release.ps1 -Message "Fix the thing"
