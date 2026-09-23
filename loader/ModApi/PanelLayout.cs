@@ -12,13 +12,9 @@ namespace Recharge.ModApi
 
     /// <summary>
     /// Declares a panel's width/height once, then positions elements as an
-    /// offset from a named anchor point within it (TopLeft, Center,
-    /// BottomRight, ...) instead of hand-computing raw coordinates from the
-    /// center every time. All AddPanelRow/GetOrCreatePanel content uses the
-    /// same convention this assumes: (0,0) is the panel's center, +X is
-    /// right, +Y is up - so an offset of (25, -25) from TopLeft means
-    /// "25 right, 25 down from the top-left corner" (i.e. a top/left inset
-    /// of 25, the same way you'd read CSS's top:25px; left:25px).
+    /// offset from a named anchor point (TopLeft, Center, BottomRight, ...)
+    /// instead of hand-computing raw coordinates from the center every
+    /// time - like CSS's top/left insets.
     ///
     /// <code>
     /// var layout = PanelLayout.Apply(panel, new Vector2(700, 640));
@@ -62,11 +58,7 @@ namespace Recharge.ModApi
         /// <summary>anchor's point plus offset - what you'd hand to a RectTransform's anchoredPosition.</summary>
         public Vector2 PositionOf(PanelAnchor anchor, Vector2 offset) => AnchorPoint(anchor) + offset;
 
-        /// <summary>
-        /// Centers the RectTransform's own anchors/pivot (so anchoredPosition
-        /// means "offset from the panel's center", matching every other
-        /// widget helper in this API) and moves it to anchor + offset.
-        /// </summary>
+        /// <summary>Centers the RectTransform's anchors/pivot and moves it to anchor + offset.</summary>
         public void Place(RectTransform rt, PanelAnchor anchor, Vector2 offset)
         {
             rt.anchorMin = new Vector2(0.5f, 0.5f);
