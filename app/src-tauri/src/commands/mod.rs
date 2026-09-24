@@ -1,5 +1,6 @@
 pub mod hub;
 pub mod launcher;
+pub mod live;
 pub mod loader;
 pub mod maps;
 pub mod mods;

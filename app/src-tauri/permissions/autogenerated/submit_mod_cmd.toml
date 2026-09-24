@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-submit-mod-cmd"
+description = "Enables the submit_mod_cmd command without any pre-configured scope."
+commands.allow = ["submit_mod_cmd"]
+
+[[permission]]
+identifier = "deny-submit-mod-cmd"
+description = "Denies the submit_mod_cmd command without any pre-configured scope."
+commands.deny = ["submit_mod_cmd"]

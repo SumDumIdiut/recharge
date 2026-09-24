@@ -274,36 +274,17 @@ export async function refreshInstallStatus(opts = {}) {
   });
 }
 
-async function maybePromptInstallChoice() {
+// With more than one install (full game + demo), start on the first one
+// detected - the full game, since it's listed first - without asking. Every
+// install stays in the Installation list to switch to.
+async function autoSelectInstall() {
   const { invoke } = window.__TAURI__.core;
   const saved = await invoke('get_saved_game_path').catch(() => null);
   if (saved) return;
 
   const installs = await invoke('detect_all_igtap_installs').catch(() => []);
   if (installs.length < 2) return;
-
-  const overlay = document.getElementById('install-picker-overlay');
-  const list = document.getElementById('install-picker-list');
-  if (!overlay || !list) return;
-
-  await new Promise((resolve) => {
-    list.innerHTML = '';
-    for (const install of installs) {
-      const row = document.createElement('button');
-      row.className = 'install-picker-row';
-      row.innerHTML = `<div class="install-picker-variant">IGTAP (${install.variant})</div><div class="install-picker-path">${escapeForHtml(install.path)}</div>`;
-      row.onclick = async () => {
-        try {
-          await invoke('set_game_path', { path: install.path });
-        } finally {
-          overlay.hidden = true;
-          resolve();
-        }
-      };
-      list.appendChild(row);
-    }
-    overlay.hidden = false;
-  });
+  await invoke('set_game_path', { path: installs[0].path }).catch(() => {});
 }
 
 function showOnboarding(html) {
@@ -412,7 +393,7 @@ export async function initHome() {
 
   logLine('recharge started');
 
-  await maybePromptInstallChoice();
+  await autoSelectInstall();
   const install = await refreshInstallStatus();
 
   let loaderInstalled = false;

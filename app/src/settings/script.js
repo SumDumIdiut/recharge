@@ -288,6 +288,8 @@ async function refreshLauncherStatus() {
       updateBtn.hidden = true;
       notes.hidden = true;
     }
+    const live = await invoke('live_status').catch(() => null);
+    if (live?.active && live.sha) status.append(` \u00b7 code ${live.sha.slice(0, 7)}`);
   } catch (err) {
     status.textContent = String(err);
   }

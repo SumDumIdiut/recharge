@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-detect-all-igtap-installs"
+description = "Enables the detect_all_igtap_installs command without any pre-configured scope."
+commands.allow = ["detect_all_igtap_installs"]
+
+[[permission]]
+identifier = "deny-detect-all-igtap-installs"
+description = "Denies the detect_all_igtap_installs command without any pre-configured scope."
+commands.deny = ["detect_all_igtap_installs"]

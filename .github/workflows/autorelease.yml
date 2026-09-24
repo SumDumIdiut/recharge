@@ -1,17 +1,16 @@
 name: Auto release
 
-# Push code to master and this publishes it: it picks the next version, builds
-# the Windows and Linux packages the app's built-in updater installs, and
-# publishes the release. Docs, workflow and bootstrap-installer changes don't
-# trigger a release.
+# Screens (app/src), the loader and its scripts reach everyone through the
+# app's live code updates the moment they're pushed - no package. Only a change
+# to the compiled app (app/src-tauri) needs one, and this publishes it: it
+# picks the next version, builds the Windows and Linux packages the built-in
+# updater installs, and publishes the release.
 on:
   workflow_dispatch:
   push:
     branches: [master]
     paths:
-      - 'app/**'
-      - 'loader/**'
-      - 'content/**'
+      - 'app/src-tauri/**'
 
 concurrency:
   group: autorelease
