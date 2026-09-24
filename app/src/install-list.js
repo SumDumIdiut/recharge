@@ -3,6 +3,8 @@ function escapeForHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+const normPath = (p) => String(p).replace(/^\\\\\?\\/, '').toLowerCase();
+
 export async function renderInstallList(listEl, opts = {}) {
   const { invoke } = window.__TAURI__.core;
   if (!listEl) return null;
@@ -17,7 +19,7 @@ export async function renderInstallList(listEl, opts = {}) {
   }
 
   const active = await invoke('detect_igtap_install').catch(() => null);
-  if (active && !installs.some((i) => i.path === active.path)) {
+  if (active && !installs.some((i) => normPath(i.path) === normPath(active.path))) {
     installs = [active, ...installs];
   }
 
@@ -29,7 +31,7 @@ export async function renderInstallList(listEl, opts = {}) {
 
   listEl.innerHTML = '';
   for (const install of installs) {
-    const isActive = active && install.path === active.path;
+    const isActive = active && normPath(install.path) === normPath(active.path);
     const row = document.createElement('div');
     row.className = 'home-install-row' + (isActive ? ' home-install-row-active' : '');
     row.innerHTML = `
