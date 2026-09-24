@@ -90,7 +90,8 @@ function renderInstalled() {
   const list = document.getElementById('mods-installed-view');
   const filtered = installedCache
     .filter((m) => matchesSearch(m.displayName + ' ' + (m.author || '')))
-    .sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' }));
+    // Enabled mods first, then disabled, each group alphabetical.
+    .sort((a, b) => (b.enabled - a.enabled) || a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = installedCache.length
       ? '<div class="empty-state">No mods match your search.</div>'
