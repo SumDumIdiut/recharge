@@ -1,0 +1,154 @@
+name: Auto release
+
+# Push code to master and this publishes it: it picks the next version, builds
+# the Windows and Linux packages the app's built-in updater installs, and
+# publishes the release. Docs, workflow and bootstrap-installer changes don't
+# trigger a release.
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'app/**'
+      - 'loader/**'
+      - 'content/**'
+
+concurrency:
+  group: autorelease
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    # The version-bump commit is pushed with GITHUB_TOKEN, which never
+    # re-triggers workflows, so this can't loop.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+      sha: ${{ steps.commit.outputs.sha }}
+      notes: ${{ steps.next.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the next version
+        id: next
+        run: |
+          set -euo pipefail
+          last=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          cur=${last#v}
+          IFS=. read -r major minor patch <<<"$cur"
+          new="$major.$minor.$((patch + 1))"
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          echo "tag=v$new" >> "$GITHUB_OUTPUT"
+          {
+            echo 'notes<<NOTES_EOF'
+            git log "$last"..HEAD --no-merges --pretty='- %s' -- app loader content | grep -v '^- Release v' || true
+            echo 'NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write the version into the project files
+        env:
+          NEW: ${{ steps.next.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i -E '4s/"version": *"[^"]*"/"version": "'"$NEW"'"/' app/package.json app/src-tauri/tauri.conf.json
+          sed -i -E '3s/^version = ".*"/version = "'"$NEW"'"/' app/src-tauri/Cargo.toml
+          sed -i -E 's/(!define PRODUCT_VERSION ")[^"]*"/\1'"$NEW"'"/' installer/recharge-installer.nsi
+          perl -0pi -e 's/(name = "recharge"\nversion = ")[^"]*"/$1$ENV{NEW}"/' app/src-tauri/Cargo.lock
+          git diff --stat
+
+      - name: Commit the bump
+        id: commit
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $TAG"
+          git pull --rebase origin master
+          git push origin HEAD:master
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: bump
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: '--bundles deb'
+          - platform: windows-latest
+            args: '--bundles nsis'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump.outputs.sha }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # --tool-path installs a shim + nested .store/, not the flat DLL folder
+      # build-loader.ps1 expects, so the real files get copied up from there.
+      - name: Install ilspycmd (bundled decompiler tool)
+        shell: bash
+        run: |
+          dotnet tool install ilspycmd --tool-path .ilspycmd-install-tmp
+          mkdir -p loader/tools/ilspycmd
+          src=$(dirname "$(find .ilspycmd-install-tmp/.store -name ilspycmd.dll)")
+          cp -r "$src"/* loader/tools/ilspycmd/
+          rm -rf .ilspycmd-install-tmp
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm install
+
+      - name: Build and attach to a draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ needs.bump.outputs.tag }}
+          commitish: ${{ needs.bump.outputs.sha }}
+          releaseName: 'Recharge ${{ needs.bump.outputs.tag }}'
+          releaseBody: ${{ needs.bump.outputs.notes }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  publish:
+    # Only once both platforms are attached, so the updater never sees a
+    # release that is missing its own platform's package.
+    needs: [bump, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.bump.outputs.tag }}
+        run: gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest
