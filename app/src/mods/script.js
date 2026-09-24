@@ -10,6 +10,10 @@ let installedCache = [];
 let catalog = [];
 let catalogError = false;
 let chosenUploadPath = null;
+let chosenGalleryPaths = [];
+let detailImages = [];
+let detailImageIndex = 0;
+const MAX_GALLERY_IMAGES = 8;
 let myUploadIds = new Set();
 let openDetailId = null;
 
@@ -61,6 +65,7 @@ async function loadCatalog() {
         version: row.version || '1.0.0',
         description: row.description,
         image: row.gallery?.length ? `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
+        images: (row.gallery || []).map((f) => `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(f)}`),
         dependencies: [],
       }));
     catalogError = false;
@@ -201,8 +206,11 @@ window.__modOpenUpload = function () {
     return;
   }
   chosenUploadPath = null;
+  chosenGalleryPaths = [];
   document.getElementById('mods-upload-path').textContent = 'No folder chosen';
   document.getElementById('mods-upload-name').value = '';
+  document.getElementById('mods-upload-description').value = '';
+  renderGalleryChoice();
   document.getElementById('mods-upload-overlay').hidden = false;
 };
 
@@ -224,6 +232,35 @@ async function browseForModFolder() {
   if (!chosen) return;
   chosenUploadPath = chosen;
   document.getElementById('mods-upload-path').textContent = chosen.split(/[\\/]/).pop();
+}
+
+function renderGalleryChoice() {
+  const el = document.getElementById('mods-upload-gallery-path');
+  if (!chosenGalleryPaths.length) {
+    el.textContent = `None chosen (optional, up to ${MAX_GALLERY_IMAGES})`;
+    return;
+  }
+  const first = chosenGalleryPaths[0].split(/[\\/]/).pop();
+  el.textContent = chosenGalleryPaths.length === 1
+    ? first
+    : `${chosenGalleryPaths.length} images (${first}, …)`;
+}
+
+async function browseForScreenshots() {
+  const { open } = window.__TAURI__.dialog;
+  const chosen = await open({
+    multiple: true,
+    directory: false,
+    title: `Choose up to ${MAX_GALLERY_IMAGES} screenshots`,
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+  });
+  if (!chosen) return;
+  const paths = Array.isArray(chosen) ? chosen : [chosen];
+  if (paths.length > MAX_GALLERY_IMAGES) {
+    alert(`Only the first ${MAX_GALLERY_IMAGES} images will be used.`);
+  }
+  chosenGalleryPaths = paths.slice(0, MAX_GALLERY_IMAGES);
+  renderGalleryChoice();
 }
 
 function closeUploadModal() {
@@ -251,6 +288,8 @@ async function submitUpload() {
       folderPath: chosenUploadPath,
       displayName: name,
       author: getUsername(),
+      description: document.getElementById('mods-upload-description').value.trim(),
+      galleryPaths: chosenGalleryPaths,
     });
     closeUploadModal();
     await loadCatalog();
@@ -349,7 +388,6 @@ const REPO_MODS = {
   'recharge.example': { repo: 'recharge-mods', folder: 'recharge-example' },
   'recharge.icyphysics': { repo: 'recharge-mods', folder: 'recharge-icy-physics' },
   'recharge.multiplayer': { repo: 'recharge-mods', folder: 'recharge-multiplayer' },
-  'recharge.pausebuffering': { repo: 'recharge-mods', folder: 'recharge-pause-buffering' },
   'recharge.tas': { repo: 'recharge-mods', folder: 'recharge-tas' },
 };
 
@@ -402,6 +440,13 @@ async function doInstall(ids, btn) {
   }
 }
 
+window.__modGalleryStep = function (delta) {
+  if (detailImages.length < 2) return;
+  detailImageIndex = (detailImageIndex + delta + detailImages.length) % detailImages.length;
+  document.getElementById('mods-gallery-img').src = detailImages[detailImageIndex];
+  document.getElementById('mods-gallery-count').textContent = `${detailImageIndex + 1} / ${detailImages.length}`;
+};
+
 window.__modOpenDetail = function (id) {
   let entry = catalog.find((c) => c.id === id);
   let installedMod = installedCache.find((m) => m.id === id);
@@ -418,10 +463,17 @@ window.__modOpenDetail = function (id) {
   const description = entry?.description || installedMod?.description;
   const deps = installedMod?.dependencies?.length ? installedMod.dependencies : entry?.dependencies;
   const protectedMod = installed && PROTECTED_MOD_IDS.has(realId);
+  detailImages = entry?.images?.length ? entry.images : (entry?.image ? [entry.image] : []);
+  detailImageIndex = 0;
 
   document.getElementById('mods-detail').innerHTML = `
     <button class="crumb-back" id="mods-detail-back" onclick="window.__modCloseDetail()" style="margin-bottom:20px;">&lt; Mods</button>
-    ${entry?.image ? `<img class="mod-detail-image" src="${escapeHtml(entry.image)}" alt="" />` : ''}
+    ${detailImages.length ? `<div class="mod-gallery">
+      <img class="mod-detail-image" id="mods-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__modGalleryStep(1)" style="cursor:pointer;"' : ''} />
+      ${detailImages.length > 1 ? `<button class="mod-gallery-nav mod-gallery-prev" title="Previous image" onclick="window.__modGalleryStep(-1)">&lsaquo;</button>
+      <button class="mod-gallery-nav mod-gallery-next" title="Next image" onclick="window.__modGalleryStep(1)">&rsaquo;</button>
+      <div class="mod-gallery-count" id="mods-gallery-count">1 / ${detailImages.length}</div>` : ''}
+    </div>` : ''}
     <div class="mod-detail-header">
       <div class="mod-detail-name${protectedMod ? ' mod-detail-name-protected' : ''}">${escapeHtml(name)}</div>
       <div class="mod-detail-meta">${author ? escapeHtml(author) + ' \u00b7 ' : ''}v${escapeHtml(version)}</div>
@@ -488,6 +540,7 @@ export async function init() {
   document.getElementById('mods-upload-cancel').addEventListener('click', closeUploadModal);
   document.getElementById('mods-upload-confirm').addEventListener('click', submitUpload);
   document.getElementById('mods-upload-browse-btn').addEventListener('click', browseForModFolder);
+  document.getElementById('mods-upload-gallery-btn').addEventListener('click', browseForScreenshots);
   render();
   await onShow();
 }
