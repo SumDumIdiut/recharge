@@ -46,7 +46,7 @@ npm run tauri dev                       # run it
 npm run tauri build -- --no-bundle      # release binary in app/src-tauri/target/release
 ```
 
-For local mod development, clone the mod repos into `mods/` (git-ignored) or point `RECHARGE_MODS_DIR` at a folder that holds them; `loader/build-loader.ps1 -GameDir <game> [-ModsDir <dir>]` compiles and deploys everything. Releases are cut by pushing a `v*` tag - GitHub Actions builds the Windows and Linux installers.
+For local mod development, clone the mod repos into `mods/` (git-ignored) or point `RECHARGE_MODS_DIR` at a folder that holds them; `loader/build-loader.ps1 -GameDir <game> [-ModsDir <dir>]` compiles and deploys everything. Releases are automatic: pushing changes under `app/`, `loader/` or `content/` to `master` makes GitHub Actions pick the next version, build the Windows and Linux packages and publish them, and the app's built-in updater installs them. There is nothing to build or upload by hand.
 
 ## Repository layout
 
@@ -57,7 +57,7 @@ For local mod development, clone the mod repos into `mods/` (git-ignored) or poi
 | `installer/` | Installers: `bootstrap/` (the permanent, version-independent ones above), plus the Windows NSIS script and Arch `PKGBUILD`. |
 | `content/` | The app's local catalog of packaged mods. |
 | `tools/` | Developer scripts (release helper, dev tooling). |
-| `.github/workflows/` | `release.yml` builds each tagged release; `bootstrap.yml` publishes the permanent installers. |
+| `.github/workflows/` | `autorelease.yml` versions, builds and publishes every push (`release.yml` builds a manually pushed `v*` tag); `bootstrap.yml` publishes the permanent installers. |
 
 ## Recharge Hub
 
