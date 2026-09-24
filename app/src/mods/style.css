@@ -74,6 +74,37 @@
   border: 1px solid var(--line);
   margin-bottom: 24px;
 }
+.mod-gallery {
+  position: relative;
+  max-width: 640px;
+  margin-bottom: 24px;
+}
+.mod-gallery .mod-detail-image { margin-bottom: 0; }
+.mod-gallery-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 56px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mod-gallery-nav:hover { background: rgba(0, 0, 0, 0.8); }
+.mod-gallery-prev { left: 8px; }
+.mod-gallery-next { right: 8px; }
+.mod-gallery-count {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font-size: 14px;
+}
 .mod-detail-header { margin-bottom: 14px; }
 .mod-detail-name { font-size: 26px; color: var(--text); text-transform: uppercase; }
 .mod-detail-meta { color: var(--text-dim); font-size: 15px; margin-top: 4px; }

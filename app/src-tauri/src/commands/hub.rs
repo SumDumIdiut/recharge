@@ -10,6 +10,7 @@ pub const BEAM_PORT: u16 = 39284;
 const HUB_ORIGIN: &str = "https://codecade.co.za";
 const HUB_BASE: &str = "https://codecade.co.za/recharge";
 const MAX_PACKAGE_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_GALLERY_IMAGES: usize = 8;
 
 fn sanitize_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
@@ -348,9 +349,31 @@ fn add_dir_to_zip<W: std::io::Write + std::io::Seek>(
 }
 
 #[tauri::command]
-pub fn submit_mod_cmd(token: String, folder_path: String, display_name: String, author: String) -> Result<String, String> {
+pub fn submit_mod_cmd(
+    token: String,
+    folder_path: String,
+    display_name: String,
+    author: String,
+    description: Option<String>,
+    gallery_paths: Option<Vec<String>>,
+) -> Result<String, String> {
+    let description = description.unwrap_or_default();
+    let gallery_paths = gallery_paths.unwrap_or_default();
     if display_name.trim().is_empty() || author.trim().is_empty() {
         return Err("name and author are required".to_string());
+    }
+    if gallery_paths.len() > MAX_GALLERY_IMAGES {
+        return Err(format!("at most {MAX_GALLERY_IMAGES} screenshots can be uploaded"));
+    }
+    for p in &gallery_paths {
+        let path = PathBuf::from(p);
+        if !path.is_file() {
+            return Err(format!("screenshot '{p}' not found"));
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+        if !matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "webp" | "gif")) {
+            return Err(format!("'{p}' isn't a png, jpg, webp or gif image"));
+        }
     }
     let folder = PathBuf::from(&folder_path);
     if !folder.is_dir() {
@@ -365,14 +388,18 @@ pub fn submit_mod_cmd(token: String, folder_path: String, display_name: String, 
     let tmp = std::env::temp_dir().join(format!("recharge-mod-upload-{}-{tmp_id}.igtap", std::process::id()));
     std::fs::write(&tmp, &zip_bytes).map_err(|e| e.to_string())?;
 
-    let form = ureq::unversioned::multipart::Form::new()
+    let mut form = ureq::unversioned::multipart::Form::new()
         .text("kind", "mod")
         .text("name", &display_name)
         .text("author", &author)
+        .text("description", &description)
         .text("modId", &manifest.id)
         .text("version", &manifest.version)
         .file("file", &tmp)
         .map_err(|e| e.to_string())?;
+    for p in &gallery_paths {
+        form = form.file("gallery", p).map_err(|e| e.to_string())?;
+    }
 
     let result: Result<SubmitResult, String> = (|| {
         ureq::post(&format!("{HUB_BASE}/api/submit"))

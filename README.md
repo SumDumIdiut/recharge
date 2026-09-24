@@ -31,7 +31,7 @@ Mod source lives in its own repositories; Recharge pulls the one you install int
 
 | Repository | Contains |
 |---|---|
-| [recharge-mods](https://github.com/SumDumIdiut/recharge-mods) | DOTnet (multiplayer), Example Mod, Icy Physics, Pause Buffering, TAS Tool, and a `_template` to start a new mod |
+| [recharge-mods](https://github.com/SumDumIdiut/recharge-mods) | DOTnet (multiplayer), Example Mod, Icy Physics, TAS Tool, and a `_template` to start a new mod |
 | [recharge-maps](https://github.com/SumDumIdiut/recharge-maps) | Navigator |
 | [recharge-skins](https://github.com/SumDumIdiut/recharge-skins) | Skinmod, with a ready-made `skin-template` folder |
 
