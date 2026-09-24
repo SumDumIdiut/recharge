@@ -36,6 +36,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The Windows checkout may have turned install.sh into CRLF, which bash rejects.
+          sed -i 's/\r$//' install.sh
           # A prerelease, so GitHub's /releases/latest (used by the app's
           # update check and these installers) never points at it.
           gh release view installer >/dev/null 2>&1 || gh release create installer \
