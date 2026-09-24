@@ -6,6 +6,8 @@ use super::settings;
 
 const CUSTOM_SKINS_MOD_ID: &str = "recharge.customskins";
 const IMAGE_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
+// Optional indicator art inside a skin folder - never the skin's own image.
+const INDICATOR_STEMS: [&str; 5] = ["dash", "doublejump", "double-jump", "double_jump", "jump"];
 
 fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
     let game_path = settings::get_game_path(app.clone())?;
@@ -66,15 +68,22 @@ fn sanitize_name(name: &str) -> Result<(), String> {
 }
 
 fn find_image_file(skin_folder: &std::path::Path) -> Option<PathBuf> {
-    std::fs::read_dir(skin_folder).ok()?.flatten().find_map(|e| {
-        let path = e.path();
-        let is_image = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| IMAGE_EXTENSIONS.contains(&s.to_ascii_lowercase().as_str()))
-            .unwrap_or(false);
-        is_image.then_some(path)
-    })
+    let mut images: Vec<PathBuf> = std::fs::read_dir(skin_folder)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|path| {
+            let is_image = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| IMAGE_EXTENSIONS.contains(&s.to_ascii_lowercase().as_str()))
+                .unwrap_or(false);
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+            is_image && !INDICATOR_STEMS.contains(&stem.as_str())
+        })
+        .collect();
+    images.sort_by_key(|p| p.file_name().map(|n| n.to_ascii_lowercase()));
+    images.into_iter().next()
 }
 
 // Written alongside a skin installed from the hub, since the folder itself
