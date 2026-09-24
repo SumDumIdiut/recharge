@@ -1,93 +1,64 @@
 # Recharge
 
-A mod manager for **IGTAP** (*an Incremental Game That's Also a Platformer*, the Steam Demo). Recharge is a Tauri desktop app that finds your install, installs/enables/disables/removes mods and maps, and drives [RechargeLoader](loader/README.md) — a lightweight mod-loading framework that patches one call into the game's own compiled code, no BepInEx or injector involved.
+A mod manager for **IGTAP** (*an Incremental Game That's Also a Platformer*). Recharge finds your game install, installs and manages mods, maps and skins, and keeps itself up to date - on Windows and Linux.
 
-IGTAP's Steam depot ships a native Linux Unity build (`IGTAP.x86_64`, confirmed against a real install) alongside the Windows one, so on Linux the game runs directly - no Proton needed unless a given branch/depot genuinely has no Linux build, in which case `play.rs` falls back to launching it through Proton via `steam steam://rungameid/<appid>`, same as a normal Steam "Play" click. Either way, RechargeLoader's actual patch target - `Assembly-CSharp.dll` - is the same managed assembly regardless of host OS or which native binary ships next to it (Unity's Mono scripting backend produces platform-independent IL), so the loader, mods, and patched assembly need no porting at all. Only the **desktop app** (Steam-library detection, launching, self-update) and its **installer** are platform-specific, and both now support Linux natively (see [Installing](#installing)) alongside the existing Windows build.
+## Download
 
-## The Recharge ecosystem
+**[Get the installer](https://github.com/SumDumIdiut/recharge/releases/tag/installer)** - one page, always current:
 
-This repo is the hub of three related projects on this drive:
+- **Windows:** [`RechargeSetup.exe`](https://github.com/SumDumIdiut/recharge/releases/download/installer/RechargeSetup.exe)
+- **Linux:** `curl -fsSL https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh | bash`
 
-- **`rust/Recharge`** (this repo) — the desktop app + RechargeLoader + the mods that ship with it.
-- **`csharp/DOTnet`** — a standalone, non-RechargeLoader implementation of real-time multiplayer for the same game. This repo's own `mods/recharge-multiplayer/` (shipped here as **DOTnet**, `content/mods/recharge-multiplayer/mod.json`) started from the same idea and author (`Flipped`) but is now a *separate, RechargeLoader-native codebase* — it has diverged well past cosmetic ghost-sync into a full Co-op mode with shared economy/save state. See [`csharp/DOTnet`'s README](../../../csharp/DOTnet/README.md) for the full comparison.
-- **recharge-hub** (`webdev/recharge-hub`, a separate Node.js/Discord-moderated submission server at `codecade.co.za/recharge`) — this app already talks to it. `app/src-tauri/src/commands/hub.rs` implements a real client: it fetches submissions from `{HUB_BASE}/api/{kind}/{id}`, downloads and installs the package, and also runs a local-only HTTP server on `127.0.0.1:39284` so the hub's own web page can push an install via its "Beam to Client" button (`install_from_hub_cmd` for the in-app Browse tab, `start_beam_server`/`handle_beam_request` for the external push path). This is a working integration today, not just a planned one — see [Recharge Hub](#recharge-hub) below.
+These never go out of date: each one downloads and installs the newest release when you run it. On Linux the script uses `apt` on Debian/Ubuntu and otherwise installs under `~/.local` with no root (`--user` forces that). After that, Recharge updates itself from inside the app.
 
-## How the pieces fit together
+Prefer a specific version? Every build is on the [Releases](https://github.com/SumDumIdiut/recharge/releases) page (`.deb` for Linux, `Setup.exe` for Windows).
 
-The Tauri app (`app/src`, JS/HTML) calls into `app/src-tauri` (Rust) over `invoke()` to drive its Home/Mods/Maps/Settings tabs and the in-app Map Editor. From there, two paths run: installing, toggling, or removing a mod writes straight into `<Game>/Recharge/Mods`, while "Update RechargeLoader" runs `loader/build-loader.ps1`, which decompiles `Assembly-CSharp.dll`, patches in one call, rebuilds it, and redeploys it. On the first pause-menu open after that, `RechargeLoaderBootstrap.Init()` resolves dependencies, loads each mod's DLL from `<Game>/Recharge/Mods/*`, and calls `IRechargeMod.OnLoad` on each. Separately, `content/index.json` feeds the app's Browse tab its local catalog of `.igtap` packages, and `codecade.co.za/recharge` talks to `hub.rs` (`install_from_hub`, or the beam server on port 39284).
+## What it does
 
-`content/` and `mods/` look similar but serve different purposes:
+- **Mods** - install, enable, disable and remove mods; the Installed tab lists enabled ones first.
+- **Navigator (maps)** - play custom real-asset maps and switch between Base Game and B-Side.
+- **Skinmod (skins)** - reskin the player, including custom sounds and the dash / double-jump indicators.
+- **Browse and upload** - a community library at [codecade.co.za/recharge](https://codecade.co.za/recharge), with accounts so you can manage your own uploads.
+- **Works with your setup** - detects Steam libraries, launches the game (through Steam/Proton on Linux), and can restore vanilla at any time. The demo can be played, but only unmodded.
 
-- **`mods/`** is *source* — the actual mod projects (`.cs` files, `.csproj`), built by `loader/build-loader.ps1` and deployed straight into `<GameDir>\Recharge\Mods\`. This is what a player ends up running.
-- **`content/`** is the app's *local Browse-tab catalog* — pre-packaged `.igtap` archives (a zip: built DLL + `mod.json` + assets) plus `index.json` (regenerated by `build-index.js`) and gallery screenshots, so the app can list/install a mod without hitting the network. Only one of the seven mods under `mods/` is currently packaged into `content/mods/` — see [Caveats](#caveats).
+## How it works
 
-## Layout
+Recharge drives **RechargeLoader**, a small mod-loading framework that patches one call into the game's own compiled code (`Assembly-CSharp.dll`) - no BepInEx or injector. The patched game loads each mod's DLL from `<Game>/Recharge/Mods` when the pause menu first opens. See [`loader/README.md`](loader/README.md) and [`loader/docs/`](loader/docs) to write your own mod.
+
+## Mods
+
+Mod source lives in its own repositories; Recharge pulls the one you install into its mods folder and compiles it.
+
+| Repository | Contains |
+|---|---|
+| [recharge-mods](https://github.com/SumDumIdiut/recharge-mods) | DOTnet (multiplayer), Example Mod, Icy Physics, Pause Buffering, TAS Tool, and a `_template` to start a new mod |
+| [recharge-maps](https://github.com/SumDumIdiut/recharge-maps) | Navigator |
+| [recharge-skins](https://github.com/SumDumIdiut/recharge-skins) | Skinmod, with a ready-made `skin-template` folder |
+
+## Building from source
+
+Needs [Rust](https://rustup.rs), Node.js, and [PowerShell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) (`pwsh` on Linux) for the loader build. On Linux also the Tauri system libraries (`libwebkit2gtk-4.1`, `gtk3`, `librsvg`).
+
+```
+cd app
+npm install
+npm run tauri dev                       # run it
+npm run tauri build -- --no-bundle      # release binary in app/src-tauri/target/release
+```
+
+For local mod development, clone the mod repos into `mods/` (git-ignored) or point `RECHARGE_MODS_DIR` at a folder that holds them; `loader/build-loader.ps1 -GameDir <game> [-ModsDir <dir>]` compiles and deploys everything. Releases are cut by pushing a `v*` tag - GitHub Actions builds the Windows and Linux installers.
+
+## Repository layout
 
 | Path | What it is |
 |---|---|
-| `app/` | The desktop app: Tauri 2 (Rust) + vanilla JS frontend. `src/` has one folder per tab (`mods/`, `maps/`, `settings/`, `credits/`) plus `home.js`/`app.js`/`theme.js`; `src-tauri/src/commands/` has one file per command group (`steam.rs` Steam-library detection - cross-platform, `settings.rs` persisted game path, `mods.rs` list/enable/uninstall, `maps.rs` list installed maps, `loader.rs` drives `build-loader.ps1` via `powershell.exe`/`pwsh`, `play.rs` launch/detect-running/restore-vanilla - launches through Steam/Proton on Linux, `launcher.rs` self-update via GitHub releases - Setup.exe on Windows, self-replacing AppImage on Linux, `hub.rs` recharge-hub integration). |
-| `loader/` | RechargeLoader itself: `build-loader.ps1` (decompile → patch → build → deploy - plain PowerShell, runs under both `powershell.exe` and cross-platform `pwsh`) and the `ModApi`/`Runtime` contract every mod builds against. Own [README](loader/README.md). |
-| `mods/` | Not tracked here - mod source lives in three private repos, cloned/pulled into this folder (or `RECHARGE_MODS_DIR`): [`recharge-mods`](https://github.com/SumDumIdiut/recharge-mods) (DOTnet, Example, Icy Physics, Pause Buffering, TAS, `_template`), [`recharge-maps`](https://github.com/SumDumIdiut/recharge-maps) (Navigator), [`recharge-skins`](https://github.com/SumDumIdiut/recharge-skins) (Skinmod). The app pulls a repo into its mods folder (`commands/repos.rs`) when you install a mod, then `build-loader.ps1 -ModsDir` compiles it. Private repos need `RECHARGE_GITHUB_TOKEN` set. |
-| `content/` | The app's local Browse-tab catalog: `index.json`, `mods/<id>/` (packaged `.igtap` + `mod.json` + gallery images), `maps/` (currently empty). |
-| `dist/` | Built/staged output, including `gallery/`. |
-| `docs/` | Currently empty — the real docs live under `loader/docs/`. |
-| `installer/` | Per-platform installers: `build-installer.ps1`/`recharge-installer.nsi` (Windows NSIS), `build-installer-linux.sh` (drives Tauri's own `.deb`/`.AppImage` bundlers), `arch/PKGBUILD` (Arch package, repackages the `.deb`'s own payload), `assets/` (icons/bitmaps), `output/` (built installers, one per past release). |
-| `tools/` | Dev-only: `devtools.js` (drives a running `tauri dev` over CDP for testing), `game-input.ps1` (Win32 input harness for automated in-game testing - Windows only), `release.ps1`, `test-bot.js`. |
-| `other/` | Miscellaneous dev scratch: sample `.igtap` files, a standalone BepInEx-based `leveledit` tool (unrelated to RechargeLoader), stray images. Not part of the shipped product. |
-
-## Installing
-
-**Just want the app?** Use the permanent installers - they never go out of date because they always download the newest release:
-
-- **Windows:** [`RechargeSetup.exe`](https://github.com/SumDumIdiut/recharge/releases/download/installer/RechargeSetup.exe)
-- **Linux:** `curl -fsSL https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh | bash` (uses apt on Debian/Ubuntu, otherwise installs under `~/.local` with no root; `--user` forces that). Script-installed copies update themselves from inside the app.
-
-Their sources are in `installer/bootstrap/` and are rebuilt by `.github/workflows/bootstrap.yml` only when those files change, not per release.
-
-
-Run the installer from a [release](../../releases), or build it yourself.
-
-**Windows:**
-
-```
-cd app
-npm install
-npm run tauri build
-```
-
-then `installer/build-installer.ps1` packages the NSIS `Setup.exe` from that build (see [Layout](#layout)). Needs [PowerShell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) for RechargeLoader's install/update pipeline.
-
-**Linux:**
-
-```
-cd app
-npm install
-npm run tauri build -- --bundles deb,appimage
-```
-
-or run `installer/build-installer-linux.sh` to build and stage both into `installer/output/`. On Arch, `installer/arch/PKGBUILD` builds a native package the same way (`makepkg -si` from `installer/arch/`). Needs [PowerShell Core](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux) (`pwsh` - `sudo pacman -S powershell`, `apt install powershell`, etc.) for RechargeLoader's install/update pipeline, and Steam itself for launching the game (IGTAP has no native Linux build, so it always runs through Proton - Recharge launches it via `steam steam://rungameid/<appid>` rather than the `.exe` directly).
-
-`Cargo.toml` names the crate `recharge` (currently version **1.4.3**); past built installers for every version back to `0.1.0` are kept in `installer/output/`.
+| `app/` | The desktop app: Tauri 2 (Rust in `src-tauri/`) with a plain JS front end in `src/`. |
+| `loader/` | RechargeLoader: `build-loader.ps1` (decompile, patch, build, deploy) and the `ModApi` / `Runtime` code every mod builds against. |
+| `installer/` | Installers: `bootstrap/` (the permanent, version-independent ones above), plus the Windows NSIS script and Arch `PKGBUILD`. |
+| `content/` | The app's local catalog of packaged mods. |
+| `tools/` | Developer scripts (release helper, dev tooling). |
+| `.github/workflows/` | `release.yml` builds each tagged release; `bootstrap.yml` publishes the permanent installers. |
 
 ## Recharge Hub
 
-The desktop app can install content straight from `codecade.co.za/recharge`, a community mod/map library:
-
-- **From inside the app:** the Mods/Maps Browse tabs call `install_from_hub_cmd(kind, id)` directly.
-- **From the hub's own web page:** clicking **Beam to Client** on a library page hits a local-only endpoint the app runs on `127.0.0.1:39284` (`app/src-tauri/src/commands/hub.rs`, `GET /beam?kind=<mods|maps>&id=<id>`). `127.0.0.1`/`localhost` are treated as potentially-trustworthy origins by browsers, so the hub's `https://` page can call this plain `http://` local server without hitting a mixed-content block — no custom URL-protocol handler needed.
-
-Either path downloads the package as a zip, extracts it to a temp folder, and installs it under the mod's own manifest `id` (for mods) or the hub's submission id (for maps, which have no manifest id of their own yet).
-
-## Building/updating a mod
-
-See [`loader/README.md`](loader/README.md#building) and [`loader/docs/creating-a-mod.md`](loader/docs/creating-a-mod.md).
-
-## Caveats
-
-- **`content/index.json` only lists one mod** (`recharge.multiplayer` / DOTnet), even though `mods/` has seven. The other six (Maps, Custom Skins, Icy Physics, Pause Buffering, TAS, RL Agent) aren't packaged into the app's local Browse catalog yet — they'd presumably need a `.igtap` built and an `index.json` entry added, or to be surfaced entirely through the recharge-hub integration instead.
-- **Top-level `docs/` is empty.** Real documentation lives under `loader/docs/`; don't confuse the two.
-- **`other/leveledit`** is a separate, unrelated BepInEx+Doorstop-based tool (has its own `winhttp.dll`/`doorstop_config.ini`) bundled here for convenience — it has nothing to do with RechargeLoader's patch-based approach described above; Windows/BepInEx-only, not addressed by the Linux work below.
-- `steam.rs` checks a fixed list of default Steam roots per OS (`C:\Program Files (x86)\Steam`/`C:\Program Files\Steam` on Windows; `~/.steam/steam`, `~/.local/share/Steam`, and the Flatpak Steam data dir on Linux), then reads `libraryfolders.vdf` from there to find non-default library drives — so detection fails if Steam itself isn't installed under one of those.
-- **Linux self-update only auto-installs when running as an AppImage** (`launcher.rs` checks the `APPIMAGE` env var the AppImage runtime sets). A `.deb`/PKGBUILD install shows a link to the release page instead of downloading anything — replacing a package-manager-owned file isn't safe to automate without going through the package manager itself.
-- **`tools/game-input.ps1`** (the Win32 input harness used by `test-bot.js`) is genuinely Windows-only and hasn't been ported - it's a dev-only testing tool, not something an end user's install path touches.
-- The Linux path has now been exercised end-to-end against a real IGTAP Demo install: Steam detection, the `pwsh`-driven RechargeLoader build pipeline (all 6 mods), and launching the game all confirmed working. Two real bugs turned up and were fixed in the process: `build-loader.ps1` was building ModApi/mods in place inside the installed (root-owned, read-only on a `.deb` install) resource directory instead of a writable copy, and its Awake-patch anchor string was hardcoded with Windows CRLF line endings, which never matches `ilspycmd`'s LF-only output on Linux. Separately, `play.rs` assumed IGTAP was Windows-only and always needed Proton - the real Linux depot ships a native `IGTAP.x86_64` build, which is now launched directly (see above).
+[codecade.co.za/recharge](https://codecade.co.za/recharge) is the community library. The app installs from it directly, and the site's **Beam to Client** button installs into a running Recharge through a local-only endpoint (`127.0.0.1:39284`).
