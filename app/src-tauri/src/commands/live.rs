@@ -17,9 +17,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub const LIVE_PORT: u16 = 39285;
 /// Bump together with app/live.json's "apiLevel" when a change adds or alters
 /// a Rust command, so older binaries stop applying bundles that need it.
-const API_LEVEL: u64 = 1;
+const API_LEVEL: u64 = 2;
 const REPO: &str = "SumDumIdiut/recharge";
-const BRANCH: &str = "master";
 const MAX_BUNDLE_BYTES: u64 = 200 * 1024 * 1024;
 const CHECK_EVERY: Duration = Duration::from_secs(20 * 60);
 /// Redirects without a confirmed successful load before we give up on live mode.
@@ -29,6 +28,20 @@ const MAX_UNCONFIRMED_TRIES: u32 = 3;
 pub struct LiveState {
     server_started: AtomicBool,
     stash: Mutex<Option<String>>,
+    /// Set when the newest code on the chosen channel needs a newer package.
+    needs_package: AtomicBool,
+    /// One update at a time: the timer and a channel switch share the work folder.
+    busy: Mutex<()>,
+}
+
+pub enum Outcome {
+    Applied,
+    UpToDate,
+    NeedsPackage,
+}
+
+fn branch_for(channel: &str) -> &'static str {
+    if channel == "beta" { "dev" } else { "master" }
 }
 
 #[derive(Serialize)]
@@ -221,8 +234,8 @@ pub fn live_take_stash(state: State<LiveState>) -> Option<String> {
 
 // ---- updating ----------------------------------------------------------
 
-fn remote_sha() -> Result<String, String> {
-    let body = ureq::get(&format!("https://api.github.com/repos/{REPO}/commits/{BRANCH}"))
+fn remote_sha(branch: &str) -> Result<String, String> {
+    let body = ureq::get(&format!("https://api.github.com/repos/{REPO}/commits/{branch}"))
         .header("User-Agent", "Recharge")
         .header("Accept", "application/vnd.github.sha")
         .call()
@@ -304,7 +317,7 @@ fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> 
         return Ok(Some("local".to_string()));
     }
 
-    let sha = remote_sha()?;
+    let sha = remote_sha(branch_for(&super::settings::update_channel(app)))?;
     if current_dir(app).and_then(|d| read_file(&d.join("sha"))).as_deref() == Some(sha.as_str()) {
         return Ok(None);
     }
@@ -322,7 +335,9 @@ fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> 
     Ok(Some(sha))
 }
 
-fn check_and_apply(app: &AppHandle) -> Result<(), String> {
+fn check_and_apply(app: &AppHandle) -> Result<Outcome, String> {
+    let state = app.state::<LiveState>();
+    let _one_at_a_time = state.busy.lock().unwrap();
     let root = live_root(app).ok_or("no data folder")?;
     let next = root.join("next");
     let _ = std::fs::remove_dir_all(&next);
@@ -332,7 +347,8 @@ fn check_and_apply(app: &AppHandle) -> Result<(), String> {
         Some(sha) => sha,
         None => {
             let _ = std::fs::remove_dir_all(&next);
-            return Ok(());
+            app.state::<LiveState>().needs_package.store(false, Ordering::SeqCst);
+            return Ok(Outcome::UpToDate);
         }
     };
 
@@ -344,7 +360,8 @@ fn check_and_apply(app: &AppHandle) -> Result<(), String> {
     if needed > API_LEVEL {
         let _ = std::fs::remove_dir_all(&next);
         log(app, &format!("new code needs API level {needed} (this app is {API_LEVEL}) - a package update is required"));
-        return Ok(());
+        app.state::<LiveState>().needs_package.store(true, Ordering::SeqCst);
+        return Ok(Outcome::NeedsPackage);
     }
 
     // The loader script looks for its decompiler next to itself, and that
@@ -371,7 +388,45 @@ fn check_and_apply(app: &AppHandle) -> Result<(), String> {
     let _ = std::fs::remove_file(root.join("tries"));
     log(app, &format!("applied code {}", &sha[..sha.len().min(7)]));
 
+    app.state::<LiveState>().needs_package.store(false, Ordering::SeqCst);
     start_server(app);
     let _ = app.emit("live-updated", sha);
-    Ok(())
+    Ok(Outcome::Applied)
+}
+
+#[derive(Serialize)]
+pub struct ChannelInfo {
+    channel: String,
+    sha: Option<String>,
+    #[serde(rename = "needsPackage")]
+    needs_package: bool,
+}
+
+#[tauri::command]
+pub fn live_get_channel(app: AppHandle) -> ChannelInfo {
+    ChannelInfo {
+        channel: super::settings::update_channel(&app),
+        sha: current_dir(&app).and_then(|d| read_file(&d.join("sha"))),
+        needs_package: app.state::<LiveState>().needs_package.load(Ordering::SeqCst),
+    }
+}
+
+/// Switches between "stable" (master) and "beta" (dev) and fetches that
+/// channel's code right away.
+#[tauri::command]
+pub async fn live_set_channel(app: AppHandle, channel: String) -> Result<String, String> {
+    if channel != "stable" && channel != "beta" {
+        return Err(format!("unknown channel: {channel}"));
+    }
+    super::settings::save_update_channel(&app, &channel);
+    let worker = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || check_and_apply(&worker))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(match outcome {
+        Outcome::Applied => "applied",
+        Outcome::UpToDate => "upToDate",
+        Outcome::NeedsPackage => "needsPackage",
+    }
+    .to_string())
 }

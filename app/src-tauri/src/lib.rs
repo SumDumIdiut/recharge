@@ -39,6 +39,8 @@ pub fn run() {
             mods::export_example_mod,
             repos::pull_mod_repo,
             live::live_status,
+            live::live_get_channel,
+            live::live_set_channel,
             live::live_ack,
             live::live_stash,
             live::live_take_stash,
