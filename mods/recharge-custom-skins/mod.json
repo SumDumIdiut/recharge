@@ -1,9 +1,0 @@
-{
-  "id": "recharge.customskins",
-  "displayName": "Skinmod",
-  "version": "2.0.0",
-  "author": "Recharge",
-  "entryAssembly": "RechargeCustomSkins.dll",
-  "minLoaderVersion": "1.0.0",
-  "enabled": true
-}

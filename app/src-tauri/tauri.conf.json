@@ -33,9 +33,7 @@
       "../../loader/ModApi": "loader/ModApi",
       "../../loader/Runtime": "loader/Runtime",
       "../../loader/tools": "loader/tools",
-      "../../loader/build-loader.ps1": "loader/build-loader.ps1",
-      "../../mods/recharge-maps": "mods/recharge-maps",
-      "../../mods/recharge-example": "mods/recharge-example"
+      "../../loader/build-loader.ps1": "loader/build-loader.ps1"
     },
     "windows": {
       "nsis": {
