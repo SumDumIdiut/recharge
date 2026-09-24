@@ -55,6 +55,12 @@
       <div id="launcher-status" class="settings-sub">Checking…</div>
       <button class="btn btn-primary" id="launcher-update-btn" onclick="window.__launcherUpdate()" hidden>Update Now</button>
     </div>
+    <div class="settings-row">
+      <div class="settings-sub">Update channel</div>
+      <button class="btn" id="channel-stable-btn" onclick="window.__setChannel('stable')">Stable</button>
+      <button class="btn" id="channel-beta-btn" onclick="window.__setChannel('beta')">Beta</button>
+    </div>
+    <div id="channel-note" class="settings-sub">Stable gets tested changes. Beta gets the newest code first and may break.</div>
     <div id="launcher-notes" class="settings-sub" hidden></div>
     <div id="launcher-update-progress" class="settings-sub" hidden></div>
   </div>

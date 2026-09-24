@@ -7,6 +7,7 @@ use super::steam;
 #[derive(Serialize, Deserialize, Default)]
 struct StoredSettings {
     game_path: Option<String>,
+    update_channel: Option<String>,
 }
 
 fn settings_path(app: &AppHandle) -> PathBuf {
@@ -26,6 +27,20 @@ fn save(app: &AppHandle, settings: &StoredSettings) {
     if let Ok(json) = serde_json::to_string_pretty(settings) {
         std::fs::write(settings_path(app), json).ok();
     }
+}
+
+/// "stable" (the master branch) or "beta" (the dev branch).
+pub fn update_channel(app: &AppHandle) -> String {
+    match load(app).update_channel.as_deref() {
+        Some("beta") => "beta".to_string(),
+        _ => "stable".to_string(),
+    }
+}
+
+pub fn save_update_channel(app: &AppHandle, channel: &str) {
+    let mut settings = load(app);
+    settings.update_channel = Some(channel.to_string());
+    save(app, &settings);
 }
 
 #[tauri::command]

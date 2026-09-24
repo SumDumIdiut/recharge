@@ -260,6 +260,7 @@ async function refreshStatus() {
 let launcherUpdateInfo = null;
 
 async function refreshLauncherStatus() {
+  refreshChannel();
   const { invoke } = window.__TAURI__.core;
   const status = document.getElementById('launcher-status');
   const notes = document.getElementById('launcher-notes');
@@ -294,6 +295,43 @@ async function refreshLauncherStatus() {
     status.textContent = String(err);
   }
 }
+
+const CHANNEL_HELP = 'Stable gets tested changes. Beta gets the newest code first and may break.';
+
+async function refreshChannel() {
+  const { invoke } = window.__TAURI__.core;
+  const note = document.getElementById('channel-note');
+  try {
+    const info = await invoke('live_get_channel');
+    document.getElementById('channel-stable-btn').classList.toggle('btn-primary', info.channel === 'stable');
+    document.getElementById('channel-beta-btn').classList.toggle('btn-primary', info.channel === 'beta');
+    note.textContent = info.needsPackage
+      ? 'The latest code on this channel needs a newer Recharge package - update the app above, then try again.'
+      : CHANNEL_HELP;
+  } catch {
+    // An older build without channels - hide the row rather than show a dead control.
+    document.getElementById('channel-stable-btn').closest('.settings-row').hidden = true;
+    note.hidden = true;
+  }
+}
+
+window.__setChannel = async function (channel) {
+  const { invoke } = window.__TAURI__.core;
+  const note = document.getElementById('channel-note');
+  const buttons = [document.getElementById('channel-stable-btn'), document.getElementById('channel-beta-btn')];
+  buttons.forEach((b) => { b.disabled = true; });
+  note.textContent = 'Switching...';
+  try {
+    const result = await invoke('live_set_channel', { channel });
+    await refreshChannel();
+    if (result === 'applied') note.textContent = `Switched to ${channel}. Reload to start using it.`;
+    else if (result === 'upToDate') note.textContent = `You're on the latest ${channel} code.`;
+  } catch (err) {
+    note.textContent = `Couldn't switch: ${String(err)}`;
+  } finally {
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+};
 
 window.__launcherUpdate = async function () {
   const { invoke } = window.__TAURI__.core;
