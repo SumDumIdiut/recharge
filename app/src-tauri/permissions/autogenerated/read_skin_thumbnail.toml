@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-skin-thumbnail"
+description = "Enables the read_skin_thumbnail command without any pre-configured scope."
+commands.allow = ["read_skin_thumbnail"]
+
+[[permission]]
+identifier = "deny-read-skin-thumbnail"
+description = "Denies the read_skin_thumbnail command without any pre-configured scope."
+commands.deny = ["read_skin_thumbnail"]

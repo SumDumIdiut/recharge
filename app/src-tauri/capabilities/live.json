@@ -1,10 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capability for the main window",
+  "identifier": "live",
+  "description": "The live-updated screens, served from the app's own local server",
   "windows": [
     "main"
   ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:39285",
+      "http://127.0.0.1:39285/*"
+    ]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-set-fullscreen",

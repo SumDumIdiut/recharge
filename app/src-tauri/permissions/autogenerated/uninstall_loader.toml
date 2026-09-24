@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-uninstall-loader"
+description = "Enables the uninstall_loader command without any pre-configured scope."
+commands.allow = ["uninstall_loader"]
+
+[[permission]]
+identifier = "deny-uninstall-loader"
+description = "Denies the uninstall_loader command without any pre-configured scope."
+commands.deny = ["uninstall_loader"]

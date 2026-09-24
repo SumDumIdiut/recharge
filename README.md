@@ -46,7 +46,7 @@ npm run tauri dev                       # run it
 npm run tauri build -- --no-bundle      # release binary in app/src-tauri/target/release
 ```
 
-For local mod development, clone the mod repos into `mods/` (git-ignored) or point `RECHARGE_MODS_DIR` at a folder that holds them; `loader/build-loader.ps1 -GameDir <game> [-ModsDir <dir>]` compiles and deploys everything. Releases are automatic: pushing changes under `app/`, `loader/` or `content/` to `master` makes GitHub Actions pick the next version, build the Windows and Linux packages and publish them, and the app's built-in updater installs them. There is nothing to build or upload by hand.
+For local mod development, clone the mod repos into `mods/` (git-ignored) or point `RECHARGE_MODS_DIR` at a folder that holds them; `loader/build-loader.ps1 -GameDir <game> [-ModsDir <dir>]` compiles and deploys everything. Most changes ship without any package: the app pulls `app/src` (its screens) and `loader/` from this repo's `master` branch on launch and every 20 minutes and runs them from its data folder, so **pushing to `master` updates everyone** (a banner offers a reload). Only a change to the compiled app (`app/src-tauri`) needs a new package, which GitHub Actions versions, builds and publishes automatically. If a change adds or alters a Rust command, bump `API_LEVEL` in `app/src-tauri/src/commands/live.rs` and `apiLevel` in `app/live.json` together, so older installs wait for the package instead of loading screens they can't run. For local development, set `RECHARGE_LIVE_LOCAL=<repo checkout>` to load the live bundle from disk instead of GitHub, or `RECHARGE_NO_LIVE=1` to use only the built-in screens.
 
 ## Repository layout
 
@@ -57,7 +57,7 @@ For local mod development, clone the mod repos into `mods/` (git-ignored) or poi
 | `installer/` | Installers: `bootstrap/` (the permanent, version-independent ones above), plus the Windows NSIS script and Arch `PKGBUILD`. |
 | `content/` | The app's local catalog of packaged mods. |
 | `tools/` | Developer scripts (release helper, dev tooling). |
-| `.github/workflows/` | `autorelease.yml` versions, builds and publishes every push (`release.yml` builds a manually pushed `v*` tag); `bootstrap.yml` publishes the permanent installers. |
+| `.github/workflows/` | `autorelease.yml` builds and publishes a package when the compiled app changes (`release.yml` builds a manually pushed `v*` tag); `bootstrap.yml` publishes the permanent installers. |
 
 ## Recharge Hub
 

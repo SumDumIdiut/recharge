@@ -62,6 +62,9 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 }
 
 fn find_build_script(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(script) = super::live::loader_script(app) {
+        return Ok(script);
+    }
     let path = app
         .path()
         .resolve("loader/build-loader.ps1", tauri::path::BaseDirectory::Resource)

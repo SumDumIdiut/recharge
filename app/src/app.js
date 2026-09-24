@@ -1,4 +1,5 @@
 import { initHome, refreshInstallStatus } from './home.js';
+import './live-update.js';
 
 const _tabLoaded = {};
 let curTab = 'home';

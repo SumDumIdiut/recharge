@@ -1,7 +1,7 @@
 mod commands;
 mod vdf;
 
-use commands::{hub, launcher, loader, maps, mods, play, repos, settings, skins, steam};
+use commands::{hub, launcher, live, loader, maps, mods, play, repos, settings, skins, steam};
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
@@ -22,6 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             hub::start_beam_server(app.handle().clone());
+            live::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -37,6 +38,10 @@ pub fn run() {
             mods::uninstall_mod,
             mods::export_example_mod,
             repos::pull_mod_repo,
+            live::live_status,
+            live::live_ack,
+            live::live_stash,
+            live::live_take_stash,
             hub::install_from_hub_cmd,
             hub::download_skin_template_cmd,
             hub::submit_skin_cmd,
