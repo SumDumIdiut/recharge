@@ -48,3 +48,7 @@
 session*.json
 .sessions/
 *cookie*
+
+# Mod sources live in their own repos (recharge-mods/-maps/-skins), cloned or
+# pulled into here - see app/src-tauri/src/commands/repos.rs
+/mods/

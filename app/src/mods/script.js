@@ -340,6 +340,18 @@ window.__modInstall = async function (id, btn) {
   doInstall([id], btn);
 };
 
+// Mods whose source lives in a GitHub repo instead of the hub: installing one
+// pulls it into the mods folder, then the loader build compiles and deploys it.
+const REPO_MODS = {
+  'recharge.maps': { repo: 'recharge-maps' },
+  'recharge.customskins': { repo: 'recharge-skins' },
+  'recharge.example': { repo: 'recharge-mods', folder: 'recharge-example' },
+  'recharge.icyphysics': { repo: 'recharge-mods', folder: 'recharge-icy-physics' },
+  'recharge.multiplayer': { repo: 'recharge-mods', folder: 'recharge-multiplayer' },
+  'recharge.pausebuffering': { repo: 'recharge-mods', folder: 'recharge-pause-buffering' },
+  'recharge.tas': { repo: 'recharge-mods', folder: 'recharge-tas' },
+};
+
 async function doInstall(ids, btn) {
   const { invoke } = window.__TAURI__.core;
   const isBadge = btn && btn.classList.contains('browse-card-badge');
@@ -354,9 +366,17 @@ async function doInstall(ids, btn) {
     }
   }
   try {
+    let pulledFromRepo = false;
     for (const id of ids) {
-      await invoke('install_from_hub_cmd', { kind: 'mods', id });
+      const source = REPO_MODS[id];
+      if (source) {
+        await invoke('pull_mod_repo', { repo: source.repo, folder: source.folder ?? null });
+        pulledFromRepo = true;
+      } else {
+        await invoke('install_from_hub_cmd', { kind: 'mods', id });
+      }
     }
+    if (pulledFromRepo) await invoke('install_or_update_loader');
     if (btn && isBadge) {
       btn.classList.remove('is-installing');
       btn.classList.add('is-done');

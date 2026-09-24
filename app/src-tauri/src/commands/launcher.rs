@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use super::settings;
 
@@ -53,10 +53,7 @@ fn read_manifest_version(path: &std::path::Path) -> Option<String> {
 }
 
 fn bundled_maps_version(app: &AppHandle) -> Option<String> {
-    let path = app
-        .path()
-        .resolve("mods/recharge-maps/mod.json", tauri::path::BaseDirectory::Resource)
-        .ok()?;
+    let path = super::repos::source_mods_dir(app).ok()?.join("recharge-maps").join("mod.json");
     read_manifest_version(&path)
 }
 

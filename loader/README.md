@@ -164,7 +164,7 @@ Every run:
 
 - Rebuilds `Recharge.ModApi.dll` and the patched `Assembly-CSharp.dll` from
   scratch (phases 1–5, fixed).
-- Discovers every `mods/<name>/*.csproj` that has a `mod.json` beside it
+- Discovers every `<ModsDir>/<repo>/[<mod>/]*.csproj` that has a `mod.json` beside it
   (except folders starting with `_`, like `mods/_template/` — see
   [`docs/creating-a-mod.md`](docs/creating-a-mod.md)), builds each one with
   `-p:ManagedDir=<game>\..._Data\Managed`, and deploys the built DLL +

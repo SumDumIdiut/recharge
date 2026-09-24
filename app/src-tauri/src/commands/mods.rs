@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::settings;
 
@@ -101,10 +101,7 @@ pub fn uninstall_mod(app: AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn export_example_mod(app: AppHandle, dest_dir: String) -> Result<(), String> {
-    let src = app
-        .path()
-        .resolve("mods/recharge-example", tauri::path::BaseDirectory::Resource)
-        .map_err(|e| format!("example mod resource not found: {e}"))?;
+    let src = super::repos::ensure_blocking(&app, "recharge-mods", Some("recharge-example"))?;
     let dest = PathBuf::from(dest_dir).join("recharge-example");
     std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     copy_dir_skipping_build_output(&src, &dest)

@@ -100,10 +100,18 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);
 
+    // Navigator (recharge-maps) is required by other mods, so it's always
+    // pulled into the mods folder before building; other mods are pulled
+    // when the user installs them.
+    let mods_dir = super::repos::source_mods_dir(app)?;
+    super::repos::ensure_blocking(app, "recharge-maps", None)?;
+
     let mut cmd = powershell_command()?;
     cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .args(["-GameDir", &game_path])
+        .args(["-ModsDir"])
+        .arg(&mods_dir)
         .args(["-StatusFile"])
         .arg(&status_file);
     if let Some(appid) = &appid {

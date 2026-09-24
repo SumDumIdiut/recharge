@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$GameDir,
     [string]$StatusFile,
     [switch]$NoSdkDownload,
-    [string]$SteamAppId
+    [string]$SteamAppId,
+    [string]$ModsDir
 )
 
 $ErrorActionPreference = 'Continue'
@@ -34,8 +35,10 @@ try {
     $rechargeRoot = Split-Path $loaderRoot -Parent
     $ilspycmd = Join-Path $loaderRoot 'tools/ilspycmd/ilspycmd.dll'
 
-    $modsSourceDir = Join-Path $rechargeRoot 'mods'
-    $modProjects = @(Get-ChildItem -Path $modsSourceDir -Filter '*.csproj' -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+    # Mod sources live one folder per repo under the mods dir (a repo is either
+    # a single mod or a folder of mods), so projects can sit two levels down.
+    $modsSourceDir = if ($ModsDir) { $ModsDir } elseif ($env:RECHARGE_MODS_DIR) { $env:RECHARGE_MODS_DIR } else { Join-Path $rechargeRoot 'mods' }
+    $modProjects = @(Get-ChildItem -Path $modsSourceDir -Filter '*.csproj' -Recurse -Depth 2 -ErrorAction SilentlyContinue |
         Where-Object { (Split-Path $_.DirectoryName -Leaf) -notlike '_*' })
     $totalPhases = 5 + $modProjects.Count
 

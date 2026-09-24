@@ -1,7 +1,7 @@
 mod commands;
 mod vdf;
 
-use commands::{hub, launcher, loader, maps, mods, play, settings, skins, steam};
+use commands::{hub, launcher, loader, maps, mods, play, repos, settings, skins, steam};
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
@@ -36,6 +36,7 @@ pub fn run() {
             mods::set_mod_enabled,
             mods::uninstall_mod,
             mods::export_example_mod,
+            repos::pull_mod_repo,
             hub::install_from_hub_cmd,
             hub::download_skin_template_cmd,
             hub::submit_skin_cmd,
