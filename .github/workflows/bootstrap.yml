@@ -2,7 +2,7 @@ name: Bootstrap installer
 
 # Builds the tiny version-independent installer (it always downloads the
 # newest Recharge release) and attaches it to a permanent "installer"
-# prerelease, so its download link never changes. Runs only when the
+# release, so its download link never changes. Runs only when the
 # bootstrap sources change - not per Recharge release.
 on:
   workflow_dispatch:
@@ -38,9 +38,9 @@ jobs:
         run: |
           # The Windows checkout may have turned install.sh into CRLF, which bash rejects.
           sed -i 's/\r$//' install.sh
-          # A prerelease, so GitHub's /releases/latest (used by the app's
-          # update check and these installers) never points at it.
+          # --latest=false keeps GitHub's /releases/latest (used by the app's
+          # update check and these installers) pointing at the app release.
           gh release view installer >/dev/null 2>&1 || gh release create installer \
-            --prerelease --target "${{ github.sha }}" --title "Installers" \
+            --latest=false --target "${{ github.sha }}" --title "Installers" \
             --notes "Permanent, version-independent installers - they always install the newest Recharge release. Download RechargeSetup.exe on Windows, or run install.sh on Linux."
           gh release upload installer RechargeSetup.exe install.sh install.ps1 --clobber
