@@ -40,8 +40,22 @@ fn default_steam_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Windows canonicalize() returns `\\?\C:\...`, which never string-matches the
+/// plain `C:\...` a saved/browsed path uses and made one install list twice.
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
+}
+
 fn push_canonical(roots: &mut Vec<PathBuf>, path: &Path) {
-    roots.push(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    roots.push(strip_verbatim_prefix(canonical));
 }
 
 fn library_roots() -> Vec<PathBuf> {
@@ -175,6 +189,8 @@ pub fn detect_all() -> Vec<InstallInfo> {
         let common = steamapps.join("common");
         found.extend(scan_library_all(&common, &steamapps));
     }
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|i| seen.insert(i.path.to_lowercase()));
     // Full Game first - it's the one that actually supports mods, so it's
     // what most actions here care about.
     found.sort_by_key(|i| variant_sort_key(&i.variant));
@@ -191,6 +207,8 @@ pub fn detect_all_igtap_installs() -> Vec<InstallInfo> {
 }
 
 pub fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
+    let game_dir = strip_verbatim_prefix(game_dir.to_path_buf());
+    let game_dir = game_dir.as_path();
     find_assembly_csharp(game_dir)?;
     let name = game_dir.file_name()?.to_string_lossy().to_string();
     let variant = variant_for_name(&name);
