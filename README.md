@@ -37,6 +37,14 @@ The Tauri app (`app/src`, JS/HTML) calls into `app/src-tauri` (Rust) over `invok
 
 ## Installing
 
+**Just want the app?** Use the permanent installers - they never go out of date because they always download the newest release:
+
+- **Windows:** [`RechargeSetup.exe`](https://github.com/SumDumIdiut/recharge/releases/download/installer/RechargeSetup.exe)
+- **Linux:** `curl -fsSL https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh | bash` (uses apt on Debian/Ubuntu, otherwise installs under `~/.local` with no root; `--user` forces that). Script-installed copies update themselves from inside the app.
+
+Their sources are in `installer/bootstrap/` and are rebuilt by `.github/workflows/bootstrap.yml` only when those files change, not per release.
+
+
 Run the installer from a [release](../../releases), or build it yourself.
 
 **Windows:**

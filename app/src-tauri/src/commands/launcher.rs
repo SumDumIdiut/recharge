@@ -6,6 +6,8 @@ use tauri::{AppHandle, Emitter};
 use super::settings;
 
 const RELEASES_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases/latest";
+#[cfg(not(windows))]
+const INSTALLER_SCRIPT_URL: &str = "https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh";
 const MAX_INSTALLER_BYTES: u64 = 200 * 1024 * 1024;
 
 #[derive(Deserialize)]
@@ -83,7 +85,7 @@ fn is_newer(a: &str, b: &str) -> bool {
 fn self_update_asset_url(assets: &[GithubAsset]) -> Option<String> {
     assets
         .iter()
-        .find(|a| a.name.ends_with("_Setup.exe"))
+        .find(|a| a.name.to_lowercase().ends_with("setup.exe"))
         .map(|a| a.browser_download_url.clone())
 }
 
@@ -95,13 +97,22 @@ fn self_update_asset_url(assets: &[GithubAsset]) -> Option<String> {
             .find(|a| a.name.to_lowercase().ends_with(".appimage"))
             .map(|a| a.browser_download_url.clone());
     }
-    if is_installed_via_deb() {
+    if is_installed_via_deb() || is_user_install() {
         return assets
             .iter()
             .find(|a| a.name.to_lowercase().ends_with(".deb"))
             .map(|a| a.browser_download_url.clone());
     }
     None
+}
+
+// Installed by installer/bootstrap/install.sh under ~/.local (no package
+// manager involved), which leaves a marker file behind.
+#[cfg(not(windows))]
+fn is_user_install() -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return false };
+    home.join(".local/share/recharge/.user-install").is_file()
+        && std::env::current_exe().map(|exe| exe.starts_with(home.join(".local"))).unwrap_or(false)
 }
 
 #[cfg(not(windows))]
@@ -204,6 +215,9 @@ pub fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String
     if is_installed_via_deb() {
         return install_deb_update(&app, &url);
     }
+    if is_user_install() {
+        return install_user_update(&app);
+    }
     Err("not running as an AppImage or a .deb install - can't self-update this install.".to_string())
 }
 
@@ -229,6 +243,27 @@ fn install_appimage_update(app: &AppHandle, url: &str, appimage_path: &std::path
     Command::new(appimage_path)
         .spawn()
         .map_err(|e| format!("couldn't start the updated AppImage: {e}"))?;
+
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_user_update(app: &AppHandle) -> Result<(), String> {
+    let _ = app.emit("launcher-update-progress", "Downloading and installing the update...");
+    let status = Command::new("bash")
+        .args(["-c", &format!("curl -fsSL {INSTALLER_SCRIPT_URL} | bash -s -- --user --no-launch")])
+        .status()
+        .map_err(|e| format!("couldn't run the installer: {e}"))?;
+    if !status.success() {
+        return Err("the update failed - check your internet connection and try again.".to_string());
+    }
+
+    let exe = std::env::current_exe().map_err(|e| format!("update installed, but couldn't relaunch: {e}"))?;
+    let _ = app.emit("launcher-update-progress", "Starting the new version...");
+    Command::new(exe)
+        .spawn()
+        .map_err(|e| format!("update installed, but couldn't relaunch: {e}"))?;
 
     app.exit(0);
     Ok(())
