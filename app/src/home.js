@@ -171,14 +171,12 @@ let accountSynced = false;
 
 export function updateAccountBadge() {
   const badge = document.getElementById('home-account-badge');
-  const menuRow = document.getElementById('home-account-menu-row');
   if (!badge) return;
   const loggedIn = isLoggedIn();
   const admin = loggedIn && isAdmin();
   badge.textContent = loggedIn ? (admin ? `${getUsername()} · Admin` : getUsername()) : 'Log In';
   badge.classList.toggle('is-logged-in', loggedIn);
   badge.classList.toggle('is-admin', admin);
-  if (menuRow) menuRow.style.display = loggedIn ? '' : 'none';
 }
 
 function setLoginMode(mode) {
