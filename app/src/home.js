@@ -1,6 +1,6 @@
 import { getWaveSettings } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
-import { isLoggedIn, getUsername, setSession } from '/auth.js';
+import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession } from '/auth.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 let loginMode = 'login';
@@ -167,13 +167,17 @@ window.__homeLaunch = async function (mode) {
   }
 };
 
+let accountSynced = false;
+
 export function updateAccountBadge() {
   const badge = document.getElementById('home-account-badge');
   const menuRow = document.getElementById('home-account-menu-row');
   if (!badge) return;
   const loggedIn = isLoggedIn();
-  badge.textContent = loggedIn ? getUsername() : 'Log In';
+  const admin = loggedIn && isAdmin();
+  badge.textContent = loggedIn ? (admin ? `${getUsername()} · Admin` : getUsername()) : 'Log In';
   badge.classList.toggle('is-logged-in', loggedIn);
+  badge.classList.toggle('is-admin', admin);
   if (menuRow) menuRow.style.display = loggedIn ? '' : 'none';
 }
 
@@ -221,6 +225,7 @@ async function submitLoginForm() {
     setSession(body.token, body.username);
     closeLoginModal();
     updateAccountBadge();
+    refreshSession().then(updateAccountBadge);
   } catch (err) {
     errorEl.textContent = String(err.message || err);
     errorEl.hidden = false;
@@ -251,6 +256,10 @@ function applyVariantUi(active) {
 
 export async function refreshInstallStatus(opts = {}) {
   updateAccountBadge();
+  if (!accountSynced) {
+    accountSynced = true;
+    refreshSession().then(updateAccountBadge);
+  }
   return renderInstallList(document.getElementById('home-install-list'), {
     emptyHtml: `<div class="home-install-label">IGTAP not found</div><div class="home-install-sub">Set the path in Settings.</div>`,
     onError: (err) => { if (opts.log !== false) logLine(`install detection failed: ${String(err)}`); },

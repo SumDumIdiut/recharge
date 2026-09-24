@@ -121,14 +121,21 @@ body {
   border: 1px solid var(--line);
   color: var(--text-dim);
   font: inherit;
-  font-size: 13px;
+  font-size: 16px;
   text-transform: uppercase;
-  padding: 6px 14px;
+  padding: 9px 20px;
   cursor: pointer;
   flex-shrink: 0;
 }
 .home-account-badge:hover { border-color: var(--line-hi); color: var(--text); }
 .home-account-badge.is-logged-in { border-color: var(--green-dim); color: var(--green); }
+.home-account-badge.is-admin {
+  font-size: 19px;
+  letter-spacing: 1px;
+  padding: 11px 24px;
+  border-color: var(--green);
+  box-shadow: 0 0 12px rgba(61, 220, 132, 0.25);
+}
 
 .home-grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; flex: 1; }
 

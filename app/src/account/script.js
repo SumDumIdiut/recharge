@@ -1,4 +1,4 @@
-import { getToken, getUsername, clearSession, isLoggedIn } from '../auth.js';
+import { getToken, getUsername, isAdmin, clearSession, isLoggedIn } from '../auth.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -120,7 +120,7 @@ export async function init() {
     window.goHome();
     return;
   }
-  document.getElementById('account-username-display').textContent = `Logged in as ${getUsername()}`;
+  document.getElementById('account-username-display').textContent = `Logged in as ${getUsername()}${isAdmin() ? ' (admin)' : ''}`;
   document.getElementById('account-logout-btn').addEventListener('click', () => {
     clearSession();
     window.goHome();
