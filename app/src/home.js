@@ -255,13 +255,15 @@ window.__homeAccountBadgeClick = function () {
   }
 };
 
-// The demo can't be modded at all - only the full game can. Hides the
-// mod-management entry points and the Modded launch tile rather than
-// leaving them there to fail with a server-side error every time.
+// Only the full game can be modded - not the demo or the playtest build. Greys
+// out the Modded launch tile and hides the mod-management entry points rather
+// than leaving them there to fail every time.
 function applyVariantUi(active) {
-  const isDemo = active?.variant === 'Demo';
-  document.getElementById('home-modded-tile').disabled = isDemo;
-  document.getElementById('home-demo-note').style.display = isDemo ? '' : 'none';
+  const unmoddable = !!active && active.variant !== 'Full Game';
+  document.getElementById('home-modded-tile').disabled = unmoddable;
+  const note = document.getElementById('home-demo-note');
+  note.style.display = unmoddable ? '' : 'none';
+  if (unmoddable) note.textContent = `The ${active.variant.toLowerCase()} build only supports vanilla - mods aren't available on it.`;
   // Library news is only shown next to the full game.
   const news = document.querySelector('.home-log-panel');
   if (news) {
@@ -269,7 +271,7 @@ function applyVariantUi(active) {
     layoutNews();
   }
   for (const id of ['home-mods-row', 'home-maps-row', 'home-skins-row']) {
-    document.getElementById(id).style.display = isDemo ? 'none' : '';
+    document.getElementById(id).style.display = unmoddable ? 'none' : '';
   }
 }
 
