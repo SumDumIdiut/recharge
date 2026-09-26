@@ -18,6 +18,7 @@ Prefer a specific version? Every build is on the [Releases](https://github.com/S
 - **Mods** - install, enable, disable and remove mods; the Installed tab lists enabled ones first.
 - **Navigator (maps)** - play custom real-asset maps and switch between Base Game and B-Side.
 - **Skinmod (skins)** - reskin the player, including custom sounds and the dash / double-jump indicators.
+- **Games** - download older IGTAP builds from the library: Unity WebGL builds play in their own window (a small Electron runtime is downloaded the first time), and standalone demos are unpacked and started directly.
 - **Browse and upload** - a community library at [codecade.co.za/recharge](https://codecade.co.za/recharge), with accounts so you can manage your own uploads.
 - **Works with your setup** - detects Steam libraries, launches the game (through Steam/Proton on Linux), and can restore vanilla at any time. The demo can be played, but only unmodded.
 
@@ -53,6 +54,7 @@ For local mod development, clone the mod repos into `mods/` (git-ignored) or poi
 | Path | What it is |
 |---|---|
 | `app/` | The desktop app: Tauri 2 (Rust in `src-tauri/`) with a plain JS front end in `src/`. |
+| `electron/` | The tiny Electron app that plays a Unity WebGL build in a window (started by Recharge's Games tab). |
 | `loader/` | RechargeLoader: `build-loader.ps1` (decompile, patch, build, deploy) and the `ModApi` / `Runtime` code every mod builds against. |
 | `installer/` | Installers: `bootstrap/` (the permanent, version-independent ones above), plus the Windows NSIS script and Arch `PKGBUILD`. |
 | `content/` | The app's local catalog of packaged mods. |

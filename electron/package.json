@@ -1,0 +1,7 @@
+{
+  "name": "recharge-game-runner",
+  "version": "1.0.0",
+  "description": "Runs a Unity WebGL build in a window, for Recharge's Games library",
+  "main": "main.js",
+  "private": true
+}
