@@ -12,6 +12,30 @@ namespace Recharge.ModApi
     /// </summary>
     public static class PauseMenuHelper
     {
+        /// <summary>The live pause menu in the current scene, or null if there isn't one (e.g. mid scene-load).</summary>
+        public static pauseMenuScript FindMenu() => UnityEngine.Object.FindFirstObjectByType<pauseMenuScript>();
+
+        /// <summary>
+        /// Runs <paramref name="install"/> against the live pause menu every
+        /// time a scene loads. The game builds a brand new pauseMenuScript
+        /// per scene, so anything a mod adds to it must be re-added each time
+        /// - a one-time snapshot would go stale after the first scene change.
+        /// </summary>
+        public static void OnMenuReady(IRechargeHost host, Action<pauseMenuScript> install)
+        {
+            host.Events.On(RechargeEvents.SceneLoaded, _ =>
+            {
+                var menu = FindMenu();
+                if (menu != null) install(menu);
+            });
+        }
+
+        /// <summary>The pause menu's main (page 1) container, or null if the game's menu doesn't have the expected shape.</summary>
+        public static GameObject MainBit(pauseMenuScript menu) => menu != null ? MenuReflection.MainBit(menu) : null;
+
+        /// <summary>The pause menu's settings container (the template every mod panel is cloned from), or null.</summary>
+        public static GameObject SettingsBit(pauseMenuScript menu) => menu != null ? MenuReflection.SettingsBit(menu) : null;
+
         public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick)
         {
             if (!HasExpectedShape(menu)) return null;
