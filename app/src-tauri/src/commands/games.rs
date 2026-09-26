@@ -74,11 +74,23 @@ fn this_platform() -> &'static str {
     }
 }
 
+/// Windows builds run on Linux through Steam's Proton.
+fn needs_proton(game: &HubGame) -> bool {
+    cfg!(target_os = "linux") && game.kind == "standalone" && game.platform == "windows"
+}
+
 fn unplayable_reason(game: &HubGame) -> Option<String> {
-    if game.kind == "standalone" && game.platform != "any" && game.platform != this_platform() {
-        return Some(format!("This is a {} build - it can't run on this computer.", game.platform));
+    if game.kind != "standalone" || game.platform == "any" || game.platform == this_platform() {
+        return None;
     }
-    None
+    if needs_proton(game) {
+        #[cfg(not(windows))]
+        if super::steam::find_proton().is_none() {
+            return Some("This is a Windows build. It runs through Steam's Proton, which isn't installed - install Proton in Steam (Library > Tools).".to_string());
+        }
+        return None;
+    }
+    Some(format!("This is a {} build - it can't run on this computer.", game.platform))
 }
 
 // The Windows build script strips the `\\?\` prefix Tauri gives resource paths
@@ -221,6 +233,40 @@ pub fn uninstall_library_game(app: AppHandle, id: String) -> Result<(), String> 
     if target.is_dir() {
         std::fs::remove_dir_all(&target).map_err(|e| format!("couldn't remove it: {e}"))?;
     }
+    // A Windows build run through Proton keeps its own Wine prefix (its saves included).
+    let _ = std::fs::remove_dir_all(proton_prefix(&app, &id)?);
+    Ok(())
+}
+
+fn proton_prefix(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?
+        .join("proton")
+        .join(id))
+}
+
+#[cfg(not(windows))]
+fn launch_with_proton(app: &AppHandle, id: &str, exe: &Path, dir: &Path) -> Result<(), String> {
+    let (proton, client) = super::steam::find_proton().ok_or("Steam's Proton isn't installed")?;
+    let prefix = proton_prefix(app, id)?;
+    std::fs::create_dir_all(&prefix).map_err(|e| e.to_string())?;
+    // Proton's output goes to a log beside the prefix, since a failed launch is otherwise silent.
+    let log = std::fs::File::create(prefix.with_extension("log")).map_err(|e| e.to_string())?;
+    let log_err = log.try_clone().map_err(|e| e.to_string())?;
+    Command::new(&proton)
+        .arg("run")
+        .arg(exe)
+        .current_dir(dir)
+        .env("STEAM_COMPAT_DATA_PATH", &prefix)
+        .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &client)
+        .env_remove("ELECTRON_RUN_AS_NODE")
+        .stdin(Stdio::null())
+        .stdout(log)
+        .stderr(log_err)
+        .spawn()
+        .map_err(|e| format!("couldn't start Proton: {e}"))?;
     Ok(())
 }
 
@@ -332,10 +378,15 @@ fn play_blocking(app: &AppHandle, id: &str) -> Result<(), String> {
         return Ok(());
     }
 
+    let via_proton = needs_proton(&game);
     let exe_rel = game.exe.ok_or("this game has no executable listed")?;
     let exe = dir.join(&exe_rel);
     if !exe.is_file() {
         return Err(format!("'{exe_rel}' is missing from the install - try reinstalling."));
+    }
+    #[cfg(not(windows))]
+    if via_proton {
+        return launch_with_proton(app, id, &exe, &dir);
     }
     #[cfg(unix)]
     {

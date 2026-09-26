@@ -77,6 +77,45 @@ fn library_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Steam's own Proton (Windows compatibility layer): the `proton` launcher of
+/// the best installed version, plus the Steam install it should treat as its
+/// client. Prefers Proton Experimental, then Hotfix, then the newest of the
+/// rest (including custom builds in `compatibilitytools.d`).
+#[cfg(not(windows))]
+pub fn find_proton() -> Option<(PathBuf, PathBuf)> {
+    let client = default_steam_dirs().into_iter().find(|d| d.join("steamapps").is_dir())?;
+
+    let mut found: Vec<(String, PathBuf)> = Vec::new();
+    for root in library_roots() {
+        if let Ok(entries) = std::fs::read_dir(root.join("steamapps").join("common")) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with("Proton") && e.path().join("proton").is_file() {
+                    found.push((name, e.path().join("proton")));
+                }
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(client.join("compatibilitytools.d")) {
+        for e in entries.flatten() {
+            if e.path().join("proton").is_file() {
+                found.push((e.file_name().to_string_lossy().to_string(), e.path().join("proton")));
+            }
+        }
+    }
+    let rank = |name: &str| -> u8 {
+        if name.contains("Experimental") {
+            0
+        } else if name.contains("Hotfix") {
+            1
+        } else {
+            2
+        }
+    };
+    found.sort_by(|a, b| rank(&a.0).cmp(&rank(&b.0)).then_with(|| b.0.cmp(&a.0)));
+    found.into_iter().next().map(|(_, path)| (path, client))
+}
+
 pub fn managed_dir(game_dir: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(game_dir).ok()?;
     for entry in entries.flatten() {
