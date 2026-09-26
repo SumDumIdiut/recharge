@@ -168,19 +168,17 @@ fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str, name: &str) -
     Ok(())
 }
 
+/// Exports Skinmod's full skin template (player sheet, dash and double-jump
+/// icons, and the sounds folder) from its repo, so it never falls behind what
+/// the mod actually reads.
 #[tauri::command]
-pub fn download_skin_template_cmd(dest_dir: String) -> Result<(), String> {
-    let bytes = download(&format!("{HUB_BASE}/api/skin-template"))
-        .map_err(|_| "no skin template has been exported from the game yet".to_string())?;
-
-    let target = PathBuf::from(dest_dir).join("SkinTemplate");
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid package: {e}"))?;
-    archive
-        .extract(&target)
-        .map_err(|e| format!("couldn't extract package: {e}"))?;
-    Ok(())
+pub async fn download_skin_template_cmd(dest_dir: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = PathBuf::from(dest_dir).join("SkinTemplate");
+        super::repos::export_repo_folder("recharge-skins", "templates/skin-template", &target)
+    })
+    .await
+    .map_err(|e| format!("export task panicked: {e}"))?
 }
 
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
