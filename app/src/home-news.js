@@ -74,10 +74,26 @@ function render(entries) {
     .join('');
 }
 
+let entries = [];
+
+// Show as many blocks as fit in the panel without scrolling: draw them all,
+// then drop blocks from the end until the list stops overflowing.
+export function layoutNews() {
+  const el = document.getElementById('home-news');
+  if (!el) return;
+  render(entries);
+  if (!el.clientHeight) return; // panel hidden right now - lay out again when it's shown
+  let blocks = el.querySelectorAll('.news-block');
+  for (let i = blocks.length; i > 1 && el.scrollHeight > el.clientHeight + 1; i--) {
+    blocks[i - 1].remove();
+  }
+}
+
 export async function initHomeNews() {
-  const entries = (await additions())
+  entries = (await additions())
     .filter((e) => e.when)
     .sort((a, b) => new Date(b.when) - new Date(a.when))
     .slice(0, MAX_ENTRIES);
-  render(entries);
+  layoutNews();
+  window.addEventListener('resize', layoutNews);
 }
