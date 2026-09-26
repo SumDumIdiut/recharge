@@ -1,3 +1,4 @@
+import { initHomeNews } from '/home-news.js';
 import { getWaveSettings } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
 import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession } from '/auth.js';
@@ -500,5 +501,6 @@ export async function initHome() {
     if (loaderInstalled && loaderOutdated) redeployLoader();
   }
 
+  initHomeNews();
   startWaveform();
 }
