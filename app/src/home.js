@@ -325,6 +325,22 @@ async function checkForLauncherUpdate() {
   }
   if (!info.updateAvailable) return;
 
+  // Don't nag: a build that can't install packages itself (a dev build, say)
+  // gets a log line instead of a dialog, and a version the user said "Later"
+  // to stays quiet until a newer one comes out.
+  if (info.appUpdateAvailable && !info.mapsUpdateAvailable) {
+    if (!info.downloadUrl) {
+      logLine(`update available: <b>v${info.latestVersion}</b> (this install can't update itself)`);
+      return;
+    }
+    let postponed = null;
+    try { postponed = localStorage.getItem('postponed-update'); } catch { /* storage unavailable */ }
+    if (postponed === info.latestVersion) {
+      logLine(`update <b>v${info.latestVersion}</b> is available (postponed)`);
+      return;
+    }
+  }
+
   const overlay = document.getElementById('update-overlay');
   const body = document.getElementById('update-body');
   const progress = document.getElementById('update-progress');
@@ -345,7 +361,10 @@ async function checkForLauncherUpdate() {
       progress.textContent = e.payload;
     });
 
-    laterBtn.onclick = () => { overlay.hidden = true; };
+    laterBtn.onclick = () => {
+      try { localStorage.setItem('postponed-update', info.latestVersion); } catch { /* storage unavailable */ }
+      overlay.hidden = true;
+    };
     const install = async () => {
       if (!info.downloadUrl) {
         progress.hidden = false;
