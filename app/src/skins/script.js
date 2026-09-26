@@ -10,6 +10,9 @@ let catalog = [];
 let catalogError = false;
 let chosenUploadPath = null;
 let myUploadIds = new Set();
+let detailImages = [];
+let detailImageIndex = 0;
+let openDetail = null; // { hubId } or { folderName }
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -61,6 +64,7 @@ async function loadCatalog() {
       name: row.name,
       author: row.author,
       description: row.description || '',
+      images: (row.gallery || []).map((f) => `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(f)}`),
       image: row.gallery?.length ? `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
     }));
     catalogError = false;
@@ -114,14 +118,14 @@ function renderInstalled() {
   list.innerHTML = filtered
     .map(
       (s) => `
-    <div class="browse-card">
+    <div class="browse-card" onclick="window.__skinOpenDetail('${escapeHtml(s.hubId ? 'hub:' + s.hubId : 'local:' + s.folderName)}')">
       ${thumb(thumbCache.get(s.folderName))}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(displayName(s))}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Delete" onclick="window.__skinConfirmDelete('${escapeHtml(s.folderName)}')">${ICON_TRASH}</button>
+          <button class="browse-card-icon-btn" title="Delete" onclick="event.stopPropagation(); window.__skinConfirmDelete('${escapeHtml(s.folderName)}')">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`
@@ -150,7 +154,7 @@ function renderBrowse() {
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = myUploadIds.has(entry.id);
       return `
-    <div class="browse-card">
+    <div class="browse-card" onclick="window.__skinOpenDetail('hub:${escapeHtml(entry.id)}')">
       ${thumb(entry.image, badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
@@ -159,7 +163,7 @@ function renderBrowse() {
       </div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>` : ''}
     </div>`;
@@ -174,7 +178,66 @@ function render() {
   document.getElementById('skins-upload-btn').style.display = isLoggedIn() ? '' : 'none';
   renderInstalled();
   renderBrowse();
+  // Keep an open detail page in step with installs/deletes, or leave it if its skin is gone.
+  if (openDetail && !window.__skinOpenDetail(openDetail)) window.__skinCloseDetail();
 }
+
+window.__skinGalleryStep = function (delta) {
+  if (detailImages.length < 2) return;
+  detailImageIndex = (detailImageIndex + delta + detailImages.length) % detailImages.length;
+  document.getElementById('skins-gallery-img').src = detailImages[detailImageIndex];
+  document.getElementById('skins-gallery-count').textContent = `${detailImageIndex + 1} / ${detailImages.length}`;
+};
+
+// key is "hub:<hub id>" for a library skin (installed or not) or
+// "local:<folder>" for one that never went through the hub.
+window.__skinOpenDetail = function (key) {
+  const [kind, ...rest] = key.split(':');
+  const ref = rest.join(':');
+  const entry = kind === 'hub' ? catalog.find((c) => c.id === ref) : null;
+  const installedSkin = kind === 'hub' ? installedCache.find((s) => s.hubId === ref) : installedCache.find((s) => s.folderName === ref);
+  if (!entry && !installedSkin) return false;
+  openDetail = key;
+
+  const name = entry ? entry.name : displayName(installedSkin);
+  const author = entry?.author || '';
+  const description = entry?.description || '';
+  const localThumb = installedSkin ? thumbCache.get(installedSkin.folderName) : null;
+  detailImages = entry?.images?.length ? entry.images : entry?.image ? [entry.image] : localThumb ? [localThumb] : [];
+  detailImageIndex = 0;
+  const mine = entry && myUploadIds.has(entry.id);
+
+  document.getElementById('skins-detail').innerHTML = `
+    <button class="crumb-back" onclick="window.__skinCloseDetail()" style="margin-bottom:20px;">&lt; Skins</button>
+    ${detailImages.length ? `<div class="mod-gallery">
+      <img class="mod-detail-image" id="skins-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__skinGalleryStep(1)" style="cursor:pointer;"' : ''} />
+      ${detailImages.length > 1 ? `<button class="mod-gallery-nav mod-gallery-prev" title="Previous image" onclick="window.__skinGalleryStep(-1)">&lsaquo;</button>
+      <button class="mod-gallery-nav mod-gallery-next" title="Next image" onclick="window.__skinGalleryStep(1)">&rsaquo;</button>
+      <div class="mod-gallery-count" id="skins-gallery-count">1 / ${detailImages.length}</div>` : ''}
+    </div>` : ''}
+    <div class="mod-detail-header">
+      <div class="mod-detail-name">${escapeHtml(name)}</div>
+      ${author ? `<div class="mod-detail-meta">${escapeHtml(author)}</div>` : ''}
+    </div>
+    ${description ? `<div class="mod-detail-desc">${escapeHtml(description)}</div>` : ''}
+    <div class="mod-detail-actions">
+      ${installedSkin
+        ? `<span class="browse-card-meta">Installed</span>
+           <button class="btn mod-detail-uninstall" onclick="window.__skinConfirmDelete('${escapeHtml(installedSkin.folderName)}')">Delete</button>`
+        : entry ? `<button class="btn btn-primary" onclick="window.__skinInstall('${escapeHtml(entry.id)}', this)">Install</button>` : ''}
+      ${mine ? `<button class="btn mod-detail-uninstall" onclick="window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">Remove from Library</button>` : ''}
+    </div>
+  `;
+  document.getElementById('skins-list').style.display = 'none';
+  document.getElementById('skins-detail').style.display = 'block';
+  return true;
+};
+
+window.__skinCloseDetail = function () {
+  document.getElementById('skins-detail').style.display = 'none';
+  document.getElementById('skins-list').style.display = 'block';
+  openDetail = null;
+};
 
 window.__skinsSubtab = function (tab) {
   currentSubtab = tab;
