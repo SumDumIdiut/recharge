@@ -122,7 +122,12 @@ fn is_running_as_appimage() -> bool {
 
 #[cfg(not(windows))]
 fn is_installed_via_deb() -> bool {
-    Command::new("dpkg")
+    // A copy running from somewhere else (a local build, say) isn't the one the
+    // package manages - installing the package wouldn't change it, so it would
+    // be offered the same update on every start.
+    let running_from_package = std::env::current_exe().map(|e| e.starts_with("/usr")).unwrap_or(false);
+    running_from_package
+        && Command::new("dpkg")
         .args(["-s", "recharge"])
         .output()
         .map(|o| o.status.success())
