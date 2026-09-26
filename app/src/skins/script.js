@@ -60,6 +60,7 @@ async function loadCatalog() {
       id: row.id,
       name: row.name,
       author: row.author,
+      description: row.description || '',
       image: row.gallery?.length ? `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
     }));
     catalogError = false;
@@ -135,7 +136,7 @@ function renderBrowse() {
     return;
   }
   const filtered = catalog
-    .filter((s) => matchesSearch(s.name + ' ' + (s.author || '')))
+    .filter((s) => matchesSearch(s.name + ' ' + (s.author || '') + ' ' + (s.description || '')))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
     list.innerHTML = '<div class="empty-state">No skins published yet.</div>';
@@ -154,6 +155,7 @@ function renderBrowse() {
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
         <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
+        ${entry.description ? `<div class="browse-card-desc" style="padding:0;">${escapeHtml(entry.description)}</div>` : ''}
       </div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
@@ -243,6 +245,7 @@ window.__skinOpenUpload = function () {
   chosenUploadPath = null;
   document.getElementById('skins-upload-path').textContent = 'No folder chosen';
   document.getElementById('skins-upload-name').value = '';
+  document.getElementById('skins-upload-description').value = '';
   document.getElementById('skins-upload-overlay').hidden = false;
 };
 
@@ -290,7 +293,7 @@ async function submitUpload() {
   confirmBtn.textContent = 'Uploading…';
   const { invoke } = window.__TAURI__.core;
   try {
-    await invoke('submit_skin_cmd', { token: getToken(), folderPath: chosenUploadPath, displayName: name, author: getUsername() });
+    await invoke('submit_skin_cmd', { token: getToken(), folderPath: chosenUploadPath, displayName: name, author: getUsername(), description: document.getElementById('skins-upload-description').value.trim() });
     closeUploadModal();
     await loadCatalog();
     await loadMyUploadIds();

@@ -229,7 +229,7 @@ struct SubmitResult {
 }
 
 #[tauri::command]
-pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String, author: String) -> Result<String, String> {
+pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String, author: String, description: Option<String>) -> Result<String, String> {
     if display_name.trim().is_empty() || author.trim().is_empty() {
         return Err("name and author are required".to_string());
     }
@@ -237,6 +237,7 @@ pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String,
     if !folder.is_dir() {
         return Err(format!("'{folder_path}' is not a folder"));
     }
+    let description = description.unwrap_or_default();
 
     let zip_bytes = zip_folder_excluding_build_output(&folder)?;
     let tmp_id = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
@@ -247,6 +248,7 @@ pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String,
         .text("kind", "skin")
         .text("name", &display_name)
         .text("author", &author)
+        .text("description", &description)
         .text("modId", "recharge.customskins")
         .file("file", &tmp)
         .map_err(|e| e.to_string())?;
