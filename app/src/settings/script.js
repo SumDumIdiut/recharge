@@ -259,6 +259,26 @@ async function refreshStatus() {
 
 let launcherUpdateInfo = null;
 
+// Recharge is delivered as live code, so the number shown is the one shipped
+// with the code (version.json, bumped on every push) rather than the version
+// of the installed package. The beta channel adds its own build counter.
+async function shownVersion(fallback) {
+  const get = async (file) => {
+    try {
+      const res = await fetch(`/${file}?t=${Date.now()}`, { cache: 'no-store' });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  };
+  const base = (await get('version.json'))?.version || fallback;
+  const { invoke } = window.__TAURI__.core;
+  const channel = await invoke('live_get_channel').then((c) => c.channel).catch(() => 'stable');
+  if (channel !== 'beta') return base;
+  const beta = await get('beta.json');
+  return beta?.build != null ? `${base}-beta.${beta.build}` : base;
+}
+
 async function refreshLauncherStatus() {
   refreshChannel();
   const { invoke } = window.__TAURI__.core;
@@ -268,8 +288,9 @@ async function refreshLauncherStatus() {
   try {
     const info = await invoke('check_launcher_update');
     launcherUpdateInfo = info;
+    const shown = await shownVersion(info.currentVersion);
     if (info.appUpdateAvailable) {
-      status.innerHTML = `v${info.currentVersion} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span>`;
+      status.innerHTML = `v${shown} <span class="launcher-update-available">&rarr; v${info.latestVersion} available</span>`;
       updateBtn.textContent = 'Update Now';
       updateBtn.hidden = false;
       if (info.notes) {
@@ -279,13 +300,13 @@ async function refreshLauncherStatus() {
         notes.hidden = true;
       }
     } else if (info.mapsUpdateAvailable) {
-      status.textContent = `v${info.currentVersion} (up to date)`;
+      status.textContent = `v${shown} (up to date)`;
       notes.textContent = `Navigator mod needs redeploying to your game: bundled v${info.bundledMapsVersion}, game has v${info.deployedMapsVersion}.`;
       notes.hidden = false;
       updateBtn.textContent = 'Redeploy Navigator';
       updateBtn.hidden = false;
     } else {
-      status.textContent = `v${info.currentVersion} (up to date)`;
+      status.textContent = `v${shown} (up to date)`;
       updateBtn.hidden = true;
       notes.hidden = true;
     }
