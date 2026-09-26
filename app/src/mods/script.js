@@ -407,7 +407,8 @@ async function doInstall(ids, btn) {
   try {
     let pulledFromRepo = false;
     for (const id of ids) {
-      const source = REPO_MODS[id];
+      // ids here are hub catalog ids, while REPO_MODS is keyed by mod id.
+      const source = REPO_MODS[id] ?? REPO_MODS[catalog.find((c) => c.id === id)?.modId];
       if (source) {
         await invoke('pull_mod_repo', { repo: source.repo, folder: source.folder ?? null });
         pulledFromRepo = true;
