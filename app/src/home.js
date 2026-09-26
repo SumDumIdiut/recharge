@@ -346,7 +346,7 @@ async function checkForLauncherUpdate() {
     });
 
     laterBtn.onclick = () => { overlay.hidden = true; };
-    nowBtn.onclick = async () => {
+    const install = async () => {
       if (!info.downloadUrl) {
         progress.hidden = false;
         progress.textContent = "This release has no installer attached - can't update in-app.";
@@ -361,9 +361,13 @@ async function checkForLauncherUpdate() {
       } catch (err) {
         nowBtn.disabled = false;
         laterBtn.disabled = false;
-        progress.textContent = String(err);
+        progress.textContent = `${String(err)} - press Update Now to retry.`;
       }
     };
+    nowBtn.onclick = install;
+    // New releases carry backend changes that can't be applied live, so the
+    // app installs them itself instead of waiting to be asked.
+    if (info.downloadUrl) install();
   } else if (info.mapsUpdateAvailable) {
     logLine(`Navigator mod update available: <b>v${info.bundledMapsVersion}</b> (game has v${info.deployedMapsVersion})`);
     body.innerHTML = `<p>The Navigator mod needs redeploying to your game: bundled <b>v${info.bundledMapsVersion}</b>, game currently has <b>v${info.deployedMapsVersion}</b>.</p>`;
@@ -451,9 +455,8 @@ export async function initHome() {
       `<p>Almost there - <b>RechargeLoader</b> isn't installed yet, and it's what lets mods actually run in-game.</p>
        <p>Go to Settings and click <b>Install / Update</b> under RechargeLoader to finish setup.</p>`
     );
-  } else {
-    checkForLauncherUpdate();
   }
+  checkForLauncherUpdate();
 
   try {
     const mods = await invoke('list_installed_mods');

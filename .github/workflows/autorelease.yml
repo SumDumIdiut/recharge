@@ -1,12 +1,16 @@
 name: Auto release
 
-# Manual only. Screens (app/src), the loader and its scripts reach everyone
-# through the app's live code updates the moment they're pushed - no package.
-# Pushing to master never publishes a release; someone has to run this by hand
-# (Actions > Auto release > Run workflow) to pick the next version, build the
-# Windows and Linux packages the built-in updater installs, and publish it.
+# Screens (app/src), the loader and its scripts reach everyone through the
+# app's live code updates the moment they're pushed. The compiled backend
+# (app/src-tauri) can't be swapped live, so a push that changes it publishes a
+# new release, and the app installs that release by itself on its next start.
+# It can also be run by hand (Actions > Auto release > Run workflow).
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'app/src-tauri/**'
 
 concurrency:
   group: autorelease
@@ -16,6 +20,7 @@ jobs:
   bump:
     # The version-bump commit is pushed with GITHUB_TOKEN, which never
     # re-triggers workflows, so this can't loop.
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
