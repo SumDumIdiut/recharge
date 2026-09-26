@@ -470,7 +470,9 @@ export async function initHome() {
       `<p>Recharge couldn't find your IGTAP install automatically.</p>
        <p>Head to Settings to check the detected path, or verify IGTAP is installed via Steam.</p>`
     );
-  } else if (!loaderInstalled) {
+  } else if (!loaderInstalled && install.variant === 'Full Game') {
+    // Only the full game is set up for mods; the demo can't take them at all
+    // and the playtest build isn't something to install the loader into.
     showOnboarding(
       `<p>Almost there - <b>RechargeLoader</b> isn't installed yet, and it's what lets mods actually run in-game.</p>
        <p>Go to Settings and click <b>Install / Update</b> under RechargeLoader to finish setup.</p>`
@@ -498,7 +500,7 @@ export async function initHome() {
     } catch { /* no install detected yet, or nothing to restore - fine */ }
     // Mods are built against the loader's ModApi; a game still holding an
     // older one shows half-built mod menus, so bring it up to date quietly.
-    if (loaderInstalled && loaderOutdated) redeployLoader();
+    if (loaderInstalled && loaderOutdated && install?.variant === 'Full Game') redeployLoader();
   }
 
   initHomeNews();

@@ -207,11 +207,15 @@ body {
   line-height: 1.5;
 }
 .home-news { display: flex; flex-direction: column; gap: 14px; margin: 10px 0 18px; }
-.home-news-item:hover .home-news-title { color: var(--green); }
-.home-news-meta { font-size: 12px; color: var(--text-dim); }
-.home-news-title { font-size: 15px; line-height: 1.35; margin-top: 3px; word-break: break-word; }
-.home-news-tag { display: inline-block; margin-right: 8px; padding: 0 6px; border: 1px solid var(--line); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
-.home-news-tag-library { color: var(--green); border-color: var(--green); }
+.news-block { background: var(--panel); border: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.news-meta { font-size: 12px; color: var(--text-dim); }
+.news-title { font-size: 20px; line-height: 1.25; word-break: break-word; }
+.news-img { width: 100%; max-height: 170px; object-fit: cover; display: block; border: 1px solid var(--line); }
+.news-body { font-size: 14px; line-height: 1.5; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.news-actions { display: flex; justify-content: flex-end; }
+.home-panel .news-actions .btn { width: auto; margin-top: 0; }
+.news-tag { display: inline-block; margin-right: 8px; padding: 0 6px; border: 1px solid var(--line); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
+.news-tag-library { color: var(--green); border-color: var(--green); }
 .home-log-details summary { cursor: pointer; color: var(--text-dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; margin: 6px 0 10px; }
 .home-log-line { color: var(--text-dim); }
 .home-log-line b { color: var(--green); font-weight: normal; }
