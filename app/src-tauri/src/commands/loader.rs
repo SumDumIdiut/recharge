@@ -91,6 +91,16 @@ fn settings_game_path(app: &AppHandle) -> Option<String> {
     super::settings::get_game_path(app.clone())
 }
 
+// Windows canonicalized paths come back as `\\?\C:\...`, which the build
+// script's Join-Path can't parse.
+fn plain_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+    }
+}
+
 #[cfg(windows)]
 fn powershell_command() -> Result<Command, String> {
     Ok(Command::new("powershell.exe"))
@@ -146,8 +156,9 @@ pub async fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
 
 fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     let game_path = settings_game_path(app)
+        .map(|p| plain_path(&p))
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
-    let script = find_build_script(app)?;
+    let script = find_build_script(app).map(|p| PathBuf::from(plain_path(&p.to_string_lossy())))?;
 
     let info = super::steam::info_for_path(std::path::Path::new(&game_path));
     if info.as_ref().map(|i| i.variant.as_str()) == Some("Demo") {
@@ -171,7 +182,7 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
         .arg(&script)
         .args(["-GameDir", &game_path])
         .args(["-ModsDir"])
-        .arg(&mods_dir)
+        .arg(plain_path(&mods_dir.to_string_lossy()))
         .args(["-StatusFile"])
         .arg(&status_file);
     if let Some(appid) = &appid {

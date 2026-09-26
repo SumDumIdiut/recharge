@@ -8,6 +8,19 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# A path saved in its Windows extended-length form (\\?\C:\...) makes Windows
+# PowerShell's Join-Path/Test-Path fail with 'the value of argument "drive" is
+# null', so hand every incoming path over in its plain form.
+function ConvertTo-PlainPath([string]$p) {
+    if (-not $p) { return $p }
+    if ($p -match '^\\\\\?\\UNC\\') { return '\\' + $p.Substring(8) }
+    if ($p -match '^\\\\\?\\') { return $p.Substring(4) }
+    return $p
+}
+$GameDir = ConvertTo-PlainPath $GameDir
+$ModsDir = ConvertTo-PlainPath $ModsDir
+$StatusFile = ConvertTo-PlainPath $StatusFile
+
 $IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 $DotnetExeName = if ($IsWindowsPlatform) { 'dotnet.exe' } else { 'dotnet' }
 $TempDir = [System.IO.Path]::GetTempPath()
