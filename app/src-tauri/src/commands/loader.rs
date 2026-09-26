@@ -15,18 +15,75 @@ const LOADER_VERSION: &str = "1.0.0";
 pub struct LoaderStatus {
     pub installed: bool,
     pub version: String,
+    /// The game's deployed loader was built from different loader sources
+    /// than this app ships, so mods built against the new ModApi would hit
+    /// missing methods at runtime. A redeploy fixes it.
+    pub outdated: bool,
 }
 
 #[tauri::command]
 pub fn loader_status(app: AppHandle) -> LoaderStatus {
-    let installed = settings_game_path(&app)
-        .and_then(|p| super::steam::managed_dir(std::path::Path::new(&p)))
+    let game_path = settings_game_path(&app);
+    let installed = game_path
+        .as_deref()
+        .and_then(|p| super::steam::managed_dir(std::path::Path::new(p)))
         .map(|managed| managed.join("Recharge.ModApi.dll").is_file())
         .unwrap_or(false);
+
+    let outdated = installed
+        && match (game_path.as_deref(), loader_stamp(&app)) {
+            (Some(p), Some(current)) => std::fs::read_to_string(stamp_path(p))
+                .map(|deployed| deployed.trim() != current)
+                .unwrap_or(true),
+            _ => false,
+        };
 
     LoaderStatus {
         installed,
         version: LOADER_VERSION.to_string(),
+        outdated,
+    }
+}
+
+fn stamp_path(game_path: &str) -> PathBuf {
+    PathBuf::from(game_path).join("Recharge").join("loader.stamp")
+}
+
+// FNV-1a over every loader source file (ModApi, Runtime, build script), in a
+// stable order, so any change to what gets compiled into the game changes it.
+fn loader_stamp(app: &AppHandle) -> Option<String> {
+    let script = find_build_script(app).ok()?;
+    let root = script.parent()?;
+    let mut files = vec![script.clone()];
+    for dir in ["ModApi", "Runtime"] {
+        collect_sources(&root.join(dir), &mut files);
+    }
+    files.sort();
+
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for file in &files {
+        let rel = file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+        let Ok(bytes) = std::fs::read(file) else { continue };
+        for b in rel.bytes().chain(std::iter::once(0)).chain(bytes.into_iter().filter(|b| *b != b'\r')) {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    Some(format!("{hash:016x}"))
+}
+
+fn collect_sources(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name();
+            if name != "bin" && name != "obj" {
+                collect_sources(&path, out);
+            }
+        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("cs" | "csproj")) {
+            out.push(path);
+        }
     }
 }
 
@@ -158,6 +215,14 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "Install script exited cleanly but Managed folder is missing.".to_string())?;
     if !managed.join("Recharge.ModApi.dll").is_file() {
         return Err("Install script exited cleanly but Recharge.ModApi.dll wasn't deployed.".into());
+    }
+
+    if let Some(stamp) = loader_stamp(app) {
+        let path = stamp_path(&game_path);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, stamp);
     }
 
     Ok(())
