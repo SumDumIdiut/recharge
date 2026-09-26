@@ -1,4 +1,4 @@
-import { initHomeNews } from '/home-news.js';
+import { initHomeNews, layoutNews } from '/home-news.js';
 import { getWaveSettings } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
 import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession } from '/auth.js';
@@ -262,6 +262,12 @@ function applyVariantUi(active) {
   const isDemo = active?.variant === 'Demo';
   document.getElementById('home-modded-tile').disabled = isDemo;
   document.getElementById('home-demo-note').style.display = isDemo ? '' : 'none';
+  // Library news is only shown next to the full game.
+  const news = document.querySelector('.home-log-panel');
+  if (news) {
+    news.style.display = active?.variant === 'Full Game' ? '' : 'none';
+    layoutNews();
+  }
   for (const id of ['home-mods-row', 'home-maps-row', 'home-skins-row']) {
     document.getElementById(id).style.display = isDemo ? 'none' : '';
   }
