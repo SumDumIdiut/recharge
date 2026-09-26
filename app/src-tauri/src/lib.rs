@@ -1,7 +1,7 @@
 mod commands;
 mod vdf;
 
-use commands::{hub, launcher, live, loader, maps, mods, play, repos, settings, skins, steam};
+use commands::{games, hub, launcher, live, loader, maps, mods, play, repos, settings, skins, steam};
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
@@ -44,6 +44,10 @@ pub fn run() {
             live::live_ack,
             live::live_stash,
             live::live_take_stash,
+            games::list_library_games,
+            games::install_library_game,
+            games::uninstall_library_game,
+            games::play_library_game,
             hub::install_from_hub_cmd,
             hub::download_skin_template_cmd,
             hub::submit_skin_cmd,

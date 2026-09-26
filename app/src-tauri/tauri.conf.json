@@ -30,6 +30,8 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "../../electron/main.js": "electron/main.js",
+      "../../electron/package.json": "electron/package.json",
       "../../loader/ModApi": "loader/ModApi",
       "../../loader/Runtime": "loader/Runtime",
       "../../loader/tools": "loader/tools",

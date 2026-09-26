@@ -1,3 +1,4 @@
+pub mod games;
 pub mod hub;
 pub mod launcher;
 pub mod live;
