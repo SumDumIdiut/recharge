@@ -1,16 +1,11 @@
 name: Auto release
 
-# Screens (app/src), the loader and its scripts reach everyone through the
-# app's live code updates the moment they're pushed. The compiled backend
-# (app/src-tauri) can't be swapped live, so a push that changes it publishes a
-# new release, and the app installs that release by itself on its next start.
-# It can also be run by hand (Actions > Auto release > Run workflow).
+# Manual only, and not used day to day: Recharge ships as live code, so screens,
+# the loader and its scripts reach everyone the moment they're pushed and no
+# package is ever built. Run this by hand (Actions > Auto release > Run
+# workflow) only when a compiled-backend release is deliberately wanted.
 on:
   workflow_dispatch:
-  push:
-    branches: [master]
-    paths:
-      - 'app/src-tauri/**'
 
 concurrency:
   group: autorelease
