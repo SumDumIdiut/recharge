@@ -380,6 +380,25 @@ async function checkForLauncherUpdate() {
   }
 }
 
+// Bump when ModApi/Runtime change in a way already-deployed loaders must pick up.
+const LOADER_EPOCH = '2026-09-26';
+
+async function redeployLoader() {
+  const { invoke } = window.__TAURI__.core;
+  const { event } = window.__TAURI__;
+  logLine('loader in your game is out of date - updating it and your mods…');
+  const unlisten = await event.listen('loader-progress', (e) => logLine(escapeForHtml(String(e.payload))));
+  try {
+    await invoke('install_or_update_loader');
+    logLine('loader: <b>updated</b>');
+    try { localStorage.setItem('loader-epoch', LOADER_EPOCH); } catch { /* storage unavailable */ }
+  } catch (err) {
+    logLine(`loader update failed: ${escapeForHtml(String(err))}`);
+  } finally {
+    unlisten();
+  }
+}
+
 function escapeForHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -397,9 +416,12 @@ export async function initHome() {
   const install = await refreshInstallStatus();
 
   let loaderInstalled = false;
+  let loaderOutdated = false;
   try {
     const loader = await invoke('loader_status');
     loaderInstalled = loader.installed;
+    // Older app builds don't report staleness, so they redeploy once per epoch.
+    loaderOutdated = loader.outdated ?? (localStorage.getItem('loader-epoch') !== LOADER_EPOCH);
     logLine(loader.installed ? `loader: <b>installed</b> (v${loader.version})` : 'loader: not installed');
   } catch (err) {
     logLine(`loader status check failed: ${String(err)}`);
@@ -437,6 +459,9 @@ export async function initHome() {
     try {
       await invoke('restore_vanilla_build');
     } catch { /* no install detected yet, or nothing to restore - fine */ }
+    // Mods are built against the loader's ModApi; a game still holding an
+    // older one shows half-built mod menus, so bring it up to date quietly.
+    if (loaderInstalled && loaderOutdated) redeployLoader();
   }
 
   startWaveform();
