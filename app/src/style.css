@@ -206,6 +206,13 @@ body {
   font-size: 14px;
   line-height: 1.5;
 }
+.home-news { display: flex; flex-direction: column; gap: 14px; margin: 10px 0 18px; }
+.home-news-item:hover .home-news-title { color: var(--green); }
+.home-news-meta { font-size: 12px; color: var(--text-dim); }
+.home-news-title { font-size: 15px; line-height: 1.35; margin-top: 3px; word-break: break-word; }
+.home-news-tag { display: inline-block; margin-right: 8px; padding: 0 6px; border: 1px solid var(--line); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
+.home-news-tag-library { color: var(--green); border-color: var(--green); }
+.home-log-details summary { cursor: pointer; color: var(--text-dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; margin: 6px 0 10px; }
 .home-log-line { color: var(--text-dim); }
 .home-log-line b { color: var(--green); font-weight: normal; }
 .home-log-ts { color: var(--text-dim); opacity: 0.6; margin-right: 8px; }
