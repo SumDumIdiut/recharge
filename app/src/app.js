@@ -4,7 +4,7 @@ import './live-update.js';
 const _tabLoaded = {};
 let curTab = 'home';
 
-const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games']);
+const LIVE_TABS = new Set(['mods', 'maps', 'skins']);
 
 async function ensureTab(tab) {
   if (tab === 'home') return;
