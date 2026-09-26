@@ -1,3 +1,4 @@
+import { initHomeGames } from '/home-games.js';
 import { getWaveSettings } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
 import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession } from '/auth.js';
@@ -481,5 +482,6 @@ export async function initHome() {
     if (loaderInstalled && loaderOutdated) redeployLoader();
   }
 
+  initHomeGames();
   startWaveform();
 }
