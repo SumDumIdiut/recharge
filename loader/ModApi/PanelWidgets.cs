@@ -171,6 +171,31 @@ namespace Recharge.ModApi
             return img;
         }
 
+        /// <summary>An empty RectTransform to group widgets under, positioned relative to <paramref name="parent"/>'s center.</summary>
+        public static RectTransform CreateContainer(Transform parent, string name, Vector2 pos, Vector2? size = null)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = pos;
+            if (size.HasValue) rt.sizeDelta = size.Value;
+            return rt;
+        }
+
+        /// <summary>A flat colored square that can be clicked (a color swatch, a palette cell).</summary>
+        public static Image CreateSwatch(Transform parent, Vector2 pos, Vector2 size, Color color, Action onClick = null)
+        {
+            var go = new GameObject("Swatch", typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = pos;
+            rt.sizeDelta = size;
+            var img = go.GetComponent<Image>();
+            img.color = color;
+            if (onClick != null) go.GetComponent<Button>().onClick.AddListener(() => onClick());
+            return img;
+        }
+
         public static Image CreateImage(Transform parent, Vector2 pos, Vector2 size)
         {
             var go = new GameObject("Image", typeof(RectTransform));
@@ -183,7 +208,7 @@ namespace Recharge.ModApi
             return img;
         }
 
-        public static TMP_InputField CreateInputField(Transform parent, TMP_FontAsset font, Vector2 pos, Vector2 size, string placeholder)
+        public static TMP_InputField CreateInputField(Transform parent, TMP_FontAsset font, Vector2 pos, Vector2 size, string placeholder, float fontSize = 18f)
         {
             var go = new GameObject("InputField", typeof(RectTransform));
             go.transform.SetParent(parent, false);
@@ -210,7 +235,7 @@ namespace Recharge.ModApi
             textRt.offsetMax = Vector2.zero;
             var text = textGo.AddComponent<TextMeshProUGUI>();
             text.font = font;
-            text.fontSize = 18;
+            text.fontSize = fontSize;
             text.color = Color.white;
             text.alignment = TextAlignmentOptions.MidlineLeft;
             text.enableWordWrapping = false;
@@ -224,7 +249,7 @@ namespace Recharge.ModApi
             placeholderRt.offsetMax = Vector2.zero;
             var placeholderText = placeholderGo.AddComponent<TextMeshProUGUI>();
             placeholderText.font = font;
-            placeholderText.fontSize = 18;
+            placeholderText.fontSize = fontSize;
             placeholderText.color = new Color(1f, 1f, 1f, 0.4f);
             placeholderText.text = placeholder;
             placeholderText.fontStyle = FontStyles.Italic;
@@ -348,6 +373,20 @@ namespace Recharge.ModApi
             });
 
             valueLabel = label;
+            return slider;
+        }
+
+        /// <summary>A whole-number 0-255 slider with a colored track and a colored letter label to its left (an R/G/B channel row, say). <paramref name="pos"/> is the row's center; the track is 480 wide, shifted right to leave room for the label.</summary>
+        public static Slider CreateColorSlider(Transform parent, TMP_FontAsset font, Vector2 pos, string label, Color trackColor, Action<float> onChanged = null)
+        {
+            var slider = CreateSlider(parent, font, pos + new Vector2(30, 0), new Vector2(480, 24), 0f, 255f, 128f, onChanged, out var valueLabel);
+            valueLabel.gameObject.SetActive(false); // the slider still updates it on change, so hide rather than destroy
+            slider.wholeNumbers = true;
+            slider.fillRect.GetComponent<Image>().color = trackColor;
+            slider.handleRect.sizeDelta = new Vector2(20, 20);
+
+            // The row container sits 30px right of pos (that's where the track is), so the letter goes 300px left of it.
+            CreateLabel(slider.transform.parent, font, new Vector2(-300, 0), new Vector2(30, 30), label, fontSize: 22f, color: trackColor, align: TextAlignmentOptions.MidlineLeft);
             return slider;
         }
 

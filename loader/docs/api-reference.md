@@ -180,6 +180,10 @@ public static class PauseMenuHelper
     public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick);
     public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label);
     public static void SetButtonLabel(GameObject buttonGo, string text);
+    public static pauseMenuScript FindMenu();
+    public static void OnMenuReady(IRechargeHost host, Action<pauseMenuScript> install);
+    public static GameObject MainBit(pauseMenuScript menu);
+    public static GameObject SettingsBit(pauseMenuScript menu);
 }
 ```
 
@@ -187,6 +191,9 @@ public static class PauseMenuHelper
 |---|---|
 | `AddRow(menu, rowName, label, onClick)` | A row that runs `onClick` directly — no sub-panel. Use for a one-shot action. Returns the row's `GameObject`, or `null` if the real menu's expected shape wasn't found (defensive — logs nothing itself, check for `null` if you want to know). |
 | `AddPanelRow(menu, rowName, label)` | A row that opens a blank sub-panel (cloned from the real Settings panel, so it matches the game's visual style) when clicked — its Back button is already wired to return to the main panel. Fill the returned (initially inactive) `GameObject` with your own UI. |
+| `OnMenuReady(host, install)` | Runs `install` against the live pause menu on every scene load. The game builds a new `pauseMenuScript` per scene, so anything added to it has to be re-added each time — call this once from `OnLoad` instead of hand-wiring `SceneLoaded`. |
+| `FindMenu()` | The live `pauseMenuScript`, or `null`. |
+| `MainBit(menu)` / `SettingsBit(menu)` | The main and settings containers (or `null` if the menu isn't the expected shape). Use these instead of reading `mainBitPublic`/`settingsBitPublic` directly. |
 | `SetButtonLabel(buttonGo, text)` | Relabels a cloned button's TMP text and strips any inherited localization hookup so your text actually sticks. Used internally by the two calls above; exposed since it's just as useful when hand-styling rows yourself. |
 
 `rowName` is both the idempotency key (calling again with the same name is a
@@ -214,6 +221,10 @@ public static class Reflect
     public static T GetProperty<T>(object target, string propertyName);
     public static object InvokeMethod(object target, string methodName, params object[] args);
     public static Type NestedType<T>(string nestedTypeName);
+    public static Type TryNestedType<T>(string nestedTypeName);   // null instead of throwing
+    public static bool TrySetField(object target, string fieldName, object value); // false if missing
+    public static FieldInfo FieldOf<T>(string fieldName);         // cache it for per-frame reads
+    public static MethodInfo MethodOf<T>(string methodName);
 }
 ```
 

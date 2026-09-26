@@ -121,7 +121,21 @@ function setPlayStatus(status) {
     status === 'launching' ? 'Launching…' : status === 'running' ? 'Running' : '';
 }
 
+let polling = false;
+
 async function pollRunning() {
+  if (polling) return; // a slow check must not overlap the next tick, or the exit handling runs twice
+  polling = true;
+  try {
+    await checkRunning();
+  } catch (err) {
+    logLine(`couldn't check whether the game is running: ${escapeForHtml(String(err))}`);
+  } finally {
+    polling = false;
+  }
+}
+
+async function checkRunning() {
   const { invoke } = window.__TAURI__.core;
   const running = await invoke('is_game_running');
   if (running) {
@@ -381,7 +395,7 @@ async function checkForLauncherUpdate() {
 }
 
 // Bump when ModApi/Runtime change in a way already-deployed loaders must pick up.
-const LOADER_EPOCH = '2026-09-26';
+const LOADER_EPOCH = '2026-09-26b';
 
 async function redeployLoader() {
   const { invoke } = window.__TAURI__.core;

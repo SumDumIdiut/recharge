@@ -39,6 +39,29 @@ namespace Recharge.ModApi
             return field != null ? (T)field.GetValue(target) : fallback;
         }
 
+        /// <summary>Like <see cref="SetField"/> but silently does nothing if the field doesn't exist (a game update may rename it).</summary>
+        public static bool TrySetField(object target, string fieldName, object value)
+        {
+            var field = FindField(target.GetType(), fieldName);
+            if (field == null) return false;
+            field.SetValue(target, value);
+            return true;
+        }
+
+        /// <summary>The <see cref="FieldInfo"/> for an instance field of <typeparamref name="T"/> (public or private), or null. Cache it when a field is read every frame.</summary>
+        public static FieldInfo FieldOf<T>(string fieldName) => FindField(typeof(T), fieldName);
+
+        /// <summary>The <see cref="MethodInfo"/> for an instance method of <typeparamref name="T"/> (public or private), or null.</summary>
+        public static MethodInfo MethodOf<T>(string methodName)
+        {
+            for (var t = typeof(T); t != null; t = t.BaseType)
+            {
+                var m = t.GetMethod(methodName, Instance | BindingFlags.DeclaredOnly);
+                if (m != null) return m;
+            }
+            return null;
+        }
+
         /// <summary>Reads a static field (public or private) on <typeparamref name="T"/> by name.</summary>
         public static TValue GetStaticField<T, TValue>(string fieldName)
         {
@@ -81,6 +104,10 @@ namespace Recharge.ModApi
             if (type == null) throw new MissingMemberException(typeof(T).FullName, nestedTypeName);
             return type;
         }
+
+        /// <summary>Like <see cref="NestedType{T}"/> but returns null instead of throwing when the nested type doesn't exist.</summary>
+        public static Type TryNestedType<T>(string nestedTypeName) =>
+            typeof(T).GetNestedType(nestedTypeName, BindingFlags.NonPublic | BindingFlags.Public);
 
         private static FieldInfo FindField(Type type, string fieldName)
         {
