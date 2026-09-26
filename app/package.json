@@ -1,7 +1,7 @@
 {
   "name": "recharge",
   "private": true,
-  "version": "3.0.11",
+  "version": "3.0.12",
   "type": "module",
   "scripts": {
     "tauri": "tauri"
