@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub const LIVE_PORT: u16 = 39285;
 /// Bump together with app/live.json's "apiLevel" when a change adds or alters
 /// a Rust command, so older binaries stop applying bundles that need it.
-const API_LEVEL: u64 = 3;
+const API_LEVEL: u64 = 4;
 const REPO: &str = "SumDumIdiut/recharge";
 const MAX_BUNDLE_BYTES: u64 = 200 * 1024 * 1024;
 const CHECK_EVERY: Duration = Duration::from_secs(20 * 60);

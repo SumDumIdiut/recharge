@@ -140,6 +140,15 @@ pub fn is_game_running(app: AppHandle) -> bool {
     is_process_running(&exe.file_name())
 }
 
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) if ma.len() == mb.len() => {
+            matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
+        }
+        _ => false,
+    }
+}
+
 fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
     let Some(managed) = steam::managed_dir(game_dir) else {
         return if modded {
@@ -149,19 +158,34 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
         };
     };
     let deployed = managed.join("Assembly-CSharp.dll");
-    let source = if modded {
-        managed.join("Assembly-CSharp.RECHARGE.dll")
-    } else {
-        managed.join("Assembly-CSharp.ORIGINAL.dll")
-    };
+    let original = managed.join("Assembly-CSharp.ORIGINAL.dll");
+    let recharge = managed.join("Assembly-CSharp.RECHARGE.dll");
+
+    // The deployed assembly is always one of our two copies. If it's neither,
+    // Steam has replaced it with a newer game build - and the backups we hold
+    // belong to the old build. Copying one back over it would pair an old
+    // assembly with the new build's data files, which Unity reports as a
+    // "corrupted level0" crash even when launched straight from Steam. So keep
+    // Steam's file as the new original and drop the now-stale modded build.
+    if deployed.is_file()
+        && (original.is_file() || recharge.is_file())
+        && !(original.is_file() && same_file(&deployed, &original))
+        && !(recharge.is_file() && same_file(&deployed, &recharge))
+    {
+        std::fs::copy(&deployed, &original)
+            .map_err(|e| format!("Couldn't keep the game's updated assembly: {e}"))?;
+        let _ = std::fs::remove_file(&recharge);
+    }
+
+    let source = if modded { &recharge } else { &original };
     if modded && !source.is_file() {
         return Err(
-            "Modded launch needs RechargeLoader installed first (Settings > Install/Update)."
+            "Modded launch needs RechargeLoader installed (or reinstalled after a game update) - Settings > Install/Update."
                 .into(),
         );
     }
     if source.is_file() {
-        std::fs::copy(&source, &deployed).map_err(|e| {
+        std::fs::copy(source, &deployed).map_err(|e| {
             format!(
                 "Failed to switch to the {} build: {e}",
                 if modded { "modded" } else { "vanilla" }
