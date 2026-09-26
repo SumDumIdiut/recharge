@@ -106,6 +106,43 @@ pub fn pull_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Resul
     result
 }
 
+/// Copies one folder of a repo (e.g. Skinmod's "templates/skin-template") to
+/// `dest`, overwriting files that are already there. Reads the repo's zip
+/// directly instead of pulling it into the mods folder, so it never leaves a
+/// half-populated repo folder that would stop the real mod from being pulled.
+pub fn export_repo_folder(repo: &str, subdir: &str, dest: &Path) -> Result<(), String> {
+    if !ALLOWED_REPOS.contains(&repo) {
+        return Err(format!("unknown mod repo: '{repo}'"));
+    }
+    for part in subdir.split('/') {
+        check_name(part)?;
+    }
+    let bytes = download_repo_zip(repo)?;
+
+    let tmp = std::env::temp_dir().join(format!("recharge-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let result = (|| {
+        zip::ZipArchive::new(Cursor::new(bytes))
+            .map_err(|e| format!("not a valid archive: {e}"))?
+            .extract(&tmp)
+            .map_err(|e| format!("couldn't extract {repo}: {e}"))?;
+        let root = std::fs::read_dir(&tmp)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.is_dir())
+            .ok_or("archive was empty")?;
+        let from = root.join(subdir);
+        if !from.is_dir() {
+            return Err(format!("'{subdir}' not found in {repo}"));
+        }
+        copy_dir(&from, dest)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
 #[tauri::command]
 pub async fn pull_mod_repo(app: AppHandle, repo: String, folder: Option<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || pull_blocking(&app, &repo, folder.as_deref()))
