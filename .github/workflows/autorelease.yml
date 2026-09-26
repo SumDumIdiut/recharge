@@ -68,9 +68,13 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Release $TAG"
-          git pull --rebase origin master
-          git push origin HEAD:master
+          # The files can already carry this version (a release that was bumped
+          # but never published), in which case there is nothing to commit.
+          if ! git diff --quiet; then
+            git commit -am "Release $TAG"
+            git pull --rebase origin master
+            git push origin HEAD:master
+          fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
