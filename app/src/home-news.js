@@ -2,8 +2,8 @@
 // channel you follow) with things recently added to the Recharge Library.
 const REPO = 'SumDumIdiut/recharge';
 const HUB = 'https://codecade.co.za/recharge';
-const PER_SOURCE = 6; // so a burst of commits can't crowd out new library items, or the reverse
-const MAX_ENTRIES = 12;
+const PER_SOURCE = 4; // so a burst of commits can't crowd out new library items, or the reverse
+const MAX_ENTRIES = 8;
 const NOISE = /^(Merge |Revert |Reapply |Release v|Version bump|Bring dev up to date|Promote dev)/i;
 
 function escapeHtml(s) {
@@ -38,10 +38,13 @@ async function changes() {
   const branch = await channelBranch();
   const commits = await json(`https://api.github.com/repos/${REPO}/commits?sha=${branch}&per_page=40`);
   return commits
-    .map((c) => ({ when: c.commit.author.date, title: c.commit.message.split('\n')[0] }))
+    .map((c) => {
+      const [title, ...rest] = c.commit.message.split('\n');
+      return { when: c.commit.author.date, title, body: rest.join(' ').replace(/\s+/g, ' ').trim(), url: c.html_url };
+    })
     .filter((c) => !NOISE.test(c.title))
     .slice(0, PER_SOURCE)
-    .map((c) => ({ kind: 'change', tag: 'Update', when: c.when, title: c.title }));
+    .map((c) => ({ kind: 'change', tag: 'Update', ...c }));
 }
 
 const LIBRARY = [
@@ -61,6 +64,8 @@ async function additions() {
           when: row.createdAt,
           title: row.name,
           by: row.author,
+          body: row.description || '',
+          image: row.gallery?.length ? `${HUB}/api/${kind.path}/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
         }));
       } catch {
         return [];
@@ -79,16 +84,29 @@ function render(entries) {
   }
   el.innerHTML = entries
     .map((e) => {
-      const click = e.tab ? ` onclick="navigate('${e.tab}')" style="cursor:pointer;"` : '';
-      const by = e.by ? ` · ${escapeHtml(e.by)}` : '';
+      const by = e.by ? ` \u00b7 ${escapeHtml(e.by)}` : '';
+      const action = e.tab
+        ? `<button class="btn" onclick="navigate('${e.tab}')">View in ${escapeHtml(e.tag)}s</button>`
+        : e.url
+          ? `<button class="btn" onclick="window.__newsOpen('${escapeHtml(e.url)}')">Open in browser</button>`
+          : '';
       return `
-      <div class="home-news-item"${click}>
-        <div class="home-news-meta"><span class="home-news-tag home-news-tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
-        <div class="home-news-title">${escapeHtml(e.title)}</div>
+      <div class="news-block">
+        <div class="news-meta"><span class="news-tag news-tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
+        <div class="news-title">${escapeHtml(e.title)}</div>
+        ${e.image ? `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />` : ''}
+        ${e.body ? `<div class="news-body">${escapeHtml(e.body)}</div>` : ''}
+        ${action ? `<div class="news-actions">${action}</div>` : ''}
       </div>`;
     })
     .join('');
 }
+
+window.__newsOpen = (url) => {
+  const opener = window.__TAURI__?.opener;
+  if (opener?.openUrl) opener.openUrl(url).catch(() => window.open(url, '_blank'));
+  else window.open(url, '_blank');
+};
 
 export async function initHomeNews() {
   const results = await Promise.allSettled([changes(), additions()]);
