@@ -8,6 +8,15 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Without these, dotnet's very first invocation on a machine (or against a
+# freshly-installed SDK) silently spends a few minutes on one-time setup -
+# expanding its NuGet fallback folder and printing a welcome banner - with no
+# console output the status bar can show, so the "Building..." step looks
+# hung. This skips that.
+$env:DOTNET_NOLOGO = '1'
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+
 # A path saved in its Windows extended-length form (\\?\C:\...) makes Windows
 # PowerShell's Join-Path/Test-Path fail with 'the value of argument "drive" is
 # null', so hand every incoming path over in its plain form.
