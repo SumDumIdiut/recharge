@@ -95,3 +95,30 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     }
     maps
 }
+
+// The map maker's "Test in game": installs the map under a fixed id, asks
+// Navigator to start it on the next launch (it reads autoplay.txt when it
+// loads at the title screen), then launches the modded game.
+const TEST_MAP_ID: &str = "map-maker-test";
+
+#[tauri::command]
+pub fn test_launch_map(app: AppHandle, map_json: String) -> Result<super::play::LaunchMethod, String> {
+    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
+    let dir = maps_dir(&app).ok_or("game path not set")?;
+    // Local development: a freshly built Navigator (RECHARGE_DEV_NAVIGATOR_DLL,
+    // set by the recharge-test launcher) goes over whatever Recharge installed,
+    // since reinstalling mods puts the GitHub build back.
+    if let Some(dll) = std::env::var_os("RECHARGE_DEV_NAVIGATOR_DLL").map(PathBuf::from).filter(|p| p.is_file()) {
+        let installed = dir.parent().ok_or("bad maps folder")?.join("RechargeMaps.dll");
+        std::fs::copy(&dll, &installed).map_err(|e| format!("couldn't install the dev Navigator: {e}"))?;
+    }
+    let target = dir.join(TEST_MAP_ID);
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    std::fs::write(target.join("map.json"), map_json).map_err(|e| e.to_string())?;
+    let request = dir.parent().ok_or("bad maps folder")?.join("autoplay.txt");
+    std::fs::write(&request, TEST_MAP_ID).map_err(|e| e.to_string())?;
+    super::play::launch_game(app, true).map_err(|e| {
+        let _ = std::fs::remove_file(&request);
+        e
+    })
+}
