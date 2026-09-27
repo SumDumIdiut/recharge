@@ -22,13 +22,29 @@ pub struct LoaderStatus {
 }
 
 #[tauri::command]
-pub fn loader_status(app: AppHandle) -> LoaderStatus {
+pub async fn loader_status(app: AppHandle) -> LoaderStatus {
+    tauri::async_runtime::spawn_blocking(move || loader_status_blocking(&app))
+        .await
+        .unwrap_or(LoaderStatus { installed: false, version: LOADER_VERSION.to_string(), outdated: false })
+}
+
+fn loader_status_blocking(app: &AppHandle) -> LoaderStatus {
+    let app = app.clone();
     let game_path = settings_game_path(&app);
     let installed = game_path
         .as_deref()
         .and_then(|p| super::steam::managed_dir(std::path::Path::new(p)))
         .map(|managed| managed.join("Recharge.ModApi.dll").is_file())
         .unwrap_or(false);
+
+    // Navigator's source follows its branch: pull any newer commits now, and
+    // the stamp (which covers the pulled revision) marks the loader outdated
+    // so it's rebuilt and redeployed with them.
+    if installed {
+        if let Err(e) = super::repos::refresh_blocking(&app, "recharge-maps") {
+            eprintln!("[loader] couldn't refresh Navigator: {e}");
+        }
+    }
 
     let outdated = installed
         && match (game_path.as_deref(), loader_stamp(&app)) {
@@ -61,13 +77,20 @@ fn loader_stamp(app: &AppHandle) -> Option<String> {
     files.sort();
 
     let mut hash: u64 = 0xcbf29ce484222325;
-    for file in &files {
-        let rel = file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/");
-        let Ok(bytes) = std::fs::read(file) else { continue };
-        for b in rel.bytes().chain(std::iter::once(0)).chain(bytes.into_iter().filter(|b| *b != b'\r')) {
+    let mut mix = |bytes: &mut dyn Iterator<Item = u8>| {
+        for b in bytes {
             hash ^= b as u64;
             hash = hash.wrapping_mul(0x100000001b3);
         }
+    };
+    for file in &files {
+        let rel = file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+        let Ok(bytes) = std::fs::read(file) else { continue };
+        mix(&mut rel.bytes().chain(std::iter::once(0)).chain(bytes.into_iter().filter(|b| *b != b'\r')));
+    }
+    // Navigator is built into every deploy, so a newer pull of it needs one too.
+    if let Some(revision) = super::repos::source_revision(app, "recharge-maps") {
+        mix(&mut revision.bytes());
     }
     Some(format!("{hash:016x}"))
 }
@@ -176,7 +199,7 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     // see repos::branch_for) rather than waiting for the user to install it.
     // Other mods are only pulled when the user installs them.
     let mods_dir = super::repos::source_mods_dir(app)?;
-    super::repos::ensure_blocking(app, "recharge-maps", None)?;
+    super::repos::refresh_blocking(app, "recharge-maps")?;
 
     let mut cmd = powershell_command()?;
     cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])

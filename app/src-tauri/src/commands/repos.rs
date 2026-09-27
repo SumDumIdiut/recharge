@@ -26,6 +26,37 @@ fn branch_marker(repo_dir: &Path) -> PathBuf {
     repo_dir.join(".recharge-branch")
 }
 
+/// Records the commit a repo folder was pulled at, so new pushes to its
+/// branch are pulled too (not just a first download or a channel switch).
+fn commit_marker(repo_dir: &Path) -> PathBuf {
+    repo_dir.join(".recharge-commit")
+}
+
+/// A branch's newest commit, from the public ref advertisement (no API rate
+/// limit). None when offline or the repo isn't reachable.
+fn remote_commit(repo: &str, branch: &str) -> Option<String> {
+    let body = ureq::get(&format!("https://github.com/{OWNER}/{repo}.git/info/refs?service=git-upload-pack"))
+        .header("User-Agent", "git/2.40.0")
+        .call()
+        .ok()?
+        .body_mut()
+        .read_to_string()
+        .ok()?;
+    let marker = format!(" refs/heads/{branch}\n");
+    let pos = body.find(&marker)?;
+    let sha = body.get(pos.saturating_sub(40)..pos)?;
+    (sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())).then(|| sha.to_string())
+}
+
+/// The branch and commit a repo's local source was pulled from, e.g.
+/// "dev@1a2b3c..." - changes whenever a newer pull replaces it.
+pub fn source_revision(app: &AppHandle, repo: &str) -> Option<String> {
+    let dir = source_mods_dir(app).ok()?.join(repo);
+    let branch = std::fs::read_to_string(branch_marker(&dir)).ok()?;
+    let commit = std::fs::read_to_string(commit_marker(&dir)).unwrap_or_default();
+    Some(format!("{}@{}", branch.trim(), commit.trim()))
+}
+
 /// Where mod source lives on disk: one folder per repo under here. Override
 /// with RECHARGE_MODS_DIR to point at a local checkout while developing.
 pub fn source_mods_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -49,13 +80,14 @@ fn check_name(name: &str) -> Result<(), String> {
 }
 
 // Private repos need RECHARGE_GITHUB_TOKEN; public ones download anonymously.
-fn download_repo_zip(repo: &str, branch: &str) -> Result<Vec<u8>, String> {
+// `rev` is a branch name or a commit.
+fn download_repo_zip(repo: &str, rev: &str) -> Result<Vec<u8>, String> {
     let token = std::env::var("RECHARGE_GITHUB_TOKEN").ok().filter(|t| !t.is_empty());
     let request = match &token {
-        Some(token) => ureq::get(&format!("https://api.github.com/repos/{OWNER}/{repo}/zipball/{branch}"))
+        Some(token) => ureq::get(&format!("https://api.github.com/repos/{OWNER}/{repo}/zipball/{rev}"))
             .header("Authorization", &format!("Bearer {token}"))
             .header("Accept", "application/vnd.github+json"),
-        None => ureq::get(&format!("https://github.com/{OWNER}/{repo}/archive/refs/heads/{branch}.zip")),
+        None => ureq::get(&format!("https://github.com/{OWNER}/{repo}/archive/{rev}.zip")),
     };
     request
         .header("User-Agent", "recharge")
@@ -93,7 +125,10 @@ pub fn pull_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Resul
     }
     let mods = source_mods_dir(app)?;
     let branch = branch_for(app, repo);
-    let bytes = download_repo_zip(repo, &branch)?;
+    // Pinned to the branch's current commit when it can be read, so the
+    // recorded commit is exactly what was downloaded.
+    let commit = remote_commit(repo, &branch);
+    let bytes = download_repo_zip(repo, commit.as_deref().unwrap_or(&branch))?;
 
     let tmp = mods.join(format!(".pull-tmp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -122,6 +157,10 @@ pub fn pull_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Resul
         let _ = std::fs::remove_dir_all(&to);
         copy_dir(&from, &to)?;
         let _ = std::fs::write(branch_marker(&to), &branch);
+        match &commit {
+            Some(commit) if folder.is_none() => { let _ = std::fs::write(commit_marker(&to), commit); }
+            _ => { let _ = std::fs::remove_file(commit_marker(&to)); }
+        }
         Ok(())
     })();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -185,6 +224,21 @@ pub fn ensure_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Res
     let current_branch = std::fs::read_to_string(branch_marker(&path)).ok();
     if !path.is_dir() || current_branch.as_deref() != Some(wanted_branch.as_str()) {
         pull_blocking(app, repo, folder)?;
+    }
+    Ok(path)
+}
+
+/// Like ensure_blocking, and also pulls again when the branch has newer
+/// commits than the local copy. Offline (or GitHub unreachable), the local
+/// copy is kept as it is.
+pub fn refresh_blocking(app: &AppHandle, repo: &str) -> Result<PathBuf, String> {
+    let path = ensure_blocking(app, repo, None)?;
+    let branch = branch_for(app, repo);
+    if let Some(remote) = remote_commit(repo, &branch) {
+        let local = std::fs::read_to_string(commit_marker(&path)).ok();
+        if local.as_deref().map(str::trim) != Some(remote.as_str()) {
+            pull_blocking(app, repo, None)?;
+        }
     }
     Ok(path)
 }
