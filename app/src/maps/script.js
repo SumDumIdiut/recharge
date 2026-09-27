@@ -142,6 +142,9 @@ function render() {
   document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('maps-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('maps-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
+  document.getElementById('maps-create-view').style.display = currentSubtab === 'create' ? '' : 'none';
+  document.getElementById('maps-search').style.visibility = currentSubtab === 'create' ? 'hidden' : '';
+  if (currentSubtab === 'create') import('./editor.js').then((m) => m.mountEditor(document.getElementById('maps-create-view')));
   document.getElementById('maps-upload-btn').style.display = isLoggedIn() ? '' : 'none';
   renderInstalled();
   renderBrowse();
