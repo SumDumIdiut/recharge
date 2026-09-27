@@ -20,6 +20,8 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.v.outputs.tag }}
       version: ${{ steps.v.outputs.version }}
@@ -44,6 +46,19 @@ jobs:
             echo "latest=true" >> "$GITHUB_OUTPUT"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Create the draft here so the two platform builds below can't race to create it themselves.
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          PRERELEASE: ${{ steps.v.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flag=""
+          [ "$PRERELEASE" = true ] && flag="--prerelease"
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "${{ github.repository }}" --draft $flag \
+              --title "Recharge $TAG" --target "${{ github.sha }}" --notes ""
 
   build:
     needs: prepare
