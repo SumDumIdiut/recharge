@@ -99,6 +99,11 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\${MAIN_EXE}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\uninstall.exe"
   CreateShortcut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\${MAIN_EXE}"
+
+  ; A silent (/S) run has no finish page to auto-launch from - relaunch here
+  ; instead. Interactive installs skip this; MUI_FINISHPAGE_RUN handles those.
+  IfSilent 0 +2
+    Exec '"$INSTDIR\${MAIN_EXE}"'
 SectionEnd
 
 Section "Uninstall"

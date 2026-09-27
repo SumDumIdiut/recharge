@@ -1,79 +1,50 @@
 name: Auto release
 
-# Manual only, and not used day to day: Recharge ships as live code, so screens,
-# the loader and its scripts reach everyone the moment they're pushed and no
-# package is ever built. Run this by hand (Actions > Auto release > Run
-# workflow) only when a compiled-backend release is deliberately wanted.
+# Screens, the loader and Navigator's mod source reach everyone live, no
+# package needed. The compiled backend can't be live-updated, so this builds
+# and publishes it automatically whenever app/src-tauri changes - master gets
+# a normal (stable) release, dev gets a prerelease (beta). The app compares
+# its own build against a release's SOURCE_SHA.txt to detect an update, then
+# installs and relaunches itself with no user action needed.
 on:
   workflow_dispatch:
+  push:
+    branches: [master, dev]
+    paths:
+      - 'app/src-tauri/**'
 
 concurrency:
-  group: autorelease
-  cancel-in-progress: false
+  group: autorelease-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
-  bump:
-    # The version-bump commit is pushed with GITHUB_TOKEN, which never
-    # re-triggers workflows, so this can't loop.
-    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
+  prepare:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
-      tag: ${{ steps.next.outputs.tag }}
-      sha: ${{ steps.commit.outputs.sha }}
-      notes: ${{ steps.next.outputs.notes }}
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      latest: ${{ steps.v.outputs.latest }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Pick the next version
-        id: next
+      - id: v
         run: |
           set -euo pipefail
-          last=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
-          cur=${last#v}
-          IFS=. read -r major minor patch <<<"$cur"
-          new="$major.$minor.$((patch + 1))"
-          echo "version=$new" >> "$GITHUB_OUTPUT"
-          echo "tag=v$new" >> "$GITHUB_OUTPUT"
-          {
-            echo 'notes<<NOTES_EOF'
-            git log "$last"..HEAD --no-merges --pretty='- %s' -- app loader content | grep -v '^- Release v' || true
-            echo 'NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Write the version into the project files
-        env:
-          NEW: ${{ steps.next.outputs.version }}
-        run: |
-          set -euo pipefail
-          sed -i -E '4s/"version": *"[^"]*"/"version": "'"$NEW"'"/' app/package.json app/src-tauri/tauri.conf.json
-          sed -i -E '3s/^version = ".*"/version = "'"$NEW"'"/' app/src-tauri/Cargo.toml
-          sed -i -E 's/(!define PRODUCT_VERSION ")[^"]*"/\1'"$NEW"'"/' installer/recharge-installer.nsi
-          perl -0pi -e 's/(name = "recharge"\nversion = ")[^"]*"/$1$ENV{NEW}"/' app/src-tauri/Cargo.lock
-          git diff --stat
-
-      - name: Commit the bump
-        id: commit
-        env:
-          TAG: ${{ steps.next.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # The files can already carry this version (a release that was bumped
-          # but never published), in which case there is nothing to commit.
-          if ! git diff --quiet; then
-            git commit -am "Release $TAG"
-            git pull --rebase origin master
-            git push origin HEAD:master
+          if [ "${{ github.ref_name }}" = dev ]; then
+            version=$(python3 -c "import json; print(json.load(open('app/src/beta.json'))['build'])")
+            echo "tag=beta-$version" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          else
+            version=$(python3 -c "import json; print(json.load(open('app/src/version.json'))['version'])")
+            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "latest=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: bump
+    needs: prepare
     permissions:
       contents: write
     strategy:
@@ -87,11 +58,19 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.bump.outputs.sha }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # Not committed - just stamps this build's own files.
+      - name: Stamp the version
+        shell: bash
+        env:
+          NEW: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i -E '4s/"version": *"[^"]*"/"version": "'"$NEW"'"/' app/package.json app/src-tauri/tauri.conf.json
+          sed -i -E '3s/^version = ".*"/version = "'"$NEW"'"/' app/src-tauri/Cargo.toml
+          perl -0pi -e 's/(name = "recharge"\nversion = ")[^"]*"/$1$ENV{NEW}"/' app/src-tauri/Cargo.lock
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -99,13 +78,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: lts/*
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
@@ -128,26 +105,29 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECHARGE_BUILD_SHA: ${{ github.sha }}
         with:
           projectPath: app
-          tagName: ${{ needs.bump.outputs.tag }}
-          commitish: ${{ needs.bump.outputs.sha }}
-          releaseName: 'Recharge ${{ needs.bump.outputs.tag }}'
-          releaseBody: ${{ needs.bump.outputs.notes }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: 'Recharge ${{ needs.prepare.outputs.tag }}'
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
           args: ${{ matrix.args }}
 
   publish:
     # Only once both platforms are attached, so the updater never sees a
     # release that is missing its own platform's package.
-    needs: [bump, build]
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Publish the release
-        env:
+      - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.bump.outputs.tag }}
-        run: gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest
+          TAG: ${{ needs.prepare.outputs.tag }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+        run: |
+          set -euo pipefail
+          echo -n "$GITHUB_SHA" > SOURCE_SHA.txt
+          gh release upload "$TAG" SOURCE_SHA.txt --repo "${{ github.repository }}" --clobber
+          gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest="$LATEST"
