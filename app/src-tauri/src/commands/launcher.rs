@@ -22,10 +22,16 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
+// GitHub returns JSON null (not a missing key) for an empty release body,
+// which plain #[serde(default)] doesn't cover - only a missing key does.
+fn null_as_default<'de, D: serde::Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
+    Ok(Option::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 struct GithubRelease {
     tag_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     body: String,
     html_url: String,
     #[serde(default)]
