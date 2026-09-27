@@ -44,4 +44,16 @@ fn main() {
     )
     .expect("failed to run tauri-build");
     println!("cargo:rerun-if-changed=src/lib.rs");
+
+    // The commit this backend was built from (see launcher.rs).
+    let sha = std::env::var("RECHARGE_BUILD_SHA").ok().or_else(|| {
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    });
+    println!("cargo:rustc-env=RECHARGE_BUILD_SHA={}", sha.unwrap_or_default());
+    println!("cargo:rerun-if-env-changed=RECHARGE_BUILD_SHA");
 }

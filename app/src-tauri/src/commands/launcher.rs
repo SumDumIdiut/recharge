@@ -6,9 +6,15 @@ use tauri::{AppHandle, Emitter};
 use super::settings;
 
 const RELEASES_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases/latest";
+const RECENT_RELEASES_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases?per_page=10";
 #[cfg(not(windows))]
 const INSTALLER_SCRIPT_URL: &str = "https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh";
 const MAX_INSTALLER_BYTES: u64 = 200 * 1024 * 1024;
+
+// The commit this backend was built from, embedded at compile time.
+fn built_sha() -> &'static str {
+    env!("RECHARGE_BUILD_SHA")
+}
 
 #[derive(Deserialize)]
 struct GithubAsset {
@@ -24,6 +30,10 @@ struct GithubRelease {
     html_url: String,
     #[serde(default)]
     assets: Vec<GithubAsset>,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
 }
 
 #[derive(Serialize)]
@@ -79,6 +89,12 @@ fn is_newer(a: &str, b: &str) -> bool {
         }
     }
     false
+}
+
+fn source_sha_of(assets: &[GithubAsset]) -> Option<String> {
+    let url = assets.iter().find(|a| a.name == "SOURCE_SHA.txt")?.browser_download_url.clone();
+    let mut r = ureq::get(&url).header("User-Agent", "Recharge").call().ok()?;
+    Some(r.body_mut().read_to_string().ok()?.trim().to_string())
 }
 
 #[cfg(windows)]
@@ -158,7 +174,9 @@ pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, Strin
         deployed_maps_version: deployed_maps_version.clone(),
     };
 
-    let mut response = match ureq::get(RELEASES_API).header("User-Agent", "Recharge").call() {
+    let beta = settings::update_channel(&app) == "beta";
+    let api = if beta { RECENT_RELEASES_API } else { RELEASES_API };
+    let mut response = match ureq::get(api).header("User-Agent", "Recharge").call() {
         // No release has been published yet (only drafts, or none at all) -
         // GitHub's "latest" endpoint 404s in that case. That's a normal
         // state, not something worth surfacing as an error.
@@ -167,17 +185,33 @@ pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, Strin
         Ok(r) => r,
     };
 
-    let release: GithubRelease = response
-        .body_mut()
-        .with_config()
-        .limit(1024 * 1024)
-        .read_json()
-        .map_err(|e| format!("bad response from GitHub: {e}"))?;
+    let release: Option<GithubRelease> = if beta {
+        let releases: Vec<GithubRelease> = response
+            .body_mut()
+            .with_config()
+            .limit(1024 * 1024)
+            .read_json()
+            .map_err(|e| format!("bad response from GitHub: {e}"))?;
+        releases.into_iter().find(|r| r.prerelease && !r.draft)
+    } else {
+        response
+            .body_mut()
+            .with_config()
+            .limit(1024 * 1024)
+            .read_json()
+            .map(Some)
+            .map_err(|e| format!("bad response from GitHub: {e}"))?
+    };
+    let Some(release) = release else { return Ok(no_release_info()) };
 
-    let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    let latest_version = release.tag_name.trim_start_matches('v').trim_start_matches("beta-").to_string();
     let download_url = self_update_asset_url(&release.assets);
 
-    let app_update_available = is_newer(&latest_version, &current_version);
+    // No SOURCE_SHA.txt on an old release - fall back to the version number.
+    let app_update_available = match source_sha_of(&release.assets) {
+        Some(sha) => sha != built_sha(),
+        None => is_newer(&latest_version, &current_version),
+    };
 
     Ok(LauncherUpdateInfo {
         update_available: app_update_available || maps_update_available,
@@ -202,8 +236,12 @@ pub fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String
     std::fs::write(&installer_path, &bytes)
         .map_err(|e| format!("couldn't save the update: {e}"))?;
 
-    let _ = app.emit("launcher-update-progress", "Starting installer...");
+    // Not .status(): the installer's own .onInit taskkills "recharge.exe" -
+    // which is us - so waiting on it here would just hang until killed. It
+    // relaunches the app itself once installed (see recharge-installer.nsi).
+    let _ = app.emit("launcher-update-progress", "Installing...");
     Command::new(&installer_path)
+        .arg("/S")
         .spawn()
         .map_err(|e| format!("couldn't start the installer: {e}"))?;
 

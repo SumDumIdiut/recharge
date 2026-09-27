@@ -234,21 +234,76 @@ pub fn live_take_stash(state: State<LiveState>) -> Option<String> {
 
 // ---- updating ----------------------------------------------------------
 
-fn remote_sha(branch: &str) -> Result<String, String> {
-    let body = ureq::get(&format!("https://api.github.com/repos/{REPO}/commits/{branch}"))
-        .header("User-Agent", "Recharge")
-        .header("Accept", "application/vnd.github.sha")
+// git's own protocol (what `git ls-remote` uses) isn't rate-limited like
+// api.github.com is; that's kept only as a fallback.
+fn remote_sha(app: &AppHandle, branch: &str) -> Result<String, String> {
+    match remote_sha_via_git(branch) {
+        Ok(sha) => Ok(sha),
+        Err(_) => remote_sha_via_api(app, branch),
+    }
+}
+
+fn remote_sha_via_git(branch: &str) -> Result<String, String> {
+    let body = ureq::get(&format!("https://github.com/{REPO}.git/info/refs?service=git-upload-pack"))
+        .header("User-Agent", "git/2.40.0")
         .call()
         .map_err(|e| e.to_string())?
         .body_mut()
         .read_to_string()
         .map_err(|e| e.to_string())?;
-    let sha = body.trim().to_string();
+    let marker = format!(" refs/heads/{branch}\n");
+    let pos = body.find(&marker).ok_or_else(|| format!("branch '{branch}' not found in ref advertisement"))?;
+    let sha = body.get(pos.saturating_sub(40)..pos).unwrap_or("");
     if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
-        Ok(sha)
+        Ok(sha.to_string())
     } else {
-        Err(format!("unexpected response: {sha}"))
+        Err("malformed git ref advertisement".to_string())
     }
+}
+
+fn remote_sha_via_api(app: &AppHandle, branch: &str) -> Result<String, String> {
+    let cache_dir = live_root(app);
+    let etag_path = cache_dir.as_ref().map(|d| d.join(format!("etag-{branch}")));
+    let sha_path = cache_dir.as_ref().map(|d| d.join(format!("sha-cache-{branch}")));
+    let cached_etag = etag_path.as_ref().and_then(|p| read_file(p));
+    let cached_sha = sha_path.as_ref().and_then(|p| read_file(p));
+
+    let mut request = ureq::get(&format!("https://api.github.com/repos/{REPO}/commits/{branch}"))
+        .header("User-Agent", "Recharge")
+        .header("Accept", "application/vnd.github.sha");
+    if let Some(etag) = &cached_etag {
+        request = request.header("If-None-Match", etag);
+    }
+
+    let response = match request.call() {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(304)) => {
+            return cached_sha.ok_or_else(|| "GitHub said 304 Not Modified but nothing was cached".to_string());
+        }
+        Err(ureq::Error::StatusCode(403)) => {
+            return Err("GitHub's rate limit is exhausted for your network right now - try again in a few minutes".to_string());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    if response.status() == 304 {
+        return cached_sha.ok_or_else(|| "GitHub said 304 Not Modified but nothing was cached".to_string());
+    }
+
+    let etag = response.headers().get("etag").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let mut response = response;
+    let body = response.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    let sha = body.trim().to_string();
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("unexpected response: {sha}"));
+    }
+
+    if let (Some(path), Some(etag)) = (&etag_path, &etag) {
+        let _ = std::fs::write(path, etag);
+    }
+    if let Some(path) = &sha_path {
+        let _ = std::fs::write(path, &sha);
+    }
+    Ok(sha)
 }
 
 /// Folders a local checkout has that are build output or machine-local tools,
@@ -317,7 +372,7 @@ fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> 
         return Ok(Some("local".to_string()));
     }
 
-    let sha = remote_sha(branch_for(&super::settings::update_channel(app)))?;
+    let sha = remote_sha(app, branch_for(&super::settings::update_channel(app)))?;
     if current_dir(app).and_then(|d| read_file(&d.join("sha"))).as_deref() == Some(sha.as_str()) {
         return Ok(None);
     }
