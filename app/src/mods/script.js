@@ -57,6 +57,9 @@ async function loadCatalog() {
     const res = await fetch(`${HUB_BASE}/api/mods`);
     const rows = await res.json();
     catalog = rows
+      // Navigator (recharge.maps) is built into every install now, not
+      // something to browse or install separately - see BUILTIN_MOD_IDS.
+      .filter((row) => row.modId !== 'recharge.maps')
       .map((row) => ({
         id: row.id,
         modId: row.modId || null,
@@ -383,7 +386,8 @@ window.__modInstall = async function (id, btn) {
 // Mods whose source lives in a GitHub repo instead of the hub: installing one
 // pulls it into the mods folder, then the loader build compiles and deploys it.
 const REPO_MODS = {
-  'recharge.maps': { repo: 'recharge-maps' },
+  // recharge.maps (Navigator) isn't here - it's built into every install
+  // automatically (see loader.rs), not something to install from this tab.
   'recharge.customskins': { repo: 'recharge-skins' },
   'recharge.example': { repo: 'recharge-mods', folder: 'recharge-example' },
   'recharge.icyphysics': { repo: 'recharge-mods', folder: 'recharge-icy-physics' },

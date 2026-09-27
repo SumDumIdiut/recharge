@@ -49,13 +49,27 @@ fn each_manifest(app: &AppHandle) -> Vec<(PathBuf, ModManifest)> {
     found
 }
 
+// recharge.maps (Navigator) is baked into every install - always pulled and
+// built alongside the loader itself (see repos::ensure_blocking's caller in
+// loader.rs) rather than being something to browse, install or toggle. It's
+// filtered out of everything user-facing here rather than never being
+// deployed at all, since other mods (multiplayer) still load against it.
+const BUILTIN_MOD_IDS: [&str; 1] = ["recharge.maps"];
+
 #[tauri::command]
 pub fn list_installed_mods(app: AppHandle) -> Vec<ModManifest> {
-    each_manifest(&app).into_iter().map(|(_, m)| m).collect()
+    each_manifest(&app)
+        .into_iter()
+        .map(|(_, m)| m)
+        .filter(|m| !BUILTIN_MOD_IDS.contains(&m.id.as_str()))
+        .collect()
 }
 
 #[tauri::command]
 pub fn set_mod_enabled(app: AppHandle, id: String, enabled: bool) -> Result<(), String> {
+    if BUILTIN_MOD_IDS.contains(&id.as_str()) {
+        return Err(format!("{id} is built into Recharge and can't be toggled"));
+    }
     let Some(dir) = mods_dir(&app) else {
         return Err("game path not set".to_string());
     };
@@ -83,8 +97,8 @@ pub fn set_mod_enabled(app: AppHandle, id: String, enabled: bool) -> Result<(), 
 
 #[tauri::command]
 pub fn uninstall_mod(app: AppHandle, id: String) -> Result<(), String> {
-    if id == "recharge.maps" {
-        return Err("recharge.maps is required by the Maps tab and can't be uninstalled here".to_string());
+    if BUILTIN_MOD_IDS.contains(&id.as_str()) {
+        return Err(format!("{id} is built into Recharge and can't be uninstalled"));
     }
     for (manifest_path, manifest) in each_manifest(&app) {
         if manifest.id != id {

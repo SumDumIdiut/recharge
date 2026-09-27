@@ -171,9 +171,10 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);
 
-    // Navigator (recharge-maps) is required by other mods, so it's always
-    // pulled into the mods folder before building; other mods are pulled
-    // when the user installs them.
+    // Navigator (recharge-maps) is baked into every install, not an optional
+    // mod - always pulled and built here (following the Stable/Beta channel,
+    // see repos::branch_for) rather than waiting for the user to install it.
+    // Other mods are only pulled when the user installs them.
     let mods_dir = super::repos::source_mods_dir(app)?;
     super::repos::ensure_blocking(app, "recharge-maps", None)?;
 
