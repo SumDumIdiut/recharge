@@ -255,6 +255,22 @@ fn remote_sha(branch: &str) -> Result<String, String> {
 /// never part of a bundle.
 const SKIP_DIRS: [&str; 6] = [".dotnet-sdk", ".git", "bin", "obj", "node_modules", "tools"];
 
+// Windows can briefly deny renaming a directory whose files just got written
+// (antivirus grabbing a look at them) - retry instead of failing outright.
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut last_err = None;
+    for attempt in 0..20 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 fn copy_dir(src: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dest)?;
     for entry in std::fs::read_dir(src)? {
@@ -378,9 +394,9 @@ fn check_and_apply(app: &AppHandle) -> Result<Outcome, String> {
     let old = root.join("old");
     let _ = std::fs::remove_dir_all(&old);
     if cur.exists() {
-        std::fs::rename(&cur, &old).map_err(|e| e.to_string())?;
+        rename_with_retry(&cur, &old).map_err(|e| e.to_string())?;
     }
-    std::fs::rename(&next, &cur).map_err(|e| e.to_string())?;
+    rename_with_retry(&next, &cur).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&old);
 
     // A fresh bundle gets a fresh chance to prove it can load.
