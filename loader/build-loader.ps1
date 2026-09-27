@@ -108,6 +108,39 @@ try {
 
     $dotnetExe = Get-DotnetExe
 
+    # Packaged builds get ilspycmd bundled in by the release workflow; a build
+    # from source never runs that step, so loader/tools/ilspycmd is empty and
+    # the decompile phase below fails with a confusing "file not found". Fetch
+    # it here instead, the same way the CI step does.
+    function Get-Ilspycmd {
+        if (Test-Path $ilspycmd) { return $ilspycmd }
+        if ($NoSdkDownload) {
+            throw "ilspycmd (the decompiler tool) isn't present at $ilspycmd and automatic download was declined."
+        }
+
+        Set-Status "Downloading ilspycmd (one-time decompiler tool)..."
+        $installDir = Split-Path $ilspycmd -Parent
+        $tmpInstallDir = Join-Path $TempDir 'recharge-ilspycmd-install'
+        Remove-Item -Recurse -Force $tmpInstallDir -ErrorAction SilentlyContinue
+        $installResult = Invoke-LoggedBuild (Join-Path $TempDir 'ilspycmd-install.log') $dotnetExe @('tool', 'install', 'ilspycmd', '--tool-path', $tmpInstallDir)
+        if ($installResult.ExitCode -ne 0) { throw (Format-BuildFailure "Could not install ilspycmd (check your internet connection)" $installResult) }
+
+        # --tool-path installs a shim + nested .store/, not the flat DLL folder
+        # this script expects, so the real files get copied up from there.
+        $storeDll = Get-ChildItem -Path (Join-Path $tmpInstallDir '.store') -Filter 'ilspycmd.dll' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $storeDll) {
+            throw "ilspycmd installed, but ilspycmd.dll wasn't found under $tmpInstallDir\.store"
+        }
+        New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+        Copy-Item -Path (Join-Path $storeDll.DirectoryName '*') -Destination $installDir -Recurse -Force
+        Remove-Item -Recurse -Force $tmpInstallDir -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path $ilspycmd)) { throw "ilspycmd.dll still missing after install." }
+        return $ilspycmd
+    }
+
+    Get-Ilspycmd | Out-Null
+
     $gameDir = $GameDir
 
     if ($SteamAppId) {
