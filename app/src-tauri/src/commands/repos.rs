@@ -2,10 +2,29 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+use super::settings;
+
 const OWNER: &str = "SumDumIdiut";
-const BRANCH: &str = "main";
+const DEFAULT_BRANCH: &str = "main";
 const MAX_REPO_BYTES: u64 = 200 * 1024 * 1024;
 const ALLOWED_REPOS: [&str; 3] = ["recharge-mods", "recharge-maps", "recharge-skins"];
+
+/// recharge-maps (Navigator) is baked into every install rather than being an
+/// optional mod, so it follows the same Stable/Beta split as Recharge itself:
+/// "main" for stable, a "dev" branch for beta. Every other repo only has main.
+fn branch_for(app: &AppHandle, repo: &str) -> String {
+    if repo == "recharge-maps" && settings::update_channel(app) == "beta" {
+        "dev".to_string()
+    } else {
+        DEFAULT_BRANCH.to_string()
+    }
+}
+
+/// Records which branch a repo folder was last pulled from, so a channel
+/// switch re-pulls it instead of silently keeping the old branch's code.
+fn branch_marker(repo_dir: &Path) -> PathBuf {
+    repo_dir.join(".recharge-branch")
+}
 
 /// Where mod source lives on disk: one folder per repo under here. Override
 /// with RECHARGE_MODS_DIR to point at a local checkout while developing.
@@ -30,13 +49,13 @@ fn check_name(name: &str) -> Result<(), String> {
 }
 
 // Private repos need RECHARGE_GITHUB_TOKEN; public ones download anonymously.
-fn download_repo_zip(repo: &str) -> Result<Vec<u8>, String> {
+fn download_repo_zip(repo: &str, branch: &str) -> Result<Vec<u8>, String> {
     let token = std::env::var("RECHARGE_GITHUB_TOKEN").ok().filter(|t| !t.is_empty());
     let request = match &token {
-        Some(token) => ureq::get(&format!("https://api.github.com/repos/{OWNER}/{repo}/zipball/{BRANCH}"))
+        Some(token) => ureq::get(&format!("https://api.github.com/repos/{OWNER}/{repo}/zipball/{branch}"))
             .header("Authorization", &format!("Bearer {token}"))
             .header("Accept", "application/vnd.github+json"),
-        None => ureq::get(&format!("https://github.com/{OWNER}/{repo}/archive/refs/heads/{BRANCH}.zip")),
+        None => ureq::get(&format!("https://github.com/{OWNER}/{repo}/archive/refs/heads/{branch}.zip")),
     };
     request
         .header("User-Agent", "recharge")
@@ -73,7 +92,8 @@ pub fn pull_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Resul
         check_name(folder)?;
     }
     let mods = source_mods_dir(app)?;
-    let bytes = download_repo_zip(repo)?;
+    let branch = branch_for(app, repo);
+    let bytes = download_repo_zip(repo, &branch)?;
 
     let tmp = mods.join(format!(".pull-tmp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -100,7 +120,9 @@ pub fn pull_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Resul
             return Err(format!("'{}' not found in {repo}", folder.unwrap_or("")));
         }
         let _ = std::fs::remove_dir_all(&to);
-        copy_dir(&from, &to)
+        copy_dir(&from, &to)?;
+        let _ = std::fs::write(branch_marker(&to), &branch);
+        Ok(())
     })();
     let _ = std::fs::remove_dir_all(&tmp);
     result
@@ -117,7 +139,7 @@ pub fn export_repo_folder(repo: &str, subdir: &str, dest: &Path) -> Result<(), S
     for part in subdir.split('/') {
         check_name(part)?;
     }
-    let bytes = download_repo_zip(repo)?;
+    let bytes = download_repo_zip(repo, DEFAULT_BRANCH)?;
 
     let tmp = std::env::temp_dir().join(format!("recharge-export-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -150,14 +172,18 @@ pub async fn pull_mod_repo(app: AppHandle, repo: String, folder: Option<String>)
         .map_err(|e| format!("pull task panicked: {e}"))?
 }
 
-/// Makes sure a repo exists locally, pulling it only if it isn't there yet.
+/// Makes sure a repo exists locally, pulling it only if it isn't there yet -
+/// or if it's there but was pulled for a different channel's branch (e.g. the
+/// user switched Stable/Beta since the last pull).
 pub fn ensure_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Result<PathBuf, String> {
     let mods = source_mods_dir(app)?;
     let path = match folder {
         Some(folder) => mods.join(repo).join(folder),
         None => mods.join(repo),
     };
-    if !path.is_dir() {
+    let wanted_branch = branch_for(app, repo);
+    let current_branch = std::fs::read_to_string(branch_marker(&path)).ok();
+    if !path.is_dir() || current_branch.as_deref() != Some(wanted_branch.as_str()) {
         pull_blocking(app, repo, folder)?;
     }
     Ok(path)
