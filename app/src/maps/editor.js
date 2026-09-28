@@ -62,13 +62,15 @@ let mounted = false;
 let frameQueued = false;
 
 function emptyDraft() {
-  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, removed: [], removedVines: [], removedObjects: [], vineSprite: 'smallArc', start: null, end: null, spawn: null };
+  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, placed: [], removed: [], removedVines: [], removedObjects: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, cat: 'blocks', pick: {} };
 }
 
 // Draft stores arrays/objects for JSON; these live views are rebuilt from it.
 let blocks = new Map(); // "cx,cy" -> 'ground' | 'dark' | 'blue' | 'orange'
 let spikes = new Map(); // "cx,cy" -> { q, c: 'spike' | 'blue' | 'orange' }
 let vines = new Map(); // anchor "cx,cy" -> { s: sprite name, q: quarter turns }
+let tiles = new Map(); // "layer|gx,gy" (that layer's own grid) -> { layer, tile, q }
+let placed = []; // objects / decor: { cat: 'objects' | 'decor', i, x, y }
 let removed = new Set(); // base cells cleared by Erase
 let removedVines = new Set(); // anchors of base vines cleared by Erase
 let removedObjects = new Set(); // ids of base upgrade boxes / triggers cleared by Erase
@@ -95,6 +97,8 @@ function loadDraft() {
   // Older drafts stored bare quarter turns for plain spikes.
   spikes = new Map(Object.entries(draft.spikes).map(([k, v]) => [k, typeof v === 'number' ? { q: v, c: 'spike' } : v]));
   vines = new Map(Object.entries(draft.vines));
+  tiles = new Map(Object.entries(draft.tiles || {}));
+  placed = [...(draft.placed || [])];
   for (const [k, v] of spikes) if (v.c === 'vine') { spikes.delete(k); vines.set(k, { s: 'smallArc', q: v.q }); }
   removedVines = new Set(draft.removedVines);
   removedObjects = new Set(draft.removedObjects);
@@ -105,6 +109,8 @@ function saveDraft() {
   draft.blocks = Object.fromEntries(blocks);
   draft.spikes = Object.fromEntries(spikes);
   draft.vines = Object.fromEntries(vines);
+  draft.tiles = Object.fromEntries(tiles);
+  draft.placed = placed;
   draft.removedVines = [...removedVines];
   draft.removedObjects = [...removedObjects];
   // Erased base vines and tiles are part of the cached tiles: redraw them.
@@ -116,7 +122,7 @@ function saveDraft() {
 }
 
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], start: draft.start, end: draft.end, spawn: draft.spawn });
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], placed, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], start: draft.start, end: draft.end, spawn: draft.spawn });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -129,6 +135,8 @@ function undo() {
   blocks = new Map(o.blocks);
   spikes = new Map(o.spikes);
   vines = new Map(o.vines);
+  tiles = new Map(o.tiles || []);
+  placed = o.placed || [];
   removedVines = new Set(o.removedVines);
   removedObjects = new Set(o.removedObjects);
   removed = new Set(o.removed);
@@ -226,6 +234,264 @@ function vineSprites() {
   return [...new Set(base.defs.filter((d) => d.kind === 'vine' && d.layer === VINE_LAYER).map((d) => d.sprite))].sort();
 }
 
+// ---- palette: everything placeable, by category ------------------------------
+// Blocks, hazards (spikes and vines), any tile of any of the level's tilemaps,
+// gameplay objects and decoration (both cloned from the real scene object by
+// Navigator), and gates. Each category has a key: pressing it picks the
+// category, pressing it again steps through its items (Shift steps back);
+// [ and ] step too, 1-9 pick directly.
+
+const CATEGORIES = [
+  { id: 'blocks', label: 'Blocks', key: 'b' },
+  { id: 'hazards', label: 'Hazards', key: 's' },
+  { id: 'tiles', label: 'Tiles', key: 't' },
+  { id: 'objects', label: 'Objects', key: 'o' },
+  { id: 'decor', label: 'Decor', key: 'd' },
+  { id: 'gates', label: 'Gates', key: 'g' },
+];
+const LAYER_LABELS = { 'new awesome nikki ground': 'Ground' };
+const layerLabel = (name) => LAYER_LABELS[name] || prettySprite(name.replace(/_/g, ' '));
+const tilemapName = (layer) => (layer === 'new awesome nikki ground' ? 'ground' : layer);
+const catalogItem = (o) => base?.catalog?.[o.cat]?.[o.i];
+
+// A tile layer's own grid (moss is 64 units, offset) - placed tiles snap to it.
+function layerGrid(name) {
+  const l = base?.art?.layers.find((x) => x.name === name);
+  return l ? { size: l.size, ox: l.ox, oy: l.oy, order: l.order ?? 0 } : { size: CELL, ox: 0, oy: OFFSET_Y - CELL, order: 0 };
+}
+function tileKeyAt(layer, wx, wy) {
+  const g = layerGrid(layer);
+  return layer + '|' + Math.floor((wx - g.ox) / g.size) + ',' + Math.floor((wy - g.oy) / g.size);
+}
+function tileCenter(layer, k) {
+  const g = layerGrid(layer);
+  const [gx, gy] = k.slice(k.lastIndexOf('|') + 1).split(',').map(Number);
+  return { x: g.ox + (gx + 0.5) * g.size, y: g.oy + (gy + 0.5) * g.size };
+}
+
+// The tile a coloured block is drawn with: its layer's most used tile.
+function colouredTile(kind) {
+  colouredTile.cache ||= {};
+  if (!(kind in colouredTile.cache)) {
+    const layer = base?.art?.layers.find((l) => l.name === (kind === 'blue' ? 'blueBlocks' : 'orangeBlocks'));
+    const counts = new Map();
+    for (let i = 0; layer && i < layer.runs.length; i += 5) counts.set(layer.runs[i + 3], (counts.get(layer.runs[i + 3]) || 0) + layer.runs[i + 2]);
+    const sprite = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const name = Object.keys(base?.art?.tiles || {}).find((n) => base.art.tiles[n] === sprite);
+    colouredTile.cache[kind] = name ? { tile: name, matrix: [1, 0, 0, 1] } : null;
+  }
+  return colouredTile.cache[kind];
+}
+
+function categoryItems(cat) {
+  if (!base) return cat === 'gates' ? gateItems() : cat === 'blocks' ? blockItems() : [];
+  switch (cat) {
+    case 'blocks': return blockItems();
+    case 'hazards': return [
+      { tool: 'spike', label: 'Spike', thumb: { art: spikeTile('spike', 0).tile } },
+      { tool: 'blueSpike', label: 'Blue spike', thumb: { art: spikeTile('blue', 0).tile } },
+      { tool: 'orangeSpike', label: 'Orange spike', thumb: { art: spikeTile('orange', 0).tile } },
+      ...vineSprites().map((v) => ({ tool: 'vine', vine: v, label: 'Vine: ' + prettySprite(v), thumb: { img: '/maps/vines/' + encodeURIComponent(v) + '.png' } })),
+    ];
+    case 'tiles': {
+      const layer = pickedLayer();
+      return (base.art.palette?.[layer] || []).map((t) => ({ tool: 'tile', layer, tile: t, label: t, thumb: { art: t } }));
+    }
+    case 'objects':
+    case 'decor':
+      return (base.catalog?.[cat] || []).map((o, i) => ({ tool: cat === 'objects' ? 'object' : 'decor', i, label: o.name, thumb: { scene: mainSprite(o) } }));
+    default: return gateItems();
+  }
+}
+function blockItems() {
+  return [
+    { tool: 'block', label: 'Ground', thumb: { art: 'ground1_tileset_64' } },
+    { tool: 'dark', label: 'Dark ground', thumb: { art: 'dark_ground_tileset_64' } },
+    { tool: 'blue', label: 'Blue block', thumb: { art: base && colouredTile('blue')?.tile, color: COLORS.blue } },
+    { tool: 'orange', label: 'Orange block', thumb: { art: base && colouredTile('orange')?.tile, color: COLORS.orange } },
+  ];
+}
+function gateItems() {
+  return [
+    { tool: 'start', label: 'Start gate', thumb: { color: COLORS.start } },
+    { tool: 'end', label: 'End gate', thumb: { color: COLORS.end } },
+    { tool: 'spawn', label: 'Spawn', thumb: { color: COLORS.spawn } },
+  ];
+}
+function pickedLayer() {
+  const layers = Object.keys(base?.art?.palette || {});
+  return layers.includes(draft.pick.tileLayer) ? draft.pick.tileLayer : layers.includes('Environmental objects') ? 'Environmental objects' : layers[0];
+}
+// An object's biggest sprite, for its thumbnail.
+function mainSprite(o) {
+  let best = null, area = -1;
+  for (const p of o.parts) { const [, , w, h] = base.scene.sprites[p.s]; if (w * h > area) { area = w * h; best = p.s; } }
+  return best;
+}
+
+function currentIndex(cat) {
+  const items = categoryItems(cat);
+  if (cat === 'tiles') return Math.max(0, items.findIndex((it) => it.tile === draft.pick.tile));
+  return Math.min(items.length - 1, Math.max(0, draft.pick[cat] ?? 0));
+}
+
+function selectItem(cat, index) {
+  const items = categoryItems(cat);
+  if (!items.length) { flash('Import the base map first - this category uses its sprites.', true); return; }
+  index = ((index % items.length) + items.length) % items.length;
+  const it = items[index];
+  draft.cat = cat;
+  if (cat === 'tiles') { draft.pick.tile = it.tile; draft.pick.tileLayer = it.layer; }
+  else draft.pick[cat] = index;
+  if (it.vine) draft.vineSprite = it.vine;
+  setTool(it.tool);
+  saveDraft();
+}
+
+// The item a tool paints with right now.
+function currentItem() {
+  if (tool === 'erase') return null;
+  const items = categoryItems(draft.cat);
+  return items[currentIndex(draft.cat)] || null;
+}
+
+function stepItem(dir) {
+  if (tool === 'erase') return selectItem(draft.cat, currentIndex(draft.cat));
+  selectItem(draft.cat, currentIndex(draft.cat) + dir);
+}
+
+// Thumbnails straight from the atlases, scaled with CSS.
+function thumbHtml(th, size = 32) {
+  const sheet = (atlas, img, rect) => {
+    if (!img?.naturalWidth || !rect) return null;
+    const [x, y, w, h] = rect, k = size / Math.max(w, h, 1);
+    return `<span class="mm-thumb-img" style="width:${Math.round(w * k)}px;height:${Math.round(h * k)}px;background-image:url('/maps/${atlas}');background-size:${img.naturalWidth * k}px ${img.naturalHeight * k}px;background-position:${-x * k}px ${-y * k}px"></span>`;
+  };
+  let inner = null;
+  if (th.art && base?.art?.tiles[th.art] !== undefined) inner = sheet(base.art.atlas, atlasImg, base.art.sprites[base.art.tiles[th.art]]);
+  else if (th.scene != null && base?.scene) inner = sheet(base.scene.atlas, sceneImg, base.scene.sprites[th.scene]);
+  else if (th.img) inner = `<img src="${th.img}" alt="" style="max-width:${size}px;max-height:${size}px">`;
+  if (!inner) inner = `<span class="mm-thumb-swatch" style="background:${th.color || '#666'}"></span>`;
+  return `<span class="mm-thumb" style="width:${size}px;height:${size}px">${inner}</span>`;
+}
+
+function updateCategoryButtons() {
+  if (!root) return;
+  root.querySelectorAll('[data-cat]').forEach((b) => {
+    const cat = b.dataset.cat;
+    const active = tool !== 'erase' && draft.cat === cat;
+    b.classList.toggle('active', active);
+    const items = categoryItems(cat);
+    const it = items[currentIndex(cat)];
+    b.querySelector('.mm-cat-item').textContent = it ? it.label : '';
+    b.querySelector('.mm-cat-thumb').innerHTML = it ? thumbHtml(it.thumb, 18) : '';
+  });
+  root.querySelector('[data-tool="erase"]')?.classList.toggle('active', tool === 'erase');
+}
+
+// The dropdown: the category's items as a grid, tiles by layer, with search.
+let popCat = null;
+function openPopover(cat, anchor) {
+  const pop = root.querySelector('#mm-pop');
+  if (popCat === cat && !pop.hidden) return closePopover();
+  popCat = cat;
+  const bar = root.querySelector('.mm-bar').getBoundingClientRect(), a = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(0, a.left - bar.left) + 'px';
+  pop.hidden = false;
+  renderPopover('');
+}
+function closePopover() {
+  popCat = null;
+  const pop = root?.querySelector('#mm-pop');
+  if (pop) pop.hidden = true;
+}
+function renderPopover(filter) {
+  const pop = root.querySelector('#mm-pop'), cat = popCat;
+  const searchable = cat === 'tiles' || cat === 'decor' || cat === 'hazards';
+  const layers = Object.keys(base?.art?.palette || {}).sort((a, b) => layerLabel(a).localeCompare(layerLabel(b)));
+  const head = [];
+  if (cat === 'tiles') head.push(`<select class="mm-input" id="mm-pop-layer">${layers.map((l) => `<option value="${l}"${l === pickedLayer() ? ' selected' : ''}>${layerLabel(l)} (${base.art.palette[l].length})</option>`).join('')}</select>`);
+  if (searchable) head.push(`<input class="mm-input" id="mm-pop-search" placeholder="Search…" value="${filter.replace(/"/g, '&quot;')}">`);
+  const items = categoryItems(cat).map((it, i) => ({ it, i })).filter(({ it }) => !filter || it.label.toLowerCase().includes(filter.toLowerCase()));
+  const LIMIT = 400;
+  const cur = currentIndex(cat);
+  pop.innerHTML = `<div class="mm-pop-head">${head.join('')}</div><div class="mm-pop-grid">${items.slice(0, LIMIT).map(({ it, i }) =>
+    `<button class="mm-item${i === cur && draft.cat === cat && tool !== 'erase' ? ' active' : ''}" data-i="${i}" title="${it.label}">${thumbHtml(it.thumb, 40)}<span class="mm-item-label">${it.label}</span>${i < 9 ? `<kbd>${i + 1}</kbd>` : ''}</button>`).join('')}</div>` +
+    (items.length > LIMIT ? `<div class="mm-pop-more">${items.length - LIMIT} more - search to narrow</div>` : '') +
+    (!items.length ? `<div class="mm-pop-more">${base ? 'Nothing matches' : 'Import the base map to use these'}</div>` : '');
+  pop.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => { selectItem(cat, Number(b.dataset.i)); closePopover(); }));
+  const layerSel = pop.querySelector('#mm-pop-layer');
+  if (layerSel) layerSel.addEventListener('change', () => {
+    const first = base.art.palette[layerSel.value][0];
+    draft.pick.tileLayer = layerSel.value;
+    draft.pick.tile = first;
+    selectItem('tiles', 0);
+    renderPopover('');
+  });
+  const search = pop.querySelector('#mm-pop-search');
+  if (search) {
+    search.addEventListener('input', () => { const v = search.value; renderPopover(v); const s2 = root.querySelector('#mm-pop-search'); s2.focus(); s2.setSelectionRange(v.length, v.length); });
+    search.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') closePopover(); });
+  }
+}
+
+// Placed tiles and objects on the canvas.
+function drawPlacedTile(t, k, alpha = 1) {
+  const sprite = base?.art?.tiles[t.tile];
+  if (sprite === undefined || !artReady()) return;
+  const c = toScreen(tileCenter(t.layer, k).x, tileCenter(t.layer, k).y);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  blitSprite(ctx, sprite, rotMatrix(t.q || 0), cam.scale, c.x, c.y);
+  ctx.restore();
+}
+function drawPlacedTiles(front) {
+  tiles.forEach((t, k) => { if ((layerGrid(t.layer).order >= 5) === front) drawPlacedTile(t, k); });
+}
+function drawPlacedObject(o, alpha = 1) {
+  const item = catalogItem(o);
+  if (!item || !sceneReady()) return;
+  ctx.save();
+  for (const p of [...item.parts].sort((a, b) => a.o - b.o)) {
+    blitScene(p.s, p.m, o.x + p.x, o.y + p.y, (p.a ?? 1) * alpha, p.dm, p.sz, p.c);
+  }
+  ctx.restore();
+  if (!item.parts.length) {
+    // Invisible objects (checkpoints): their trigger box.
+    const b = item.box || [-50, -50, 50, 50];
+    const a = toScreen(o.x + b[0], o.y + b[3]), z = toScreen(o.x + b[2], o.y + b[1]);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = COLORS.checkpoint;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(a.x, a.y, z.x - a.x, z.y - a.y);
+    ctx.fillStyle = COLORS.checkpoint;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(item.name.toUpperCase(), (a.x + z.x) / 2, a.y - 4);
+    ctx.restore();
+  }
+}
+// Rough extent of a placed object, for erasing it.
+function objectHit(o, wx, wy) {
+  const item = catalogItem(o);
+  if (!item) return false;
+  if (item.box && wx >= o.x + item.box[0] && wx <= o.x + item.box[2] && wy >= o.y + item.box[1] && wy <= o.y + item.box[3]) return true;
+  return item.parts.some((p) => {
+    const [, , w, h] = base.scene.sprites[p.s];
+    const r = (Math.max(w, h) / 2) * Math.max(Math.abs(p.m[0]) + Math.abs(p.m[1]), Math.abs(p.m[2]) + Math.abs(p.m[3]));
+    return Math.abs(wx - (o.x + p.x)) <= r && Math.abs(wy - (o.y + p.y)) <= r;
+  }) || Math.hypot(wx - o.x, wy - o.y) < CELL;
+}
+function tileAt(wx, wy) {
+  let best = null;
+  tiles.forEach((t, k) => {
+    if (tileKeyAt(t.layer, wx, wy) !== k) return;
+    if (!best || layerGrid(t.layer).order >= layerGrid(best[1].layer).order) best = [k, t];
+  });
+  return best;
+}
+
 // ---- world queries -------------------------------------------------------
 
 function isSolid(cx, cy) {
@@ -320,6 +586,8 @@ function exportArea() {
   blocks.forEach((_, k) => addKey(k));
   spikes.forEach((_, k) => addKey(k));
   vines.forEach((_, k) => addKey(k));
+  tiles.forEach((t, k) => { const c = tileCenter(t.layer, k); const cc = cellOf(c.x, c.y); xs.push(cc.cx); ys.push(cc.cy); });
+  for (const o of placed) { const cc = cellOf(o.x, o.y); xs.push(cc.cx); ys.push(cc.cy); }
   if (baseOn()) removedVines.forEach(addKey);
   if (baseOn()) removed.forEach(addKey);
   for (const g of [draft.start, draft.end, draft.spawn]) {
@@ -376,6 +644,14 @@ function buildOverlay() {
     const t = vineTile(v.s, v.q);
     objects.push({ type: 'tile', tilemap: t.layer, tileName: t.tile, ...at(k), matrix: t.matrix });
   });
+  tiles.forEach((t, k) => {
+    const c = tileCenter(t.layer, k);
+    objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, x: c.x, y: c.y, matrix: rotMatrix(t.q || 0) });
+  });
+  for (const o of placed) {
+    const item = catalogItem(o);
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y) });
+  }
 
   // Only the author's own gates: the real courses keep theirs in the world.
   const hasGates = !!(draft.start && draft.end);
@@ -448,6 +724,14 @@ function buildMap() {
   for (const [k, v] of vineCells) {
     const [cx, cy] = unkey(k);
     objects.push({ type: 'tile', tilemap: v.layer, tileName: v.tile, cellX: cx, cellY: cy, matrix: v.matrix });
+  }
+  tiles.forEach((t, k) => {
+    const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
+    objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, cellX: cc.cx, cellY: cc.cy, matrix: rotMatrix(t.q || 0) });
+  });
+  for (const o of placed) {
+    const item = catalogItem(o);
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y) });
   }
 
   return {
@@ -621,7 +905,7 @@ function buildArtIndex() {
   if (!base?.art) return;
   if (!atlasImg) {
     atlasImg = new Image();
-    atlasImg.onload = () => { artCache.clear(); invalidateBase(); };
+    atlasImg.onload = () => { artCache.clear(); invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); };
     atlasImg.src = '/maps/' + base.art.atlas;
   }
   const layers = base.art.layers
@@ -866,7 +1150,7 @@ function buildScene() {
   if (!sc) return;
   if (!sceneImg) {
     sceneImg = new Image();
-    sceneImg.onload = invalidateBase;
+    sceneImg.onload = () => { invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); };
     sceneImg.src = '/maps/' + sc.atlas;
   }
   const pick = (byState) => [...(byState.always || []), ...(byState[draft.baseState] || [])];
@@ -1680,6 +1964,7 @@ function draw() {
     ctx.stroke();
   }
 
+  if (useArt) drawPlacedTiles(false);
   blocks.forEach((kind, k) => {
     const [cx, cy] = unkey(k);
     if (useArt) {
@@ -1700,8 +1985,9 @@ function draw() {
   // The author's vines (the base map's are in the cached image).
   const near = (cx, cy) => cx >= minCx - 6 && cx <= maxCx + 6 && cy >= minCy - 6 && cy <= maxCy + 6;
   vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (near(cx, cy)) drawVine(cx, cy, v.s, rotMatrix(v.q)); });
+  if (useArt) drawPlacedTiles(true);
+  for (const o of placed) drawPlacedObject(o);
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
-  if (draft.originRings) drawOriginRings(W, H);
 
   // Invisible triggers always get an outline; upgrade boxes only when their
   // real art isn't being drawn (zoomed out). Erased ones are crossed out.
@@ -1780,6 +2066,8 @@ function draw() {
     if (BLOCK_KIND[tool]) { ctx.fillStyle = COLORS[BLOCK_KIND[tool]]; const r = cellRect(cx, cy); ctx.fillRect(r.x, r.y, r.w, r.h); }
     else if (SPIKE_KIND[tool]) drawSpike(cx, cy, autoSpikeTurn(cx, cy), COLORS[SPIKE_KIND[tool]]);
     else if (tool === 'vine' && base) drawVine(cx, cy, draft.vineSprite, rotMatrix(0));
+    else if (tool === 'tile' && base && draft.pick.tile) { const w = cellWorld(cx, cy); const tk = tileKeyAt(draft.pick.tileLayer, w.x + CELL / 2, w.y + CELL / 2); ctx.globalAlpha = 1; drawPlacedTile({ layer: draft.pick.tileLayer, tile: draft.pick.tile, q: 0 }, tk, 0.6); }
+    else if ((tool === 'object' || tool === 'decor') && base) { const w = cellWorld(cx, cy); const cat = tool === 'object' ? 'objects' : 'decor'; ctx.globalAlpha = 1; drawPlacedObject({ cat, i: draft.pick[cat] ?? 0, x: w.x + CELL / 2, y: w.y + CELL / 2 }, 0.6); }
     else if (tool === 'start') drawGate(gateAt(cx, cy, 'start'), START_BOX, COLORS.start, 'START');
     else if (tool === 'end') drawGate(gateAt(cx, cy, 'end'), END_BOX, COLORS.end, 'END');
     else if (tool === 'spawn') drawGate(gateAt(cx, cy, 'spawn'), SPAWN_BOX, COLORS.spawn, 'SPAWN');
@@ -1832,120 +2120,6 @@ function teleportArrowAt(wx, wy) {
     }
   }
   return null;
-}
-
-// ---- floating origin rings --------------------------------------------------
-// How the game resets positions (FloatingOrigin + Movement): every scene load
-// starts the world centred on (0, 0) (currentOrigin is a scene value, zero in
-// the level). Each frame, once the player is FloatingOrigin.Threshold (17500)
-// from the centre, the whole world is shifted after the next physics step so
-// the player is back at (0, 0) - the centre moves to where they crossed.
-// Nothing else changes it: respawns, checkpoints and course ghosts only
-// convert with currentOrigin, and teleports just move the player.
-// A map is loaded right after a scene load with the player put at its spawn,
-// so its first ring is known: around the spawn if that's outside the (0, 0)
-// ring (the world re-centres on it at once), else around (0, 0). Later rings
-// depend on the route, so they're shown along a straight line to the end gate
-// (or the cursor).
-
-function toggleOriginRings() {
-  draft.originRings = !draft.originRings;
-  root.querySelector('#mm-origin').classList.toggle('active', draft.originRings);
-  saveDraft();
-  requestDraw();
-}
-
-function originRing() {
-  const fo = base?.floatingOrigin;
-  if (!fo) return null;
-  const spawn = draft.spawn || draft.start || viewSpawn();
-  // A map without the base game lives in Navigator's far-off pocket: always outside.
-  const far = !baseOn() || (fo.use2d ? Math.abs(spawn.x) : Math.hypot(spawn.x, spawn.y)) > fo.threshold;
-  return { x: far ? spawn.x : 0, y: far ? spawn.y : 0, r: fo.threshold, use2d: fo.use2d, onSpawn: far };
-}
-
-// The rings a player meets going in a straight line from the spawn to a
-// point: each crossing is where the next ring is centred.
-function originChain(to) {
-  const first = originRing();
-  if (!first) return [];
-  const rings = [{ x: first.x, y: first.y }];
-  if (!to || first.use2d) return rings;
-  for (let n = 0; n < 24; n++) {
-    const c = rings[rings.length - 1];
-    const dx = to.x - c.x, dy = to.y - c.y, d = Math.hypot(dx, dy);
-    if (d <= first.r) break;
-    rings.push({ x: c.x + dx / d * first.r, y: c.y + dy / d * first.r });
-  }
-  return rings;
-}
-
-function drawOriginRings(W, H) {
-  const first = originRing();
-  if (!first) return;
-  // Along the route to the end gate, or towards the cursor on maps without one.
-  const target = draft.end || (hover && (() => { const w = cellWorld(hover.cx, hover.cy); return { x: w.x + CELL / 2, y: w.y + CELL / 2 }; })());
-  const rings = originChain(target);
-  const r = first.r * cam.scale;
-  const color = (n) => `rgba(240, 160, 64, ${n === 0 ? 0.95 : 0.6})`;
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.font = 'bold 12px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  if (target && rings.length > 1) {
-    // The route the chain is measured along.
-    const a = toScreen(rings[0].x, rings[0].y), b = toScreen(target.x, target.y);
-    ctx.strokeStyle = 'rgba(240, 160, 64, 0.35)';
-    ctx.setLineDash([2, 5]);
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-  }
-  rings.forEach((ring, n) => {
-    const c = toScreen(ring.x, ring.y);
-    ctx.strokeStyle = color(n);
-    ctx.setLineDash(n === 0 ? [] : [12, 7]);
-    ctx.beginPath();
-    if (first.use2d) { for (const x of [c.x - r, c.x + r]) { ctx.moveTo(x, 0); ctx.lineTo(x, H); } }
-    else ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
-    ctx.stroke();
-    // Numbered centre: 1 is where the map starts, 2 onwards are resets.
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(16, 16, 16, 0.9)';
-    ctx.beginPath(); ctx.arc(c.x, c.y, 10, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = color(n);
-    ctx.stroke();
-    ctx.fillStyle = color(0);
-    ctx.fillText(String(n + 1), c.x, c.y + 0.5);
-  });
-  ctx.restore();
-  drawOriginLegend(W, H, rings.length, !!draft.end);
-}
-
-// A small key in the corner rather than text on the rings.
-function drawOriginLegend(W, H, count, toEnd) {
-  const dist = Math.round(base.floatingOrigin.threshold).toLocaleString('en-US');
-  const lines = [
-    ['Position resets (floating origin)', true],
-    [`Going ${dist} units from a ring's centre resets every position`, false],
-    ['to the player, and a new ring starts there.', false],
-    [toEnd ? `${count} ring${count === 1 ? '' : 's'} on the way from spawn (1) to the end gate.` : 'Rings shown on the way from spawn (1) to the cursor.', false],
-  ];
-  ctx.save();
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.font = '12px sans-serif';
-  const width = Math.max(...lines.map(([l]) => ctx.measureText(l).width)) + 24, height = lines.length * 17 + 14;
-  const x = 10, y = H - height - 30;
-  ctx.fillStyle = 'rgba(16, 16, 16, 0.88)';
-  ctx.fillRect(x, y, width, height);
-  ctx.fillStyle = 'rgba(240, 160, 64, 0.95)';
-  ctx.fillRect(x, y, 3, height);
-  lines.forEach(([line, head], n) => {
-    ctx.font = head ? 'bold 12px sans-serif' : '12px sans-serif';
-    ctx.fillStyle = head ? 'rgba(240, 160, 64, 0.95)' : '#e8ecd8';
-    ctx.fillText(line, x + 14, y + 20 + n * 17);
-  });
-  ctx.restore();
 }
 
 // ---- hitbox view ------------------------------------------------------------
@@ -2179,8 +2353,28 @@ function applyTool(cx, cy) {
   } else if (tool === 'vine') {
     if (!base || vines.get(k)?.s === draft.vineSprite) return false;
     vines.set(k, { s: draft.vineSprite, q: 0 });
+  } else if (tool === 'tile') {
+    const pk = draft.pick;
+    if (!base || !pk.tile) return false;
+    const w = cellWorld(cx, cy), tk = tileKeyAt(pk.tileLayer, w.x + CELL / 2, w.y + CELL / 2);
+    if (tiles.get(tk)?.tile === pk.tile) return false;
+    tiles.set(tk, { layer: pk.tileLayer, tile: pk.tile, q: 0 });
+  } else if (tool === 'object' || tool === 'decor') {
+    if (drag?.placedObject) return false; // one per click
+    const cat = tool === 'object' ? 'objects' : 'decor', i = draft.pick[cat] ?? 0;
+    if (!catalogItem({ cat, i })) return false;
+    const w = cellWorld(cx, cy);
+    placed.push({ cat, i, x: w.x + CELL / 2, y: w.y + CELL / 2 });
+    if (drag) drag.placedObject = true;
   } else if (tool === 'erase') {
     if (blocks.delete(k) || spikes.delete(k)) return true;
+    {
+      const w = cellWorld(cx, cy), px = w.x + CELL / 2, py = w.y + CELL / 2;
+      const oi = placed.findLastIndex((o) => objectHit(o, px, py));
+      if (oi >= 0) { placed.splice(oi, 1); return true; }
+      const t = tileAt(px, py);
+      if (t) { tiles.delete(t[0]); return true; }
+    }
     const isBase = baseOn() && (groundSet.has(k) || mossSet.has(k) || blueSet.has(k) || orangeSet.has(k) || (baseHaz.get(k) && baseHaz.get(k).kind !== 'vine'));
     if (isBase && !removed.has(k)) { removed.add(k); return true; }
     const w = cellWorld(cx, cy);
@@ -2216,7 +2410,15 @@ function rotateSpikeAtHover() {
   const sp = spikes.get(k);
   const w = cellWorld(hover.cx, hover.cy);
   const vine = sp ? null : vineAt(w.x + CELL / 2, w.y + CELL / 2);
-  if (!sp && !vine?.own) return;
+  if (!sp && !vine?.own) {
+    const t = tileAt(w.x + CELL / 2, w.y + CELL / 2);
+    if (!t) return;
+    pushUndo();
+    tiles.set(t[0], { ...t[1], q: ((t[1].q || 0) + 1) % 4 });
+    saveDraft();
+    requestDraw();
+    return;
+  }
   pushUndo();
   if (sp) {
     // Cycle through the directions that have a surface behind them (all four
@@ -2233,9 +2435,7 @@ function rotateSpikeAtHover() {
 
 function setTool(t) {
   tool = t;
-  root.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
-  root.querySelector('#mm-vine').hidden = t !== 'vine';
-  if (t === 'vine' && !base) flash('Import the base map first - vines use its sprites.', true);
+  updateCategoryButtons();
   requestDraw();
 }
 
@@ -2243,6 +2443,8 @@ function updateStatus() {
   const el = root?.querySelector('#mm-status');
   if (!el) return;
   const parts = [`${blocks.size} blocks`, `${spikes.size} spikes`, `${vines.size} vines`];
+  if (tiles.size) parts.push(`${tiles.size} tiles`);
+  if (placed.length) parts.push(`${placed.length} objects`);
   const gone = removed.size + removedVines.size + removedObjects.size;
   if (baseOn() && gone) parts.push(`${gone} removed`);
   let lonely = false;
@@ -2313,21 +2515,9 @@ function setBaseState(state) {
 
 const prettySprite = (name) => name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
 
-function fillVineList() {
-  const sel = root.querySelector('#mm-vine');
-  if (sel.options.length || !base) return;
-  for (const name of vineSprites()) {
-    const o = document.createElement('option');
-    o.value = name;
-    o.textContent = prettySprite(name);
-    sel.appendChild(o);
-  }
-  if (!vineSprites().includes(draft.vineSprite)) draft.vineSprite = vineSprites()[0];
-  sel.value = draft.vineSprite;
-}
 
 function fillJumpList() {
-  fillVineList();
+  updateCategoryButtons();
   const jump = root.querySelector('#mm-jump');
   if (jump.options.length > 1 || !base) return;
   for (const c of base.courses) {
@@ -2509,29 +2699,27 @@ function onKeyDown(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
+  if (e.key === 'Escape') { closePopover(); return; }
   if (!e.shiftKey && k === 'h') { toggleHitboxes(); return; }
-  if (!e.shiftKey && k === 'f') { toggleOriginRings(); return; }
-  const tools = e.shiftKey ? { u: 'blueSpike', o: 'orangeSpike' } : { b: 'block', d: 'dark', u: 'blue', o: 'orange', s: 'spike', v: 'vine', e: 'erase', 1: 'start', 2: 'end', 3: 'spawn' };
-  if (tools[k]) setTool(tools[k]);
-  else if (k === 'r') rotateSpikeAtHover();
+  if (k === 'e') { setTool('erase'); return; }
+  if (k === 'r') { rotateSpikeAtHover(); return; }
+  if (e.key === '[' || e.key === ']') { stepItem(e.key === ']' ? 1 : -1); updatePopover(); return; }
+  if (/^[1-9]$/.test(e.key)) { selectItem(draft.cat, Number(e.key) - 1); updatePopover(); return; }
+  const cat = CATEGORIES.find((c) => c.key === k);
+  if (cat) {
+    // The category's key: pick it, or step through it when it's already picked.
+    if (draft.cat === cat.id && tool !== 'erase') stepItem(e.shiftKey ? -1 : 1);
+    else selectItem(cat.id, currentIndex(cat.id));
+    updatePopover();
+  }
+}
+
+function updatePopover() {
+  if (popCat) { popCat = draft.cat; renderPopover(''); }
 }
 
 // ---- mount ---------------------------------------------------------------
 
-const TOOLS = [
-  { id: 'block', label: 'Block', key: 'B', tip: 'Paint blocks' },
-  { id: 'dark', label: 'Dark', key: 'D', tip: 'Paint dark blocks - the darker plating of walls and tunnels; solid like normal blocks' },
-  { id: 'blue', label: 'Blue', key: 'U', tip: 'Paint blue blocks - solid while blue is the active colour' },
-  { id: 'orange', label: 'Orange', key: 'O', tip: 'Paint orange blocks - solid while orange is the active colour' },
-  { id: 'spike', label: 'Spike', key: 'S', tip: 'Paint spikes - they face away from the nearest ground; R rotates the one under the cursor' },
-  { id: 'blueSpike', label: 'Blue spike', key: 'Shift+U', tip: 'Paint blue spikes - deadly while blue is the active colour' },
-  { id: 'orangeSpike', label: 'Orange spike', key: 'Shift+O', tip: 'Paint orange spikes - deadly while orange is the active colour' },
-  { id: 'vine', label: 'Vine', key: 'V', tip: 'Place the overgrowth\'s deadly thorn vines (pick the shape beside the tools; R rotates the one under the cursor)' },
-  { id: 'erase', label: 'Erase', key: 'E', tip: 'Erase your edits (and base-game tiles when the base map is imported)' },
-  { id: 'start', label: 'Start', key: '1', tip: 'Place the start gate (optional; the player spawns here unless a spawn is set)' },
-  { id: 'end', label: 'End', key: '2', tip: 'Place the end gate (optional - with no start and end gates the map is free play)' },
-  { id: 'spawn', label: 'Spawn', key: '3', tip: 'Where the player appears (defaults to the start gate, else the middle of the view)' },
-];
 
 export async function mountEditor(container) {
   if (mounted && root === container) { resize(); return; }
@@ -2539,10 +2727,11 @@ export async function mountEditor(container) {
   root = container;
   root.innerHTML = `
     <div class="mm-bar">
-      <div class="mm-tools">
-        ${TOOLS.map((t) => `<button class="mm-tool" data-tool="${t.id}" title="${t.tip} (${t.key})">${t.label}</button>`).join('')}
+      <div class="mm-cats">
+        ${CATEGORIES.map((c) => `<button class="mm-cat" data-cat="${c.id}" title="${c.label} - ${c.key.toUpperCase()} to pick, again to step through (Shift back), [ ] step, 1-9 pick"><span class="mm-cat-thumb"></span><span class="mm-cat-text"><span class="mm-cat-label">${c.label}</span><span class="mm-cat-item"></span></span><kbd>${c.key.toUpperCase()}</kbd><span class="mm-caret">▾</span></button>`).join('')}
+        <button class="mm-cat mm-erase" data-tool="erase" title="Erase your edits and base-game tiles and objects (E)"><span class="mm-cat-text"><span class="mm-cat-label">Erase</span></span><kbd>E</kbd></button>
       </div>
-      <select class="mm-input mm-vine" id="mm-vine" title="Vine shape" hidden></select>
+      <div class="mm-pop" id="mm-pop" hidden></div>
       <div class="mm-bar-right">
         <div class="mm-tools" id="mm-state" hidden>
           <button class="mm-tool" data-state="start" title="Area 1 as it is at the start of the game">Start of game</button>
@@ -2562,7 +2751,6 @@ export async function mountEditor(container) {
         <div class="mm-empty-sub">Want to build on the real level? Use <b>Import base map</b>.</div>
       </div>
       <div class="mm-views">
-        <button class="mm-tool mm-view" id="mm-origin" title="Show the ring where the game re-centres every position on the player (floating origin reset) (F)">Origin rings</button>
         <button class="mm-tool mm-view" id="mm-hitbox" title="Show collision: solid blocks green, deadly shapes red (H)">View hitboxes</button>
       </div>
       <div class="mm-hint">Left-click paint · Right-drag / Space-drag pan · Wheel zoom</div>
@@ -2581,7 +2769,12 @@ export async function mountEditor(container) {
 
   canvas = root.querySelector('#mm-canvas');
   ctx = canvas.getContext('2d');
-  root.querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  root.querySelector('[data-tool="erase"]').addEventListener('click', () => { closePopover(); setTool('erase'); });
+  root.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
+    if (draft.cat !== b.dataset.cat || tool === 'erase') selectItem(b.dataset.cat, currentIndex(b.dataset.cat));
+    openPopover(b.dataset.cat, b);
+  }));
+  root.addEventListener('mousedown', (e) => { if (popCat && !e.target.closest('#mm-pop, [data-cat]')) closePopover(); });
   root.querySelectorAll('[data-state]').forEach((b) => b.addEventListener('click', () => setBaseState(b.dataset.state)));
 
   loadDraft();
@@ -2612,9 +2805,6 @@ export async function mountEditor(container) {
   root.querySelector('#mm-base').addEventListener('click', toggleBase);
   root.querySelector('#mm-hitbox').addEventListener('click', toggleHitboxes);
   root.querySelector('#mm-hitbox').classList.toggle('active', !!draft.hitboxes);
-  root.querySelector('#mm-origin').addEventListener('click', toggleOriginRings);
-  root.querySelector('#mm-origin').classList.toggle('active', !!draft.originRings);
-  root.querySelector('#mm-vine').addEventListener('change', (e) => { draft.vineSprite = e.target.value; saveDraft(); requestDraw(); });
   root.querySelector('#mm-undo').addEventListener('click', undo);
   root.querySelector('#mm-clear').addEventListener('click', clearAll);
   root.querySelector('#mm-test').addEventListener('click', testInGame);
@@ -2627,7 +2817,10 @@ export async function mountEditor(container) {
   bindCanvas();
   bindWindow();
   syncBaseUi();
-  setTool('block');
+  // The category and item picked last time.
+  if (!CATEGORIES.some((c) => c.id === draft.cat) || !categoryItems(draft.cat).length) draft.cat = 'blocks';
+  selectItem(draft.cat, currentIndex(draft.cat));
   resize();
   updateStatus();
 }
+
