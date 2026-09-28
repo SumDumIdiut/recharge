@@ -52,7 +52,7 @@ let mounted = false;
 let frameQueued = false;
 
 function emptyDraft() {
-  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
+  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, baseEdits: {}, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
 }
 
 let blocks = new Map();
@@ -118,7 +118,7 @@ function saveDraft() {
 }
 
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], courses: courses(), spawn: draft.spawn });
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
 }
 function pushUndo() {
   undoStack.push(snapshot());
@@ -140,6 +140,7 @@ function undo() {
   removedScene = new Set(o.removedScene || []);
   removed = new Set(o.removed);
   draft.courses = o.courses || [];
+  draft.baseEdits = o.baseEdits || {};
   if (o.start || o.end) { draft.start = o.start; draft.end = o.end; migrateGates(); }
   draft.spawn = o.spawn;
   saveDraft();
@@ -868,6 +869,7 @@ function tileAt(wx, wy) {
 
 let placeRot = 0;
 let placeFlip = false;
+let hoverWorld = null;
 let selection = null;
 let brush = null;
 
@@ -887,7 +889,98 @@ function itemAt(wx, wy) {
   if (t) return { kind: 'tile', key: t[0] };
   const v = vineAt(wx, wy);
   if (v?.own) return { kind: 'cell', k: v.k, vine: true };
+  if (baseOn()) {
+    const bo = baseObjects.findLast((o) => !removedObjects.has(o.id) && Math.abs(wx - o.x) <= o.w / 2 && Math.abs(wy - o.y) <= o.h / 2);
+    if (bo) return { kind: 'base', id: bo.id };
+    const bc = baseCellsAt(c.cx, c.cy);
+    if (bc) return bc;
+    const sp = sceneSpriteAt(wx, wy);
+    if (sp) return { kind: 'scene', id: sp.id };
+  }
   return null;
+}
+
+const BASE_SETS = () => [['Ground', groundSet], ['Moss', mossSet], ['Blue blocks', blueSet], ['Orange blocks', orangeSet]];
+function baseCellsAt(cx, cy) {
+  const k0 = key(cx, cy);
+  if (removed.has(k0)) return null;
+  const h = baseHaz.get(k0);
+  if (h && h.kind !== 'vine') return { kind: 'basecells', cells: [k0], what: 'Spike' };
+  const hit = BASE_SETS().find(([, set]) => set?.has(k0));
+  if (!hit) return null;
+  const [what, set] = hit, seen = new Set([k0]), stack = [[cx, cy]];
+  while (stack.length && seen.size <= 400) {
+    const [x, y] = stack.pop();
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const k = key(x + dx, y + dy);
+      if (seen.has(k) || !set.has(k) || removed.has(k)) continue;
+      seen.add(k);
+      stack.push([x + dx, y + dy]);
+    }
+  }
+  return { kind: 'basecells', cells: seen.size > 400 ? [k0] : [...seen], what };
+}
+
+function objectBounds(o) {
+  const item = catalogItem(o);
+  if (!item) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const all = objectParts(o, item), shown = all.filter((p) => !HIDDEN_PART(p));
+  for (const p of shown) {
+    const [, , w, h, pvx, pvy] = base.scene.sprites[p.s], W = p.dm ? p.sz[0] : w, H = p.dm ? p.sz[1] : h;
+    for (const [lx, ly] of [[-pvx * W, -pvy * H], [(1 - pvx) * W, -pvy * H], [-pvx * W, (1 - pvy) * H], [(1 - pvx) * W, (1 - pvy) * H]]) {
+      const x = o.x + p.x + p.m[0] * lx + p.m[1] * ly, y = o.y + p.y + p.m[2] * lx + p.m[3] * ly;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+  }
+  if (!shown.length || !Number.isFinite(x0)) {
+    const b = item.box || [-CELL / 2, -CELL / 2, CELL / 2, CELL / 2];
+    return { x0: o.x + b[0], y0: o.y + b[1], x1: o.x + b[2], y1: o.y + b[3] };
+  }
+  return { x0, y0, x1, y1 };
+}
+
+const sameTarget = (a, b) => !!a && !!b && a.kind === b.kind && a.index === b.index && a.key === b.key && a.k === b.k && a.id === b.id && a.which === b.which && a.course === b.course && (a.cells?.[0] ?? null) === (b.cells?.[0] ?? null);
+
+function drawTarget(t) {
+  const rectW = (x0, y0, x1, y1) => { const a = toScreen(x0, y1), b = toScreen(x1, y0); ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4); };
+  if (t.kind === 'object') { const b = placed[t.index] && objectBounds(placed[t.index]); if (b) rectW(b.x0, b.y0, b.x1, b.y1); }
+  else if (t.kind === 'gate') {
+    const g = t.which === 'spawn' ? draft.spawn : courseById(t.course)?.[t.which];
+    const b = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX }[t.which];
+    if (g) rectW(g.x + b.dx - Math.max(b.w, CELL) / 2, g.y + b.dy - Math.max(b.h, CELL) / 2, g.x + b.dx + Math.max(b.w, CELL) / 2, g.y + b.dy + Math.max(b.h, CELL) / 2);
+  } else if (t.kind === 'tile') {
+    const tl = tiles.get(t.key);
+    if (tl) { const g = layerGrid(tl.layer), c = tileCenter(tl.layer, t.key); rectW(c.x - g.size / 2, c.y - g.size / 2, c.x + g.size / 2, c.y + g.size / 2); }
+  } else if (t.kind === 'cell') {
+    if (t.vine) { const v = vines.get(t.k), img = v && vineImage(v.s), [cx, cy] = unkey(t.k), w = cellWorld(cx, cy), r = Math.max(img?.naturalWidth || 96, img?.naturalHeight || 96) / 2; rectW(w.x + CELL / 2 - r, w.y + CELL / 2 - r, w.x + CELL / 2 + r, w.y + CELL / 2 + r); }
+    else { const [cx, cy] = unkey(t.k), w = cellWorld(cx, cy); rectW(w.x, w.y, w.x + CELL, w.y + CELL); }
+  } else if (t.kind === 'base') {
+    const o = baseObjects.find((x) => x.id === t.id);
+    if (o) rectW(o.x - o.w / 2, o.y - o.h / 2, o.x + o.w / 2, o.y + o.h / 2);
+  } else if (t.kind === 'basecells') {
+    const set = new Set(t.cells);
+    ctx.beginPath();
+    for (const k of t.cells) {
+      const [cx, cy] = unkey(k), r = cellRect(cx, cy);
+      if (!set.has(key(cx, cy + 1))) { ctx.moveTo(r.x, r.y); ctx.lineTo(r.x + r.w, r.y); }
+      if (!set.has(key(cx, cy - 1))) { ctx.moveTo(r.x, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h); }
+      if (!set.has(key(cx - 1, cy))) { ctx.moveTo(r.x, r.y); ctx.lineTo(r.x, r.y + r.h); }
+      if (!set.has(key(cx + 1, cy))) { ctx.moveTo(r.x + r.w, r.y); ctx.lineTo(r.x + r.w, r.y + r.h); }
+    }
+    ctx.stroke();
+  } else if (t.kind === 'scene') {
+    const p = sceneList?.items.find((x) => x.id === t.id);
+    if (!p) return;
+    const [, , w, h, pvx, pvy] = base.scene.sprites[p.s], W = p.dm ? p.sz[0] : w, H = p.dm ? p.sz[1] : h;
+    ctx.beginPath();
+    [[-pvx * W, -pvy * H], [(1 - pvx) * W, -pvy * H], [(1 - pvx) * W, (1 - pvy) * H], [-pvx * W, (1 - pvy) * H]].forEach(([lx, ly], i) => {
+      const s2 = toScreen(p.x + p.m[0] * lx + p.m[1] * ly, p.y + p.m[2] * lx + p.m[3] * ly);
+      if (i) ctx.lineTo(s2.x, s2.y); else ctx.moveTo(s2.x, s2.y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+  }
 }
 
 function zipHandle(o) {
@@ -910,7 +1003,7 @@ function selectDown(e) {
     drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : null, before: snapshot(), changed: false };
   } else {
     const c = cellOf(w.x, w.y);
-    selection = { kind: 'region', x0: c.cx, y0: c.cy, x1: c.cx, y1: c.cy };
+    selection = null;
     drag = { pan: false, region: c };
   }
   renderConfig();
@@ -921,6 +1014,8 @@ function selectMove(e) {
   const w = worldAt(e);
   if (drag.region) {
     const c = cellOf(w.x, w.y);
+    if (c.cx !== drag.region.cx || c.cy !== drag.region.cy) drag.regionMoved = true;
+    if (!drag.regionMoved) return;
     selection = { kind: 'region', x0: Math.min(drag.region.cx, c.cx), y0: Math.min(drag.region.cy, c.cy), x1: Math.max(drag.region.cx, c.cx), y1: Math.max(drag.region.cy, c.cy) };
     renderConfig();
   } else if (drag.gate) {
@@ -1064,6 +1159,9 @@ function deleteSelection() {
   pushUndo();
   if (selection.kind === 'object') placed.splice(selection.index, 1);
   else if (selection.kind === 'gate') clearMarker(selection);
+  else if (selection.kind === 'base') removedObjects.add(selection.id);
+  else if (selection.kind === 'basecells') selection.cells.forEach((k) => removed.add(k));
+  else if (selection.kind === 'scene') removedScene.add(selection.id);
   else if (selection.kind === 'tile') { const id = tiles.get(selection.key)?.arrow; if (id) removeArrow(id); else tiles.delete(selection.key); }
   else if (selection.kind === 'cell') { if (selection.vine) vines.delete(selection.k); else { blocks.delete(selection.k); spikes.delete(selection.k); } }
   else if (selection.kind === 'region') {
@@ -1255,6 +1353,51 @@ const LEVEL_TOGGLES = [
   ['wallJump', 'Wall jump'], ['blockSwap', 'Block swap dash'], ['omniDash', 'Omni dash'],
   ['zipMovers', 'Zip movers work'], ['refreshers', 'Refreshers work'],
 ];
+const LOCAL_UPGRADE_ENUM = ['Global', 'Movement', 'Clones', 'Base reward', 'Fast clone chance', 'Big clone chance', 'Boost all previous courses', 'Clone reward multiplier', 'Clones', 'Green clone reward', 'Emergency lights', 'Clone dust generation', 'More watts', 'Red clone reward'];
+const MOVEMENT_ENUM = ['Dash', 'Wall jump', 'Double jump', 'Swap blocks once', 'Block swap', 'End of demo', 'Omni dash'];
+const GLOBAL_ENUM = ['Base reward', 'Fast clone chance', 'Max clone speed', 'Big clone chance', 'Max clone size', 'Clone multiplier', 'New atom', 'Atom level chance', 'Green clone chance', 'Tree growth', 'Unlock prestige', 'Open gate', 'More watts', 'More green power', 'More nuclear power', 'Open area 2 door', 'Zip movers', 'Exempt course from atom prestige', 'Triple threat', 'Refreshers', 'Clone dust digits', 'Completion boost', 'Completion boost time', 'Completion boost strength', 'Clone dust multiplier', 'More refresher orbs', 'Teleporters', 'Buy max on a course', 'Red clone chance', 'Blue clone chance', 'Nuclear power soft cap', 'Completion boost doubles NP', 'Speedrun time', 'Start speedrun', 'More watts', 'More green power', 'More red power', 'More red power', 'Red power cap', 'GP atoms keep courses', 'NP generation speed'];
+function boxKindName(o) {
+  const b = o.box;
+  if (!b) return o.label;
+  if (b.upgrade === 0) return GLOBAL_ENUM[b.global] || o.label;
+  if (b.upgrade === 1) return MOVEMENT_ENUM[b.movement] || o.label;
+  return LOCAL_UPGRADE_ENUM[b.upgrade] || o.label;
+}
+const CURRENCY_ENUM = ['Cash', 'GreenPower', 'AtomicPower', 'regularNumber', 'CloneDust', 'RedPower', 'BluePower'];
+function baseUpgradeConfig(o) {
+  const b = o.box || {};
+  return { currency: CURRENCY_ENUM[b.currency] || 'Cash', price: b.price ?? 10, scale: b.scale ?? 1.5, add: b.add ?? 0, power: b.power ?? 1, max: b.max ?? 1, prices: [], label: '', ...(draft.baseEdits?.[o.id] || {}) };
+}
+function baseUpgradeHtml(o, num) {
+  const u = baseUpgradeConfig(o), edited = !!draft.baseEdits?.[o.id];
+  const sel = (id, label, options, value) => `<label>${label}<select class="mm-input" data-cfg="${id}">${options.map(([v, t]) => `<option value="${v}"${v === value ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
+  let html = `<div class="mm-config-row"><label>Label<input class="mm-input" type="text" data-cfg="bu:label" value="${u.label.replace(/"/g, '&quot;')}" placeholder="the game's own"></label>${sel('bu:currency', 'Paid in', CURRENCIES, u.currency)}</div>`;
+  html += `<div class="mm-config-row">${num('bu:price', 'Price', u.price, 1)}${num('bu:max', 'Max buys', u.max, 1)}</div>`;
+  html += `<div class="mm-config-sub">Each next price = ((last + add) ^ power) × scale</div>`;
+  html += `<div class="mm-config-row">${num('bu:scale', '× Scale', u.scale, 0.1)}${num('bu:add', '+ Add', u.add, 1)}${num('bu:power', '^ Power', u.power, 0.005)}</div>`;
+  html += `<div class="mm-config-row"><label>Set prices (comma list, overrides the curve)<input class="mm-input" type="text" data-cfg="bu:prices" value="${u.prices.join(', ')}" placeholder="e.g. 10, 25, 60"></label></div>`;
+  html += `<div class="mm-config-sub">Prices: ${upgradePrices(u, Math.min(u.max, 10)).map(shortNumber).join(', ')}${u.max > 10 ? ' …' : ''}</div>`;
+  html += edited ? `<div class="mm-config-row"><button class="mm-tool" data-act="baseReset">Reset to the game's values</button></div>` : `<div class="mm-config-sub">The game's own values (course boxes also scale with the course's tier in the game).</div>`;
+  return html;
+}
+function applyBaseUpgrade(field, raw) {
+  const o = baseObjects.find((x) => x.id === selection.id);
+  if (!o) return;
+  const u = { ...(draft.baseEdits?.[o.id] || {}) };
+  if (field === 'currency' || field === 'label') u[field] = raw.trim();
+  else if (field === 'prices') u.prices = raw.split(/[\s,;]+/).map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  else {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return;
+    u[field] = field === 'max' ? Math.max(1, Math.round(v)) : field === 'price' || field === 'add' ? Math.max(0, v) : Math.max(0.001, v);
+  }
+  pushUndo();
+  draft.baseEdits = { ...(draft.baseEdits || {}), [o.id]: u };
+  saveDraft();
+  renderConfig();
+  requestDraw();
+}
+
 function renderPlayerPanel() {
   const el = root?.querySelector('#mm-player');
   if (!el || el.hidden) return;
@@ -1308,6 +1451,17 @@ function renderConfig() {
       html += `<div class="mm-config-row">${chk('fx', 'Flip X (F)', cfg.fx)}${chk('fy', 'Flip Y', cfg.fy)}</div>`;
     }
     for (const [f, def] of Object.entries(item.fields || {})) html += `<div class="mm-config-row">${num('field:' + f, FIELD_LABELS[f] || f, cfg.fields?.[f] ?? def, 0.1)}</div>`;
+  } else if (selection.kind === 'base') {
+    const o = baseObjects.find((x) => x.id === selection.id);
+    if (!o || removedObjects.has(o.id)) { selection = null; el.hidden = true; return; }
+    html += `<div class="mm-config-title">${o.kind === 'upgrade' ? boxKindName(o) : o.label}<span>level ${o.kind === 'upgrade' ? 'upgrade box' : 'object'}</span></div>`;
+    if (o.box) html += baseUpgradeHtml(o, num);
+  } else if (selection.kind === 'basecells') {
+    html += `<div class="mm-config-title">${selection.what}<span>level · ${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'}</span></div>`;
+  } else if (selection.kind === 'scene') {
+    const p = sceneList?.items.find((x) => x.id === selection.id);
+    if (!p || removedScene.has(p.id)) { selection = null; el.hidden = true; return; }
+    html += `<div class="mm-config-title">${prettySprite(p.p.split('/').pop().replace(/ \(\d+\)$/, ''))}<span>level decoration</span></div>`;
   } else if (selection.kind === 'gate') {
     const c = courseById(selection.course);
     if (selection.which === 'spawn') {
@@ -1351,6 +1505,7 @@ function renderConfig() {
 function applyConfig(inp) {
   const id = inp.dataset.cfg;
   if (id.startsWith('up:')) return applyUpgradeConfig(id.slice(3), inp.value);
+  if (id.startsWith('bu:')) return applyBaseUpgrade(id.slice(3), inp.value);
   if (id === 'link' || id === 'gatecourse' || id.startsWith('reward:')) return applyCourseConfig(id, inp.value);
   const v = inp.type === 'checkbox' ? inp.checked : Number(inp.value);
   if (inp.type !== 'checkbox' && !Number.isFinite(v)) return;
@@ -1426,6 +1581,14 @@ function applyCourseConfig(id, raw) {
 
 function configAction(act) {
   if (act === 'delete') return deleteSelection();
+  if (act === 'baseReset') {
+    pushUndo();
+    delete draft.baseEdits[selection.id];
+    saveDraft();
+    renderConfig();
+    requestDraw();
+    return;
+  }
   if (act === 'delcourse') {
     pushUndo();
     draft.courses = courses().filter((c) => c.id !== selection.course);
@@ -1453,34 +1616,20 @@ function drawSelection() {
   ctx.strokeStyle = COLORS.start;
   ctx.lineWidth = 1.5;
   ctx.setLineDash([5, 3]);
-  if (selection.kind === 'gate') {
-    const g = selection.which === 'spawn' ? draft.spawn : courseById(selection.course)?.[selection.which];
-    const b = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX }[selection.which];
-    if (g) { const c = toScreen(g.x + b.dx, g.y + b.dy), w = Math.max(10, b.w * cam.scale) + 8, h = Math.max(10, b.h * cam.scale) + 8; ctx.strokeRect(c.x - w / 2, c.y - h / 2, w, h); }
-  } else if (selection.kind === 'region') {
+  if (selection.kind === 'region') {
     const a = cellRect(selection.x0, selection.y1), b = cellRect(selection.x1, selection.y0);
     ctx.fillStyle = 'rgba(65, 248, 141, 0.08)';
     ctx.fillRect(a.x, a.y, b.x + b.w - a.x, b.y + b.h - a.y);
     ctx.strokeRect(a.x, a.y, b.x + b.w - a.x, b.y + b.h - a.y);
-  } else if (selection.kind === 'tile') {
-    const t = tiles.get(selection.key);
-    if (t) { const g = layerGrid(t.layer), c = tileCenter(t.layer, selection.key), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.strokeRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); }
-  } else if (selection.kind === 'cell') {
-    const [cx, cy] = unkey(selection.k), r = cellRect(cx, cy);
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-  } else if (selection.kind === 'object') {
-    const o = placed[selection.index];
-    if (o) {
-      const c = toScreen(o.x, o.y);
-      ctx.beginPath(); ctx.arc(c.x, c.y, 10, 0, Math.PI * 2); ctx.stroke();
-      const h = zipHandle(o);
-      if (h) {
-        const hc = toScreen(h.x, h.y);
-        ctx.setLineDash([]);
-        ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
-        ctx.fillStyle = COLORS.start;
-        ctx.beginPath(); ctx.arc(hc.x, hc.y, 7, 0, Math.PI * 2); ctx.fill();
-      }
+  } else drawTarget(selection);
+  if (selection.kind === 'object') {
+    const o = placed[selection.index], h = o && zipHandle(o);
+    if (h) {
+      const c = toScreen(o.x, o.y), hc = toScreen(h.x, h.y);
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(hc.x, hc.y); ctx.stroke();
+      ctx.fillStyle = COLORS.start;
+      ctx.beginPath(); ctx.arc(hc.x, hc.y, 7, 0, Math.PI * 2); ctx.fill();
     }
   }
   ctx.restore();
@@ -1488,8 +1637,8 @@ function drawSelection() {
 
 function editorState() {
   saveDraft();
-  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, courses: cs, spawn, player, ownProgress } = draft;
-  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, courses: cs, spawn, player, ownProgress };
+  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
+  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, courses: cs, baseEdits: be, spawn, player, ownProgress };
 }
 
 async function readMapFile(file) {
@@ -1518,7 +1667,7 @@ async function loadMapFile(file) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
   pushUndo();
-  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], courses: [], start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [] }, st);
+  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [] }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
   localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   loadDraft();
@@ -1685,6 +1834,12 @@ function buildOverlay() {
   });
   for (const o of baseObjects) if (removedObjects.has(o.id)) objects.push({ type: 'hide', path: o.path, srcX: o.x, srcY: o.y });
   for (const p of sceneList?.items || []) if (p.id && removedScene.has(p.id)) objects.push({ type: 'hide', path: p.p, srcX: p.x, srcY: p.y, rendererOnly: true });
+  for (const id of Object.keys(draft.baseEdits || {})) {
+    const o = baseObjects.find((x) => x.id === id);
+    if (!o || removedObjects.has(id)) continue;
+    const u = baseUpgradeConfig(o);
+    objects.push({ type: 'modify', path: o.path, srcX: o.x, srcY: o.y, upgrade: { id: 'level:' + id, label: u.label, currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } });
+  }
   blocks.forEach((kind, k) => {
     const [cx, cy] = unkey(k);
     const art = isGround(kind) && groundTile(cx, cy, kind === 'dark');
@@ -3050,7 +3205,10 @@ function draw() {
     else if (tool === 'stamp' && base?.art?.stamps?.[draft.pick.stamp]) { const w = cellWorld(cx, cy); ctx.globalAlpha = 1; for (const [tk, t] of stampTiles(base.art.stamps[draft.pick.stamp], w.x + CELL / 2, w.y + CELL / 2, placeRot, placeFlip)) drawPlacedTile(t, tk, 0.6); }
     else if (tool === 'arrow' && base) { ctx.globalAlpha = 1; drawArrowNodes(cx, cy); }
     else if (tool === 'paste' && brush) { ctx.globalAlpha = 1; drawBrush(cx, cy); }
-    else if (tool === 'select' || tool === 'pick') { }
+    else if (tool === 'select') {
+      const t = hoverWorld && !drag && itemAt(hoverWorld.x, hoverWorld.y);
+      if (t && !sameTarget(t, selection)) { ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.setLineDash([]); drawTarget(t); }
+    }
     else if (tool === 'start') drawGate(gateAt(cx, cy, 'start'), START_BOX, COLORS.start, 'START');
     else if (tool === 'end') drawGate(gateAt(cx, cy, 'end'), END_BOX, COLORS.end, 'END');
     else if (tool === 'spawn') drawGate(gateAt(cx, cy, 'spawn'), SPAWN_BOX, COLORS.spawn, 'SPAWN');
@@ -3712,7 +3870,8 @@ function bindWindow() {
       if (arrow !== hoverArrow) { hoverArrow = arrow; canvas.style.cursor = arrow ? 'pointer' : ''; requestDraw(); }
     }
     const c = eventCell(e);
-    if (hover && hover.cx === c.cx && hover.cy === c.cy) return;
+    hoverWorld = worldAt(e);
+    if (hover && hover.cx === c.cx && hover.cy === c.cy) { if (tool === 'select' && !drag) requestDraw(); return; }
     hover = c;
     if (drag?.arrow) arrowMove(c.cx, c.cy);
     else if (drag && (BLOCK_KIND[tool] || SPIKE_KIND[tool] || tool === 'erase' || tool === 'tile' || tool === 'moss')) {
@@ -3723,6 +3882,7 @@ function bindWindow() {
   });
   window.addEventListener('mouseup', () => {
     if (!drag) return;
+    if (drag.region && !drag.regionMoved) { selection = null; renderConfig(); requestDraw(); }
     if (drag.arrow) arrowUp();
     drag = null;
     canvas.style.cursor = '';

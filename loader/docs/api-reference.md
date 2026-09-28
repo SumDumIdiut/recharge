@@ -180,6 +180,8 @@ public static class PauseMenuHelper
     public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick);
     public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label);
     public static void SetButtonLabel(GameObject buttonGo, string text);
+    public static GameObject CloneButton(GameObject template, Transform parent, string name, string label, Vector2 pos, Vector2 size, Action onClick = null);
+    public static void SetButtonAction(GameObject buttonGo, Action onClick);
     public static pauseMenuScript FindMenu();
     public static void OnMenuReady(IRechargeHost host, Action<pauseMenuScript> install);
     public static GameObject MainBit(pauseMenuScript menu);
@@ -195,6 +197,12 @@ public static class PauseMenuHelper
 | `FindMenu()` | The live `pauseMenuScript`, or `null`. |
 | `MainBit(menu)` / `SettingsBit(menu)` | The main and settings containers (or `null` if the menu isn't the expected shape). Use these instead of reading `mainBitPublic`/`settingsBitPublic` directly. |
 | `SetButtonLabel(buttonGo, text)` | Relabels a cloned button's TMP text and strips any inherited localization hookup so your text actually sticks. Used internally by the two calls above; exposed since it's just as useful when hand-styling rows yourself. |
+| `CloneButton(template, parent, name, label, pos, size, onClick)` | The way to make a mod button from a vanilla one (usually `MainBit(menu)`'s `"Settings"`). It strips every localization component, gives the label to a `ModLabel`, drops the template's click wiring and sends clicks only to `onClick`. Label formatting stays as the template's, so style it after if you need to. |
+| `SetButtonAction(buttonGo, onClick)` | Replaces everything a button does on click with `onClick` (or nothing, if `null`), including wiring it inherited from its template. |
+
+### `ModLabel`
+
+`ModLabel.cs`. The component behind `SetButtonLabel`/`CloneButton`, which owns a TMP label's text. If the label is ever reset to the text its template carried (for a cloned Settings button, `"Settings"`), `ModLabel` puts your text back and logs `[Recharge] ModLabel: '<path>' was reset to ...` once, naming the button. Writing your own new text to `.text` directly still works, because only a revert to the template's text is treated as a reset. `ModLabel.Attach(tmp, text)` takes over a bare TMP that isn't a button's `"Text (TMP)"` child (a title or a header), `ModLabel.ForButton(buttonGo, text)` takes over a button's label, and `ModLabel.StripLocalizers(go)` removes every Unity Localization component under `go`.
 
 `rowName` is both the idempotency key (calling again with the same name is a
 safe no-op — fine to call unconditionally every `OnLoad`) and, for

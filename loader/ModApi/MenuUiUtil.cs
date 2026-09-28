@@ -16,12 +16,12 @@ namespace Recharge.ModApi
         public static void SetButtonLabel(GameObject buttonGo, string text)
         {
             var labelT = FindLabelTransform(buttonGo);
-            if (labelT == null) return;
-            var loc = labelT.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-            if (loc != null) Object.DestroyImmediate(loc);
-            var tmp = labelT.GetComponent<TMP_Text>();
-            if (tmp == null) return;
-            tmp.text = text;
+            bool firstTakeover = labelT != null && labelT.GetComponent<ModLabel>() == null;
+            var label = ModLabel.ForButton(buttonGo, text);
+            if (label == null || !firstTakeover) return;
+            // Defaults only on first takeover, so styling a mod applies afterwards
+            // (wrapping, overflow) survives relabeling it every frame.
+            var tmp = label.GetComponent<TMP_Text>();
             tmp.enableWordWrapping = false;
             tmp.overflowMode = TextOverflowModes.Ellipsis;
         }
