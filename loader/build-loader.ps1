@@ -64,7 +64,10 @@ try {
         Where-Object { (Split-Path $_.DirectoryName -Leaf) -notlike '_*' })
     $totalPhases = 5 + $modProjects.Count
 
-    $copyRoot = Join-Path $TempDir 'recharge-loader-copies'
+    # Namespaced by PID so two overlapping runs (e.g. two callers invoking the
+    # installer at once) never share a working directory and step on each
+    # other's in-progress decompiled/patched source.
+    $copyRoot = Join-Path $TempDir "recharge-loader-copies-$PID"
     Remove-Item -Recurse -Force $copyRoot -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $copyRoot | Out-Null
 
@@ -201,7 +204,7 @@ try {
     Copy-Item $modApiBuilt $managed -Force
 
     Set-Status "2/$($totalPhases): Decompiling the game's original assembly..."
-    $work = Join-Path $TempDir 'recharge-loader-build'
+    $work = Join-Path $TempDir "recharge-loader-build-$PID"
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     $decompileResult = Invoke-LoggedBuild (Join-Path $work 'decompile.log') $dotnetExe @($ilspycmd, "-p", "-o", $work, "-r", $managed, $backup)
