@@ -177,7 +177,27 @@ pub async fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
     result
 }
 
+// The install/update button and the "Redeploy Navigator" button both invoke
+// this from the frontend through separate, non-shared disabled-state guards,
+// and build-loader.ps1 itself uses one fixed (non-namespaced) temp working
+// directory - so two overlapping runs collide there and can patch the same
+// decompiled source twice. This lock makes overlap impossible regardless of
+// which button (or future caller) triggers it.
+static INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct InstallGuard;
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        INSTALLING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
+    if INSTALLING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("An install/update is already running - wait for it to finish first.".into());
+    }
+    let _guard = InstallGuard;
+
     let game_path = settings_game_path(app)
         .map(|p| plain_path(&p))
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
