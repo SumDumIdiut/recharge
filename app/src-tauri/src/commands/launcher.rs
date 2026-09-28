@@ -16,9 +16,7 @@ fn built_sha() -> &'static str {
     env!("RECHARGE_BUILD_SHA")
 }
 
-// When this backend was built (UTC, same format as GitHub's created_at), so a
-// SHA mismatch against the latest release can be checked for direction: a
-// local build made after that release was published isn't "behind" it.
+// When this backend was built (UTC, same format as GitHub's created_at) - lets a SHA mismatch be checked for direction.
 fn built_at() -> &'static str {
     env!("RECHARGE_BUILD_TIME")
 }
@@ -153,9 +151,7 @@ fn is_running_as_appimage() -> bool {
 
 #[cfg(not(windows))]
 fn is_installed_via_deb() -> bool {
-    // A copy running from somewhere else (a local build, say) isn't the one the
-    // package manages - installing the package wouldn't change it, so it would
-    // be offered the same update on every start.
+    // A copy running from elsewhere (a local build) isn't what the package manages.
     let running_from_package = std::env::current_exe().map(|e| e.starts_with("/usr")).unwrap_or(false);
     running_from_package
         && Command::new("dpkg")
@@ -234,10 +230,7 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
     let latest_version = release.tag_name.trim_start_matches('v').trim_start_matches("beta-").to_string();
     let download_url = self_update_asset_url(&release.assets);
 
-    // No SOURCE_SHA.txt on an old release - fall back to the version number.
-    // A SHA mismatch alone isn't "behind": a local dev build made after this
-    // release was published also mismatches, but is ahead of it, not behind -
-    // only offer the update if the release is actually newer than this build.
+    // No SOURCE_SHA.txt - fall back to version. A SHA mismatch alone isn't "behind".
     let app_update_available = match source_sha_of(&release.assets) {
         Some(sha) => sha != built_sha() && release.created_at.as_str() > built_at(),
         None => is_newer(&latest_version, &current_version),
@@ -272,9 +265,7 @@ fn install_launcher_update_blocking(app: AppHandle, url: String) -> Result<(), S
     std::fs::write(&installer_path, &bytes)
         .map_err(|e| format!("couldn't save the update: {e}"))?;
 
-    // Not .status(): the installer's own .onInit taskkills "recharge.exe" -
-    // which is us - so waiting on it here would just hang until killed. It
-    // relaunches the app itself once installed (see recharge-installer.nsi).
+    // Not .status(): the installer's own .onInit taskkills us, so waiting here would hang.
     let _ = app.emit("launcher-update-progress", "Installing...");
     Command::new(&installer_path)
         .arg("/S")

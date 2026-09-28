@@ -1,7 +1,3 @@
-// Renders base-map tiles for the map editor off the main thread: the editor
-// module itself, with its canvases as OffscreenCanvases (see editor.js, "tile
-// workers"). Messages: init (load the base map + images), state (level state
-// changed), tile (render one, returned as an ImageBitmap).
 import { workerInit, workerSetState, workerRenderTile } from './editor.js';
 
 let ready = null;

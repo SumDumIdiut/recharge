@@ -1,7 +1,4 @@
-//! The Games library: whole game builds hosted on the hub. Unity WebGL builds
-//! are played in a small Electron window (the Electron runtime is downloaded
-//! the first time one is played); standalone builds are unpacked and started
-//! directly.
+//! The Games library: whole game builds hosted on the hub (WebGL via Electron, or standalone).
 
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};

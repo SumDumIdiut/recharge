@@ -128,10 +128,7 @@ fn slugify(name: &str) -> String {
     out
 }
 
-// Installed alongside a slug of the skin's own name (like the hub's own
-// download-filename slug) instead of the raw hub id, so the Installed tab
-// shows a real name rather than a UUID - see HUB_META_FILE for how that
-// mapping is recovered later (folder name alone no longer carries it).
+// Installed under a slug of the skin's name, not the raw hub id - see HUB_META_FILE.
 fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str, name: &str) -> Result<(), String> {
     let dir = skins_dir(app).ok_or("game path not set")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -139,10 +136,7 @@ fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str, name: &str) -
     let slug = slugify(name);
     let slug = if slug.is_empty() { hub_id.to_string() } else { slug };
 
-    // A folder already using this slug is fine to overwrite if it's this
-    // same hub skin (a re-install/update); if it belongs to a *different*
-    // hub id (two skins that happen to share a name), fall back to a
-    // suffixed slug instead of clobbering unrelated content.
+    // A same-slug folder belonging to a different hub id gets a suffixed slug instead of being clobbered.
     let mut candidate = slug.clone();
     if dir.join(&candidate).is_dir() {
         let existing_hub_id = super::skins::read_hub_meta(&dir.join(&candidate)).map(|m| m.hub_id);
@@ -168,9 +162,7 @@ fn install_skin_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str, name: &str) -
     Ok(())
 }
 
-/// Exports Skinmod's full skin template (player sheet, dash and double-jump
-/// icons, and the sounds folder) from its repo, so it never falls behind what
-/// the mod actually reads.
+/// Exports the skin template (sheet, icons, sounds) straight from its repo.
 #[tauri::command]
 pub async fn download_skin_template_cmd(dest_dir: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {

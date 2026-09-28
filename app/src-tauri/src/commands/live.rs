@@ -1,10 +1,4 @@
-//! Live code updates: the app's screens (app/src) and loader scripts (loader/)
-//! are pulled straight from the repo's master branch into the app's data
-//! folder and served from there, so pushing code updates every install with
-//! no new package. The embedded copy inside the binary stays as the fallback.
-//!
-//! Only Rust changes need a new package. A bundle declares the API level it
-//! needs in app/live.json; a binary with a lower level ignores it.
+//! Live code: app/src and loader/ are pulled from the repo and served locally, gated by app/live.json's API level.
 
 use serde::Serialize;
 use std::io::{Cursor, Read};

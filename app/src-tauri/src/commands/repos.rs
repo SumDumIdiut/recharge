@@ -9,9 +9,7 @@ const DEFAULT_BRANCH: &str = "main";
 const MAX_REPO_BYTES: u64 = 200 * 1024 * 1024;
 const ALLOWED_REPOS: [&str; 3] = ["recharge-mods", "recharge-maps", "recharge-skins"];
 
-/// recharge-maps (Navigator) is baked into every install rather than being an
-/// optional mod, so it follows the same Stable/Beta split as Recharge itself:
-/// "main" for stable, a "dev" branch for beta. Every other repo only has main.
+/// Navigator follows Recharge's own Stable/Beta split (main/dev); every other repo only has main.
 fn branch_for(app: &AppHandle, repo: &str) -> String {
     if repo == "recharge-maps" && settings::update_channel(app) == "beta" {
         "dev".to_string()
@@ -167,10 +165,7 @@ pub fn pull_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Resul
     result
 }
 
-/// Copies one folder of a repo (e.g. Skinmod's "templates/skin-template") to
-/// `dest`, overwriting files that are already there. Reads the repo's zip
-/// directly instead of pulling it into the mods folder, so it never leaves a
-/// half-populated repo folder that would stop the real mod from being pulled.
+/// Copies one folder of a repo to `dest`, reading the zip directly rather than via the mods folder.
 pub fn export_repo_folder(repo: &str, subdir: &str, dest: &Path) -> Result<(), String> {
     if !ALLOWED_REPOS.contains(&repo) {
         return Err(format!("unknown mod repo: '{repo}'"));
@@ -211,9 +206,7 @@ pub async fn pull_mod_repo(app: AppHandle, repo: String, folder: Option<String>)
         .map_err(|e| format!("pull task panicked: {e}"))?
 }
 
-/// Makes sure a repo exists locally, pulling it only if it isn't there yet -
-/// or if it's there but was pulled for a different channel's branch (e.g. the
-/// user switched Stable/Beta since the last pull).
+/// Pulls a repo only if it's missing, or was pulled for a different channel's branch.
 pub fn ensure_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Result<PathBuf, String> {
     let mods = source_mods_dir(app)?;
     let path = match folder {
@@ -228,9 +221,7 @@ pub fn ensure_blocking(app: &AppHandle, repo: &str, folder: Option<&str>) -> Res
     Ok(path)
 }
 
-/// Like ensure_blocking, and also pulls again when the branch has newer
-/// commits than the local copy. Offline (or GitHub unreachable), the local
-/// copy is kept as it is.
+/// Like ensure_blocking, and also pulls again if the branch has newer commits.
 pub fn refresh_blocking(app: &AppHandle, repo: &str) -> Result<PathBuf, String> {
     let path = ensure_blocking(app, repo, None)?;
     let branch = branch_for(app, repo);

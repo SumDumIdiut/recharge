@@ -77,10 +77,7 @@ fn library_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Steam's own Proton (Windows compatibility layer): the `proton` launcher of
-/// the best installed version, plus the Steam install it should treat as its
-/// client. Prefers Proton Experimental, then Hotfix, then the newest of the
-/// rest (including custom builds in `compatibilitytools.d`).
+/// The best installed Proton's launcher + its Steam client dir (Experimental > Hotfix > newest).
 #[cfg(not(windows))]
 pub fn find_proton() -> Option<(PathBuf, PathBuf)> {
     let client = default_steam_dirs().into_iter().find(|d| d.join("steamapps").is_dir())?;

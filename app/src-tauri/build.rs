@@ -1,7 +1,4 @@
-// The app's own commands are only callable from the built-in screens unless
-// they're declared in an app manifest and granted by a capability - which the
-// live-updated screens (served from a local origin) need. Rather than keep a
-// second copy of the command list, read it from the invoke_handler in lib.rs.
+// Live-updated screens need commands granted via an app manifest - read the list from lib.rs rather than duplicating it.
 fn main() {
     let lib = std::fs::read_to_string("src/lib.rs").expect("src/lib.rs");
     let handler = lib
@@ -45,11 +42,7 @@ fn main() {
     .expect("failed to run tauri-build");
     println!("cargo:rerun-if-changed=src/lib.rs");
 
-    // The commit this backend was built from (see launcher.rs). Without
-    // watching HEAD, cargo has no reason to rerun this script for a plain
-    // rebuild after a new commit (only src/lib.rs or the env var above do
-    // that) - so a local `cargo build` would keep embedding a stale SHA
-    // from whenever this script last actually ran.
+    // Watch HEAD so a plain rebuild re-embeds the commit SHA (see launcher.rs) instead of a stale one.
     let git_dir = std::path::Path::new("../../.git");
     println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
     if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
@@ -69,11 +62,7 @@ fn main() {
     println!("cargo:rustc-env=RECHARGE_BUILD_SHA={}", sha.unwrap_or_default());
     println!("cargo:rerun-if-env-changed=RECHARGE_BUILD_SHA");
 
-    // When this binary was compiled (UTC, GitHub's release created_at format)
-    // - see launcher.rs. A SHA mismatch against the latest release doesn't by
-    // itself mean an update is available: a local dev build made after that
-    // release was published is also a mismatch, but isn't behind it. Comparing
-    // build time against the release's created_at tells the two apart.
+    // When this was compiled (UTC, GitHub's created_at format) - see launcher.rs's downgrade check.
     println!("cargo:rustc-env=RECHARGE_BUILD_TIME={}", iso8601_now());
 }
 
