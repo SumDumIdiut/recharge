@@ -47,6 +47,26 @@ async function additions() {
   return lists.flat();
 }
 
+// A skin's own image is the Unity animator sheet, not a curated thumbnail:
+// always 6 rows in this fixed order (Idle, run, Fall, Jump, wallPose, Dash -
+// see TemplateGrid.cs in recharge-skins), so row 0 is always Idle regardless
+// of column count. Crops to that row's first (leftmost) frame, assuming
+// roughly square cells like the rest of the skin pipeline does.
+function applySkinThumb(el, src) {
+  const probe = new Image();
+  probe.onload = () => {
+    const cellH = probe.naturalHeight / 6;
+    const boxH = el.clientHeight;
+    const boxW = el.clientWidth;
+    const scale = boxH / cellH;
+    el.style.backgroundImage = `url("${src}")`;
+    el.style.backgroundSize = `${probe.naturalWidth * scale}px ${probe.naturalHeight * scale}px`;
+    el.style.backgroundPosition = `${Math.max(0, (boxW - boxH) / 2)}px 0px`;
+  };
+  probe.onerror = () => el.remove();
+  probe.src = src;
+}
+
 function render(entries) {
   const el = document.getElementById('home-news');
   if (!el) return;
@@ -57,33 +77,28 @@ function render(entries) {
   el.innerHTML = entries
     .map((e) => {
       const by = e.by ? ` \u00b7 ${escapeHtml(e.by)}` : '';
-      const action = e.tab
-        ? `<button class="btn" onclick="navigate('${e.tab}')">View in ${escapeHtml(e.tag)}s</button>`
-        : '';
+      const isSkin = e.tag === 'Skin';
+      const img = !e.image
+        ? ''
+        : isSkin
+          ? `<div class="news-img news-img-crop" data-skin-src="${escapeHtml(e.image)}"></div>`
+          : `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />`;
       return `
-      <div class="news-block">
+      <div class="news-block" ${e.tab ? `onclick="navigate('${e.tab}')"` : ''}>
         <div class="news-meta"><span class="tag tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
         <div class="news-title">${escapeHtml(e.title)}</div>
-        ${e.image ? `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />` : ''}
+        ${img}
         ${e.body ? `<div class="news-body">${escapeHtml(e.body)}</div>` : ''}
-        ${action ? `<div class="news-actions">${action}</div>` : ''}
       </div>`;
     })
     .join('');
+  el.querySelectorAll('.news-img-crop').forEach((node) => applySkinThumb(node, node.dataset.skinSrc));
 }
 
 let entries = [];
 
-// Draws every block, then drops from the end until the panel stops overflowing.
 export function layoutNews() {
-  const el = document.getElementById('home-news');
-  if (!el) return;
   render(entries);
-  if (!el.clientHeight) return; // panel hidden right now - lay out again when it's shown
-  let blocks = el.querySelectorAll('.news-block');
-  for (let i = blocks.length; i > 1 && el.scrollHeight > el.clientHeight + 1; i--) {
-    blocks[i - 1].remove();
-  }
 }
 
 export async function initHomeNews() {
@@ -92,5 +107,4 @@ export async function initHomeNews() {
     .sort((a, b) => new Date(b.when) - new Date(a.when))
     .slice(0, MAX_ENTRIES);
   layoutNews();
-  window.addEventListener('resize', layoutNews);
 }
