@@ -19,45 +19,45 @@
   <div id="mods-detail" style="display:none;"></div>
 </main>
 
-<div class="mods-modal-overlay" id="mods-dep-overlay" hidden>
-  <div class="mods-modal">
-    <div class="mods-modal-title" id="mods-dep-title">Additional Mods Required</div>
-    <div class="mods-modal-body" id="mods-dep-body"></div>
-    <div class="mods-modal-actions">
+<div class="modal-overlay" id="mods-dep-overlay" hidden>
+  <div class="modal">
+    <div class="modal-title" id="mods-dep-title">Additional Mods Required</div>
+    <div class="modal-body" id="mods-dep-body"></div>
+    <div class="modal-actions">
       <button class="btn" id="mods-dep-cancel">Cancel</button>
       <button class="btn btn-primary" id="mods-dep-confirm">Install All</button>
     </div>
   </div>
 </div>
 
-<div class="mods-modal-overlay" id="mods-upload-overlay" hidden>
-  <div class="mods-modal">
-    <div class="mods-modal-title">Upload a Mod</div>
-    <div class="mods-modal-body">
-      <label class="skins-upload-label">
+<div class="modal-overlay" id="mods-upload-overlay" hidden>
+  <div class="modal">
+    <div class="modal-title">Upload a Mod</div>
+    <div class="modal-body">
+      <label class="form-field">
         Mod folder
-        <div class="skins-upload-browse-row">
-          <span class="skins-upload-browse-path" id="mods-upload-path">No folder chosen</span>
+        <div class="form-browse-row">
+          <span class="form-browse-path" id="mods-upload-path">No folder chosen</span>
           <button class="btn" id="mods-upload-browse-btn" type="button">Browse…</button>
         </div>
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Name
-        <input class="skins-upload-input" id="mods-upload-name" type="text" placeholder="e.g. Icy Physics" />
+        <input class="form-input" id="mods-upload-name" type="text" placeholder="e.g. Icy Physics" />
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Description
-        <textarea class="skins-upload-input" id="mods-upload-description" rows="3" style="resize: vertical; font: inherit;" placeholder="Optional"></textarea>
+        <textarea class="form-input" id="mods-upload-description" rows="3" style="resize: vertical; font: inherit;" placeholder="Optional"></textarea>
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Screenshots
-        <div class="skins-upload-browse-row">
-          <span class="skins-upload-browse-path" id="mods-upload-gallery-path">None chosen (optional, up to 8)</span>
+        <div class="form-browse-row">
+          <span class="form-browse-path" id="mods-upload-gallery-path">None chosen (optional, up to 8)</span>
           <button class="btn" id="mods-upload-gallery-btn" type="button">Browse…</button>
         </div>
       </label>
     </div>
-    <div class="mods-modal-actions">
+    <div class="modal-actions">
       <button class="btn" id="mods-upload-cancel">Cancel</button>
       <button class="btn btn-primary" id="mods-upload-confirm">Upload</button>
     </div>

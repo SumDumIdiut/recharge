@@ -1,4 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { escapeHtml, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -17,29 +18,13 @@ const MAX_GALLERY_IMAGES = 8;
 let myUploadIds = new Set();
 let openDetailId = null;
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 function matchesSearch(haystack) {
   if (!searchTerm) return true;
   return haystack.toLowerCase().includes(searchTerm.toLowerCase());
 }
 
 function thumb(entry, badge) {
-  const img = entry?.image
-    ? `<img class="browse-card-thumb" src="${escapeHtml(entry.image)}" alt="" />`
-    : `<div class="browse-card-thumb browse-card-thumb-empty"></div>`;
-  return `<div class="browse-card-media">${img}${badge || ''}</div>`;
-}
-
-const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
-const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>';
-const ICON_SPINNER = '<svg class="mod-spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="42 14"/></svg>';
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return sharedThumb(entry?.image, badge);
 }
 
 function isNewerVersion(a, b) {
@@ -57,8 +42,7 @@ async function loadCatalog() {
     const res = await fetch(`${HUB_BASE}/api/mods`);
     const rows = await res.json();
     catalog = rows
-      // Navigator (recharge.maps) is built into every install now, not
-      // something to browse or install separately - see BUILTIN_MOD_IDS.
+      // Navigator (recharge.maps) is built into every install, not browsed separately.
       .filter((row) => row.modId !== 'recharge.maps')
       .map((row) => ({
         id: row.id,
@@ -114,16 +98,16 @@ function renderInstalled() {
       const author = entry?.author || m.author;
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
-      ${thumb(entry, hasUpdate ? `<button class="browse-card-badge browse-card-badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
+      ${thumb(entry, hasUpdate ? `<button class="badge badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
         <div class="browse-card-name${protectedMod ? ' browse-card-name-protected' : ''}">${escapeHtml(m.displayName)}</div>
-        <div class="browse-card-meta">${author ? escapeHtml(author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="mod-update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
+        <div class="browse-card-meta">${author ? escapeHtml(author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
       </div>
       <div class="browse-card-actions">
         <span class="browse-card-meta">${m.enabled ? 'Enabled' : 'Disabled'}</span>
         <div class="browse-card-actions-right">
-          <div class="mod-toggle ${m.enabled ? 'on' : ''}" data-id="${escapeHtml(m.id)}" onclick="event.stopPropagation(); window.__modToggle(this)"></div>
-          ${protectedMod ? '' : `<button class="browse-card-icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__modConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(m.displayName).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>`}
+          <div class="toggle ${m.enabled ? 'is-on' : ''}" data-id="${escapeHtml(m.id)}" onclick="event.stopPropagation(); window.__modToggle(this)"></div>
+          ${protectedMod ? '' : `<button class="icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__modConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(m.displayName).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>`}
         </div>
       </div>
     </div>`;
@@ -149,8 +133,8 @@ function renderBrowse() {
     .map((entry) => {
       const installed = installedCache.some((m) => m.id === entry.modId);
       const badge = installed
-        ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
-        : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
+        ? `<div class="badge badge-installed" title="Installed">${ICON_CHECK}</div>`
+        : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = myUploadIds.has(entry.id);
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(entry.id)}')">
@@ -161,7 +145,7 @@ function renderBrowse() {
       </div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__modConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__modConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>` : ''}
     </div>`;
@@ -214,7 +198,7 @@ window.__modOpenUpload = function () {
   document.getElementById('mods-upload-name').value = '';
   document.getElementById('mods-upload-description').value = '';
   renderGalleryChoice();
-  document.getElementById('mods-upload-overlay').hidden = false;
+  openModal('mods-upload-overlay');
 };
 
 window.__modConfirmDeleteFromHub = function (id, name) {
@@ -267,7 +251,7 @@ async function browseForScreenshots() {
 }
 
 function closeUploadModal() {
-  document.getElementById('mods-upload-overlay').hidden = true;
+  closeModal('mods-upload-overlay');
 }
 
 async function submitUpload() {
@@ -308,7 +292,7 @@ async function submitUpload() {
 
 window.__modToggle = async function (el) {
   const { invoke } = window.__TAURI__.core;
-  const enabled = !el.classList.contains('on');
+  const enabled = !el.classList.contains('is-on');
   await invoke('set_mod_enabled', { id: el.dataset.id, enabled });
   const mod = installedCache.find((m) => m.id === el.dataset.id);
   if (mod) mod.enabled = enabled;
@@ -316,7 +300,7 @@ window.__modToggle = async function (el) {
   if (!document.getElementById('mods-detail-toggle')) return;
   const detailToggle = document.getElementById('mods-detail-toggle');
   if (detailToggle && detailToggle.dataset.id === el.dataset.id) {
-    detailToggle.classList.toggle('on', enabled);
+    detailToggle.classList.toggle('is-on', enabled);
   }
 };
 
@@ -345,7 +329,7 @@ function resolveMissingDependencies(entry) {
 }
 
 function closeDepModal() {
-  document.getElementById('mods-dep-overlay').hidden = true;
+  closeModal('mods-dep-overlay');
 }
 
 window.__modInstall = async function (id, btn) {
@@ -356,10 +340,10 @@ window.__modInstall = async function (id, btn) {
     document.getElementById('mods-dep-title').textContent = "Can't Install";
     document.getElementById('mods-dep-body').innerHTML =
       `<p><b>${escapeHtml(entry.name)}</b> requires the following, which ${unavailable.length === 1 ? "isn't" : "aren't"} available in the catalog:</p>` +
-      `<ul class="mods-dep-list">${unavailable.map((depId) => `<li class="mods-dep-unavailable">${escapeHtml(depId)}</li>`).join('')}</ul>`;
+      `<ul class="dep-list">${unavailable.map((depId) => `<li class="text-danger">${escapeHtml(depId)}</li>`).join('')}</ul>`;
     document.getElementById('mods-dep-confirm').style.display = 'none';
     document.getElementById('mods-dep-cancel').textContent = 'Close';
-    document.getElementById('mods-dep-overlay').hidden = false;
+    openModal('mods-dep-overlay');
     return;
   }
 
@@ -367,11 +351,11 @@ window.__modInstall = async function (id, btn) {
     document.getElementById('mods-dep-title').textContent = 'Additional Mods Required';
     document.getElementById('mods-dep-body').innerHTML =
       `<p><b>${escapeHtml(entry.name)}</b> requires the following mod${missing.length === 1 ? '' : 's'}, which ${missing.length === 1 ? "isn't" : "aren't"} installed yet:</p>` +
-      `<ul class="mods-dep-list">${missing.map((m) => `<li>${escapeHtml(m.name)}</li>`).join('')}</ul>` +
+      `<ul class="dep-list">${missing.map((m) => `<li>${escapeHtml(m.name)}</li>`).join('')}</ul>` +
       `<p>Install ${missing.length === 1 ? 'it' : 'them'} along with <b>${escapeHtml(entry.name)}</b>?</p>`;
     document.getElementById('mods-dep-confirm').style.display = '';
     document.getElementById('mods-dep-cancel').textContent = 'Cancel';
-    document.getElementById('mods-dep-overlay').hidden = false;
+    openModal('mods-dep-overlay');
 
     document.getElementById('mods-dep-confirm').onclick = () => {
       closeDepModal();
@@ -383,11 +367,9 @@ window.__modInstall = async function (id, btn) {
   doInstall([id], btn);
 };
 
-// Mods whose source lives in a GitHub repo instead of the hub: installing one
-// pulls it into the mods folder, then the loader build compiles and deploys it.
+// Mods whose source lives in a GitHub repo: installing pulls it in, then the loader build compiles/deploys it.
 const REPO_MODS = {
-  // recharge.maps (Navigator) isn't here - it's built into every install
-  // automatically (see loader.rs), not something to install from this tab.
+  // recharge.maps (Navigator) isn't here - built into every install automatically (see loader.rs).
   'recharge.customskins': { repo: 'recharge-skins' },
   'recharge.example': { repo: 'recharge-mods', folder: 'recharge-example' },
   'recharge.icyphysics': { repo: 'recharge-mods', folder: 'recharge-icy-physics' },
@@ -397,13 +379,11 @@ const REPO_MODS = {
 
 async function doInstall(ids, btn) {
   const { invoke } = window.__TAURI__.core;
-  const isBadge = btn && btn.classList.contains('browse-card-badge');
+  const isBadge = btn && btn.classList.contains('badge');
   if (btn) {
     btn.disabled = true;
     if (isBadge) {
-      btn.classList.remove('browse-card-badge-install', 'browse-card-badge-update');
-      btn.classList.add('is-installing');
-      btn.innerHTML = ICON_SPINNER;
+      setBadgeState(btn, 'installing');
     } else {
       btn.textContent = ids.length > 1 ? `Installing (${ids.length})…` : 'Installing…';
     }
@@ -422,9 +402,7 @@ async function doInstall(ids, btn) {
     }
     if (pulledFromRepo) await invoke('install_or_update_loader');
     if (btn && isBadge) {
-      btn.classList.remove('is-installing');
-      btn.classList.add('is-done');
-      btn.innerHTML = ICON_CHECK;
+      setBadgeState(btn, 'done');
       await sleep(450); // let the tick actually be seen before the list re-renders out from under it
     }
     await refresh();
@@ -434,9 +412,7 @@ async function doInstall(ids, btn) {
     if (btn) {
       btn.disabled = false;
       if (isBadge) {
-        btn.classList.remove('is-installing', 'is-done');
-        btn.classList.add('browse-card-badge-install');
-        btn.innerHTML = ICON_DOWNLOAD;
+        setBadgeState(btn, 'failed');
       } else {
         btn.textContent = 'Install';
       }
@@ -473,26 +449,26 @@ window.__modOpenDetail = function (id) {
 
   document.getElementById('mods-detail').innerHTML = `
     <button class="crumb-back" id="mods-detail-back" onclick="window.__modCloseDetail()" style="margin-bottom:20px;">&lt; Mods</button>
-    ${detailImages.length ? `<div class="mod-gallery">
-      <img class="mod-detail-image" id="mods-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__modGalleryStep(1)" style="cursor:pointer;"' : ''} />
-      ${detailImages.length > 1 ? `<button class="mod-gallery-nav mod-gallery-prev" title="Previous image" onclick="window.__modGalleryStep(-1)">&lsaquo;</button>
-      <button class="mod-gallery-nav mod-gallery-next" title="Next image" onclick="window.__modGalleryStep(1)">&rsaquo;</button>
-      <div class="mod-gallery-count" id="mods-gallery-count">1 / ${detailImages.length}</div>` : ''}
+    ${detailImages.length ? `<div class="gallery">
+      <img class="detail-image" id="mods-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__modGalleryStep(1)" style="cursor:pointer;"' : ''} />
+      ${detailImages.length > 1 ? `<button class="gallery-nav gallery-prev" title="Previous image" onclick="window.__modGalleryStep(-1)">&lsaquo;</button>
+      <button class="gallery-nav gallery-next" title="Next image" onclick="window.__modGalleryStep(1)">&rsaquo;</button>
+      <div class="gallery-count" id="mods-gallery-count">1 / ${detailImages.length}</div>` : ''}
     </div>` : ''}
-    <div class="mod-detail-header">
-      <div class="mod-detail-name${protectedMod ? ' mod-detail-name-protected' : ''}">${escapeHtml(name)}</div>
-      <div class="mod-detail-meta">${author ? escapeHtml(author) + ' \u00b7 ' : ''}v${escapeHtml(version)}</div>
+    <div class="detail-header">
+      <div class="detail-name${protectedMod ? ' detail-name-protected' : ''}">${escapeHtml(name)}</div>
+      <div class="detail-meta">${author ? escapeHtml(author) + ' \u00b7 ' : ''}v${escapeHtml(version)}</div>
     </div>
-    ${description ? `<div class="mod-detail-desc">${escapeHtml(description)}</div>` : ''}
-    ${deps?.length ? `<div class="mod-detail-deps">Requires: ${deps.map(escapeHtml).join(', ')}</div>` : ''}
-    <div class="mod-detail-actions">
+    ${description ? `<div class="detail-desc">${escapeHtml(description)}</div>` : ''}
+    ${deps?.length ? `<div class="detail-deps">Requires: ${deps.map(escapeHtml).join(', ')}</div>` : ''}
+    <div class="detail-actions">
       ${
         installed
           ? `<div class="settings-row">
                <span class="browse-card-meta">${installedMod.enabled ? 'Enabled' : 'Disabled'}</span>
-               <div class="mod-toggle ${installedMod.enabled ? 'on' : ''}" id="mods-detail-toggle" data-id="${escapeHtml(realId)}" onclick="window.__modToggle(this)"></div>
+               <div class="toggle ${installedMod.enabled ? 'is-on' : ''}" id="mods-detail-toggle" data-id="${escapeHtml(realId)}" onclick="window.__modToggle(this)"></div>
              </div>
-             ${protectedMod ? '' : `<button class="btn mod-detail-uninstall" onclick="window.__modConfirmUninstall('${escapeHtml(realId)}', '${escapeHtml(name).replace(/'/g, "\\'")}')">Uninstall</button>`}`
+             ${protectedMod ? '' : `<button class="btn btn-danger" onclick="window.__modConfirmUninstall('${escapeHtml(realId)}', '${escapeHtml(name).replace(/'/g, "\\'")}')">Uninstall</button>`}`
           : entry
             ? `<button class="btn btn-primary" onclick="window.__modInstall('${escapeHtml(hubId)}', this)">Install</button>`
             : ''
@@ -512,7 +488,7 @@ window.__modConfirmUninstall = function (id, name) {
   confirmBtn.style.display = '';
   confirmBtn.textContent = 'Uninstall';
   document.getElementById('mods-dep-cancel').textContent = 'Cancel';
-  document.getElementById('mods-dep-overlay').hidden = false;
+  openModal('mods-dep-overlay');
 
   confirmBtn.onclick = async () => {
     closeDepModal();

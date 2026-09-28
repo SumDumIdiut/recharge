@@ -1,10 +1,8 @@
 // "What's new": the newest mods, maps and skins added to the Recharge Library.
+import { escapeHtml } from './ui.js';
+
 const HUB = 'https://codecade.co.za/recharge';
 const MAX_ENTRIES = 8;
-
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 
 function ago(iso) {
   const secs = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -64,7 +62,7 @@ function render(entries) {
         : '';
       return `
       <div class="news-block">
-        <div class="news-meta"><span class="news-tag news-tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
+        <div class="news-meta"><span class="tag tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
         <div class="news-title">${escapeHtml(e.title)}</div>
         ${e.image ? `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />` : ''}
         ${e.body ? `<div class="news-body">${escapeHtml(e.body)}</div>` : ''}
@@ -76,8 +74,7 @@ function render(entries) {
 
 let entries = [];
 
-// Show as many blocks as fit in the panel without scrolling: draw them all,
-// then drop blocks from the end until the list stops overflowing.
+// Draws every block, then drops from the end until the panel stops overflowing.
 export function layoutNews() {
   const el = document.getElementById('home-news');
   if (!el) return;

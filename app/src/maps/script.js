@@ -1,4 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -10,29 +11,9 @@ let catalogError = false;
 let chosenUploadPath = null;
 let myUploadIds = new Set();
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 function matchesSearch(haystack) {
   if (!searchTerm) return true;
   return haystack.toLowerCase().includes(searchTerm.toLowerCase());
-}
-
-function thumb(entry, badge) {
-  const img = entry?.image
-    ? `<img class="browse-card-thumb" src="${escapeHtml(entry.image)}" alt="" />`
-    : `<div class="browse-card-thumb browse-card-thumb-empty"></div>`;
-  return `<div class="browse-card-media">${img}${badge || ''}</div>`;
-}
-
-const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
-const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>';
-const ICON_SPINNER = '<svg class="mod-spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="42 14"/></svg>';
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function loadCatalog() {
@@ -85,14 +66,14 @@ function renderInstalled() {
       const entry = catalog.find((c) => c.id === m.id);
       return `
     <div class="browse-card">
-      ${thumb(entry)}
+      ${thumb(entry?.image)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(m.name)}</div>
         <div class="browse-card-meta">${m.groupCount} course${m.groupCount === 1 ? '' : 's'}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__mapConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(m.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__mapConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(m.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`;
@@ -117,12 +98,12 @@ function renderBrowse() {
     .map((entry) => {
       const installed = installedCache.some((m) => m.id === entry.id);
       const badge = installed
-        ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
-        : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__mapInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
+        ? `<div class="badge badge-installed" title="Installed">${ICON_CHECK}</div>`
+        : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__mapInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = myUploadIds.has(entry.id);
       return `
     <div class="browse-card">
-      ${thumb(entry, badge)}
+      ${thumb(entry.image, badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
         <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
@@ -130,7 +111,7 @@ function renderBrowse() {
       <div class="browse-card-desc">${escapeHtml(entry.description || '')}</div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="window.__mapConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Remove from the Recharge Library" onclick="window.__mapConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>` : ''}
     </div>`;
@@ -165,25 +146,19 @@ window.__mapInstall = async function (id, btn) {
   const { invoke } = window.__TAURI__.core;
   if (btn) {
     btn.disabled = true;
-    btn.classList.remove('browse-card-badge-install');
-    btn.classList.add('is-installing');
-    btn.innerHTML = ICON_SPINNER;
+    setBadgeState(btn, 'installing');
   }
   try {
     await invoke('install_from_hub_cmd', { kind: 'maps', id });
     if (btn) {
-      btn.classList.remove('is-installing');
-      btn.classList.add('is-done');
-      btn.innerHTML = ICON_CHECK;
+      setBadgeState(btn, 'done');
       await sleep(450);
     }
     await refresh();
   } catch (err) {
     if (btn) {
       btn.disabled = false;
-      btn.classList.remove('is-installing', 'is-done');
-      btn.classList.add('browse-card-badge-install');
-      btn.innerHTML = ICON_DOWNLOAD;
+      setBadgeState(btn, 'failed');
     }
     alert(String(err));
   }
@@ -207,7 +182,7 @@ window.__mapOpenUpload = function () {
   document.getElementById('maps-upload-path').textContent = 'No file chosen';
   document.getElementById('maps-upload-name').value = '';
   document.getElementById('maps-upload-description').value = '';
-  document.getElementById('maps-upload-overlay').hidden = false;
+  openModal('maps-upload-overlay');
 };
 
 window.__mapConfirmDeleteFromHub = function (id, name) {
@@ -231,7 +206,7 @@ async function browseForMapFile() {
 }
 
 function closeUploadModal() {
-  document.getElementById('maps-upload-overlay').hidden = true;
+  closeModal('maps-upload-overlay');
 }
 
 async function submitUpload() {

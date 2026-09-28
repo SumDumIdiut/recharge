@@ -16,27 +16,27 @@
   <div id="maps-create-view" class="map-maker" style="display:none;"></div>
 </main>
 
-<div class="mods-modal-overlay" id="maps-upload-overlay" hidden>
-  <div class="mods-modal">
-    <div class="mods-modal-title">Upload a Map</div>
-    <div class="mods-modal-body">
-      <label class="skins-upload-label">
+<div class="modal-overlay" id="maps-upload-overlay" hidden>
+  <div class="modal">
+    <div class="modal-title">Upload a Map</div>
+    <div class="modal-body">
+      <label class="form-field">
         Map file
-        <div class="skins-upload-browse-row">
-          <span class="skins-upload-browse-path" id="maps-upload-path">No file chosen</span>
+        <div class="form-browse-row">
+          <span class="form-browse-path" id="maps-upload-path">No file chosen</span>
           <button class="btn" id="maps-upload-browse-btn" type="button">Browse…</button>
         </div>
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Name
-        <input class="skins-upload-input" id="maps-upload-name" type="text" placeholder="e.g. Death by Lolo" />
+        <input class="form-input" id="maps-upload-name" type="text" placeholder="e.g. Death by Lolo" />
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Description
-        <input class="skins-upload-input" id="maps-upload-description" type="text" placeholder="Optional" />
+        <input class="form-input" id="maps-upload-description" type="text" placeholder="Optional" />
       </label>
     </div>
-    <div class="mods-modal-actions">
+    <div class="modal-actions">
       <button class="btn" id="maps-upload-cancel">Cancel</button>
       <button class="btn btn-primary" id="maps-upload-confirm">Upload</button>
     </div>

@@ -1,4 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -14,19 +15,12 @@ let detailImages = [];
 let detailImageIndex = 0;
 let openDetail = null; // { hubId } or { folderName }
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 function matchesSearch(haystack) {
   if (!searchTerm) return true;
   return haystack.toLowerCase().includes(searchTerm.toLowerCase());
 }
 
-// A hub-installed skin's folder is named after a slug of its real name, not
-// the name itself (see HUB_META_FILE on the Rust side), so prefer the real
-// name it recorded there; only prettify the raw folder name as a fallback
-// for locally-added skins that never went through the hub.
+// Prefers the real name recorded in hub metadata over the (slugged) folder name.
 function displayName(s) {
   if (typeof s === 'object' && s.displayName) return s.displayName;
   const folderName = typeof s === 'object' ? s.folderName : s;
@@ -37,22 +31,6 @@ function displayName(s) {
 
 function suggestUploadName(folderName) {
   return displayName(folderName).replace(/\s+Skin\d*$/i, '');
-}
-
-function thumb(src, badge) {
-  const img = src
-    ? `<img class="browse-card-thumb" src="${escapeHtml(src)}" alt="" />`
-    : `<div class="browse-card-thumb browse-card-thumb-empty"></div>`;
-  return `<div class="browse-card-media">${img}${badge || ''}</div>`;
-}
-
-const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>';
-const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>';
-const ICON_SPINNER = '<svg class="mod-spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="42 14"/></svg>';
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function loadCatalog() {
@@ -104,10 +82,7 @@ async function loadThumbnails() {
   );
 }
 
-// Falls back to matching by name for a skin that's on disk but was never
-// installed through the hub (self-authored, added by hand) - it has no
-// hubId to match on, so without this it would show as downloadable forever
-// even though the user already has it.
+// Falls back to name-matching for a self-authored skin with no hubId to match on.
 function installedFor(entry) {
   return installedCache.find(
     (s) => s.hubId === entry.id || (!s.hubId && displayName(s).toLowerCase() === entry.name.toLowerCase())
@@ -135,7 +110,7 @@ function renderInstalled() {
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Delete" onclick="event.stopPropagation(); window.__skinConfirmDelete('${escapeHtml(s.folderName)}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Delete" onclick="event.stopPropagation(); window.__skinConfirmDelete('${escapeHtml(s.folderName)}')">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`
@@ -160,8 +135,8 @@ function renderBrowse() {
     .map((entry) => {
       const installed = !!installedFor(entry);
       const badge = installed
-        ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
-        : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
+        ? `<div class="badge badge-installed" title="Installed">${ICON_CHECK}</div>`
+        : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = myUploadIds.has(entry.id);
       return `
     <div class="browse-card" onclick="window.__skinOpenDetail('hub:${escapeHtml(entry.id)}')">
@@ -172,7 +147,7 @@ function renderBrowse() {
       </div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>` : ''}
     </div>`;
@@ -198,8 +173,7 @@ window.__skinGalleryStep = function (delta) {
   document.getElementById('skins-gallery-count').textContent = `${detailImageIndex + 1} / ${detailImages.length}`;
 };
 
-// key is "hub:<hub id>" for a library skin (installed or not) or
-// "local:<folder>" for one that never went through the hub.
+// key is "hub:<id>" for a library skin or "local:<folder>" for a non-hub one.
 window.__skinOpenDetail = function (key) {
   const [kind, ...rest] = key.split(':');
   const ref = rest.join(':');
@@ -218,23 +192,23 @@ window.__skinOpenDetail = function (key) {
 
   document.getElementById('skins-detail').innerHTML = `
     <button class="crumb-back" onclick="window.__skinCloseDetail()" style="margin-bottom:20px;">&lt; Skins</button>
-    ${detailImages.length ? `<div class="mod-gallery">
-      <img class="mod-detail-image" id="skins-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__skinGalleryStep(1)" style="cursor:pointer;"' : ''} />
-      ${detailImages.length > 1 ? `<button class="mod-gallery-nav mod-gallery-prev" title="Previous image" onclick="window.__skinGalleryStep(-1)">&lsaquo;</button>
-      <button class="mod-gallery-nav mod-gallery-next" title="Next image" onclick="window.__skinGalleryStep(1)">&rsaquo;</button>
-      <div class="mod-gallery-count" id="skins-gallery-count">1 / ${detailImages.length}</div>` : ''}
+    ${detailImages.length ? `<div class="gallery">
+      <img class="detail-image" id="skins-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__skinGalleryStep(1)" style="cursor:pointer;"' : ''} />
+      ${detailImages.length > 1 ? `<button class="gallery-nav gallery-prev" title="Previous image" onclick="window.__skinGalleryStep(-1)">&lsaquo;</button>
+      <button class="gallery-nav gallery-next" title="Next image" onclick="window.__skinGalleryStep(1)">&rsaquo;</button>
+      <div class="gallery-count" id="skins-gallery-count">1 / ${detailImages.length}</div>` : ''}
     </div>` : ''}
-    <div class="mod-detail-header">
-      <div class="mod-detail-name">${escapeHtml(name)}</div>
-      ${author ? `<div class="mod-detail-meta">${escapeHtml(author)}</div>` : ''}
+    <div class="detail-header">
+      <div class="detail-name">${escapeHtml(name)}</div>
+      ${author ? `<div class="detail-meta">${escapeHtml(author)}</div>` : ''}
     </div>
-    ${description ? `<div class="mod-detail-desc">${escapeHtml(description)}</div>` : ''}
-    <div class="mod-detail-actions">
+    ${description ? `<div class="detail-desc">${escapeHtml(description)}</div>` : ''}
+    <div class="detail-actions">
       ${installedSkin
         ? `<span class="browse-card-meta">Installed</span>
-           <button class="btn mod-detail-uninstall" onclick="window.__skinConfirmDelete('${escapeHtml(installedSkin.folderName)}')">Delete</button>`
+           <button class="btn btn-danger" onclick="window.__skinConfirmDelete('${escapeHtml(installedSkin.folderName)}')">Delete</button>`
         : entry ? `<button class="btn btn-primary" onclick="window.__skinInstall('${escapeHtml(entry.id)}', this)">Install</button>` : ''}
-      ${mine ? `<button class="btn mod-detail-uninstall" onclick="window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">Remove from Library</button>` : ''}
+      ${mine ? `<button class="btn btn-danger" onclick="window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">Remove from Library</button>` : ''}
     </div>
   `;
   document.getElementById('skins-list').style.display = 'none';
@@ -271,25 +245,19 @@ window.__skinInstall = async function (id, btn) {
   const { invoke } = window.__TAURI__.core;
   if (btn) {
     btn.disabled = true;
-    btn.classList.remove('browse-card-badge-install');
-    btn.classList.add('is-installing');
-    btn.innerHTML = ICON_SPINNER;
+    setBadgeState(btn, 'installing');
   }
   try {
     await invoke('install_from_hub_cmd', { kind: 'skins', id });
     if (btn) {
-      btn.classList.remove('is-installing');
-      btn.classList.add('is-done');
-      btn.innerHTML = ICON_CHECK;
+      setBadgeState(btn, 'done');
       await sleep(450);
     }
     await refresh();
   } catch (err) {
     if (btn) {
       btn.disabled = false;
-      btn.classList.remove('is-installing', 'is-done');
-      btn.classList.add('browse-card-badge-install');
-      btn.innerHTML = ICON_DOWNLOAD;
+      setBadgeState(btn, 'failed');
     }
     alert(String(err));
   }
@@ -318,7 +286,7 @@ window.__skinOpenUpload = function () {
   document.getElementById('skins-upload-path').textContent = 'No folder chosen';
   document.getElementById('skins-upload-name').value = '';
   document.getElementById('skins-upload-description').value = '';
-  document.getElementById('skins-upload-overlay').hidden = false;
+  openModal('skins-upload-overlay');
 };
 
 window.__skinConfirmDeleteFromHub = function (id, name) {
@@ -346,7 +314,7 @@ async function browseForSkinFolder() {
 }
 
 function closeUploadModal() {
-  document.getElementById('skins-upload-overlay').hidden = true;
+  closeModal('skins-upload-overlay');
 }
 
 async function submitUpload() {

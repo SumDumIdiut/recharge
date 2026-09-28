@@ -1,11 +1,9 @@
+import { escapeHtml } from '../ui.js';
+
 let games = [];
 let loadError = null;
 const busy = new Map(); // game id -> progress text while installing/starting
 let unlisten = null;
-
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 
 function formatSize(bytes) {
   if (!bytes) return '';

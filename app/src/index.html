@@ -42,7 +42,7 @@
       })();
     </script>
     <link rel="stylesheet" href="/style.css" />
-    <link rel="stylesheet" href="/mods/style.css" />
+    <link rel="stylesheet" href="/components.css" />
     <link rel="stylesheet" href="/maps/style.css" />
     <link rel="stylesheet" href="/skins/style.css" />
     <link rel="stylesheet" href="/account/style.css" />
@@ -155,45 +155,45 @@
       <div class="progress-track"><div class="progress-fill" id="global-progress-fill"></div></div>
     </button>
 
-    <div class="mods-modal-overlay" id="onboard-overlay" hidden>
-      <div class="mods-modal">
-        <div class="mods-modal-title">Get Set Up</div>
-        <div class="mods-modal-body" id="onboard-body"></div>
-        <div class="mods-modal-actions">
+    <div class="modal-overlay" id="onboard-overlay" hidden>
+      <div class="modal">
+        <div class="modal-title">Get Set Up</div>
+        <div class="modal-body" id="onboard-body"></div>
+        <div class="modal-actions">
           <button class="btn" id="onboard-dismiss">Not Now</button>
           <button class="btn btn-primary" id="onboard-go">Go to Settings</button>
         </div>
       </div>
     </div>
 
-    <div class="mods-modal-overlay" id="update-overlay" hidden>
-      <div class="mods-modal">
-        <div class="mods-modal-title">Update Available</div>
-        <div class="mods-modal-body" id="update-body"></div>
+    <div class="modal-overlay" id="update-overlay" hidden>
+      <div class="modal">
+        <div class="modal-title">Update Available</div>
+        <div class="modal-body" id="update-body"></div>
         <div id="update-progress" class="settings-sub" hidden></div>
-        <div class="mods-modal-actions">
+        <div class="modal-actions">
           <button class="btn" id="update-later">Later</button>
           <button class="btn btn-primary" id="update-now">Update Now</button>
         </div>
       </div>
     </div>
 
-    <div class="mods-modal-overlay" id="login-overlay" hidden>
-      <div class="mods-modal">
-        <div class="mods-modal-title" id="login-title">Log In</div>
-        <div class="mods-modal-body">
-          <label class="skins-upload-label">
+    <div class="modal-overlay" id="login-overlay" hidden>
+      <div class="modal">
+        <div class="modal-title" id="login-title">Log In</div>
+        <div class="modal-body">
+          <label class="form-field">
             Username
-            <input class="skins-upload-input" id="login-username" type="text" />
+            <input class="form-input" id="login-username" type="text" />
           </label>
-          <label class="skins-upload-label">
+          <label class="form-field">
             Password
-            <input class="skins-upload-input" id="login-password" type="password" />
+            <input class="form-input" id="login-password" type="password" />
           </label>
           <div class="account-error" id="login-error" hidden></div>
           <button class="account-toggle-link" id="login-toggle-mode">Need an account? Register</button>
         </div>
-        <div class="mods-modal-actions">
+        <div class="modal-actions">
           <button class="btn" id="login-cancel">Cancel</button>
           <button class="btn btn-primary" id="login-submit">Log In</button>
         </div>
