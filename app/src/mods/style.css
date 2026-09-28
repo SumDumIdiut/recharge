@@ -67,10 +67,16 @@
 
 .browse-card-name-protected, .mod-detail-name-protected { color: var(--green); }
 
+/* Fixed height + object-fit so every gallery - any image's own aspect ratio,
+   any mod/map/skin - occupies the same box instead of the page resizing
+   and jumping as you step through images or open a different item. */
 .mod-detail-image {
   width: 100%;
   max-width: 640px;
+  height: 360px;
+  object-fit: contain;
   display: block;
+  background: var(--panel);
   border: 1px solid var(--line);
   margin-bottom: 24px;
 }
@@ -84,26 +90,32 @@
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 34px;
-  height: 56px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.55);
   color: var(--text);
-  font-size: 28px;
+  font-size: 22px;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, transform 0.15s;
 }
-.mod-gallery-nav:hover { background: rgba(0, 0, 0, 0.8); }
-.mod-gallery-prev { left: 8px; }
-.mod-gallery-next { right: 8px; }
+.mod-gallery-nav:hover { background: rgba(0, 0, 0, 0.85); border-color: var(--green); transform: translateY(-50%) scale(1.08); }
+.mod-gallery-prev { left: 12px; }
+.mod-gallery-next { right: 12px; }
 .mod-gallery-count {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 2px 8px;
+  right: 12px;
+  bottom: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
   background: rgba(0, 0, 0, 0.6);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
 }
 .mod-detail-header { margin-bottom: 14px; }
 .mod-detail-name { font-size: 26px; color: var(--text); text-transform: uppercase; }
