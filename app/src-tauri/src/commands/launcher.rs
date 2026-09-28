@@ -157,7 +157,13 @@ fn is_installed_via_deb() -> bool {
 }
 
 #[tauri::command]
-pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, String> {
+pub async fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || check_launcher_update_blocking(&app))
+        .await
+        .map_err(|e| format!("update check task panicked: {e}"))?
+}
+
+fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo, String> {
     let current_version = app.package_info().version.to_string();
 
     let bundled_maps_version = bundled_maps_version(&app);
@@ -233,9 +239,15 @@ pub fn check_launcher_update(app: AppHandle) -> Result<LauncherUpdateInfo, Strin
     })
 }
 
-#[cfg(windows)]
 #[tauri::command]
-pub fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || install_launcher_update_blocking(app, url))
+        .await
+        .map_err(|e| format!("update install task panicked: {e}"))?
+}
+
+#[cfg(windows)]
+fn install_launcher_update_blocking(app: AppHandle, url: String) -> Result<(), String> {
     let bytes = download_update(&app, &url)?;
 
     let installer_path = std::env::temp_dir().join("Recharge_Update_Setup.exe");
@@ -256,8 +268,7 @@ pub fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
-pub fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String> {
+fn install_launcher_update_blocking(app: AppHandle, url: String) -> Result<(), String> {
     if let Some(appimage_path) = std::env::var_os("APPIMAGE").map(PathBuf::from) {
         return install_appimage_update(&app, &url, &appimage_path);
     }

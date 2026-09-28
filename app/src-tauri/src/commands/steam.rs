@@ -241,8 +241,8 @@ pub fn detect() -> Option<InstallInfo> {
 }
 
 #[tauri::command]
-pub fn detect_all_igtap_installs() -> Vec<InstallInfo> {
-    detect_all()
+pub async fn detect_all_igtap_installs() -> Vec<InstallInfo> {
+    tauri::async_runtime::spawn_blocking(detect_all).await.unwrap_or_default()
 }
 
 pub fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
@@ -263,7 +263,11 @@ pub fn info_for_path(game_dir: &Path) -> Option<InstallInfo> {
 }
 
 #[tauri::command]
-pub fn detect_igtap_install(app: AppHandle) -> Option<InstallInfo> {
+pub async fn detect_igtap_install(app: AppHandle) -> Option<InstallInfo> {
+    tauri::async_runtime::spawn_blocking(move || detect_igtap_install_blocking(app)).await.unwrap_or(None)
+}
+
+fn detect_igtap_install_blocking(app: AppHandle) -> Option<InstallInfo> {
     if let Some(path) = settings::get_game_path(app) {
         if let Some(info) = info_for_path(Path::new(&path)) {
             return Some(info);

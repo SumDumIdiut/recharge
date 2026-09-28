@@ -135,6 +135,9 @@ function initWaveform() {
   densityEl.value = settings.density;
   slidersEl.style.opacity = settings.enabled ? '1' : '0.4';
 
+  // Dragging a slider fires 'input' continuously; rebuilding the whole
+  // waveform on every tick is needless work mid-drag, so debounce it.
+  let applyTimer = null;
   function apply() {
     const next = {
       enabled: enabledEl.checked,
@@ -144,7 +147,8 @@ function initWaveform() {
     };
     saveWaveSettings(next);
     slidersEl.style.opacity = next.enabled ? '1' : '0.4';
-    startWaveform();
+    clearTimeout(applyTimer);
+    applyTimer = setTimeout(startWaveform, 100);
   }
 
   enabledEl.oninput = apply;

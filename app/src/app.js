@@ -3,37 +3,49 @@ import './live-update.js';
 
 const _tabLoaded = {};
 let curTab = 'home';
+let navGeneration = 0; // bumped on every navigate(), so a slow load that's since been left can't clobber wherever the user is now
 
 const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games']);
 
-async function ensureTab(tab) {
-  if (tab === 'home') return;
+// Loads/refreshes a tab's content after it's already visible, so switching to
+// it is never blocked on the fetch, the script import or its own refresh.
+async function loadTab(tab, target, token) {
   if (!_tabLoaded[tab]) {
+    target.innerHTML = '<div class="empty-state">Loading…</div>';
     const res = await fetch('/' + tab + '/view.html');
-    document.getElementById('view-' + tab).innerHTML = await res.text();
+    const html = await res.text();
+    if (token !== navGeneration) return;
+    target.innerHTML = html;
     _tabLoaded[tab] = true;
     const mod = await import('/' + tab + '/script.js');
+    if (token !== navGeneration) return;
     if (mod.init) await mod.init();
     return;
   }
   if (LIVE_TABS.has(tab)) {
     const mod = await import('/' + tab + '/script.js');
+    if (token !== navGeneration) return;
     if (mod.onShow) await mod.onShow();
   }
 }
 
-window.navigate = async function navigate(tab) {
+window.navigate = function navigate(tab) {
   if (tab === curTab) return;
-  await ensureTab(tab);
+  const target = document.getElementById('view-' + tab);
+  if (!target) return;
 
   document.getElementById('view-' + curTab)?.classList.remove('v-on');
-  document.getElementById('view-' + tab)?.classList.add('v-on');
+  target.classList.add('v-on');
   curTab = tab;
   try { localStorage.setItem('rechargeCurrentTab', tab); } catch {}
 
   document.getElementById('crumb-bar').hidden = tab === 'home';
 
-  if (tab === 'home') refreshInstallStatus({ log: false });
+  if (tab === 'home') {
+    refreshInstallStatus({ log: false });
+    return;
+  }
+  loadTab(tab, target, ++navGeneration);
 };
 
 window.goHome = () => window.navigate('home');
