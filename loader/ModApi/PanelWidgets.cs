@@ -208,7 +208,11 @@ namespace Recharge.ModApi
             return img;
         }
 
-        public static TMP_InputField CreateInputField(Transform parent, TMP_FontAsset font, Vector2 pos, Vector2 size, string placeholder, float fontSize = 18f)
+        // Kept as its own overload: mods built before fontSize existed bind to this exact signature (removing it throws MissingMethodException at load).
+        public static TMP_InputField CreateInputField(Transform parent, TMP_FontAsset font, Vector2 pos, Vector2 size, string placeholder)
+            => CreateInputField(parent, font, pos, size, placeholder, 18f);
+
+        public static TMP_InputField CreateInputField(Transform parent, TMP_FontAsset font, Vector2 pos, Vector2 size, string placeholder, float fontSize)
         {
             var go = new GameObject("InputField", typeof(RectTransform));
             go.transform.SetParent(parent, false);

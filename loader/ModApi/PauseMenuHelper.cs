@@ -67,6 +67,37 @@ namespace Recharge.ModApi
             menu != null && MenuReflection.MainBit(menu) != null && MenuReflection.SettingsBit(menu) != null;
 
         public static void SetButtonLabel(GameObject buttonGo, string text) => MenuUiUtil.SetButtonLabel(buttonGo, text);
+
+        /// <summary>
+        /// Clones a vanilla button (e.g. MainBit(menu)'s "Settings") as a mod
+        /// button: localization stripped and its label owned by a
+        /// <see cref="ModLabel"/> (so it can't revert to the template's text),
+        /// the template's click wiring dropped, and clicks routed only to
+        /// <paramref name="onClick"/>. Label formatting is left as the template's.
+        /// </summary>
+        public static GameObject CloneButton(GameObject template, Transform parent, string name, string label, Vector2 pos, Vector2 size, Action onClick = null)
+        {
+            if (template == null) return null;
+            var go = UnityEngine.Object.Instantiate(template, parent);
+            go.name = name;
+            go.SetActive(true);
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = pos;
+            rt.sizeDelta = size;
+            ModLabel.StripLocalizers(go);
+            ModLabel.ForButton(go, label);
+            SetButtonAction(go, onClick);
+            return go;
+        }
+
+        /// <summary>Replaces everything a button does on click (including wiring cloned from its template) with <paramref name="onClick"/>, or nothing if null.</summary>
+        public static void SetButtonAction(GameObject buttonGo, Action onClick)
+        {
+            var btn = buttonGo != null ? buttonGo.GetComponent<UnityEngine.UI.Button>() : null;
+            if (btn == null) return;
+            btn.onClick = new UnityEngine.UI.Button.ButtonClickedEvent();
+            if (onClick != null) btn.onClick.AddListener(() => onClick());
+        }
         public static void CopyButtonTextColor(GameObject sourceButtonGo, GameObject targetButtonGo) => MenuUiUtil.CopyButtonTextColor(sourceButtonGo, targetButtonGo);
         public static void ScaleButtonFontSize(GameObject buttonGo, float multiplier) => MenuUiUtil.ScaleButtonFontSize(buttonGo, multiplier);
         public static void SetButtonTextColor(GameObject buttonGo, Color color) => MenuUiUtil.SetButtonTextColor(buttonGo, color);

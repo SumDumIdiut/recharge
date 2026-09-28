@@ -78,10 +78,7 @@ namespace Recharge.ModApi
 
             if (title != null)
             {
-                var titleTmp = title.GetComponent<TMP_Text>();
-                if (titleTmp != null) titleTmp.text = label;
-                var loc = title.GetComponent<UnityEngine.Localization.Components.LocalizeStringEvent>();
-                if (loc != null) Object.DestroyImmediate(loc);
+                ModLabel.Attach(title.GetComponent<TMP_Text>(), label);
 
                 var closeBtn = title.Find("Close");
                 if (closeBtn != null)
