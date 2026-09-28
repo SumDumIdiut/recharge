@@ -147,7 +147,7 @@ body {
 .home-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .home-title-left { display: flex; align-items: center; gap: 14px; }
 .home-logo { width: 140px; height: 140px; display: block; }
-.home-title { font-size: 52px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
+.home-title { font-size: 76px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
 
 .home-account-badge {
   background: none;
