@@ -145,6 +145,7 @@ body {
 
 .home-header { margin-bottom: 34px; }
 .home-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.home-title-right { display: flex; align-items: center; gap: 18px; }
 .home-title-left { display: flex; align-items: center; gap: 14px; }
 .home-logo { width: 140px; height: 140px; display: block; }
 .home-title { font-size: 76px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
@@ -175,7 +176,7 @@ body {
 .home-panel-title { font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
 .home-install-list { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; }
 
-.home-patreon-link { display: flex; justify-content: center; margin-top: 14px; color: var(--text-dim); transition: color 0.15s; }
+.home-patreon-link { display: flex; align-items: center; color: var(--text-dim); transition: color 0.15s; }
 .home-patreon-link svg { width: 26px; height: 26px; }
 .home-patreon-link:hover { color: #ff424d; }
 .home-install-row {
