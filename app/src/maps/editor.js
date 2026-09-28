@@ -111,7 +111,7 @@ function saveDraft() {
   draft.removedVines = [...removedVines];
   draft.removedObjects = [...removedObjects];
   draft.removedScene = [...removedScene];
-  const vineSig = [...removedVines].sort().join(';') + '|' + [...removed].sort().join(';') + '|' + [...removedScene].sort().join(';');
+  const vineSig = [...removedVines].sort().join(';') + '|' + [...removed].sort().join(';') + '|' + [...removedScene].sort().join(';') + '|' + JSON.stringify(draft.baseEdits || {});
   if (vineSig !== lastVineSig) { lastVineSig = vineSig; baseVersion++; artCache.clear(); }
   draft.removed = [...removed];
   try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {}
@@ -287,8 +287,8 @@ function trueSpikeDef() {
   const pts = (d?.shape || [[[13, 3], [-13, 3], [-13, -16], [13, -16]]]).flat();
   const x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
   const y0 = Math.min(...pts.map((p) => p[1])), y1 = Math.max(...pts.map((p) => p[1]));
-  const cx = (x0 + x1) / 2, w = x1 - x0, h = y1 - y0;
-  const box = [cx - w, y0, cx + w, y0 + 2 * h];
+  const cx = (x0 + x1) / 2, h = y1 - y0, half = Math.max(4, (x1 - x0) / 2 - 1);
+  const box = [cx - half, y0, cx + half, y0 + 2 * h];
   return { tile: t.tile, box, shape: [[[box[2], box[3]], [box[0], box[3]], [box[0], box[1]], [box[2], box[1]]]] };
 }
 function trueSpikeJson(sp, cx, cy, at) {
@@ -296,8 +296,7 @@ function trueSpikeJson(sp, cx, cy, at) {
   return { type: 'trueSpike', tileName: d.tile, ...at, rotation: spikeTurn(sp, cx, cy) * 90, color: c, hitbox: d.box };
 }
 const tintedTiles = new Map();
-function drawTrueSpike(cx, cy, q) {
-  if (!artReady()) return drawSpike(cx, cy, q, COLORS.true);
+function trueSpikeCanvas() {
   const d = trueSpikeDef(), sprite = base.art.tiles[d.tile];
   let cv = tintedTiles.get(sprite);
   if (!cv) {
@@ -306,12 +305,18 @@ function drawTrueSpike(cx, cy, q) {
     cv.width = w; cv.height = h;
     const g = cv.getContext('2d');
     g.drawImage(atlasImg, sx, sy, w, h, 0, 0, w, h);
-    g.globalCompositeOperation = 'source-atop';
+    g.globalCompositeOperation = 'multiply';
     g.fillStyle = COLORS.true;
-    g.globalAlpha = 0.7;
     g.fillRect(0, 0, w, h);
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(atlasImg, sx, sy, w, h, 0, 0, w, h);
     tintedTiles.set(sprite, cv);
   }
+  return cv;
+}
+function drawTrueSpike(cx, cy, q) {
+  if (!artReady()) return drawSpike(cx, cy, q, COLORS.true);
+  const d = trueSpikeDef(), cv = trueSpikeCanvas();
   const wc = cellWorld(cx, cy), c = toScreen(wc.x + CELL / 2, wc.y + CELL / 2), m = rotMatrix(q), px = cam.scale, w = cv.width, h = cv.height;
   ctx.save();
   ctx.setTransform(px * m[0], -px * m[2], -px * m[1], px * m[3], c.x + px * (-m[0] * w / 2 + m[1] * h / 2), c.y + px * (m[2] * w / 2 - m[3] * h / 2));
@@ -437,7 +442,7 @@ function categoryItems(cat) {
       { tool: 'spike', label: 'Spike', group: 'Spikes', thumb: { art: spikeTile('spike', 0).tile } },
       { tool: 'blueSpike', label: 'Blue spike', group: 'Spikes', thumb: { art: spikeTile('blue', 0).tile } },
       { tool: 'orangeSpike', label: 'Orange spike', group: 'Spikes', thumb: { art: spikeTile('orange', 0).tile } },
-      { tool: 'trueSpike', label: 'True spike', group: 'Spikes', thumb: { color: COLORS.true } },
+      { tool: 'trueSpike', label: 'True spike', group: 'Spikes', thumb: { trueSpike: true, color: COLORS.true } },
       ...vineSprites().filter((v) => base.catalog?.vineNames?.[v] !== null).map((v) => ({ tool: 'vine', vine: v, group: 'Thorn vines', label: base.catalog?.vineNames?.[v] || prettySprite(v), thumb: { img: '/maps/vines/' + encodeURIComponent(v) + '.png' } })),
     ];
     case 'objects':
@@ -526,6 +531,7 @@ function thumbHtml(th, size = 32) {
   else if (th.sprite != null && base?.art) inner = sheet(base.art.atlas, atlasImg, base.art.sprites[th.sprite]);
   else if (th.scene != null && base?.scene) inner = sheet(base.scene.atlas, sceneImg, base.scene.sprites[th.scene]);
   else if (th.img) inner = `<img src="${th.img}" alt="" style="max-width:${size}px;max-height:${size}px">`;
+  else if (th.trueSpike && artReady()) { const url = (trueSpikeCanvas.url ||= trueSpikeCanvas().toDataURL()); inner = `<img src="${url}" alt="" style="width:${size}px;height:${size}px;image-rendering:pixelated">`; }
   else if (th.arrow && base) { const url = arrowThumb(); if (url) inner = `<img src="${url}" alt="" style="max-width:${size}px;max-height:${size}px;image-rendering:pixelated">`; }
   else if (th.stamp != null && base) { const url = stampThumb(th.stamp); if (url) inner = `<img src="${url}" alt="" style="max-width:${size}px;max-height:${size}px;image-rendering:pixelated">`; }
   if (!inner) inner = `<span class="mm-thumb-swatch" style="background:${th.color || '#666'}"></span>`;
@@ -699,7 +705,7 @@ function drawPlacedObject(o, alpha = 1) {
     }
     ctx.restore();
   }
-  if (item.upgradeBox) drawUpgradeLabel(o);
+  if (item.upgradeBox) drawBoxTexts(o, alpha);
   if (animated && !animTimer) animTimer = setTimeout(() => { animTimer = 0; requestDraw(); }, 60);
   if (!parts.length) {
     const b = item.box || [-50, -50, 50, 50];
@@ -915,6 +921,7 @@ function tileAt(wx, wy) {
   return best;
 }
 
+let spikePlaceTurn = null;
 let placeRot = 0;
 let placeFlip = false;
 let hoverWorld = null;
@@ -1173,6 +1180,16 @@ function placementCfg(item) {
 const PLACING = ['object', 'decor', 'stamp', 'vine'];
 function turnSomething(dir, flip = false) {
   let target = tool === 'select' ? selection : null;
+  if (SPIKE_KIND[tool] && !flip) {
+    const w = hover && cellWorld(hover.cx, hover.cy), under = w && itemAt(w.x + CELL / 2, w.y + CELL / 2);
+    if (!under || under.kind !== 'cell' || !spikes.has(under.k)) {
+      const order = [null, 0, 1, 2, 3], i = order.indexOf(spikePlaceTurn);
+      spikePlaceTurn = order[(i + (dir < 0 ? order.length - 1 : 1)) % order.length];
+      flash(spikePlaceTurn === null ? 'Spikes: seat on the surface they touch' : `Spikes: always ${['up', 'left', 'down', 'right'][spikePlaceTurn]}`);
+      requestDraw();
+      return;
+    }
+  }
   if (!target && PLACING.includes(tool)) {
     if (flip) placeFlip = !placeFlip;
     else placeRot = (placeRot + dir + 4) & 3;
@@ -1393,6 +1410,7 @@ const UPGRADE_KINDS = [
   { id: 'doubleJump', label: 'Double jump', multi: true },
   { id: 'wallJump', label: 'Wall jump' },
   { id: 'blockSwap', label: 'Block swap' },
+  { id: 'omniDash', label: 'Omni dash' },
   { id: 'zipMovers', label: 'Zip movers' },
   { id: 'refreshers', label: 'Refreshers' },
   { id: 'clones', label: 'Clones', multi: true, local: true },
@@ -1426,6 +1444,84 @@ function shortNumber(v) {
   let i = -1;
   while (Math.abs(v) >= 1000 && i < units.length - 1) { v /= 1000; i++; }
   return (Math.round(v * 10) / 10) + units[i];
+}
+
+const BOX_TEXT = {
+  dash: { name: '+1 Dash' },
+  doubleJump: { name: '+1 midair jump' },
+  wallJump: { name: 'Unlock wall jump' },
+  blockSwap: { name: 'Activate orange blocks, Deactivate blue blocks' },
+  omniDash: { name: '-1 Midair jump.\n\nDash in any direction' },
+  zipMovers: { name: 'Activate zip movers' },
+  refreshers: { name: 'Enable Jump and Dash refresh orbs' },
+  clones: { name: '0 Clones', effect: '[+1 Per use]' },
+  baseReward: { name: '1x base reward', effect: '[+1x  Per use]' },
+  cloneMult: { name: '0.1x clone reward multiplier', effect: '[+0.1x  Per use]' },
+  fastClone: { name: '5% clone speed increase chance', effect: '[+5%  Per use]' },
+  bigClone: { name: '5% clone size increase chance', effect: '[+5%  Per use]' },
+};
+const CURRENCY_MARK = { Cash: 'w', GreenPower: 'gp', AtomicPower: 'np', CloneDust: 'cd', RedPower: 'rp', BluePower: 'bp' };
+const CURRENCY_COLOUR = { Cash: '#ff6a00', GreenPower: '#00dd5d', AtomicPower: '#9654f0', CloneDust: '#b3905e', RedPower: '#db5246', BluePower: '#9654f0' };
+function gameCost(v, currency) {
+  const mark = CURRENCY_MARK[currency] ?? '';
+  const two = (n) => (Math.round(n * 100) / 100).toFixed(2);
+  if (v >= 1e18) return v.toExponential(2).replace('e+', 'e') + mark;
+  if (v / 1e15 > 1) return two(v / 1e15) + 'P' + mark;
+  for (const [d, u] of [[1e12, 'T'], [1e9, 'G'], [1e6, 'M'], [1e3, 'K']]) if (v / d >= 1) return two(v / d) + u + mark;
+  if (v > 0) return (currency === 'AtomicPower' ? v.toFixed(2) : String(Math.round(v))) + mark;
+  return '0' + mark;
+}
+const BOX_NAME_T = { f: 2, dx: 0, dy: -44.6, r: 0, w: 127.5, h: 127.5, k: 1.5, size: 8.55, auto: [8, 36], ha: 2, va: 256, wrap: 1, ls: 0, cs: 0, m: [0, 3.21, 0, 17.78], c: '#d9dad9', a: 1 };
+const BOX_COST_T = { f: 1, dx: 2.6, dy: 43, r: 0, w: 100.5, h: 37.5, k: 1.5, size: 11.5, auto: [1, 21], ha: 4, va: 512, wrap: 1, ls: 0, cs: 0, m: [1.3, 0, 0, 0], a: 1 };
+const BOX_EFFECT_T = { f: 2, dx: 0, dy: -102, r: 0, w: 135, h: 45, k: 1.5, size: 9.85, auto: [5, 36], ha: 2, va: 1024, wrap: 1, ls: 0, cs: 0, m: [0, 0, 0, 16.17], c: '#d9dad9', a: 1 };
+function boxTexts(o) {
+  const u = upgradeConfig(o), text = BOX_TEXT[u.kind] || { name: upgradeLabel(u) };
+  const out = [
+    { ...BOX_COST_T, t: gameCost(upgradePrices(u, 1)[0], u.currency), c: CURRENCY_COLOUR[u.currency] || '#ffffff' },
+    { ...BOX_NAME_T, t: u.label || text.name },
+  ];
+  if (text.effect) out.push({ ...BOX_EFFECT_T, t: text.effect });
+  return out;
+}
+const bakedTexts = new Map();
+function drawTextAt(t, x, y) {
+  const k = [t.t, t.f, t.c, t.w, t.h, t.size, t.k].join('|');
+  let e = bakedTexts.get(k);
+  if (!e) {
+    e = { t: { ...t } };
+    e.baked = bakeText(e.t);
+    bakedTexts.set(k, e);
+    if (bakedTexts.size > 400) bakedTexts.delete(bakedTexts.keys().next().value);
+  }
+  if (!e.baked) return;
+  const c = toScreen(x, y);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, c.x, c.y);
+  ctx.scale(cam.scale / e.baked.px, cam.scale / e.baked.px);
+  ctx.globalAlpha *= t.a ?? 1;
+  ctx.drawImage(e.baked.canvas, e.baked.x0 * e.baked.px, -e.baked.top * e.baked.px);
+  ctx.restore();
+}
+function fontsReady() {
+  const fonts = base?.scene?.fonts || [];
+  return fonts.length > 0 && fonts.every((f, i) => !f || fontImage(i).complete);
+}
+function drawBoxTexts(o, alpha) {
+  if (!fontsReady()) return drawUpgradeLabel(o);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (const t of boxTexts(o)) drawTextAt(t, o.x + t.dx, o.y + t.dy);
+  ctx.restore();
+}
+function editedBoxText(t) {
+  for (const [id, e] of Object.entries(draft.baseEdits || {})) {
+    const o = baseObjects.find((x) => x.id === id);
+    if (!o || Math.abs(t.x - o.x) > o.w / 2 || Math.abs(t.y - o.y) > o.h / 2) continue;
+    const u = baseUpgradeConfig(o);
+    if (t.f === 1) return { ...t, t: gameCost(upgradePrices(u, 1)[0], u.currency), c: CURRENCY_COLOUR[u.currency] || t.c };
+    if (e.label && !t.t.startsWith('[')) return { ...t, t: e.label };
+  }
+  return null;
 }
 
 function drawUpgradeLabel(o) {
@@ -1654,6 +1750,7 @@ function applyConfig(inp) {
 
 function applyUpgradeConfig(field, raw) {
   const o = placed[selection.index], u = { ...(o.cfg?.upgrade || {}) };
+  if ((field === 'kind' || field === 'currency') && !raw.trim()) return;
   if (field === 'kind' || field === 'currency' || field === 'label') u[field] = raw.trim();
   else if (field === 'prices') u.prices = raw.split(/[\s,;]+/).map(Number).filter((n) => Number.isFinite(n) && n >= 0);
   else {
@@ -1819,6 +1916,8 @@ function neighbourTurn(cx, cy) {
 }
 
 function autoSpikeTurn(cx, cy) {
+  for (const [dx, dy] of [[1, 0], [-1, 0]]) { const n = neighbourTurn(cx + dx, cy + dy); if (n === 0 || n === 2) return n; }
+  for (const [dx, dy] of [[0, 1], [0, -1]]) { const n = neighbourTurn(cx + dx, cy + dy); if (n === 1 || n === 3) return n; }
   const options = seats(cx, cy);
   if (!options.length) return 0;
   for (const q of options) {
@@ -1887,8 +1986,7 @@ function cloneConfig(o, item) {
   const cfg = o.cfg || {}, out = {};
   if (item.upgradeBox) {
     const u = upgradeConfig(o);
-    const local = UPGRADE_KINDS.find((k) => k.id === u.kind)?.local;
-    return { ...(courseById(o.course) ? { course: o.course } : {}), upgrade: { id: o.uid || 'box' + Math.round(o.x) + '_' + Math.round(o.y), kind: u.kind, label: local ? u.label : upgradeLabel(u), currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } };
+    return { ...(courseById(o.course) ? { course: o.course } : {}), upgrade: { id: o.uid || 'box' + Math.round(o.x) + '_' + Math.round(o.y), kind: u.kind, label: u.label || (u.kind === 'omniDash' ? BOX_TEXT.omniDash.name : ''), currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } };
   }
   if (item.worldScale) {
     const S = item.worldScale * (cfg.scale || 1);
@@ -2805,6 +2903,8 @@ function drawSceneText(tl, br) {
     if (t.x + reach < tl.x || t.x - reach > br.x || t.y + reach < br.y || t.y - reach > tl.y) continue;
     if (!sizeCache.has(t)) sizeCache.set(t, textSize(t));
     if (sizeCache.get(t) * t.k * cam.scale < 2.5) continue;
+    const edited = Object.keys(draft.baseEdits || {}).length ? editedBoxText(t) : null;
+    if (edited) { ctx.save(); drawTextAt(edited, t.x, t.y); ctx.restore(); continue; }
     let baked = textCache.get(t);
     if (baked === undefined) { baked = bakeText(t); textCache.set(t, baked); }
     if (!baked) continue;
@@ -3099,7 +3199,7 @@ function failWorkers() {
 }
 
 function workerState() {
-  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], version: baseVersion };
+  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], baseEdits: draft.baseEdits || {}, version: baseVersion };
 }
 
 function onWorkerMessage(worker, m) {
@@ -3159,6 +3259,7 @@ export function workerSetState(state) {
   removed = new Set(state.removed);
   removedVines = new Set(state.removedVines);
   removedScene = new Set(state.removedScene || []);
+  draft.baseEdits = state.baseEdits || {};
   if (!layer || draft.baseState !== state.baseState) {
     draft.baseState = state.baseState;
     applyBaseState();
@@ -3321,8 +3422,8 @@ function draw() {
     const { cx, cy } = hover;
     ctx.globalAlpha = 0.5;
     if (BLOCK_KIND[tool]) { ctx.fillStyle = COLORS[BLOCK_KIND[tool]]; const r = cellRect(cx, cy); ctx.fillRect(r.x, r.y, r.w, r.h); }
-    else if (tool === 'trueSpike') { ctx.globalAlpha = 0.7; drawTrueSpike(cx, cy, autoSpikeTurn(cx, cy)); }
-    else if (SPIKE_KIND[tool]) drawSpike(cx, cy, autoSpikeTurn(cx, cy), COLORS[SPIKE_KIND[tool]]);
+    else if (tool === 'trueSpike') { ctx.globalAlpha = 0.7; drawTrueSpike(cx, cy, spikePlaceTurn ?? autoSpikeTurn(cx, cy)); }
+    else if (SPIKE_KIND[tool]) drawSpike(cx, cy, spikePlaceTurn ?? autoSpikeTurn(cx, cy), COLORS[SPIKE_KIND[tool]]);
     else if (tool === 'vine' && base) drawVine(cx, cy, draft.vineSprite, rotMatrix(placeRot));
     else if (tool === 'moss' && base) { const w = cellWorld(cx, cy), c = mossCenter(mossKeyAt(w.x + CELL / 2, w.y + CELL / 2)), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); }
     else if (tool === 'tile' && base && draft.pick.tile) { const w = cellWorld(cx, cy); const tk = tileKeyAt(draft.pick.tileLayer, w.x + CELL / 2, w.y + CELL / 2); ctx.globalAlpha = 1; drawPlacedTile({ layer: draft.pick.tileLayer, tile: draft.pick.tile, q: 0 }, tk, 0.6); }
@@ -3648,7 +3749,7 @@ function applyTool(cx, cy) {
   } else if (SPIKE_KIND[tool]) {
     if (spikes.get(k)?.c === SPIKE_KIND[tool]) return false;
     blocks.delete(k);
-    spikes.set(k, { c: SPIKE_KIND[tool] });
+    spikes.set(k, spikePlaceTurn === null ? { c: SPIKE_KIND[tool] } : { c: SPIKE_KIND[tool], q: spikePlaceTurn });
   } else if (tool === 'vine') {
     if (!base || vines.get(k)?.s === draft.vineSprite) return false;
     vines.set(k, { s: draft.vineSprite, q: placeRot });
