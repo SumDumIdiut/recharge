@@ -56,12 +56,10 @@ function applySkinThumb(el, src) {
   const probe = new Image();
   probe.onload = () => {
     const cellH = probe.naturalHeight / 6;
-    const boxH = el.clientHeight;
-    const boxW = el.clientWidth;
-    const scale = boxH / cellH;
+    const scale = el.clientHeight / cellH;
     el.style.backgroundImage = `url("${src}")`;
     el.style.backgroundSize = `${probe.naturalWidth * scale}px ${probe.naturalHeight * scale}px`;
-    el.style.backgroundPosition = `${Math.max(0, (boxW - boxH) / 2)}px 0px`;
+    el.style.backgroundPosition = '0 0';
   };
   probe.onerror = () => el.remove();
   probe.src = src;
