@@ -79,7 +79,7 @@ function render(entries) {
       const img = !e.image
         ? ''
         : isSkin
-          ? `<div class="news-img news-img-crop" data-skin-src="${escapeHtml(e.image)}"></div>`
+          ? `<div class="news-img-crop" data-skin-src="${escapeHtml(e.image)}"></div>`
           : `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />`;
       return `
       <div class="news-block" ${e.tab ? `onclick="navigate('${e.tab}')"` : ''}>
