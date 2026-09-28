@@ -19,27 +19,27 @@
   <div id="skins-detail" style="display:none;"></div>
 </main>
 
-<div class="mods-modal-overlay" id="skins-upload-overlay" hidden>
-  <div class="mods-modal">
-    <div class="mods-modal-title">Upload a Skin</div>
-    <div class="mods-modal-body">
-      <label class="skins-upload-label">
+<div class="modal-overlay" id="skins-upload-overlay" hidden>
+  <div class="modal">
+    <div class="modal-title">Upload a Skin</div>
+    <div class="modal-body">
+      <label class="form-field">
         Skin folder
-        <div class="skins-upload-browse-row">
-          <span class="skins-upload-browse-path" id="skins-upload-path">No folder chosen</span>
+        <div class="form-browse-row">
+          <span class="form-browse-path" id="skins-upload-path">No folder chosen</span>
           <button class="btn" id="skins-upload-browse-btn" type="button">Browse…</button>
         </div>
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Name
-        <input class="skins-upload-input" id="skins-upload-name" type="text" placeholder="e.g. Googly Eyes" />
+        <input class="form-input" id="skins-upload-name" type="text" placeholder="e.g. Googly Eyes" />
       </label>
-      <label class="skins-upload-label">
+      <label class="form-field">
         Description
-        <textarea class="skins-upload-input" id="skins-upload-description" rows="3" style="resize: vertical; font: inherit;" placeholder="Optional"></textarea>
+        <textarea class="form-input" id="skins-upload-description" rows="3" style="resize: vertical; font: inherit;" placeholder="Optional"></textarea>
       </label>
     </div>
-    <div class="mods-modal-actions">
+    <div class="modal-actions">
       <button class="btn" id="skins-upload-cancel">Cancel</button>
       <button class="btn btn-primary" id="skins-upload-confirm">Upload</button>
     </div>

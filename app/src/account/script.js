@@ -1,16 +1,10 @@
 import { getToken, getUsername, isAdmin, clearSession, isLoggedIn } from '../auth.js';
+import { escapeHtml, thumb, openModal, closeModal, ICON_TRASH, ICON_EDIT } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
 let myUploads = [];
 let editingId = null;
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h10l1-13"/></svg>';
-const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 
 function galleryUrl(row) {
   if (!row.gallery?.length) return null;
@@ -27,20 +21,17 @@ function renderUploads() {
   list.innerHTML = myUploads
     .map((row) => {
       const img = galleryUrl(row);
-      const thumb = img
-        ? `<img class="browse-card-thumb" src="${escapeHtml(img)}" alt="" />`
-        : `<div class="browse-card-thumb browse-card-thumb-empty"></div>`;
       return `
     <div class="browse-card">
-      <div class="browse-card-media">${thumb}</div>
+      ${thumb(img)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(row.name)}</div>
         <div class="browse-card-meta">${escapeHtml(row.kind)} &middot; ${escapeHtml(row.author)}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="browse-card-icon-btn" title="Edit" onclick="window.__acctEdit('${escapeHtml(row.id)}')">${ICON_EDIT}</button>
-          <button class="browse-card-icon-btn" title="Delete" onclick="window.__acctDelete('${escapeHtml(row.id)}', '${escapeHtml(row.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Edit" onclick="window.__acctEdit('${escapeHtml(row.id)}')">${ICON_EDIT}</button>
+          <button class="icon-btn" title="Delete" onclick="window.__acctDelete('${escapeHtml(row.id)}', '${escapeHtml(row.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`;
@@ -68,11 +59,11 @@ window.__acctEdit = function (id) {
   document.getElementById('account-edit-name').value = row.name;
   document.getElementById('account-edit-author').value = row.author;
   document.getElementById('account-edit-description').value = row.description || '';
-  document.getElementById('account-edit-overlay').hidden = false;
+  openModal('account-edit-overlay');
 };
 
 function closeEditModal() {
-  document.getElementById('account-edit-overlay').hidden = true;
+  closeModal('account-edit-overlay');
   editingId = null;
 }
 
