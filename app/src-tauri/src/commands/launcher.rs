@@ -188,12 +188,18 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
 
     let beta = settings::update_channel(&app) == "beta";
     let api = if beta { RECENT_RELEASES_API } else { RELEASES_API };
+    // A transient DNS blip (EAI_AGAIN) shouldn't surface as a hard error on
+    // the very first retry - one retry after a short wait smooths that over.
     let mut response = match ureq::get(api).header("User-Agent", "Recharge").call() {
-        // No release has been published yet (only drafts, or none at all) -
-        // GitHub's "latest" endpoint 404s in that case. That's a normal
-        // state, not something worth surfacing as an error.
         Err(ureq::Error::StatusCode(404)) => return Ok(no_release_info()),
-        Err(e) => return Err(format!("couldn't reach GitHub: {e}")),
+        Err(_) => {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            match ureq::get(api).header("User-Agent", "Recharge").call() {
+                Err(ureq::Error::StatusCode(404)) => return Ok(no_release_info()),
+                Err(e) => return Err(format!("couldn't reach GitHub: {e}")),
+                Ok(r) => r,
+            }
+        }
         Ok(r) => r,
     };
 
