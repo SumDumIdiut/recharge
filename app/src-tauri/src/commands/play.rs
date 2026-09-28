@@ -140,6 +140,23 @@ pub fn is_game_running(app: AppHandle) -> bool {
     is_process_running(&exe.file_name())
 }
 
+// A cheap (non-cryptographic) content stamp - same FNV-1a used for the
+// loader's own source stamp in loader.rs. Good enough to answer "is this
+// byte-for-byte what I last wrote here", which is all this needs.
+fn fnv1a_file(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Some(format!("{hash:016x}"))
+}
+
+fn deployed_stamp_path(managed: &Path) -> PathBuf {
+    managed.join("Assembly-CSharp.deployed.stamp")
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     match (std::fs::metadata(a), std::fs::metadata(b)) {
         (Ok(ma), Ok(mb)) if ma.len() == mb.len() => {
@@ -160,21 +177,38 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
     let deployed = managed.join("Assembly-CSharp.dll");
     let original = managed.join("Assembly-CSharp.ORIGINAL.dll");
     let recharge = managed.join("Assembly-CSharp.RECHARGE.dll");
+    let stamp_path = deployed_stamp_path(&managed);
 
-    // The deployed assembly is always one of our two copies. If it's neither,
-    // Steam has replaced it with a newer game build - and the backups we hold
-    // belong to the old build. Copying one back over it would pair an old
-    // assembly with the new build's data files, which Unity reports as a
-    // "corrupted level0" crash even when launched straight from Steam. So keep
-    // Steam's file as the new original and drop the now-stale modded build.
-    if deployed.is_file()
-        && (original.is_file() || recharge.is_file())
-        && !(original.is_file() && same_file(&deployed, &original))
-        && !(recharge.is_file() && same_file(&deployed, &recharge))
-    {
+    // The stamp records the hash of whatever *we* last wrote to $deployed.
+    // Rebuilding the loader produces a new Assembly-CSharp.RECHARGE.dll on
+    // disk with different bytes even from an identical source (compiler
+    // output isn't guaranteed byte-stable run to run) - comparing $deployed
+    // against recharge.dll's *current* bytes would then wrongly conclude
+    // Steam replaced the game and overwrite the real backup with a stale
+    // modded build. Comparing against our own stamp instead isn't affected
+    // by a rebuild that never touched $deployed. No stamp yet (an install
+    // from before this existed) falls back to the old direct comparison,
+    // so upgrading to this doesn't itself look like a fresh Steam update.
+    let matches_our_stamp = deployed.is_file()
+        && match read_stamp(&stamp_path) {
+            Some(stamp) => fnv1a_file(&deployed).as_deref() == Some(stamp.as_str()),
+            None => {
+                (original.is_file() && same_file(&deployed, &original))
+                    || (recharge.is_file() && same_file(&deployed, &recharge))
+            }
+        };
+
+    if deployed.is_file() && (original.is_file() || recharge.is_file()) && !matches_our_stamp {
+        // Steam has replaced the deployed assembly since we last touched it -
+        // the backups we hold belong to the old build. Copying one back over
+        // it would pair an old assembly with the new build's data files,
+        // which Unity reports as a "corrupted level0" crash even launched
+        // straight from Steam. So keep Steam's file as the new original and
+        // drop the now-stale modded build.
         std::fs::copy(&deployed, &original)
             .map_err(|e| format!("Couldn't keep the game's updated assembly: {e}"))?;
         let _ = std::fs::remove_file(&recharge);
+        let _ = std::fs::remove_file(&stamp_path);
     }
 
     let source = if modded { &recharge } else { &original };
@@ -191,8 +225,15 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
                 if modded { "modded" } else { "vanilla" }
             )
         })?;
+        if let Some(stamp) = fnv1a_file(&deployed) {
+            let _ = std::fs::write(&stamp_path, stamp);
+        }
     }
     Ok(())
+}
+
+fn read_stamp(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
 #[derive(serde::Serialize)]
