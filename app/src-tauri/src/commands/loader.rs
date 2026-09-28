@@ -193,6 +193,8 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
 
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);
+    let log_file = std::env::temp_dir().join(format!("recharge-install-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&log_file);
 
     // Navigator (recharge-maps) is baked into every install, not an optional
     // mod - always pulled and built here (following the Stable/Beta channel,
@@ -212,9 +214,15 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     if let Some(appid) = &appid {
         cmd.args(["-SteamAppId", appid]);
     }
+    // A failure before the script's first Set-Status call (a parse error, an
+    // early crash in the SDK/ilspycmd fetch) would otherwise leave the user
+    // with nothing but a bare exit code - capture the script's own output so
+    // there's something to show them.
+    let log_writer = std::fs::File::create(&log_file).map_err(|e| format!("Couldn't create install log: {e}"))?;
+    let log_writer_err = log_writer.try_clone().map_err(|e| format!("Couldn't create install log: {e}"))?;
     cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(log_writer))
+        .stderr(Stdio::from(log_writer_err));
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -239,12 +247,22 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     let _ = std::fs::remove_file(&status_file);
 
     if !exit_status.success() {
-        return Err(if last_status.is_empty() {
-            format!("Install failed (exit {:?})", exit_status.code())
+        let err = if last_status.is_empty() {
+            let tail = std::fs::read_to_string(&log_file)
+                .ok()
+                .map(|s| s.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"))
+                .filter(|s| !s.trim().is_empty());
+            match tail {
+                Some(tail) => format!("Install failed (exit {:?}):\n{tail}", exit_status.code()),
+                None => format!("Install failed (exit {:?}) with no output.", exit_status.code()),
+            }
         } else {
             last_status
-        });
+        };
+        let _ = std::fs::remove_file(&log_file);
+        return Err(err);
     }
+    let _ = std::fs::remove_file(&log_file);
 
     let managed = super::steam::managed_dir(std::path::Path::new(&game_path))
         .ok_or_else(|| "Install script exited cleanly but Managed folder is missing.".to_string())?;
