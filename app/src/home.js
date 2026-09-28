@@ -80,7 +80,9 @@ export function startWaveform() {
   svg.setAttribute('viewBox', `0 0 ${totalWidth * 2} ${svgHeight}`);
   polyline.setAttribute('points', allPoints.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
 
-  const lastScreenX = new Map(units.map((u) => [u, null]));
+  // Indexed in lockstep with units (a Map keyed by object was needless hashing
+  // overhead on every frame for what's just "the previous value at this slot").
+  const lastScreenX = new Array(units.length).fill(null);
   const start = performance.now();
 
   function frame(now) {
@@ -90,15 +92,16 @@ export function startWaveform() {
     polyline.style.transform = `translateX(${-offset}px)`;
 
     const tx = (banner.clientWidth || containerWidth) - 30;
-    for (const u of units) {
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
       const screenX = u.peakX - offset;
-      const prev = lastScreenX.get(u);
+      const prev = lastScreenX[i];
       if (prev != null && prev - screenX < 20 && prev > tx && screenX <= tx) {
         polyline.classList.remove('beat-single', 'beat-double', 'beat-sharp');
         void polyline.offsetWidth;
         polyline.classList.add('beat-' + u.shape);
       }
-      lastScreenX.set(u, screenX);
+      lastScreenX[i] = screenX;
     }
 
     requestAnimationFrame(frame);

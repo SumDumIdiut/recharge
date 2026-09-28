@@ -144,6 +144,7 @@ async function loadBase() {
   const res = await fetch('/maps/basemap.json');
   base = await res.json();
   applyBaseState();
+  startTileWorkers();
 }
 
 // The base map is the always-present layers plus whichever area-1 state is
@@ -543,8 +544,15 @@ function toWorld(sx, sy) {
   return { x: (sx - canvas.width / 2) / cam.scale + cam.x, y: (canvas.height / 2 - sy) / cam.scale + cam.y };
 }
 
+// The same module also runs in the tile workers (tile-worker.js), which have
+// no page: canvases there are OffscreenCanvases and nothing is scheduled.
+const IN_WORKER = typeof document === 'undefined';
+function makeCanvas() {
+  return IN_WORKER ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
+}
+
 function requestDraw() {
-  if (frameQueued) return;
+  if (IN_WORKER || frameQueued) return;
   frameQueued = true;
   requestAnimationFrame(() => { frameQueued = false; draw(); });
 }
@@ -585,12 +593,11 @@ function drawKillBox(cx, cy, box = [-16, -16, 16, 16], m = [1, 0, 0, 1]) {
 }
 
 // ---- real tile art (basemap.art + tiles.png) --------------------------------
-// Zoomed in, the base map is drawn from the game's own tile sprites. Each
+// The base map is drawn from the game's own tile sprites at every zoom. Each
 // layer's tile runs are indexed into 512-unit chunks, and chunks are baked
 // into cached canvases at a resolution matched to the zoom.
 
 const ART_CHUNK = 512;
-const ART_MIN_CELL_PX = 3; // below this, flat colours read better (and are fast)
 let atlasImg = null;
 let artIndex = null; // band -> chunk key -> [[layer, runIndex], ...] in draw order
 let spriteOrders = []; // distinct sorting orders of the scene sprites, ascending
@@ -664,7 +671,7 @@ function blitSprite(g, sprite, m, px, cxPx, cyPx) {
 
 function bakeChunk(lod, band, ccx, ccy) {
   const size = Math.max(1, Math.round(ART_CHUNK * lod));
-  const c = document.createElement('canvas');
+  const c = makeCanvas();
   c.width = c.height = size;
   const g = c.getContext('2d');
   const x0 = ccx * ART_CHUNK, yTop = (ccy + 1) * ART_CHUNK;
@@ -892,7 +899,7 @@ function tintedSprite(sprite, c) {
   let cv = tintCache.get(k);
   if (cv) return cv;
   const [sx, sy, w, h] = base.scene.sprites[sprite];
-  cv = document.createElement('canvas');
+  cv = makeCanvas();
   cv.width = w; cv.height = h;
   const g = cv.getContext('2d');
   g.drawImage(sceneImg, sx, sy, w, h, 0, 0, w, h);
@@ -964,7 +971,7 @@ function bakeGroup(g) {
     minX = Math.min(minX, x - r); maxX = Math.max(maxX, x + r); minY = Math.min(minY, y - r); maxY = Math.max(maxY, y + r);
   }
   const px = Math.min(2, 2048 / Math.max(maxX - minX, maxY - minY, 1));
-  const cv = document.createElement('canvas');
+  const cv = makeCanvas();
   cv.width = Math.ceil((maxX - minX) * px);
   cv.height = Math.ceil((maxY - minY) * px);
   const gx = cv.getContext('2d');
@@ -1002,7 +1009,7 @@ function drawSceneItems(W, H, items, from, to) {
     const p = items[i];
     if (p.group) { drawGroups([p], tl, br); continue; }
     if (p.x + p.reach < tl.x || p.x - p.reach > br.x || p.y + p.reach < br.y || p.y - p.reach > tl.y) continue;
-    if (p.live && staticRender) continue; // drawn live by drawLiveItems
+    if (p.live && staticRender && cam.scale >= LIVE_MIN_SCALE) continue; // drawn live by drawLiveItems
     let sprite = p.s;
     if (p.frames && !staticRender) { sprite = p.frames[Math.floor(now * p.fps + (p.ph || 0) * p.frames.length) % p.frames.length]; animated = true; }
     if (p.sc && !staticRender) animated = true;
@@ -1016,8 +1023,12 @@ function drawSceneItems(W, H, items, from, to) {
 // Animated scene sprites, drawn every frame over the cached level. In the
 // game solid tiles that sort above a sprite hide it, so each sorting order's
 // sprites go on a scratch layer that has those tiles' cells cut out first.
+// Zoomed out further than this, animated sprites are too small to see move:
+// they're baked into the tiles like everything else instead.
+const LIVE_MIN_SCALE = 0.25;
+
 function drawLiveItems(W, H) {
-  if (!sceneReady() || !sceneList) return;
+  if (!sceneReady() || !sceneList || cam.scale < LIVE_MIN_SCALE) return;
   const tl = toWorld(0, 0), br = toWorld(W, H);
   const visible = sceneList.items.filter((p) => p.live && !(p.x + p.reach < tl.x || p.x - p.reach > br.x || p.y + p.reach < br.y || p.y - p.reach > tl.y));
   if (!visible.length) return;
@@ -1099,6 +1110,7 @@ function drawSceneImages(tl, br) {
 const fontImages = [];
 function fontImage(i) {
   if (!fontImages[i]) {
+    if (IN_WORKER) return { complete: false }; // workers preload every font
     const img = new Image();
     img.onload = () => { textCache.clear(); invalidateBase(); };
     img.src = '/maps/' + base.scene.fonts[i].atlas;
@@ -1188,7 +1200,7 @@ function bakeText(t) {
   });
   if (!quads.length) return null;
   const px = Math.min(3, 1024 / Math.max(maxX - minX, maxY - minY, 1)); // canvas pixels per world unit
-  const cv = document.createElement('canvas');
+  const cv = makeCanvas();
   cv.width = Math.max(1, Math.ceil((maxX - minX) * px));
   cv.height = Math.max(1, Math.ceil((maxY - minY) * px));
   const g = cv.getContext('2d');
@@ -1241,6 +1253,7 @@ function drawZipPaths() {
 const vineImages = {};
 function vineImage(name) {
   if (!vineImages[name]) {
+    if (IN_WORKER) return { complete: false }; // workers preload the level's vines
     const img = new Image();
     img.onload = invalidateBase;
     img.src = '/maps/vines/' + encodeURIComponent(name) + '.png';
@@ -1353,22 +1366,56 @@ function renderBaseLayer(W, H, useArt) {
   if (useArt) drawSceneOverlays(W, H);
 }
 
-function renderTile(z, tx, ty) {
-  const s = Math.pow(2, z), T = TILE_PX / s;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = TILE_PX;
+// Renders the base map centred on world (x, y) at 'scale' into cv (its size).
+function renderRegion(cv, x, y, scale) {
   const saved = [canvas, ctx, cam];
   canvas = cv;
   ctx = cv.getContext('2d');
-  cam = { x: (tx + 0.5) * T, y: (ty + 0.5) * T, scale: s };
+  cam = { x, y, scale };
   staticRender = true;
   try {
-    renderBaseLayer(TILE_PX, TILE_PX, artReady() && s * CELL >= ART_MIN_CELL_PX);
+    renderBaseLayer(cv.width, cv.height, artReady());
   } finally {
     staticRender = false;
     [canvas, ctx, cam] = saved;
   }
+}
+
+function renderTile(z, tx, ty) {
+  const s = Math.pow(2, z), T = TILE_PX / s;
+  const cv = makeCanvas();
+  cv.width = cv.height = TILE_PX;
+  renderRegion(cv, (tx + 0.5) * T, (ty + 0.5) * T, s);
   return cv;
+}
+
+// Rendering on this thread (no tile workers): a zoomed-out tile holds
+// thousands of sprites, so it's rendered in pieces - one per step, a few
+// milliseconds each - and each frame does as many steps as its budget allows.
+const tileJobs = new Map(); // key -> { cv, g, n, next }
+let pieceCanvas = null;
+
+function tileJob(key, z) {
+  let job = tileJobs.get(key);
+  if (!job) {
+    const n = z >= -1 ? 1 : z >= -3 ? 2 : 4; // pieces per side
+    const cv = makeCanvas();
+    cv.width = cv.height = TILE_PX;
+    job = { cv, g: cv.getContext('2d'), n, next: 0 };
+    tileJobs.set(key, job);
+  }
+  return job;
+}
+
+// Renders the job's next piece; true once the tile is complete.
+function stepTileJob(job, z, tx, ty) {
+  const s = Math.pow(2, z), T = TILE_PX / s, size = TILE_PX / job.n;
+  const px = job.next % job.n, py = Math.floor(job.next / job.n); // py counts down from the top
+  if (!pieceCanvas) pieceCanvas = makeCanvas();
+  pieceCanvas.width = pieceCanvas.height = size; // also clears it
+  renderRegion(pieceCanvas, tx * T + ((px + 0.5) * T) / job.n, (ty + 1) * T - ((py + 0.5) * T) / job.n, s);
+  job.g.drawImage(pieceCanvas, px * size, py * size);
+  return ++job.next >= job.n * job.n;
 }
 
 // A coarser level's cached tile, as [canvas, sx, sy, sw, sh] covering tile (z, tx, ty).
@@ -1383,34 +1430,193 @@ function coarserTile(z, tx, ty) {
   return null;
 }
 
+// A finer level's cached tiles drawn into tile (z, tx, ty)'s screen rect -
+// right after zooming out, before the coarser tiles have arrived.
+function drawFromFiner(z, tx, ty, x0, y0, w, h) {
+  let any = false;
+  for (let dy = 0; dy < 2; dy++) {
+    for (let dx = 0; dx < 2; dx++) {
+      const c = tileCache.get(tileKey(z + 1, tx * 2 + dx, ty * 2 + dy));
+      if (!c) continue;
+      // Child row 1 is the upper half (world y up, screen y down).
+      ctx.drawImage(c, x0 + (dx * w) / 2, y0 + ((1 - dy) * h) / 2, w / 2, h / 2);
+      any = true;
+    }
+  }
+  return any;
+}
+
+function storeTile(key, tile) {
+  tileCache.set(key, tile);
+  while (tileCache.size > MAX_TILES) {
+    const oldest = tileCache.keys().next().value;
+    tileCache.get(oldest)?.close?.(); // ImageBitmaps hold GPU memory until closed
+    tileCache.delete(oldest);
+  }
+}
+
 function drawBaseTiles(W, H, useArt) {
   if (useArt) drawBackground(W, H);
   const z = lodFor(cam.scale), s = Math.pow(2, z), T = TILE_PX / s;
   const tl = toWorld(0, 0), br = toWorld(W, H);
   const tiles = [];
-  for (let ty = Math.floor(br.y / T); ty <= Math.floor(tl.y / T); ty++) {
-    for (let tx = Math.floor(tl.x / T); tx <= Math.floor(br.x / T); tx++) tiles.push([tx, ty]);
+  // The view plus a one-tile margin (fetched last) so panning finds them ready.
+  for (let ty = Math.floor(br.y / T) - 1; ty <= Math.floor(tl.y / T) + 1; ty++) {
+    for (let tx = Math.floor(tl.x / T) - 1; tx <= Math.floor(br.x / T) + 1; tx++) {
+      const visible = ty >= Math.floor(br.y / T) && ty <= Math.floor(tl.y / T) && tx >= Math.floor(tl.x / T) && tx <= Math.floor(br.x / T);
+      tiles.push([tx, ty, visible]);
+    }
   }
-  // Render missing tiles nearest the centre first.
-  tiles.sort((a, b) => Math.hypot((a[0] + 0.5) * T - cam.x, (a[1] + 0.5) * T - cam.y) - Math.hypot((b[0] + 0.5) * T - cam.x, (b[1] + 0.5) * T - cam.y));
+  // Missing tiles nearest the centre first, the margin after the view.
+  const dist = (t) => (t[2] ? 0 : 1e12) + Math.hypot((t[0] + 0.5) * T - cam.x, (t[1] + 0.5) * T - cam.y);
+  tiles.sort((a, b) => dist(a) - dist(b));
+  const workers = tileWorkersReady();
   const deadline = performance.now() + TILE_BUDGET_MS;
   let missing = false;
-  for (const [tx, ty] of tiles) {
+  for (const [tx, ty, visible] of tiles) {
     const key = tileKey(z, tx, ty);
     let c = cachedTile(key);
-    if (!c && performance.now() < deadline) {
-      c = renderTile(z, tx, ty);
-      tileCache.set(key, c);
-      while (tileCache.size > MAX_TILES) tileCache.delete(tileCache.keys().next().value);
+    let job = null;
+    if (!c) {
+      if (workers) requestTile(key, z, tx, ty);
+      else if (visible) {
+        job = tileJob(key, z);
+        while (performance.now() < deadline) {
+          if (stepTileJob(job, z, tx, ty)) { c = job.cv; storeTile(key, c); tileJobs.delete(key); job = null; break; }
+        }
+      }
     }
+    if (!visible) continue;
     const a = toScreen(tx * T, (ty + 1) * T), b = toScreen((tx + 1) * T, ty * T);
     const x0 = Math.round(a.x), y0 = Math.round(a.y), w = Math.round(b.x) - x0, h = Math.round(b.y) - y0;
     if (c) { ctx.drawImage(c, x0, y0, w, h); continue; }
     missing = true;
     const coarse = coarserTile(z, tx, ty);
     if (coarse) ctx.drawImage(coarse[0], coarse[1], coarse[2], coarse[3], coarse[4], x0, y0, w, h);
+    else drawFromFiner(z, tx, ty, x0, y0, w, h);
+    if (job?.next) ctx.drawImage(job.cv, x0, y0, w, h); // the pieces done so far
   }
-  if (missing) requestDraw(); // keep filling in over the next frames
+  // Half-done tiles for another zoom level or an older level version aren't needed.
+  if (tileJobs.size > 256) {
+    const current = baseVersion + '|' + draft.baseState + '|' + z + '|';
+    for (const k of tileJobs.keys()) if (!k.startsWith(current)) tileJobs.delete(k);
+  }
+  // Rendering here: keep filling in over the next frames. With workers, each
+  // arriving tile asks for a frame itself.
+  if (missing && !workers) requestDraw();
+}
+
+// ---- tile workers --------------------------------------------------------------
+// Tiles are rendered off the main thread by a few workers running this same
+// module (tile-worker.js) on OffscreenCanvases, and come back as ImageBitmaps,
+// so zooming right out - thousands of sprites per tile - never blocks the
+// editor. Without worker support, tiles render here within a frame budget.
+
+const pool = { workers: [], ready: 0, failed: false, inflight: new Map(), version: -1 };
+
+function startTileWorkers() {
+  // localStorage "mapMakerNoWorkers" forces rendering on this thread (for testing).
+  let off = false;
+  try { off = !!localStorage.getItem('mapMakerNoWorkers'); } catch {}
+  if (off || pool.workers.length || pool.failed || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return;
+  const count = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
+  for (let n = 0; n < count; n++) {
+    let worker;
+    try { worker = new Worker(new URL('./tile-worker.js', import.meta.url), { type: 'module' }); } catch { pool.failed = true; return; }
+    worker.jobs = 0;
+    worker.ready = false;
+    worker.onmessage = (e) => onWorkerMessage(worker, e.data);
+    worker.onerror = () => failWorkers();
+    worker.postMessage({ type: 'init', state: workerState() });
+    pool.workers.push(worker);
+  }
+  // Some engines (WebKitGTK here) hang drawing in a worker: no ready in time -> render here.
+  setTimeout(() => { if (!pool.ready && pool.workers.length) failWorkers(); }, 5000);
+}
+
+function failWorkers() {
+  pool.failed = true;
+  for (const w of pool.workers) w.terminate();
+  pool.workers = [];
+  pool.ready = 0;
+  pool.inflight.clear();
+  requestDraw(); // carry on rendering here
+}
+
+function workerState() {
+  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], version: baseVersion };
+}
+
+function onWorkerMessage(worker, m) {
+  if (m.type === 'ready') { worker.ready = true; pool.ready++; requestDraw(); return; }
+  if (m.type === 'unsupported') { failWorkers(); return; }
+  if (m.type !== 'tile') return;
+  worker.jobs--;
+  pool.inflight.delete(m.key);
+  // Keys carry the version: a tile rendered before an edit is dropped.
+  if (m.bitmap && m.key.startsWith(baseVersion + '|')) { storeTile(m.key, m.bitmap); requestDraw(); }
+  else m.bitmap?.close?.();
+}
+
+function tileWorkersReady() {
+  if (!pool.ready) return false;
+  if (pool.version !== baseVersion) {
+    // The level changed (state, erased cells): workers render the new one.
+    pool.version = baseVersion;
+    pool.inflight.clear();
+    const state = workerState();
+    for (const w of pool.workers) w.postMessage({ type: 'state', state });
+  }
+  return true;
+}
+
+function requestTile(key, z, tx, ty) {
+  if (pool.inflight.has(key)) return;
+  const free = pool.workers.filter((w) => w.ready).sort((a, b) => a.jobs - b.jobs)[0];
+  if (!free || free.jobs >= 3) return; // a short queue each: later frames ask again, for what's in view then
+  free.jobs++;
+  pool.inflight.set(key, free);
+  free.postMessage({ type: 'tile', key, z, tx, ty });
+}
+
+// Worker side (called from tile-worker.js).
+export async function workerInit(state) {
+  if (typeof OffscreenCanvas === 'undefined' || !new OffscreenCanvas(1, 1).getContext('2d')) throw new Error('no OffscreenCanvas 2D');
+  const bitmap = async (url) => {
+    const img = await createImageBitmap(await (await fetch(url)).blob());
+    // Stand in for the <img> elements the renderer checks.
+    img.complete = true;
+    img.naturalWidth = img.width;
+    img.naturalHeight = img.height;
+    return img;
+  };
+  base = await (await fetch('/maps/basemap.json')).json();
+  const vines = [...new Set(base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite))];
+  [atlasImg, sceneImg] = await Promise.all([bitmap('/maps/' + base.art.atlas), bitmap('/maps/' + base.scene.atlas)]);
+  const fonts = await Promise.all((base.scene.fonts || []).map((f) => (f ? bitmap('/maps/' + f.atlas) : null)));
+  fonts.forEach((f, n) => { fontImages[n] = f; });
+  const vineBitmaps = await Promise.all(vines.map((v) => bitmap('/maps/vines/' + encodeURIComponent(v) + '.png').catch(() => null)));
+  vines.forEach((v, n) => { if (vineBitmaps[n]) vineImages[v] = vineBitmaps[n]; });
+  draft.useBase = true;
+  workerSetState(state);
+  // Prove drawing works here before saying ready (it can hang instead).
+  const probe = new OffscreenCanvas(4, 4);
+  probe.getContext('2d').drawImage(atlasImg, 0, 0, 4, 4);
+  probe.transferToImageBitmap().close();
+}
+
+export function workerSetState(state) {
+  removed = new Set(state.removed);
+  removedVines = new Set(state.removedVines);
+  if (!layer || draft.baseState !== state.baseState) {
+    draft.baseState = state.baseState;
+    applyBaseState();
+  }
+  baseVersion = state.version;
+}
+
+export function workerRenderTile(z, tx, ty) {
+  return renderTile(z, tx, ty).transferToImageBitmap();
 }
 
 function draw() {
@@ -1446,7 +1652,7 @@ function draw() {
       ctx.fillRect(x0, y0, Math.ceil(r.x + r.w) - x0, Math.ceil(r.y + r.h) - y0);
     }
   };
-  const useArt = artReady() && cellPx >= ART_MIN_CELL_PX;
+  const useArt = artReady();
   if (baseOn()) {
     drawBaseTiles(W, H, useArt);
     if (useArt) drawLiveItems(W, H);
@@ -1495,6 +1701,7 @@ function draw() {
   const near = (cx, cy) => cx >= minCx - 6 && cx <= maxCx + 6 && cy >= minCy - 6 && cy <= maxCy + 6;
   vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (near(cx, cy)) drawVine(cx, cy, v.s, rotMatrix(v.q)); });
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
+  if (draft.originRings) drawOriginRings(W, H);
 
   // Invisible triggers always get an outline; upgrade boxes only when their
   // real art isn't being drawn (zoomed out). Erased ones are crossed out.
@@ -1627,6 +1834,120 @@ function teleportArrowAt(wx, wy) {
   return null;
 }
 
+// ---- floating origin rings --------------------------------------------------
+// How the game resets positions (FloatingOrigin + Movement): every scene load
+// starts the world centred on (0, 0) (currentOrigin is a scene value, zero in
+// the level). Each frame, once the player is FloatingOrigin.Threshold (17500)
+// from the centre, the whole world is shifted after the next physics step so
+// the player is back at (0, 0) - the centre moves to where they crossed.
+// Nothing else changes it: respawns, checkpoints and course ghosts only
+// convert with currentOrigin, and teleports just move the player.
+// A map is loaded right after a scene load with the player put at its spawn,
+// so its first ring is known: around the spawn if that's outside the (0, 0)
+// ring (the world re-centres on it at once), else around (0, 0). Later rings
+// depend on the route, so they're shown along a straight line to the end gate
+// (or the cursor).
+
+function toggleOriginRings() {
+  draft.originRings = !draft.originRings;
+  root.querySelector('#mm-origin').classList.toggle('active', draft.originRings);
+  saveDraft();
+  requestDraw();
+}
+
+function originRing() {
+  const fo = base?.floatingOrigin;
+  if (!fo) return null;
+  const spawn = draft.spawn || draft.start || viewSpawn();
+  // A map without the base game lives in Navigator's far-off pocket: always outside.
+  const far = !baseOn() || (fo.use2d ? Math.abs(spawn.x) : Math.hypot(spawn.x, spawn.y)) > fo.threshold;
+  return { x: far ? spawn.x : 0, y: far ? spawn.y : 0, r: fo.threshold, use2d: fo.use2d, onSpawn: far };
+}
+
+// The rings a player meets going in a straight line from the spawn to a
+// point: each crossing is where the next ring is centred.
+function originChain(to) {
+  const first = originRing();
+  if (!first) return [];
+  const rings = [{ x: first.x, y: first.y }];
+  if (!to || first.use2d) return rings;
+  for (let n = 0; n < 24; n++) {
+    const c = rings[rings.length - 1];
+    const dx = to.x - c.x, dy = to.y - c.y, d = Math.hypot(dx, dy);
+    if (d <= first.r) break;
+    rings.push({ x: c.x + dx / d * first.r, y: c.y + dy / d * first.r });
+  }
+  return rings;
+}
+
+function drawOriginRings(W, H) {
+  const first = originRing();
+  if (!first) return;
+  // Along the route to the end gate, or towards the cursor on maps without one.
+  const target = draft.end || (hover && (() => { const w = cellWorld(hover.cx, hover.cy); return { x: w.x + CELL / 2, y: w.y + CELL / 2 }; })());
+  const rings = originChain(target);
+  const r = first.r * cam.scale;
+  const color = (n) => `rgba(240, 160, 64, ${n === 0 ? 0.95 : 0.6})`;
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (target && rings.length > 1) {
+    // The route the chain is measured along.
+    const a = toScreen(rings[0].x, rings[0].y), b = toScreen(target.x, target.y);
+    ctx.strokeStyle = 'rgba(240, 160, 64, 0.35)';
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  rings.forEach((ring, n) => {
+    const c = toScreen(ring.x, ring.y);
+    ctx.strokeStyle = color(n);
+    ctx.setLineDash(n === 0 ? [] : [12, 7]);
+    ctx.beginPath();
+    if (first.use2d) { for (const x of [c.x - r, c.x + r]) { ctx.moveTo(x, 0); ctx.lineTo(x, H); } }
+    else ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // Numbered centre: 1 is where the map starts, 2 onwards are resets.
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(16, 16, 16, 0.9)';
+    ctx.beginPath(); ctx.arc(c.x, c.y, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = color(n);
+    ctx.stroke();
+    ctx.fillStyle = color(0);
+    ctx.fillText(String(n + 1), c.x, c.y + 0.5);
+  });
+  ctx.restore();
+  drawOriginLegend(W, H, rings.length, !!draft.end);
+}
+
+// A small key in the corner rather than text on the rings.
+function drawOriginLegend(W, H, count, toEnd) {
+  const dist = Math.round(base.floatingOrigin.threshold).toLocaleString('en-US');
+  const lines = [
+    ['Position resets (floating origin)', true],
+    [`Going ${dist} units from a ring's centre resets every position`, false],
+    ['to the player, and a new ring starts there.', false],
+    [toEnd ? `${count} ring${count === 1 ? '' : 's'} on the way from spawn (1) to the end gate.` : 'Rings shown on the way from spawn (1) to the cursor.', false],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = '12px sans-serif';
+  const width = Math.max(...lines.map(([l]) => ctx.measureText(l).width)) + 24, height = lines.length * 17 + 14;
+  const x = 10, y = H - height - 30;
+  ctx.fillStyle = 'rgba(16, 16, 16, 0.88)';
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = 'rgba(240, 160, 64, 0.95)';
+  ctx.fillRect(x, y, 3, height);
+  lines.forEach(([line, head], n) => {
+    ctx.font = head ? 'bold 12px sans-serif' : '12px sans-serif';
+    ctx.fillStyle = head ? 'rgba(240, 160, 64, 0.95)' : '#e8ecd8';
+    ctx.fillText(line, x + 14, y + 20 + n * 17);
+  });
+  ctx.restore();
+}
+
 // ---- hitbox view ------------------------------------------------------------
 // Collision as the game has it: solid cells (ground, moss, the author's
 // blocks) outlined green, blue / orange blocks in their colour, and every
@@ -1650,7 +1971,7 @@ function defByTile(tile) {
 // One deadly shape: polygons around the cell centre, through a tile matrix.
 // Screen-sized scratch canvases for the kill-shape union and its outline.
 function scratchCanvas(name) {
-  const c = (scratchCanvas[name] ||= document.createElement('canvas'));
+  const c = (scratchCanvas[name] ||= makeCanvas());
   if (c.width !== canvas.width || c.height !== canvas.height) { c.width = canvas.width; c.height = canvas.height; }
   return c;
 }
@@ -2189,6 +2510,7 @@ function onKeyDown(e) {
   const k = e.key.toLowerCase();
   if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
   if (!e.shiftKey && k === 'h') { toggleHitboxes(); return; }
+  if (!e.shiftKey && k === 'f') { toggleOriginRings(); return; }
   const tools = e.shiftKey ? { u: 'blueSpike', o: 'orangeSpike' } : { b: 'block', d: 'dark', u: 'blue', o: 'orange', s: 'spike', v: 'vine', e: 'erase', 1: 'start', 2: 'end', 3: 'spawn' };
   if (tools[k]) setTool(tools[k]);
   else if (k === 'r') rotateSpikeAtHover();
@@ -2239,7 +2561,10 @@ export async function mountEditor(container) {
         <div>Paint blocks and spikes, then set a spawn - gates are optional.</div>
         <div class="mm-empty-sub">Want to build on the real level? Use <b>Import base map</b>.</div>
       </div>
-      <button class="mm-tool mm-view" id="mm-hitbox" title="Show collision: solid blocks green, deadly shapes red (H)">View hitboxes</button>
+      <div class="mm-views">
+        <button class="mm-tool mm-view" id="mm-origin" title="Show the ring where the game re-centres every position on the player (floating origin reset) (F)">Origin rings</button>
+        <button class="mm-tool mm-view" id="mm-hitbox" title="Show collision: solid blocks green, deadly shapes red (H)">View hitboxes</button>
+      </div>
       <div class="mm-hint">Left-click paint · Right-drag / Space-drag pan · Wheel zoom</div>
       <div class="mm-flash" id="mm-flash" hidden></div>
     </div>
@@ -2287,6 +2612,8 @@ export async function mountEditor(container) {
   root.querySelector('#mm-base').addEventListener('click', toggleBase);
   root.querySelector('#mm-hitbox').addEventListener('click', toggleHitboxes);
   root.querySelector('#mm-hitbox').classList.toggle('active', !!draft.hitboxes);
+  root.querySelector('#mm-origin').addEventListener('click', toggleOriginRings);
+  root.querySelector('#mm-origin').classList.toggle('active', !!draft.originRings);
   root.querySelector('#mm-vine').addEventListener('change', (e) => { draft.vineSprite = e.target.value; saveDraft(); requestDraw(); });
   root.querySelector('#mm-undo').addEventListener('click', undo);
   root.querySelector('#mm-clear').addEventListener('click', clearAll);

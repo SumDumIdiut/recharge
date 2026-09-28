@@ -219,8 +219,10 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
 }
 
 #[tauri::command]
-pub fn install_from_hub_cmd(app: AppHandle, kind: String, id: String) -> Result<String, String> {
-    install_from_hub(&app, &kind, &id)
+pub async fn install_from_hub_cmd(app: AppHandle, kind: String, id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install_from_hub(&app, &kind, &id))
+        .await
+        .map_err(|e| format!("install task panicked: {e}"))?
 }
 
 #[derive(serde::Deserialize)]
@@ -229,7 +231,13 @@ struct SubmitResult {
 }
 
 #[tauri::command]
-pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String, author: String, description: Option<String>) -> Result<String, String> {
+pub async fn submit_skin_cmd(token: String, folder_path: String, display_name: String, author: String, description: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || submit_skin_blocking(token, folder_path, display_name, author, description))
+        .await
+        .map_err(|e| format!("upload task panicked: {e}"))?
+}
+
+fn submit_skin_blocking(token: String, folder_path: String, display_name: String, author: String, description: Option<String>) -> Result<String, String> {
     if display_name.trim().is_empty() || author.trim().is_empty() {
         return Err("name and author are required".to_string());
     }
@@ -270,7 +278,13 @@ pub fn submit_skin_cmd(token: String, folder_path: String, display_name: String,
 }
 
 #[tauri::command]
-pub fn submit_map_cmd(token: String, file_path: String, display_name: String, author: String, description: String) -> Result<String, String> {
+pub async fn submit_map_cmd(token: String, file_path: String, display_name: String, author: String, description: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || submit_map_blocking(token, file_path, display_name, author, description))
+        .await
+        .map_err(|e| format!("upload task panicked: {e}"))?
+}
+
+fn submit_map_blocking(token: String, file_path: String, display_name: String, author: String, description: String) -> Result<String, String> {
     if display_name.trim().is_empty() || author.trim().is_empty() {
         return Err("name and author are required".to_string());
     }
@@ -349,7 +363,22 @@ fn add_dir_to_zip<W: std::io::Write + std::io::Seek>(
 }
 
 #[tauri::command]
-pub fn submit_mod_cmd(
+pub async fn submit_mod_cmd(
+    token: String,
+    folder_path: String,
+    display_name: String,
+    author: String,
+    description: Option<String>,
+    gallery_paths: Option<Vec<String>>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        submit_mod_blocking(token, folder_path, display_name, author, description, gallery_paths)
+    })
+    .await
+    .map_err(|e| format!("upload task panicked: {e}"))?
+}
+
+fn submit_mod_blocking(
     token: String,
     folder_path: String,
     display_name: String,
@@ -418,7 +447,13 @@ pub fn submit_mod_cmd(
 }
 
 #[tauri::command]
-pub fn delete_hub_submission_cmd(token: String, id: String) -> Result<(), String> {
+pub async fn delete_hub_submission_cmd(token: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_hub_submission_blocking(token, id))
+        .await
+        .map_err(|e| format!("delete task panicked: {e}"))?
+}
+
+fn delete_hub_submission_blocking(token: String, id: String) -> Result<(), String> {
     sanitize_id(&id)?;
     ureq::delete(&format!("{HUB_BASE}/api/submissions/{id}"))
         .header("Authorization", format!("Bearer {token}"))
