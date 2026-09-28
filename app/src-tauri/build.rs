@@ -45,7 +45,19 @@ fn main() {
     .expect("failed to run tauri-build");
     println!("cargo:rerun-if-changed=src/lib.rs");
 
-    // The commit this backend was built from (see launcher.rs).
+    // The commit this backend was built from (see launcher.rs). Without
+    // watching HEAD, cargo has no reason to rerun this script for a plain
+    // rebuild after a new commit (only src/lib.rs or the env var above do
+    // that) - so a local `cargo build` would keep embedding a stale SHA
+    // from whenever this script last actually ran.
+    let git_dir = std::path::Path::new("../../.git");
+    println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
+    if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
+        if let Some(ref_path) = head.trim().strip_prefix("ref: ") {
+            println!("cargo:rerun-if-changed={}", git_dir.join(ref_path).display());
+        }
+    }
+
     let sha = std::env::var("RECHARGE_BUILD_SHA").ok().or_else(|| {
         std::process::Command::new("git")
             .args(["rev-parse", "HEAD"])
