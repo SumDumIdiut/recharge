@@ -217,12 +217,17 @@ try {
     $propsInsert = "`tpublic GameObject mainBitPublic => mainBit;`n`tpublic GameObject settingsBitPublic => settingsBit;`n`n"
 
     $src = (Get-Content $pauseMenuPath -Raw) -replace "`r`n", "`n"
-    if ($src -notmatch [regex]::Escape($awakeAnchor)) {
+    if ($src -notmatch [regex]::Escape($awakeAnchor) -and $src -notmatch [regex]::Escape("RechargeLoaderBootstrap.Init")) {
         throw "pauseMenuScript.cs didn't match the expected shape (the game may have updated)."
     }
-    $src = $src -replace [regex]::Escape($awakeAnchor), ($awakeAnchor + "`n" + $hookInsert)
-    $src = $src -replace "(?m)^\tprivate void Start\(\)", ($propsInsert + "`tprivate void Start()")
-    Set-Content -Path $pauseMenuPath -Value $src -NoNewline
+    # A backup that was already patched by an earlier run (a stale/corrupted
+    # ORIGINAL.dll) decompiles with the hook/properties already present -
+    # inserting them again would duplicate-define mainBitPublic/settingsBitPublic.
+    if ($src -notmatch [regex]::Escape("RechargeLoaderBootstrap.Init")) {
+        $src = $src -replace [regex]::Escape($awakeAnchor), ($awakeAnchor + "`n" + $hookInsert)
+        $src = $src -replace "(?m)^\tprivate void Start\(\)", ($propsInsert + "`tprivate void Start()")
+        Set-Content -Path $pauseMenuPath -Value $src -NoNewline
+    }
 
     Copy-Item (Join-Path $loaderRoot 'Runtime/*.cs') $work
 
