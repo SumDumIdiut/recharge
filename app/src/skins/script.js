@@ -104,6 +104,16 @@ async function loadThumbnails() {
   );
 }
 
+// Falls back to matching by name for a skin that's on disk but was never
+// installed through the hub (self-authored, added by hand) - it has no
+// hubId to match on, so without this it would show as downloadable forever
+// even though the user already has it.
+function installedFor(entry) {
+  return installedCache.find(
+    (s) => s.hubId === entry.id || (!s.hubId && displayName(s).toLowerCase() === entry.name.toLowerCase())
+  );
+}
+
 function renderInstalled() {
   const list = document.getElementById('skins-installed-view');
   const filtered = installedCache
@@ -148,7 +158,7 @@ function renderBrowse() {
   }
   list.innerHTML = filtered
     .map((entry) => {
-      const installed = installedCache.some((s) => s.hubId === entry.id);
+      const installed = !!installedFor(entry);
       const badge = installed
         ? `<div class="browse-card-badge browse-card-badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="browse-card-badge browse-card-badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
@@ -159,7 +169,6 @@ function renderBrowse() {
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
         <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
-        ${entry.description ? `<div class="browse-card-desc" style="padding:0;">${escapeHtml(entry.description)}</div>` : ''}
       </div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
@@ -195,7 +204,7 @@ window.__skinOpenDetail = function (key) {
   const [kind, ...rest] = key.split(':');
   const ref = rest.join(':');
   const entry = kind === 'hub' ? catalog.find((c) => c.id === ref) : null;
-  const installedSkin = kind === 'hub' ? installedCache.find((s) => s.hubId === ref) : installedCache.find((s) => s.folderName === ref);
+  const installedSkin = kind === 'hub' ? (entry ? installedFor(entry) : installedCache.find((s) => s.hubId === ref)) : installedCache.find((s) => s.folderName === ref);
   if (!entry && !installedSkin) return false;
   openDetail = key;
 
