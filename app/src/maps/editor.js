@@ -19,6 +19,7 @@ const COLORS = {
   blue: '#3f7fe0',
   orange: '#e08a3f',
   spike: '#d0d4c4',
+  true: '#ff2020',
   kill: 'rgba(214, 64, 88, 0.35)',
   removed: 'rgba(198, 62, 216, 0.6)',
   start: '#41f88d',
@@ -274,13 +275,59 @@ function defUses() {
 }
 
 function spikeTile(c, q) {
-  const layer = SPIKE_LAYER[c];
+  const layer = SPIKE_LAYER[c] || SPIKE_LAYER.spike;
   const uses = defUses();
   const spikes = base.defs.map((d, i) => [d, uses.get(i) || 0]).filter(([d]) => d.layer === layer && d.kind === 'spike');
   const best = (want) => spikes.filter(([d]) => d.base === want).sort((a, b) => b[1] - a[1])[0]?.[0];
   const d = (q === 1 && best(3)) || best(q) || best(0) || spikes[0][0];
   return { layer, tile: d.tile, matrix: rotMatrix(q - d.base) };
 }
+function trueSpikeDef() {
+  const t = spikeTile('spike', 0), d = defByTile(t.layer + '|' + t.tile);
+  const pts = (d?.shape || [[[13, 3], [-13, 3], [-13, -16], [13, -16]]]).flat();
+  const x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
+  const y0 = Math.min(...pts.map((p) => p[1])), y1 = Math.max(...pts.map((p) => p[1]));
+  const cx = (x0 + x1) / 2, w = x1 - x0, h = y1 - y0;
+  const box = [cx - w, y0, cx + w, y0 + 2 * h];
+  return { tile: t.tile, box, shape: [[[box[2], box[3]], [box[0], box[3]], [box[0], box[1]], [box[2], box[1]]]] };
+}
+function trueSpikeJson(sp, cx, cy, at) {
+  const d = trueSpikeDef(), c = COLORS.true.match(/\w\w/g).map((h) => Math.round((parseInt(h, 16) / 255) * 1000) / 1000);
+  return { type: 'trueSpike', tileName: d.tile, ...at, rotation: spikeTurn(sp, cx, cy) * 90, color: c, hitbox: d.box };
+}
+const tintedTiles = new Map();
+function drawTrueSpike(cx, cy, q) {
+  if (!artReady()) return drawSpike(cx, cy, q, COLORS.true);
+  const d = trueSpikeDef(), sprite = base.art.tiles[d.tile];
+  let cv = tintedTiles.get(sprite);
+  if (!cv) {
+    const [sx, sy, w, h] = base.art.sprites[sprite];
+    cv = makeCanvas();
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    g.drawImage(atlasImg, sx, sy, w, h, 0, 0, w, h);
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = COLORS.true;
+    g.globalAlpha = 0.7;
+    g.fillRect(0, 0, w, h);
+    tintedTiles.set(sprite, cv);
+  }
+  const wc = cellWorld(cx, cy), c = toScreen(wc.x + CELL / 2, wc.y + CELL / 2), m = rotMatrix(q), px = cam.scale, w = cv.width, h = cv.height;
+  ctx.save();
+  ctx.setTransform(px * m[0], -px * m[2], -px * m[1], px * m[3], c.x + px * (-m[0] * w / 2 + m[1] * h / 2), c.y + px * (m[2] * w / 2 - m[3] * h / 2));
+  ctx.drawImage(cv, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.strokeStyle = COLORS.true;
+  ctx.globalAlpha = 0.5;
+  ctx.setLineDash([3, 3]);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  d.shape[0].forEach(([x, y], i) => { const p = toScreen(wc.x + CELL / 2 + m[0] * x + m[1] * y, wc.y + CELL / 2 + m[2] * x + m[3] * y); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
 function vineTile(sprite, q) {
   const d = base.defs.find((d) => d.kind === 'vine' && d.sprite === sprite && d.layer === VINE_LAYER) || base.defs.find((d) => d.kind === 'vine' && d.sprite === sprite);
   return { layer: d.layer, tile: d.tile, matrix: rotMatrix(q) };
@@ -390,6 +437,7 @@ function categoryItems(cat) {
       { tool: 'spike', label: 'Spike', group: 'Spikes', thumb: { art: spikeTile('spike', 0).tile } },
       { tool: 'blueSpike', label: 'Blue spike', group: 'Spikes', thumb: { art: spikeTile('blue', 0).tile } },
       { tool: 'orangeSpike', label: 'Orange spike', group: 'Spikes', thumb: { art: spikeTile('orange', 0).tile } },
+      { tool: 'trueSpike', label: 'True spike', group: 'Spikes', thumb: { color: COLORS.true } },
       ...vineSprites().filter((v) => base.catalog?.vineNames?.[v] !== null).map((v) => ({ tool: 'vine', vine: v, group: 'Thorn vines', label: base.catalog?.vineNames?.[v] || prettySprite(v), thumb: { img: '/maps/vines/' + encodeURIComponent(v) + '.png' } })),
     ];
     case 'objects':
@@ -884,7 +932,10 @@ function itemAt(wx, wy) {
   const m = markerAt(wx, wy);
   if (m) return { kind: 'gate', ...m };
   const c = cellOf(wx, wy), k = key(c.cx, c.cy);
-  if (spikes.has(k) || blocks.has(k)) return { kind: 'cell', k };
+  if (spikes.has(k)) return { kind: 'cell', k };
+  if (blocks.has(k)) return ownBlocksAt(c.cx, c.cy);
+  const mk = mossKeyAt(wx, wy);
+  if (mossCells.has(mk)) return ownMossAt(mk);
   const t = tileAt(wx, wy);
   if (t) return { kind: 'tile', key: t[0] };
   const v = vineAt(wx, wy);
@@ -898,6 +949,53 @@ function itemAt(wx, wy) {
     if (sp) return { kind: 'scene', id: sp.id };
   }
   return null;
+}
+
+const BLOCK_NAMES = { ground: 'Ground', dark: 'Dark ground', blue: 'Blue blocks', orange: 'Orange blocks' };
+function floodKeys(start, has) {
+  const seen = new Set([start]), stack = [start];
+  while (stack.length && seen.size <= 2000) {
+    const [x, y] = unkey(stack.pop());
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const k = key(x + dx, y + dy);
+      if (!seen.has(k) && has(k)) { seen.add(k); stack.push(k); }
+    }
+  }
+  return [...seen];
+}
+function ownBlocksAt(cx, cy) {
+  const kind = blocks.get(key(cx, cy));
+  return { kind: 'blocks', what: BLOCK_NAMES[kind] || 'Blocks', cells: floodKeys(key(cx, cy), (k) => blocks.get(k) === kind) };
+}
+function ownMossAt(mk) {
+  return { kind: 'moss', what: 'Moss', cells: floodKeys(mk, (k) => mossCells.has(k)) };
+}
+function outlineCells(cells, rectOf) {
+  const set = new Set(cells);
+  ctx.beginPath();
+  for (const k of cells) {
+    const [x, y] = unkey(k), r = rectOf(x, y);
+    if (!set.has(key(x, y + 1))) { ctx.moveTo(r.x, r.y); ctx.lineTo(r.x + r.w, r.y); }
+    if (!set.has(key(x, y - 1))) { ctx.moveTo(r.x, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h); }
+    if (!set.has(key(x - 1, y))) { ctx.moveTo(r.x, r.y); ctx.lineTo(r.x, r.y + r.h); }
+    if (!set.has(key(x + 1, y))) { ctx.moveTo(r.x + r.w, r.y); ctx.lineTo(r.x + r.w, r.y + r.h); }
+  }
+  ctx.stroke();
+}
+function mossRect(gx, gy) {
+  const g = layerGrid('moss'), a = toScreen(g.ox + gx * g.size, g.oy + (gy + 1) * g.size);
+  return { x: a.x, y: a.y, w: g.size * cam.scale, h: g.size * cam.scale };
+}
+function moveCells(sel, dx, dy) {
+  if (sel.kind === 'blocks') {
+    const moving = sel.cells.map((k) => [k, blocks.get(k)]).filter(([, v]) => v);
+    for (const [k] of moving) blocks.delete(k);
+    sel.cells = moving.map(([k, v]) => { const [x, y] = unkey(k), nk = key(x + dx, y + dy); blocks.set(nk, v); spikes.delete(nk); return nk; });
+  } else if (sel.kind === 'moss') {
+    const moving = sel.cells.filter((k) => mossCells.has(k));
+    for (const k of moving) mossCells.delete(k);
+    sel.cells = moving.map((k) => { const [x, y] = unkey(k), nk = key(x + dx, y + dy); mossCells.set(nk, true); return nk; });
+  }
 }
 
 const BASE_SETS = () => [['Ground', groundSet], ['Moss', mossSet], ['Blue blocks', blueSet], ['Orange blocks', orangeSet]];
@@ -958,6 +1056,10 @@ function drawTarget(t) {
   } else if (t.kind === 'base') {
     const o = baseObjects.find((x) => x.id === t.id);
     if (o) rectW(o.x - o.w / 2, o.y - o.h / 2, o.x + o.w / 2, o.y + o.h / 2);
+  } else if (t.kind === 'blocks') {
+    outlineCells(t.cells, cellRect);
+  } else if (t.kind === 'moss') {
+    outlineCells(t.cells, mossRect);
   } else if (t.kind === 'basecells') {
     const set = new Set(t.cells);
     ctx.beginPath();
@@ -1000,7 +1102,7 @@ function selectDown(e) {
   if (hit) {
     selection = hit;
     if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
-    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : null, before: snapshot(), changed: false };
+    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : null, before: snapshot(), changed: false };
   } else {
     const c = cellOf(w.x, w.y);
     selection = null;
@@ -1018,6 +1120,13 @@ function selectMove(e) {
     if (!drag.regionMoved) return;
     selection = { kind: 'region', x0: Math.min(drag.region.cx, c.cx), y0: Math.min(drag.region.cy, c.cy), x1: Math.max(drag.region.cx, c.cx), y1: Math.max(drag.region.cy, c.cy) };
     renderConfig();
+  } else if (drag.group) {
+    const now = selection.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy);
+    if (now !== drag.group.at) {
+      const [ax, ay] = unkey(drag.group.at), [bx, by] = unkey(now);
+      changed(() => moveCells(selection, bx - ax, by - ay));
+      drag.group.at = now;
+    }
   } else if (drag.gate) {
     const c = cellOf(w.x, w.y), which = drag.gate.which, g = gateAt(c.cx, c.cy, which);
     const cur = which === 'spawn' ? draft.spawn : courseById(drag.gate.course)?.[which];
@@ -1119,6 +1228,10 @@ function nudgeSelection(dx, dy, fine) {
     const nk = shiftKey(sel.k);
     for (const m of sel.vine ? [vines] : [blocks, spikes]) if (m.has(sel.k)) { const v = m.get(sel.k); m.delete(sel.k); m.set(nk, v); }
     sel.k = nk;
+  } else if (sel.kind === 'blocks' || sel.kind === 'moss') {
+    moveCells(sel, dx, dy);
+  } else if (sel.kind === 'base' || sel.kind === 'basecells' || sel.kind === 'scene') {
+    return false;
   } else if (sel.kind === 'gate') {
     const g = sel.which === 'spawn' ? draft.spawn : courseById(sel.course)?.[sel.which];
     if (!g) return false;
@@ -1160,6 +1273,8 @@ function deleteSelection() {
   if (selection.kind === 'object') placed.splice(selection.index, 1);
   else if (selection.kind === 'gate') clearMarker(selection);
   else if (selection.kind === 'base') removedObjects.add(selection.id);
+  else if (selection.kind === 'blocks') selection.cells.forEach((k) => blocks.delete(k));
+  else if (selection.kind === 'moss') selection.cells.forEach((k) => mossCells.delete(k));
   else if (selection.kind === 'basecells') selection.cells.forEach((k) => removed.add(k));
   else if (selection.kind === 'scene') removedScene.add(selection.id);
   else if (selection.kind === 'tile') { const id = tiles.get(selection.key)?.arrow; if (id) removeArrow(id); else tiles.delete(selection.key); }
@@ -1456,6 +1571,8 @@ function renderConfig() {
     if (!o || removedObjects.has(o.id)) { selection = null; el.hidden = true; return; }
     html += `<div class="mm-config-title">${o.kind === 'upgrade' ? boxKindName(o) : o.label}<span>level ${o.kind === 'upgrade' ? 'upgrade box' : 'object'}</span></div>`;
     if (o.box) html += baseUpgradeHtml(o, num);
+  } else if (selection.kind === 'blocks' || selection.kind === 'moss') {
+    html += `<div class="mm-config-title">${selection.what}<span>${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'} - drag or arrow keys to move</span></div>`;
   } else if (selection.kind === 'basecells') {
     html += `<div class="mm-config-title">${selection.what}<span>level · ${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'}</span></div>`;
   } else if (selection.kind === 'scene') {
@@ -1485,7 +1602,7 @@ function renderConfig() {
     html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotL">⟲ Rotate</button><button class="mm-tool" data-act="rotR">Rotate ⟳</button></div>`;
     html += `<div class="mm-config-row">${chk('fx', 'Flip X', t.fx)}${chk('fy', 'Flip Y', t.fy)}</div>`;
   } else if (selection.kind === 'cell') {
-    const sp = spikes.get(selection.k), kind = selection.vine ? 'Vine' : sp ? { spike: 'Spike', blue: 'Blue spike', orange: 'Orange spike' }[sp.c] : { ground: 'Ground', dark: 'Dark ground', blue: 'Blue block', orange: 'Orange block' }[blocks.get(selection.k)];
+    const sp = spikes.get(selection.k), kind = selection.vine ? 'Vine' : sp ? { spike: 'Spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[sp.c] : { ground: 'Ground', dark: 'Dark ground', blue: 'Blue block', orange: 'Orange block' }[blocks.get(selection.k)];
     html += `<div class="mm-config-title">${kind}<span>cell ${selection.k}</span></div>`;
     if (sp || selection.vine) html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotCell">Rotate ⟳ (R)</button></div>`;
   } else {
@@ -1853,6 +1970,7 @@ function buildOverlay() {
   mossCells.forEach((_, k) => { const c = mossCenter(k); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', x: c.x, y: c.y, matrix: [1, 0, 0, 1] }); });
   spikes.forEach((sp, k) => {
     const [cx, cy] = unkey(k);
+    if (sp.c === 'true') { objects.push(trueSpikeJson(sp, cx, cy, at(k))); return; }
     const t = spikeTile(sp.c, spikeTurn(sp, cx, cy));
     objects.push({ type: 'tile', tilemap: t.layer, tileName: t.tile, ...at(k), matrix: t.matrix });
   });
@@ -1906,7 +2024,7 @@ function buildMap() {
   const cells = new Map();
   if (baseOn()) importBaseCells(cells, inArea);
   blocks.forEach((kind, k) => cells.set(k, { t: kind }));
-  spikes.forEach((sp, k) => { const [cx, cy] = unkey(k); cells.set(k, { t: 'tile', ...spikeTile(sp.c, spikeTurn(sp, cx, cy)) }); });
+  spikes.forEach((sp, k) => { const [cx, cy] = unkey(k); if (sp.c !== 'true') cells.set(k, { t: 'tile', ...spikeTile(sp.c, spikeTurn(sp, cx, cy)) }); });
   const vineCells = [];
   if (baseOn()) baseHaz.forEach((h, k) => {
     const [cx, cy] = unkey(k);
@@ -1942,6 +2060,11 @@ function buildMap() {
     objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, cellX: cc.cx, cellY: cc.cy, matrix: tileMatrix(t) });
   });
   mossCells.forEach((_, k) => { const c = mossCenter(k), cc = cellOf(c.x, c.y); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', cellX: cc.cx, cellY: cc.cy, matrix: [1, 0, 0, 1] }); });
+  spikes.forEach((sp, k) => {
+    if (sp.c !== 'true') return;
+    const [cx, cy] = unkey(k), w = cellWorld(cx, cy);
+    objects.push(trueSpikeJson(sp, cx, cy, { x: Math.round(w.x + CELL / 2 - origin.x), y: Math.round(w.y + CELL / 2 - origin.y) }));
+  });
   for (const o of placed) {
     const item = catalogItem(o);
     if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), ...cloneConfig(o, item) });
@@ -3120,6 +3243,7 @@ function draw() {
     const [cx, cy] = unkey(k);
     const q = spikeTurn(sp, cx, cy);
     if (useArt && base) { const t = spikeTile(sp.c, q); if (drawTileArt(cx, cy, t.tile, t.matrix)) return; }
+    if (sp.c === 'true') return drawTrueSpike(cx, cy, q);
     drawSpike(cx, cy, q, COLORS[sp.c]);
   });
 
@@ -3197,6 +3321,7 @@ function draw() {
     const { cx, cy } = hover;
     ctx.globalAlpha = 0.5;
     if (BLOCK_KIND[tool]) { ctx.fillStyle = COLORS[BLOCK_KIND[tool]]; const r = cellRect(cx, cy); ctx.fillRect(r.x, r.y, r.w, r.h); }
+    else if (tool === 'trueSpike') { ctx.globalAlpha = 0.7; drawTrueSpike(cx, cy, autoSpikeTurn(cx, cy)); }
     else if (SPIKE_KIND[tool]) drawSpike(cx, cy, autoSpikeTurn(cx, cy), COLORS[SPIKE_KIND[tool]]);
     else if (tool === 'vine' && base) drawVine(cx, cy, draft.vineSprite, rotMatrix(placeRot));
     else if (tool === 'moss' && base) { const w = cellWorld(cx, cy), c = mossCenter(mossKeyAt(w.x + CELL / 2, w.y + CELL / 2)), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); }
@@ -3359,6 +3484,7 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
     spikes.forEach((sp, k) => {
       const [cx, cy] = unkey(k);
       if (!inView(cx, cy, 1)) return;
+      if (sp.c === 'true') { const d = trueSpikeDef(); addShape(cx, cy, { layer: 'Spikes', shape: d.shape }, rotMatrix(spikeTurn(sp, cx, cy)), false); return; }
       const t = spikeTile(sp.c, spikeTurn(sp, cx, cy));
       addShape(cx, cy, defByTile(t.layer + '|' + t.tile), t.matrix, false);
     });
@@ -3415,7 +3541,7 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
 }
 
 const BLOCK_KIND = { block: 'ground', dark: 'dark', blue: 'blue', orange: 'orange' };
-const SPIKE_KIND = { spike: 'spike', blueSpike: 'blue', orangeSpike: 'orange' };
+const SPIKE_KIND = { spike: 'spike', blueSpike: 'blue', orangeSpike: 'orange', trueSpike: 'true' };
 
 const spikeTurn = (sp, cx, cy) => sp.q ?? autoSpikeTurn(cx, cy);
 
@@ -3857,7 +3983,7 @@ function bindWindow() {
       requestDraw();
       return;
     }
-    if (drag && (drag.region || drag.move || drag.zip || drag.gate)) { selectMove(e); return; }
+    if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group)) { selectMove(e); return; }
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
       if (hover) { hover = null; updateStatus(); requestDraw(); }
