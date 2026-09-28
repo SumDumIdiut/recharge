@@ -68,4 +68,35 @@ fn main() {
     });
     println!("cargo:rustc-env=RECHARGE_BUILD_SHA={}", sha.unwrap_or_default());
     println!("cargo:rerun-if-env-changed=RECHARGE_BUILD_SHA");
+
+    // When this binary was compiled (UTC, GitHub's release created_at format)
+    // - see launcher.rs. A SHA mismatch against the latest release doesn't by
+    // itself mean an update is available: a local dev build made after that
+    // release was published is also a mismatch, but isn't behind it. Comparing
+    // build time against the release's created_at tells the two apart.
+    println!("cargo:rustc-env=RECHARGE_BUILD_TIME={}", iso8601_now());
+}
+
+fn iso8601_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86400);
+    let sod = secs.rem_euclid(86400);
+    let (h, m, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
+
+    // Howard Hinnant's civil_from_days (public domain): days-since-epoch -> Y/M/D.
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
 }

@@ -16,6 +16,13 @@ fn built_sha() -> &'static str {
     env!("RECHARGE_BUILD_SHA")
 }
 
+// When this backend was built (UTC, same format as GitHub's created_at), so a
+// SHA mismatch against the latest release can be checked for direction: a
+// local build made after that release was published isn't "behind" it.
+fn built_at() -> &'static str {
+    env!("RECHARGE_BUILD_TIME")
+}
+
 #[derive(Deserialize)]
 struct GithubAsset {
     name: String,
@@ -40,6 +47,8 @@ struct GithubRelease {
     prerelease: bool,
     #[serde(default)]
     draft: bool,
+    #[serde(default)]
+    created_at: String,
 }
 
 #[derive(Serialize)]
@@ -226,8 +235,11 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
     let download_url = self_update_asset_url(&release.assets);
 
     // No SOURCE_SHA.txt on an old release - fall back to the version number.
+    // A SHA mismatch alone isn't "behind": a local dev build made after this
+    // release was published also mismatches, but is ahead of it, not behind -
+    // only offer the update if the release is actually newer than this build.
     let app_update_available = match source_sha_of(&release.assets) {
-        Some(sha) => sha != built_sha(),
+        Some(sha) => sha != built_sha() && release.created_at.as_str() > built_at(),
         None => is_newer(&latest_version, &current_version),
     };
 
