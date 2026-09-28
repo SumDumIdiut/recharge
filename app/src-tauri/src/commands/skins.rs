@@ -86,10 +86,7 @@ fn find_image_file(skin_folder: &std::path::Path) -> Option<PathBuf> {
     images.into_iter().next()
 }
 
-// Written alongside a skin installed from the hub, since the folder itself
-// is named after a readable slug of the skin's name (not the hub id) - this
-// is what lets the Browse tab still recognize "already installed" and lets
-// the Installed tab show the real name instead of guessing from the folder.
+// Since the folder is named after a slug, not the hub id - lets Browse/Installed recover the real identity.
 pub const HUB_META_FILE: &str = ".recharge-hub-meta.json";
 
 #[derive(Serialize, Deserialize)]

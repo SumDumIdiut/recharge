@@ -96,18 +96,14 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     maps
 }
 
-// The map maker's "Test in game": installs the map under a fixed id, asks
-// Navigator to start it on the next launch (it reads autoplay.txt when it
-// loads at the title screen), then launches the modded game.
+// "Test in game": installs under a fixed id, flags it via autoplay.txt, then launches modded.
 const TEST_MAP_ID: &str = "map-maker-test";
 
 #[tauri::command]
 pub fn test_launch_map(app: AppHandle, map_json: String) -> Result<super::play::LaunchMethod, String> {
     serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
     let dir = maps_dir(&app).ok_or("game path not set")?;
-    // Local development: a freshly built Navigator (RECHARGE_DEV_NAVIGATOR_DLL,
-    // set by the recharge-test launcher) goes over whatever Recharge installed,
-    // since reinstalling mods puts the GitHub build back.
+    // Dev: a locally-built Navigator (RECHARGE_DEV_NAVIGATOR_DLL) overrides the installed one.
     if let Some(dll) = std::env::var_os("RECHARGE_DEV_NAVIGATOR_DLL").map(PathBuf::from).filter(|p| p.is_file()) {
         let installed = dir.parent().ok_or("bad maps folder")?.join("RechargeMaps.dll");
         std::fs::copy(&dll, &installed).map_err(|e| format!("couldn't install the dev Navigator: {e}"))?;

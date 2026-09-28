@@ -15,9 +15,7 @@ const LOADER_VERSION: &str = "1.0.0";
 pub struct LoaderStatus {
     pub installed: bool,
     pub version: String,
-    /// The game's deployed loader was built from different loader sources
-    /// than this app ships, so mods built against the new ModApi would hit
-    /// missing methods at runtime. A redeploy fixes it.
+    /// Deployed loader is stale vs this app's sources - mods would hit missing ModApi methods.
     pub outdated: bool,
 }
 
@@ -37,9 +35,7 @@ fn loader_status_blocking(app: &AppHandle) -> LoaderStatus {
         .map(|managed| managed.join("Recharge.ModApi.dll").is_file())
         .unwrap_or(false);
 
-    // Navigator's source follows its branch: pull any newer commits now, and
-    // the stamp (which covers the pulled revision) marks the loader outdated
-    // so it's rebuilt and redeployed with them.
+    // Pull Navigator's branch now; the stamp then marks the loader outdated if it moved.
     if installed {
         if let Err(e) = super::repos::refresh_blocking(&app, "recharge-maps") {
             eprintln!("[loader] couldn't refresh Navigator: {e}");
@@ -177,12 +173,7 @@ pub async fn install_or_update_loader(app: AppHandle) -> Result<(), String> {
     result
 }
 
-// The install/update button and the "Redeploy Navigator" button both invoke
-// this from the frontend through separate, non-shared disabled-state guards,
-// and build-loader.ps1 itself uses one fixed (non-namespaced) temp working
-// directory - so two overlapping runs collide there and can patch the same
-// decompiled source twice. This lock makes overlap impossible regardless of
-// which button (or future caller) triggers it.
+// Two callers (install button, Redeploy Navigator) could otherwise overlap and patch the same decompiled source twice.
 static INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct InstallGuard;
@@ -216,10 +207,7 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     let log_file = std::env::temp_dir().join(format!("recharge-install-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log_file);
 
-    // Navigator (recharge-maps) is baked into every install, not an optional
-    // mod - always pulled and built here (following the Stable/Beta channel,
-    // see repos::branch_for) rather than waiting for the user to install it.
-    // Other mods are only pulled when the user installs them.
+    // Navigator (recharge-maps) is baked into every install; other mods are pulled only when installed.
     let mods_dir = super::repos::source_mods_dir(app)?;
     super::repos::refresh_blocking(app, "recharge-maps")?;
 
@@ -234,10 +222,7 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     if let Some(appid) = &appid {
         cmd.args(["-SteamAppId", appid]);
     }
-    // A failure before the script's first Set-Status call (a parse error, an
-    // early crash in the SDK/ilspycmd fetch) would otherwise leave the user
-    // with nothing but a bare exit code - capture the script's own output so
-    // there's something to show them.
+    // Capture the script's output, or a failure before its first Set-Status call shows only a bare exit code.
     let log_writer = std::fs::File::create(&log_file).map_err(|e| format!("Couldn't create install log: {e}"))?;
     let log_writer_err = log_writer.try_clone().map_err(|e| format!("Couldn't create install log: {e}"))?;
     cmd.stdin(Stdio::null())

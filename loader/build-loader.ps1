@@ -306,7 +306,7 @@ $refXml
         $deployedManifestPath = Join-Path $deployModDir 'mod.json'
         if (Test-Path $deployedManifestPath) {
             $deployedManifest = Get-Content $deployedManifestPath -Raw | ConvertFrom-Json
-            if ($null -ne $deployedManifest.enabled) { $manifest.enabled = $deployedManifest.enabled }
+            if ($null -ne $deployedManifest.enabled -and $manifest.id -ne 'recharge.maps') { $manifest.enabled = $deployedManifest.enabled }
         }
         $manifest | ConvertTo-Json -Depth 10 | Set-Content -NoNewline -Path $deployedManifestPath
     }

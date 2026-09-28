@@ -80,13 +80,7 @@ fn is_process_running(exe_name: &str) -> bool {
         .contains(&exe_name.to_lowercase())
 }
 
-// pgrep -f matches a zombie (already-exited, not yet reaped by its parent)
-// the same as a live one, so a game that exited cleanly could still read as
-// "running" indefinitely - confirmed live: Player.log showed a normal exit
-// (proper Physics/Input shutdown sequence, no crash), but `ps` still listed
-// the process as `<defunct>` and Recharge kept showing Running. Filtering
-// those out via /proc/[pid]/stat's state field is what a zombie-aware check
-// needs, since pgrep itself has no flag for it.
+// pgrep -f matches an already-exited zombie too, so filter those via /proc/[pid]/stat's state field.
 #[cfg(not(windows))]
 fn is_process_running(exe_name: &str) -> bool {
     let Ok(output) = Command::new("pgrep")
@@ -109,8 +103,7 @@ fn is_zombie(pid: u32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };
-    // Format: "pid (comm) state ...". comm can itself contain spaces/parens,
-    // so the state field is found relative to the *last* ')', not the first.
+    // "pid (comm) state ..." - comm can contain parens, so find the *last* ')'.
     match stat.rfind(')') {
         Some(idx) => stat[idx + 1..].trim_start().starts_with('Z'),
         None => false,
@@ -140,9 +133,7 @@ pub fn is_game_running(app: AppHandle) -> bool {
     is_process_running(&exe.file_name())
 }
 
-// A cheap (non-cryptographic) content stamp - same FNV-1a used for the
-// loader's own source stamp in loader.rs. Good enough to answer "is this
-// byte-for-byte what I last wrote here", which is all this needs.
+// A cheap content stamp (same FNV-1a as loader.rs's own source stamp) - "is this byte-for-byte what I wrote".
 fn fnv1a_file(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -157,10 +148,7 @@ fn deployed_stamp_path(managed: &Path) -> PathBuf {
     managed.join("Assembly-CSharp.deployed.stamp")
 }
 
-// The loader install script deploys Assembly-CSharp.dll directly (it doesn't
-// go through deploy_build), so without this the next launch's stamp check
-// sees bytes that don't match the old stamp, reads that as "Steam updated
-// the game", and deletes the just-installed Assembly-CSharp.RECHARGE.dll.
+// The install script deploys the dll directly, bypassing deploy_build - without this the next launch's stale stamp reads as a Steam update and deletes it.
 pub(crate) fn refresh_deploy_stamp(managed: &Path) {
     let deployed = managed.join("Assembly-CSharp.dll");
     if let Some(stamp) = fnv1a_file(&deployed) {
@@ -190,16 +178,7 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
     let recharge = managed.join("Assembly-CSharp.RECHARGE.dll");
     let stamp_path = deployed_stamp_path(&managed);
 
-    // The stamp records the hash of whatever *we* last wrote to $deployed.
-    // Rebuilding the loader produces a new Assembly-CSharp.RECHARGE.dll on
-    // disk with different bytes even from an identical source (compiler
-    // output isn't guaranteed byte-stable run to run) - comparing $deployed
-    // against recharge.dll's *current* bytes would then wrongly conclude
-    // Steam replaced the game and overwrite the real backup with a stale
-    // modded build. Comparing against our own stamp instead isn't affected
-    // by a rebuild that never touched $deployed. No stamp yet (an install
-    // from before this existed) falls back to the old direct comparison,
-    // so upgrading to this doesn't itself look like a fresh Steam update.
+    // The stamp is the hash of what *we* last wrote - a rebuild's non-byte-stable output would otherwise look like a Steam update. No stamp yet falls back to a direct comparison.
     let matches_our_stamp = deployed.is_file()
         && match read_stamp(&stamp_path) {
             Some(stamp) => fnv1a_file(&deployed).as_deref() == Some(stamp.as_str()),
@@ -210,12 +189,7 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
         };
 
     if deployed.is_file() && (original.is_file() || recharge.is_file()) && !matches_our_stamp {
-        // Steam has replaced the deployed assembly since we last touched it -
-        // the backups we hold belong to the old build. Copying one back over
-        // it would pair an old assembly with the new build's data files,
-        // which Unity reports as a "corrupted level0" crash even launched
-        // straight from Steam. So keep Steam's file as the new original and
-        // drop the now-stale modded build.
+        // Steam replaced the assembly - keep its file as the new original and drop the now-stale modded build.
         std::fs::copy(&deployed, &original)
             .map_err(|e| format!("Couldn't keep the game's updated assembly: {e}"))?;
         let _ = std::fs::remove_file(&recharge);

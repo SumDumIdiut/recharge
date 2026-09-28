@@ -49,11 +49,7 @@ fn each_manifest(app: &AppHandle) -> Vec<(PathBuf, ModManifest)> {
     found
 }
 
-// recharge.maps (Navigator) is baked into every install - always pulled and
-// built alongside the loader itself (see repos::ensure_blocking's caller in
-// loader.rs) rather than being something to browse, install or toggle. It's
-// filtered out of everything user-facing here rather than never being
-// deployed at all, since other mods (multiplayer) still load against it.
+// Navigator is baked into every install (see loader.rs); filtered from user-facing lists only, since other mods still load against it.
 const BUILTIN_MOD_IDS: [&str; 1] = ["recharge.maps"];
 
 #[tauri::command]
