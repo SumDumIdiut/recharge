@@ -157,6 +157,17 @@ fn deployed_stamp_path(managed: &Path) -> PathBuf {
     managed.join("Assembly-CSharp.deployed.stamp")
 }
 
+// The loader install script deploys Assembly-CSharp.dll directly (it doesn't
+// go through deploy_build), so without this the next launch's stamp check
+// sees bytes that don't match the old stamp, reads that as "Steam updated
+// the game", and deletes the just-installed Assembly-CSharp.RECHARGE.dll.
+pub(crate) fn refresh_deploy_stamp(managed: &Path) {
+    let deployed = managed.join("Assembly-CSharp.dll");
+    if let Some(stamp) = fnv1a_file(&deployed) {
+        let _ = std::fs::write(deployed_stamp_path(managed), stamp);
+    }
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     match (std::fs::metadata(a), std::fs::metadata(b)) {
         (Ok(ma), Ok(mb)) if ma.len() == mb.len() => {

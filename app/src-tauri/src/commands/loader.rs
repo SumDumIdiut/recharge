@@ -289,6 +289,7 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     if !managed.join("Recharge.ModApi.dll").is_file() {
         return Err("Install script exited cleanly but Recharge.ModApi.dll wasn't deployed.".into());
     }
+    super::play::refresh_deploy_stamp(&managed);
 
     if let Some(stamp) = loader_stamp(app) {
         let path = stamp_path(&game_path);
