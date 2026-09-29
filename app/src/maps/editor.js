@@ -2007,7 +2007,7 @@ async function toggleInstalledList() {
   list.querySelectorAll('[data-id]').forEach((b) => b.addEventListener('click', async () => {
     try {
       const text = await window.__TAURI__.core.invoke('read_map', { id: b.dataset.id });
-      await openMap(JSON.parse(text), b.dataset.id);
+      await openMap(JSON.parse(text), b.dataset.id, b.dataset.id);
       list.hidden = true;
     } catch (e) {
       flash(/read_map|not found|unknown command/i.test(String(e)) ? 'This Recharge build can\'t read installed maps yet.' : 'Couldn\'t open that map: ' + e, true);
@@ -2015,7 +2015,7 @@ async function toggleInstalledList() {
   }));
 }
 
-async function openMap(map, label) {
+async function openMap(map, label, installedId = null) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
   pushUndo();
@@ -2027,6 +2027,10 @@ async function openMap(map, label) {
   selection = null;
   saveDraft();
   syncBaseUi();
+  draft.savedId = installedId && installedId !== TEST_MAP_ID ? installedId : null;
+  draft.savedAt = null;
+  saveDraft();
+  syncSaveState();
   root.querySelector('#mm-name').value = draft.name || '';
   root.querySelector('#mm-desc').value = draft.description || '';
   renderConfig();
@@ -3882,6 +3886,7 @@ const KEY_GUIDE = [
     ['Delete', 'Delete the selection'],
     ['Esc', 'Deselect / close, then leave fullscreen'],
     ['Ctrl+C / Ctrl+V, V', 'Copy region / paste'],
+    ['Ctrl+S', 'Save to your installed maps'],
     ['Ctrl+D', 'Duplicate the selection'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / redo (Ctrl+Shift+Z too)'],
   ]],
@@ -4444,6 +4449,42 @@ function exportZip() {
   flash(`Saved ${a.download} · ${map.groups[0].objects.length} objects`);
 }
 
+// The editor's own test map is overwritten by every test run, so it's never a save target.
+const TEST_MAP_ID = 'map-maker-test';
+
+// Saves into the game's installed maps: the first save picks a folder from the
+// map's name (never another map's), later ones replace that same map.
+async function saveMap() {
+  let map;
+  try { map = buildMap(); } catch (e) { flash(e.message, true); return; }
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (!invoke) { flash('Saving needs the Recharge app.', true); return; }
+  try {
+    let id = draft.savedId;
+    if (!id) {
+      const taken = new Set((await invoke('list_maps')).map((m) => m.id));
+      taken.add(TEST_MAP_ID);
+      const stem = slug(map.name);
+      id = stem;
+      for (let n = 2; taken.has(id); n++) id = stem + '-' + n;
+    }
+    await invoke('save_map', { id, mapJson: JSON.stringify(map, null, 2) });
+    draft.savedId = id;
+    draft.savedAt = Date.now();
+    saveDraft();
+    syncSaveState();
+    flash(`Saved "${map.name}" to your maps (${id})`);
+  } catch (e) {
+    flash(/save_map|unknown command|not found/i.test(String(e)) ? 'Update Recharge to save maps - this build can\'t yet. Export .zip still works.' : 'Couldn\'t save: ' + e, true);
+  }
+}
+
+function syncSaveState() {
+  const el = root?.querySelector('#mm-save-state');
+  if (!el) return;
+  el.textContent = draft.savedId ? `Saves to your maps as ${draft.savedId}` + (draft.savedAt ? ' · last saved ' + new Date(draft.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '') : 'Not saved yet - Save adds it to your maps';
+}
+
 async function testInGame() {
   let map;
   try { map = buildMap(); } catch (e) { flash(e.message, true); return; }
@@ -4603,6 +4644,7 @@ function onKeyDown(e) {
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveMap(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelection(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); if (brush) setTool('paste'); return; }
@@ -4682,7 +4724,8 @@ export async function mountEditor(container) {
         <button class="mm-tool" id="mm-sim-btn" title="Play zip movers along their tracks (T)">▶ Simulate</button>
         <button class="mm-tool" id="mm-full-btn" title="Fullscreen editor, or back to the page (Esc leaves fullscreen)"></button>
         <button class="mm-tool" id="mm-keys-btn" title="Every keyboard shortcut (K or ?)">?</button>
-        <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, test in game, open and export">Map ▾</button>
+        <button class="mm-tool" id="mm-save" title="Save to your installed maps (Ctrl+S)">Save</button>
+        <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, save, test in game, open and export">Map ▾</button>
       </div>
     </div>
     <div class="mm-canvas-wrap">
@@ -4702,7 +4745,8 @@ export async function mountEditor(container) {
         <div class="mm-config-title">Map<span>name, testing and files</span></div>
         <div class="mm-config-row"><label>Name<input class="mm-input" id="mm-name" type="text" placeholder="Map name" /></label></div>
         <div class="mm-config-row"><label>Description<input class="mm-input" id="mm-desc" type="text" placeholder="Optional" /></label></div>
-        <div class="mm-config-row"><button class="mm-tool mm-primary" id="mm-test" title="Install this map and launch the game straight into it">Test in game</button></div>
+        <div class="mm-config-row"><button class="mm-tool" id="mm-save-panel" title="Save to your installed maps (Ctrl+S)">Save</button><button class="mm-tool mm-primary" id="mm-test" title="Install this map and launch the game straight into it">Test in game</button></div>
+        <div class="mm-config-sub" id="mm-save-state"></div>
         <div class="mm-config-row"><button class="mm-tool" id="mm-load" title="Open one of your installed maps to keep editing it">Load installed…</button></div>
         <div class="mm-load-list" id="mm-load-list" hidden></div>
         <div class="mm-config-row"><button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json) to keep editing it">Open…</button><button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button><button class="mm-tool" id="mm-export">Export .zip</button></div>
@@ -4767,6 +4811,9 @@ export async function mountEditor(container) {
   root.querySelector('#mm-undo').addEventListener('click', undo);
   root.querySelector('#mm-clear').addEventListener('click', clearAll);
   root.querySelector('#mm-test').addEventListener('click', testInGame);
+  root.querySelector('#mm-save').addEventListener('click', saveMap);
+  root.querySelector('#mm-save-panel').addEventListener('click', saveMap);
+  syncSaveState();
   root.querySelector('#mm-copy').addEventListener('click', copyJson);
   root.querySelector('#mm-export').addEventListener('click', exportZip);
 

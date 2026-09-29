@@ -47,6 +47,18 @@ pub fn read_map(app: AppHandle, id: String) -> Result<String, String> {
     std::fs::read_to_string(dir.join(&id).join("map.json")).map_err(|e| format!("couldn't read map '{id}': {e}"))
 }
 
+// Writes the editor's map into the installed maps as <id>/map.json, replacing that map if it exists.
+#[tauri::command]
+pub fn save_map(app: AppHandle, id: String, map_json: String) -> Result<(), String> {
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return Err(format!("invalid id: '{id}'"));
+    }
+    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
+    let target = maps_dir(&app).ok_or("game path not set")?.join(&id);
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    std::fs::write(target.join("map.json"), map_json).map_err(|e| format!("couldn't save map '{id}': {e}"))
+}
+
 #[tauri::command]
 pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     let mut maps = Vec::new();
