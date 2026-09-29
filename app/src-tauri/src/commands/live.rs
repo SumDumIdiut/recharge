@@ -108,11 +108,22 @@ pub fn init(app: &AppHandle) {
         start_server(app);
     }
     let app = app.clone();
-    std::thread::spawn(move || loop {
-        if let Err(e) = check_and_apply(&app) {
-            log(&app, &format!("update check failed: {e}"));
+    std::thread::spawn(move || {
+        // Reload automatically just this once - the dismissible banner alone left a stale first load unnoticed.
+        let mut first = true;
+        loop {
+            match check_and_apply(&app) {
+                Ok(Outcome::Applied) if first => {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.eval("location.reload()");
+                    }
+                }
+                Err(e) => log(&app, &format!("update check failed: {e}")),
+                _ => {}
+            }
+            first = false;
+            std::thread::sleep(CHECK_EVERY);
         }
-        std::thread::sleep(CHECK_EVERY);
     });
 }
 
