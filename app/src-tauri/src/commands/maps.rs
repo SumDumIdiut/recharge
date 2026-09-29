@@ -59,6 +59,29 @@ pub fn save_map(app: AppHandle, id: String, map_json: String) -> Result<(), Stri
     std::fs::write(target.join("map.json"), map_json).map_err(|e| format!("couldn't save map '{id}': {e}"))
 }
 
+// "Export .zip": asks where to save, then writes map.json zipped there. None if the user cancels.
+#[tauri::command]
+pub async fn export_map_zip(app: AppHandle, map_json: String, file_name: String) -> Result<Option<String>, String> {
+    use std::io::Write;
+    use tauri_plugin_dialog::DialogExt;
+    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
+    let Some(picked) = app.dialog().file().set_file_name(&file_name).add_filter("Map", &["zip"]).blocking_save_file() else {
+        return Ok(None);
+    };
+    let mut path = picked.into_path().map_err(|e| e.to_string())?;
+    if path.extension().is_none() {
+        path.set_extension("zip");
+    }
+    let file = std::fs::File::create(&path).map_err(|e| format!("couldn't create {}: {e}", path.display()))?;
+    let mut archive = zip::ZipWriter::new(file);
+    archive
+        .start_file("map.json", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated))
+        .map_err(|e| e.to_string())?;
+    archive.write_all(map_json.as_bytes()).map_err(|e| e.to_string())?;
+    archive.finish().map_err(|e| e.to_string())?;
+    Ok(Some(path.display().to_string()))
+}
+
 #[tauri::command]
 pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     let mut maps = Vec::new();

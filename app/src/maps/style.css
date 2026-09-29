@@ -37,13 +37,6 @@
 
 .mm-canvas-wrap { position: relative; flex: 1; min-height: 0; border: 1px solid var(--line); overflow: hidden; background: var(--bg); }
 .mm-canvas-wrap canvas { position: absolute; inset: 0; display: block; }
-.mm-empty {
-  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-  color: var(--text-dim); font-size: 16px; text-align: center; pointer-events: none;
-}
-.mm-empty[hidden] { display: none; }
-.mm-empty-sub { font-size: 14px; }
-.mm-empty b { color: var(--text); font-weight: normal; }
 .mm-views { position: absolute; top: 8px; right: 10px; display: flex; gap: 6px; }
 .mm-view { background: color-mix(in oklab, var(--bg) 85%, transparent); border: 1px solid var(--line); }
 .mm-view.active { border-color: var(--green); }
