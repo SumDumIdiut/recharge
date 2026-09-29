@@ -69,6 +69,8 @@ let tiles = new Map();
 let placed = [];
 // Spikes placed off the grid (a finer snap than a cell): { x, y, c, q }.
 let freeSpikes = [];
+// Text placed in the map, in the style of the level's green signs: { x, y, t, w, h, c, r }.
+let signs = [];
 let arrows = [];
 let removed = new Set();
 let removedVines = new Set();
@@ -104,6 +106,7 @@ function loadDraft() {
   mossCells = new Map(Object.entries(draft.moss || {}));
   placed = [...(draft.placed || [])];
   freeSpikes = [...(draft.freeSpikes || [])];
+  signs = [...(draft.signs || [])];
   arrows = (draft.arrows || []).map((a) => ({ ...a, cells: a.cells.map((c) => [...c]) }));
   for (const [k, v] of spikes) if (v.c === 'vine') { spikes.delete(k); vines.set(k, { s: 'smallArc', q: v.q }); }
   removedVines = new Set(draft.removedVines);
@@ -121,6 +124,7 @@ function saveDraft() {
   draft.moss = Object.fromEntries(mossCells);
   draft.placed = placed;
   draft.freeSpikes = freeSpikes;
+  draft.signs = signs;
   draft.arrows = arrows;
   draft.removedVines = [...removedVines];
   draft.removedObjects = [...removedObjects];
@@ -135,7 +139,7 @@ function saveDraft() {
 }
 
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, signs, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
 }
 function pushUndo() {
   redoStack = [];
@@ -163,6 +167,7 @@ function restoreSnapshot(s) {
   mossCells = new Map(o.moss || []);
   placed = o.placed || [];
   freeSpikes = o.freeSpikes || [];
+  signs = o.signs || [];
   arrows = o.arrows || [];
   removedVines = new Set(o.removedVines);
   removedObjects = new Set(o.removedObjects);
@@ -485,6 +490,7 @@ function categoryItems(cat) {
         .filter((it) => !/checkpoint/i.test(it.label));
     case 'decor':
       return [
+        { tool: 'sign', label: 'Text', group: 'Text', thumb: { color: SIGN_COLOR } },
         { tool: 'arrow', label: 'Guide arrow', group: 'Paths', thumb: { arrow: true } },
         ...(base.catalog?.decor || []).map((o, i) => ({ tool: 'decor', i, label: o.name, group: 'Props', thumb: { scene: mainSprite(o) } })),
         ...(base.art.stamps || []).map((st, si) => ({ tool: 'stamp', si, label: st.name, group: 'Tile pieces', thumb: { stamp: si } }))
@@ -1118,7 +1124,7 @@ function itemAt(wx, wy) {
   return t && layerOpen(targetLayer(t)) ? t : null;
 }
 function itemAtAny(wx, wy) {
-  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy) : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
+  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy) : e.kind === 'sign' ? Math.abs(wx - e.it.x) <= e.it.w / 2 && Math.abs(wy - e.it.y) <= e.it.h / 2 : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
   if (top) return { kind: top.kind, index: top.index };
   const m = markerAt(wx, wy);
   if (m) return { kind: 'gate', ...m };
@@ -1271,6 +1277,7 @@ function drawTarget(t) {
   const rectW = (x0, y0, x1, y1) => { const a = toScreen(x0, y1), b = toScreen(x1, y0); ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4); };
   if (t.kind === 'object') { const b = placed[t.index] && objectBounds(placed[t.index]); if (b) rectW(b.x0, b.y0, b.x1, b.y1); }
   else if (t.kind === 'fspike') { const f = freeSpikes[t.index]; if (f) rectW(f.x - CELL / 2, f.y - CELL / 2, f.x + CELL / 2, f.y + CELL / 2); }
+  else if (t.kind === 'sign') { const sg = signs[t.index]; if (sg) rectW(sg.x - sg.w / 2, sg.y - sg.h / 2, sg.x + sg.w / 2, sg.y + sg.h / 2); }
   else if (t.kind === 'gate') {
     const g = markerPos(t), b = MARKER_BOX[t.which];
     if (g) rectW(g.x + b.dx - Math.max(b.w, CELL) / 2, g.y + b.dy - Math.max(b.h, CELL) / 2, g.x + b.dx + Math.max(b.w, CELL) / 2, g.y + b.dy + Math.max(b.h, CELL) / 2);
@@ -1322,10 +1329,10 @@ function zipHandle(o) {
 
 // Pressing on what's already selected picks it up to drag, whatever tool is active.
 function grabsSelection(wp) {
-  if (selection?.kind !== 'object' && selection?.kind !== 'gate' && selection?.kind !== 'fspike') return false;
+  if (!['object', 'gate', 'fspike', 'sign'].includes(selection?.kind)) return false;
   const hit = itemAt(wp.x, wp.y);
   if (!hit || hit.kind !== selection.kind) return false;
-  return hit.kind === 'object' || hit.kind === 'fspike' ? hit.index === selection.index : hit.which === selection.which && hit.course === selection.course;
+  return hit.kind === 'object' || hit.kind === 'fspike' || hit.kind === 'sign' ? hit.index === selection.index : hit.which === selection.which && hit.course === selection.course;
 }
 
 function selectDown(e) {
@@ -1341,7 +1348,7 @@ function selectDown(e) {
     selection = hit;
     showInDropdown(hit);
     if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
-    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, fspike: hit.kind === 'fspike', start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'fspike' ? { x: freeSpikes[hit.index].x, y: freeSpikes[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
+    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, fspike: hit.kind === 'fspike', sign: hit.kind === 'sign', start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'fspike' ? { x: freeSpikes[hit.index].x, y: freeSpikes[hit.index].y } : hit.kind === 'sign' ? { x: signs[hit.index].x, y: signs[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
   } else {
     const c = cellOf(w.x, w.y);
     selection = null;
@@ -1366,6 +1373,10 @@ function selectMove(e) {
       changed(() => moveCells(selection, bx - ax, by - ay));
       drag.group.at = now;
     }
+  } else if (drag.sign) {
+    const sg = signs[selection.index], snap = e.shiftKey ? 1 : snapV();
+    const x = drag.orig.x + Math.round((w.x - drag.start.x) / snap) * snap, y = drag.orig.y + Math.round((w.y - drag.start.y) / snap) * snap;
+    if (sg && (sg.x !== x || sg.y !== y)) changed(() => { sg.x = x; sg.y = y; });
   } else if (drag.fspike) {
     const f = freeSpikes[selection.index], snap = e.shiftKey ? 1 : snapV();
     const x = Math.round((drag.orig.x + w.x - drag.start.x) / snap) * snap, y = drag.orig.y + Math.round((w.y - drag.start.y) / snap) * snap;
@@ -1495,6 +1506,10 @@ function nudgeSelection(dx, dy, fine) {
     moveCells(sel, dx, dy);
   } else if (sel.kind === 'base' || sel.kind === 'basecells' || sel.kind === 'scene') {
     return false;
+  } else if (sel.kind === 'sign') {
+    const sg = signs[sel.index], step = fine ? 1 : snapV();
+    if (!sg) return false;
+    sg.x += dx * step; sg.y += dy * step;
   } else if (sel.kind === 'fspike') {
     const f = freeSpikes[sel.index], step = fine ? 1 : snapV();
     if (!f) return false;
@@ -1539,6 +1554,7 @@ function deleteSelection() {
   pushUndo();
   if (selection.kind === 'object') placed.splice(selection.index, 1);
   else if (selection.kind === 'fspike') freeSpikes.splice(selection.index, 1);
+  else if (selection.kind === 'sign') signs.splice(selection.index, 1);
   else if (selection.kind === 'gate') clearMarker(selection);
   else if (selection.kind === 'base') removedObjects.add(selection.id);
   else if (selection.kind === 'blocks') selection.cells.forEach((k) => blocks.delete(k));
@@ -1597,9 +1613,10 @@ function baseTilesIn(x0, y0, x1, y1) {
 // The stack: placed objects, decorations and free spikes in draw order,
 // back to front. Each keeps a z; new things (no z yet) go on top as made.
 function stack() {
-  const all = [...placed.map((it, i) => ({ kind: 'object', index: i, it })), ...freeSpikes.map((it, i) => ({ kind: 'fspike', index: i, it }))];
+  const all = [...placed.map((it, i) => ({ kind: 'object', index: i, it })), ...freeSpikes.map((it, i) => ({ kind: 'fspike', index: i, it })), ...signs.map((it, i) => ({ kind: 'sign', index: i, it }))];
   const z = (e) => e.it.z ?? Infinity;
-  return all.sort((a, b) => z(a) - z(b) || (a.kind === b.kind ? a.index - b.index : a.kind === 'object' ? -1 : 1));
+  const kindOrder = { object: 0, fspike: 1, sign: 2 };
+  return all.sort((a, b) => z(a) - z(b) || (a.kind === b.kind ? a.index - b.index : kindOrder[a.kind] - kindOrder[b.kind]));
 }
 function stackRank() {
   const rank = new Map();
@@ -1608,7 +1625,7 @@ function stackRank() {
 }
 // Moves the selection in the stack: 'front', 'back', or one step 'up' / 'down'.
 function restack(how) {
-  if (selection?.kind !== 'object' && selection?.kind !== 'fspike') { flash('Select an object or a free spike to move it in front or behind.', true); return; }
+  if (!['object', 'fspike', 'sign'].includes(selection?.kind)) { flash('Select an object, text or a free spike to move it in front or behind.', true); return; }
   const list = stack(), pos = list.findIndex((e) => e.kind === selection.kind && e.index === selection.index);
   if (pos < 0) return;
   const to = how === 'front' ? list.length - 1 : how === 'back' ? 0 : Math.max(0, Math.min(list.length - 1, pos + (how === 'up' ? 1 : -1)));
@@ -1630,6 +1647,14 @@ function stackButtons() {
 let clipObject = null;
 function pasteObject() {
   const at = hoverWorld || { x: cam.x, y: cam.y }, snap = snapV();
+  if (clipObject.sign) {
+    const p = snapPoint(at, snap);
+    pushUndo();
+    signs.push({ ...clipObject.sign, x: p.x, y: p.y });
+    selection = { kind: 'sign', index: signs.length - 1 };
+    saveDraft(); renderConfig(); requestDraw();
+    return;
+  }
   if (clipObject.freeSpike) {
     const p = snapPoint(at, snap);
     pushUndo();
@@ -1650,6 +1675,11 @@ function pasteObject() {
 }
 
 function copySelection() {
+  if (selection?.kind === 'sign' && signs[selection.index]) {
+    clipObject = { sign: { ...signs[selection.index] } };
+    flash('Copied text - Ctrl+V pastes it at the mouse');
+    return;
+  }
   if (selection?.kind === 'fspike' && freeSpikes[selection.index]) {
     clipObject = { freeSpike: { ...freeSpikes[selection.index] } };
     flash('Copied spike - Ctrl+V pastes it at the mouse');
@@ -2046,6 +2076,16 @@ function renderConfig() {
     html += `<div class="mm-config-thumb">${thumbHtml({ art: t.tile }, 48)}</div>`;
     html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotL">⟲ Rotate</button><button class="mm-tool" data-act="rotR">Rotate ⟳</button></div>`;
     html += `<div class="mm-config-row">${chk('fx', 'Flip X', t.fx)}${chk('fy', 'Flip Y', t.fy)}</div>`;
+  } else if (selection.kind === 'sign') {
+    const sg = signs[selection.index];
+    if (!sg) { selection = null; el.hidden = true; return; }
+    const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    html += `<div class="mm-config-title">Text<span>says anything, in the level's sign style</span></div>`;
+    html += `<div class="mm-config-row"><label>Text<textarea class="mm-input" rows="2" data-sign="t">${esc(sg.t)}</textarea></label></div>`;
+    html += `<div class="mm-config-row"><label>Width<input class="mm-input" type="number" min="16" step="8" data-sign="w" value="${sg.w}"></label><label>Height<input class="mm-input" type="number" min="8" step="8" data-sign="h" value="${sg.h}"></label></div>`;
+    html += `<div class="mm-config-row"><label>Colour<input class="mm-input" type="color" data-sign="c" value="${sg.c || SIGN_COLOR}"></label><label>Rotation (°)<input class="mm-input" type="number" step="5" data-sign="r" value="${sg.r || 0}"></label></div>`;
+    html += `<div class="mm-config-sub">The text shrinks to fit its box, like the game's signs.</div>`;
+    html += stackButtons();
   } else if (selection.kind === 'fspike') {
     const f = freeSpikes[selection.index];
     if (!f) { selection = null; el.hidden = true; return; }
@@ -2070,6 +2110,20 @@ function renderConfig() {
   el.querySelectorAll('[data-cfg]').forEach((inp) => inp.addEventListener('change', () => applyConfig(inp)));
   el.querySelectorAll('input').forEach((inp) => inp.addEventListener('keydown', (e) => e.stopPropagation()));
   el.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => configAction(b.dataset.act)));
+  el.querySelectorAll('[data-sign]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => e.stopPropagation());
+    inp.addEventListener(inp.tagName === 'TEXTAREA' ? 'input' : 'change', () => {
+      const sg = signs[selection?.index];
+      if (!sg) return;
+      if (!inp.dataset.typing) { pushUndo(); if (inp.tagName === 'TEXTAREA') inp.dataset.typing = '1'; }
+      const f = inp.dataset.sign;
+      if (f === 't' || f === 'c') sg[f] = inp.value;
+      else { const v = Number(inp.value); if (!Number.isFinite(v)) return; sg[f] = f === 'r' ? v : Math.max(8, v); }
+      saveDraft();
+      requestDraw();
+    });
+    inp.addEventListener('blur', () => { delete inp.dataset.typing; });
+  });
 }
 
 function applyConfig(inp) {
@@ -2228,8 +2282,8 @@ function drawSelection() {
 
 function editorState() {
   saveDraft();
-  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
-  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress };
+  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
+  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress };
 }
 
 async function readMapFile(file) {
@@ -2282,7 +2336,7 @@ async function openMap(map, label, installedId = null) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
   pushUndo();
-  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] }, st);
+  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
   localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   loadDraft();
@@ -2483,6 +2537,7 @@ function buildOverlay() {
   mossCells.forEach((_, k) => { const c = mossCenter(k); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', x: c.x, y: c.y, matrix: [1, 0, 0, 1] }); });
   const ranks = stackRank();
   for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f), order: ranks.get(f) });
+  for (const sg of signs) objects.push({ ...signJson(sg), order: ranks.get(sg) });
   spikes.forEach((sp, k) => {
     const [cx, cy] = unkey(k);
     if (sp.c === 'true') { objects.push(trueSpikeJson(sp, cx, cy, at(k))); return; }
@@ -2581,6 +2636,7 @@ function buildMap() {
   });
   const ranks = stackRank();
   for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f, origin.x, origin.y), order: ranks.get(f) });
+  for (const sg of signs) objects.push({ ...signJson(sg, origin.x, origin.y), order: ranks.get(sg) });
   for (const o of placed) {
     const item = catalogItem(o);
     if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: ranks.get(o), ...cloneConfig(o, item) });
@@ -3839,6 +3895,7 @@ function draw() {
   if (!layerHidden('course')) for (const c of courses()) drawCourseScreen(c, courseColor(c.id), courseNumber(c.id));
   for (const e of stack()) {
     if (e.kind === 'fspike') { if (!layerHidden('hazards')) drawFreeSpike(e.it); }
+    else if (e.kind === 'sign') { if (!layerHidden('decor')) drawSign(e.it); }
     else if (!layerHidden(e.it.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(e.it);
   }
   drawSelection();
@@ -4114,6 +4171,59 @@ function drawFreeSpike(f) {
   ctx.fillStyle = COLORS[f.c] || COLORS.spike;
   ctx.beginPath(); ctx.moveTo(...pt(-1, -1)); ctx.lineTo(...pt(1, -1)); ctx.lineTo(...pt(0, 1)); ctx.closePath(); ctx.fill();
 }
+// ---- text: the level's green sign text (the zone 2 statue's), saying anything ----
+const SIGN_PATH = 'zone 2/Area1/Lighting objects/CoolStatue/StatuePrestigeText';
+const SIGN_COLOR = '#7bb652';
+function signTemplate() {
+  const texts = sceneList?.texts || [];
+  return texts.find((t) => t.t.startsWith('Mossy ground')) || texts.find((t) => t.c === SIGN_COLOR) || null;
+}
+function signDefaults() {
+  const tpl = signTemplate();
+  return { w: Math.round(tpl ? tpl.w * tpl.k : 280), h: Math.round(tpl ? tpl.h * tpl.k : 56) };
+}
+const signBaked = new Map();
+function drawSign(sg) {
+  const tpl = signTemplate();
+  const c = toScreen(sg.x, sg.y), w = sg.w * cam.scale, h = sg.h * cam.scale;
+  if (!tpl || !fontsReady()) {
+    ctx.save();
+    ctx.fillStyle = sg.c || SIGN_COLOR;
+    ctx.font = `${Math.max(8, 20 * cam.scale)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(sg.t, c.x, c.y);
+    ctx.restore();
+    return;
+  }
+  const t = { ...tpl, t: sg.t || ' ', w: sg.w / tpl.k, h: sg.h / tpl.k, c: sg.c || tpl.c, r: 0 };
+  const k = [t.t, t.w, t.h, t.c].join('|');
+  let baked = signBaked.get(k);
+  if (baked === undefined) {
+    baked = bakeText(t);
+    signBaked.set(k, baked);
+    if (signBaked.size > 300) signBaked.delete(signBaked.keys().next().value);
+  }
+  if (!baked) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, c.x, c.y);
+  ctx.rotate(-((sg.r || 0) * Math.PI) / 180);
+  ctx.scale(cam.scale / baked.px, cam.scale / baked.px);
+  ctx.drawImage(baked.canvas, baked.x0 * baked.px, -baked.top * baked.px);
+  ctx.restore();
+  if (selection?.kind === 'sign' && signs[selection.index] === sg) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(123, 182, 82, 0.5)';
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(c.x - w / 2, c.y - h / 2, w, h);
+    ctx.restore();
+  }
+}
+const signAt = (wx, wy) => signs.findLastIndex((sg) => Math.abs(wx - sg.x) <= sg.w / 2 && Math.abs(wy - sg.y) <= sg.h / 2);
+function signJson(sg, ox = 0, oy = 0) {
+  const col = (sg.c || SIGN_COLOR).match(/\w\w/g).map((h) => Math.round((parseInt(h, 16) / 255) * 1000) / 1000);
+  return { type: 'sign', path: SIGN_PATH, x: Math.round(sg.x - ox), y: Math.round(sg.y - oy), text: sg.t, width: sg.w, height: sg.h, color: col, rotation: sg.r || 0 };
+}
+
 // A free spike for the game: its tile, turned, and its hitbox in its own units.
 function freeSpikeJson(f, ox = 0, oy = 0) {
   const at = { x: Math.round(f.x - ox), y: Math.round(f.y - oy) };
@@ -4147,7 +4257,7 @@ function vineAt(wx, wy) {
 const LAYER_DEFS = [['level', 'Level (base map)'], ['blocks', 'Blocks & moss'], ['hazards', 'Spikes & vines'], ['tiles', 'Tiles & arrows'], ['objects', 'Objects'], ['decor', 'Decorations'], ['course', 'Course & spawn']];
 const layerHidden = (id) => !!draft.layers?.[id]?.hidden;
 const layerLocked = (id) => !!draft.layers?.[id]?.locked;
-const TOOL_LAYER = { block: 'blocks', dark: 'blocks', blue: 'blocks', orange: 'blocks', moss: 'blocks', spike: 'hazards', blueSpike: 'hazards', orangeSpike: 'hazards', trueSpike: 'hazards', vine: 'hazards', tile: 'tiles', stamp: 'tiles', arrow: 'tiles', object: 'objects', decor: 'decor', start: 'course', end: 'course', spawn: 'course', paste: null };
+const TOOL_LAYER = { block: 'blocks', dark: 'blocks', blue: 'blocks', orange: 'blocks', moss: 'blocks', spike: 'hazards', blueSpike: 'hazards', orangeSpike: 'hazards', trueSpike: 'hazards', vine: 'hazards', tile: 'tiles', stamp: 'tiles', arrow: 'tiles', object: 'objects', decor: 'decor', sign: 'decor', start: 'course', end: 'course', spawn: 'course', paste: null };
 function targetLayer(t) {
   switch (t?.kind) {
     case 'object': return placed[t.index]?.cat === 'decor' ? 'decor' : 'objects';
@@ -4155,6 +4265,7 @@ function targetLayer(t) {
     case 'blocks': case 'moss': return 'blocks';
     case 'cell': return t.vine || spikes.has(t.k) ? 'hazards' : 'blocks';
     case 'fspike': return 'hazards';
+    case 'sign': return 'decor';
     case 'tile': return 'tiles';
     case 'base': case 'basecells': case 'scene': case 'decotiles': return 'level';
     default: return null;
@@ -4611,6 +4722,13 @@ function applyTool(cx, cy) {
     if (blocks.get(k) === BLOCK_KIND[tool]) return false;
     spikes.delete(k);
     blocks.set(k, BLOCK_KIND[tool]);
+  } else if (tool === 'sign') {
+    if (drag?.signPlaced) return false;
+    const p = snapPoint(hoverWorld || { x: cellWorld(cx, cy).x + CELL / 2, y: cellWorld(cx, cy).y + CELL / 2 });
+    signs.push({ x: p.x, y: p.y, t: 'Text', ...signDefaults() });
+    selection = { kind: 'sign', index: signs.length - 1 };
+    if (drag) drag.signPlaced = true;
+    setTimeout(() => { setTool('select'); renderConfig(); root.querySelector('[data-sign="t"]')?.select(); });
   } else if (SPIKE_KIND[tool]) {
     if (snapV() < CELL && hoverWorld) return placeFreeSpike(SPIKE_KIND[tool], hoverWorld);
     if (spikes.get(k)?.c === SPIKE_KIND[tool]) return false;
@@ -4653,6 +4771,8 @@ function applyTool(cx, cy) {
       if (oi >= 0) { placed.splice(oi, 1); return true; }
       const fi = freeSpikeAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
       if (fi >= 0) { freeSpikes.splice(fi, 1); return true; }
+      const si = signAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
+      if (si >= 0) { signs.splice(si, 1); return true; }
       const t = tileAt(px, py);
       if (t) { if (t[1].arrow) removeArrow(t[1].arrow); else tiles.delete(t[0]); return true; }
       if (mossCells.delete(mossKeyAt(px, py))) return true;
@@ -4929,6 +5049,7 @@ function clearAll() {
   mossCells.clear();
   placed = [];
   freeSpikes = [];
+  signs = [];
   arrows = [];
   removed.clear();
   removedVines.clear();
@@ -5003,7 +5124,7 @@ function bindWindow() {
       return;
     }
     if (drag?.platform) { const r = canvas.getBoundingClientRect(); hoverWorld = toWorld(e.clientX - r.left, e.clientY - r.top); platformPaint(hoverWorld); return; }
-    if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group || drag.fspike)) { selectMove(e); return; }
+    if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group || drag.fspike || drag.sign)) { selectMove(e); return; }
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
       if (hover) { hover = null; updateStatus(); requestDraw(); }
