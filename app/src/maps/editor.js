@@ -3880,7 +3880,7 @@ const KEY_GUIDE = [
     ['Q', 'Select - click a thing (opens it in its dropdown), drag a region'],
     ['E', 'Erase'],
     ['Delete', 'Delete the selection'],
-    ['Esc', 'Deselect / close'],
+    ['Esc', 'Deselect / close, then leave fullscreen'],
     ['Ctrl+C / Ctrl+V, V', 'Copy region / paste'],
     ['Ctrl+D', 'Duplicate the selection'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / redo (Ctrl+Shift+Z too)'],
@@ -4609,7 +4609,12 @@ function onKeyDown(e) {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
-  if (e.key === 'Escape') { if (popCat) closePopover(); else { selection = null; renderConfig(); if (tool === 'paste') setTool('select'); requestDraw(); } return; }
+  if (e.key === 'Escape') {
+    if (popCat) closePopover();
+    else if (selection || tool === 'paste') { selection = null; renderConfig(); if (tool === 'paste') setTool('select'); requestDraw(); }
+    else if (!draft.inline) { draft.inline = true; saveDraft(); syncChrome(); }
+    return;
+  }
   if (e.key === 'Delete' || e.key === 'Backspace') { if (selection) { e.preventDefault(); deleteSelection(); } return; }
   if (e.key.startsWith('Arrow')) {
     e.preventDefault();
@@ -4675,7 +4680,7 @@ export async function mountEditor(container) {
         <button class="mm-tool" id="mm-undo" title="Undo (Ctrl+Z)">Undo</button>
         <button class="mm-tool" id="mm-clear" title="Clear the whole draft">Clear</button>
         <button class="mm-tool" id="mm-sim-btn" title="Play zip movers along their tracks (T)">▶ Simulate</button>
-        <button class="mm-tool" id="mm-full-btn" title="Fullscreen editor, or back to the page"></button>
+        <button class="mm-tool" id="mm-full-btn" title="Fullscreen editor, or back to the page (Esc leaves fullscreen)"></button>
         <button class="mm-tool" id="mm-keys-btn" title="Every keyboard shortcut (K or ?)">?</button>
         <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, test in game, open and export">Map ▾</button>
       </div>
