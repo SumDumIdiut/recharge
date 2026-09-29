@@ -57,6 +57,7 @@ pub fn run() {
             maps::list_maps,
             maps::read_map,
             maps::save_map,
+            maps::export_map_zip,
             maps::uninstall_map,
             maps::test_launch_map,
             skins::list_installed_skins,

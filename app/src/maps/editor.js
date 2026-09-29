@@ -4,6 +4,10 @@ const END_BOX = { dx: 0, dy: -26, w: 240, h: 13 };
 const START_LIFT = 125;
 const SPAWN_BOX = { dx: 0, dy: 0, w: 32, h: 64 };
 const SPAWN_LIFT = 40;
+// A course's screen (the board showing its reward, best time and clones),
+// placed by the centre of its texts: the game's board is 350 x 150 scaled
+// 1.1 x 1.15, sitting just below them.
+const SCREEN_BOX = { dx: 3, dy: 3, w: 385, h: 172 };
 const END_LIFT = 32;
 const CELL = 32;
 const OFFSET_Y = 9;
@@ -49,7 +53,7 @@ let drag = null;
 let spaceDown = false;
 let undoStack = [];
 let redoStack = [];
-const DEFAULT_PLAYER = { dashes: 1, airJumps: 1, wallJump: true, blockSwap: false, omniDash: false, zipMovers: true, refreshers: true, cash: 0 };
+const DEFAULT_PLAYER = { dashes: 1, airJumps: 1, wallJump: true, blockSwap: false, omniDash: false, zipMovers: true, refreshers: true, teleporters: true, cash: 0 };
 let draft = emptyDraft();
 let mounted = false;
 let frameQueued = false;
@@ -657,13 +661,128 @@ function zipConfig(o, item = catalogItem(o)) {
   const base = zipPlatform(item);
   const span = c.span ?? base.span;
   const across = Math.abs(end[1]) < Math.abs(end[0]) * 0.5;
-  return { end, time: c.time ?? z.time, backTime: c.backTime ?? z.backTime, span, size: across ? [base.thick, span] : [span, base.thick] };
+  return { end, time: c.time ?? z.time, backTime: c.backTime ?? z.backTime, auto: !!c.auto, pauseMove: c.pauseMove ?? 1, pauseReturn: c.pauseReturn ?? 0.5, span, size: across ? [base.thick, span] : [span, base.thick] };
 }
 function zipPlatform(item) {
   const part = item.parts.find((p) => p.n === 'ZipMoverMovingPart');
   const [w, h] = part?.sz || [96, 384];
   return Math.abs(item.zip.end[1]) < Math.abs(item.zip.end[0]) ? { thick: w, span: h } : { thick: h, span: w };
 }
+// ---- zip platforms built from grate tiles ----
+// A zip mover's platform is a grid of cells around its moving part; the cells
+// under the gear are the root, and every other cell hangs off it (connected).
+let platformEdit = null;
+const STEPS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const zipMovingPart = (item) => item?.parts?.find((p) => p.n === 'ZipMoverMovingPart');
+function zipShape(o, item = catalogItem(o)) {
+  const z = zipConfig(o, item), mp = zipMovingPart(item);
+  if (!z || !mp) return null;
+  const c = o.cfg?.zip || {};
+  const [w, h] = z.size, n = Math.max(1, Math.round(w / CELL)), m = Math.max(1, Math.round(h / CELL));
+  const grid = c.grid || [n % 2 ? 0 : CELL / 2, m % 2 ? 0 : CELL / 2];
+  let cells = c.cells;
+  if (!cells) {
+    cells = [];
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) cells.push(key(Math.round((-w / 2 + CELL / 2 + i * CELL - grid[0]) / CELL), Math.round((-h / 2 + CELL / 2 + j * CELL - grid[1]) / CELL)));
+  }
+  return { centre: { x: o.x + mp.x, y: o.y + mp.y }, grid, cells: new Set(cells) };
+}
+function shapeCellCentre(sh, k) {
+  const [i, j] = unkey(k);
+  return { x: sh.grid[0] + i * CELL, y: sh.grid[1] + j * CELL };
+}
+function isRootCell(sh, k) {
+  const p = shapeCellCentre(sh, k);
+  return Math.abs(p.x) <= CELL / 2 && Math.abs(p.y) <= CELL / 2;
+}
+function attachedCells(sh, cells) {
+  const seen = new Set([...cells].filter((k) => isRootCell(sh, k))), stack = [...seen];
+  while (stack.length) {
+    const [i, j] = unkey(stack.pop());
+    for (const [di, dj] of STEPS4) {
+      const k = key(i + di, j + dj);
+      if (cells.has(k) && !seen.has(k)) { seen.add(k); stack.push(k); }
+    }
+  }
+  return seen;
+}
+// The cells as few rectangles as possible: rows of runs, stacked where they match.
+// [centreX, centreY, width, height] from the moving part's centre.
+function platformRects(sh) {
+  const rows = new Map();
+  for (const k of sh.cells) {
+    const [i, j] = unkey(k);
+    if (!rows.has(j)) rows.set(j, []);
+    rows.get(j).push(i);
+  }
+  const rects = [];
+  for (const [j, is] of [...rows].sort((a, b) => a[0] - b[0])) {
+    is.sort((a, b) => a - b);
+    for (let t = 0; t < is.length;) {
+      let u = t;
+      while (u + 1 < is.length && is[u + 1] === is[u] + 1) u++;
+      const a = is[t], b = is[u], above = rects.find((q) => q.a === a && q.b === b && q.j1 === j - 1);
+      if (above) above.j1 = j; else rects.push({ a, b, j0: j, j1: j });
+      t = u + 1;
+    }
+  }
+  return rects.map((q) => [sh.grid[0] + ((q.a + q.b) / 2) * CELL, sh.grid[1] + ((q.j0 + q.j1) / 2) * CELL, (q.b - q.a + 1) * CELL, (q.j1 - q.j0 + 1) * CELL]);
+}
+function platformCellAt(wp) {
+  const o = placed[platformEdit], sh = o && zipShape(o);
+  if (!sh) return null;
+  return { o, sh, k: key(Math.round((wp.x - sh.centre.x - sh.grid[0]) / CELL), Math.round((wp.y - sh.centre.y - sh.grid[1]) / CELL)) };
+}
+function platformPaint(wp) {
+  const hit = platformCellAt(wp);
+  if (!hit) return;
+  const { o, sh, k } = hit, cells = new Set(sh.cells);
+  if (drag.platformMode == null) drag.platformMode = cells.has(k) ? 'erase' : 'paint';
+  if (drag.platformMode === 'paint') {
+    const [i, j] = unkey(k);
+    if (cells.has(k) || !STEPS4.some(([di, dj]) => cells.has(key(i + di, j + dj)))) return;
+    cells.add(k);
+  } else {
+    if (!cells.has(k)) return;
+    if (isRootCell(sh, k)) { if (!drag.warned) { drag.warned = true; flash('The root under the gear stays - the rest of the platform hangs off it.'); } return; }
+    cells.delete(k);
+    const kept = attachedCells(sh, cells);
+    for (const c of [...cells]) if (!kept.has(c)) cells.delete(c);
+  }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  o.cfg = { ...o.cfg, zip: { ...(o.cfg?.zip || {}), grid: sh.grid, cells: [...cells] } };
+  saveDraft();
+  renderConfig();
+  requestDraw();
+}
+function setPlatformEdit(index) {
+  platformEdit = index;
+  renderConfig();
+  requestDraw();
+  if (index != null) flash('Building the platform: drag from empty space to add grate, from grate to remove it');
+}
+function drawPlatformEdit() {
+  const o = placed[platformEdit], sh = o && zipShape(o);
+  if (!sh) { platformEdit = null; return; }
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (const k of sh.cells) {
+    const p = shapeCellCentre(sh, k), a = toScreen(sh.centre.x + p.x - CELL / 2, sh.centre.y + p.y + CELL / 2), sz = CELL * cam.scale;
+    ctx.fillStyle = isRootCell(sh, k) ? 'rgba(65, 248, 141, 0.28)' : 'rgba(94, 200, 240, 0.12)';
+    ctx.fillRect(a.x, a.y, sz, sz);
+    ctx.strokeStyle = 'rgba(94, 200, 240, 0.55)';
+    ctx.strokeRect(a.x + 0.5, a.y + 0.5, sz - 1, sz - 1);
+  }
+  const hover = hoverWorld && platformCellAt(hoverWorld);
+  if (hover) {
+    const p = shapeCellCentre(sh, hover.k), a = toScreen(sh.centre.x + p.x - CELL / 2, sh.centre.y + p.y + CELL / 2), sz = CELL * cam.scale;
+    ctx.strokeStyle = sh.cells.has(hover.k) ? '#ff6b6b' : COLORS.start;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(a.x, a.y, sz, sz);
+  }
+  ctx.restore();
+}
+
 function snapZipEnd(dx, dy) {
   const a = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
   const ux = Math.round(Math.cos(a)), uy = Math.round(Math.sin(a));
@@ -686,6 +805,10 @@ function objectParts(o, item = catalogItem(o)) {
       if (p.n === 'ZipMoverMovingPart' && p.sz) return { ...p, sz: zip.size };
       return p;
     });
+    if (cfg.zip?.cells) {
+      const sh = zipShape(o, item);
+      parts = parts.flatMap((p) => (p.n === 'ZipMoverMovingPart' ? platformRects(sh).map(([rx, ry, w, h]) => ({ ...p, x: p.x + rx, y: p.y + ry, sz: [w, h] })) : [p]));
+    }
   }
   if (item.stretch && cfg.width && cfg.width !== item.stretch.width) {
     parts = parts.map((p, n) => {
@@ -756,13 +879,16 @@ function drawPlacedObject(o, alpha = 1) {
     ctx.restore();
   }
 }
+// Where along its track (0 start, 1 end) a zip mover is `now` seconds into
+// its loop: move, pause, return, pause - as the game plays one on its own.
 function zipTravel(zip, now) {
-  const go = Math.max(0.05, zip.time), back = Math.max(0.05, zip.backTime), cycle = go + 0.5 + back + 1;
+  const go = Math.max(0.05, zip.time), back = Math.max(0.05, zip.backTime);
+  const atEnd = Math.max(0, zip.pauseReturn ?? 0.5), atStart = Math.max(0, zip.pauseMove ?? 1), cycle = go + atEnd + back + atStart;
   let t = now % cycle;
   if (t < go) { const x = t / go; return x < 0.75 ? 1.1851852 * x * x * x : 1.1851852 * 0.421875 + 3 * 1.1851852 * 0.5625 * (x - 0.75); }
   t -= go;
-  if (t < 0.5) return 1;
-  t -= 0.5;
+  if (t < atEnd) return 1;
+  t -= atEnd;
   if (t < back) return 1 - t / back;
   return 0;
 }
@@ -1136,8 +1262,7 @@ function drawTarget(t) {
   const rectW = (x0, y0, x1, y1) => { const a = toScreen(x0, y1), b = toScreen(x1, y0); ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4); };
   if (t.kind === 'object') { const b = placed[t.index] && objectBounds(placed[t.index]); if (b) rectW(b.x0, b.y0, b.x1, b.y1); }
   else if (t.kind === 'gate') {
-    const g = t.which === 'spawn' ? draft.spawn : courseById(t.course)?.[t.which];
-    const b = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX }[t.which];
+    const g = markerPos(t), b = MARKER_BOX[t.which];
     if (g) rectW(g.x + b.dx - Math.max(b.w, CELL) / 2, g.y + b.dy - Math.max(b.h, CELL) / 2, g.x + b.dx + Math.max(b.w, CELL) / 2, g.y + b.dy + Math.max(b.h, CELL) / 2);
   } else if (t.kind === 'tile') {
     const tl = tiles.get(t.key);
@@ -1185,6 +1310,14 @@ function zipHandle(o) {
   return z ? { x: o.x + z.end[0], y: o.y + z.end[1] } : null;
 }
 
+// Pressing on what's already selected picks it up to drag, whatever tool is active.
+function grabsSelection(wp) {
+  if (selection?.kind !== 'object' && selection?.kind !== 'gate') return false;
+  const hit = itemAt(wp.x, wp.y);
+  if (!hit || hit.kind !== selection.kind) return false;
+  return hit.kind === 'object' ? hit.index === selection.index : hit.which === selection.which && hit.course === selection.course;
+}
+
 function selectDown(e) {
   const w = worldAt(e);
   const sel = selection?.kind === 'object' ? placed[selection.index] : null;
@@ -1198,7 +1331,7 @@ function selectDown(e) {
     selection = hit;
     showInDropdown(hit);
     if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
-    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : null, before: snapshot(), changed: false };
+    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
   } else {
     const c = cellOf(w.x, w.y);
     selection = null;
@@ -1223,6 +1356,10 @@ function selectMove(e) {
       changed(() => moveCells(selection, bx - ax, by - ay));
       drag.group.at = now;
     }
+  } else if (drag.gate && drag.gate.which === 'screen') {
+    const course = courseById(drag.gate.course), snap = e.shiftKey ? 1 : snapV();
+    const at = { x: Math.round((drag.orig.x + w.x - drag.start.x) / snap) * snap, y: Math.round((drag.orig.y + w.y - drag.start.y) / snap) * snap };
+    if (course && (course.screen?.x !== at.x || course.screen?.y !== at.y)) changed(() => { course.screen = at; });
   } else if (drag.gate) {
     const c = cellOf(w.x, w.y), which = drag.gate.which, g = gateAt(c.cx, c.cy, which);
     const cur = which === 'spawn' ? draft.spawn : courseById(drag.gate.course)?.[which];
@@ -1340,7 +1477,7 @@ function nudgeSelection(dx, dy, fine) {
   } else if (sel.kind === 'base' || sel.kind === 'basecells' || sel.kind === 'scene') {
     return false;
   } else if (sel.kind === 'gate') {
-    const g = sel.which === 'spawn' ? draft.spawn : courseById(sel.course)?.[sel.which];
+    const g = markerPos(sel);
     if (!g) return false;
     const moved = { ...g, x: g.x + dx * CELL, y: g.y + dy * CELL };
     if (sel.which === 'spawn') draft.spawn = moved; else courseById(sel.course)[sel.which] = moved;
@@ -1432,8 +1569,45 @@ function baseTilesIn(x0, y0, x1, y1) {
   return out;
 }
 
+// Layering: objects draw in list order, so the end of the list is the front.
+function restack(toFront) {
+  if (selection?.kind !== 'object') { flash('Select an object to move it in front or behind.', true); return; }
+  const i = selection.index, o = placed[i];
+  if (!o || (toFront ? i === placed.length - 1 : i === 0)) return;
+  pushUndo();
+  placed.splice(i, 1);
+  if (toFront) placed.push(o); else placed.unshift(o);
+  selection = { kind: 'object', index: toFront ? placed.length - 1 : 0 };
+  if (platformEdit === i) platformEdit = selection.index;
+  saveDraft();
+  renderConfig();
+  requestDraw();
+  flash(toFront ? 'Brought to front' : 'Sent to back');
+}
+
+// A copied object: Ctrl+V puts a copy under the mouse (a region copy pastes with a click instead).
+let clipObject = null;
+function pasteObject() {
+  const at = hoverWorld || { x: cam.x, y: cam.y }, snap = snapV();
+  const copy = { ...JSON.parse(JSON.stringify(clipObject)), x: Math.round(at.x / snap) * snap, y: Math.round(at.y / snap) * snap };
+  if (copy.uid) copy.uid = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  delete copy.tp;
+  pushUndo();
+  placed.push(copy);
+  selection = { kind: 'object', index: placed.length - 1 };
+  saveDraft();
+  renderConfig();
+  requestDraw();
+}
+
 function copySelection() {
-  if (selection?.kind !== 'region') { flash('Drag out a region with Select (Q) first.', true); return; }
+  if (selection?.kind === 'object' && placed[selection.index]) {
+    clipObject = JSON.parse(JSON.stringify(placed[selection.index]));
+    flash(`Copied ${catalogItem(clipObject)?.name || 'object'} - Ctrl+V pastes it at the mouse`);
+    return;
+  }
+  if (selection?.kind !== 'region') { flash('Select an object, or drag out a region with Select (Q), first.', true); return; }
+  clipObject = null;
   const { x0, y0, x1, y1 } = selection;
   const origin = cellWorld(x0, y0);
   const inRegion = (cx, cy) => cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
@@ -1661,7 +1835,7 @@ function upgradeConfigHtml(o, num) {
 
 const LEVEL_TOGGLES = [
   ['wallJump', 'Wall jump'], ['blockSwap', 'Block swap dash'], ['omniDash', 'Omni dash'],
-  ['zipMovers', 'Zip movers work'], ['refreshers', 'Refreshers work'],
+  ['zipMovers', 'Zip movers work'], ['refreshers', 'Refreshers work'], ['teleporters', 'Teleporters work'],
 ];
 const LOCAL_UPGRADE_ENUM = ['Global', 'Movement', 'Clones', 'Base reward', 'Fast clone chance', 'Big clone chance', 'Boost all previous courses', 'Clone reward multiplier', 'Clones', 'Green clone reward', 'Emergency lights', 'Clone dust generation', 'More watts', 'Red clone reward'];
 const MOVEMENT_ENUM = ['Dash', 'Wall jump', 'Double jump', 'Swap blocks once', 'Block swap', 'End of demo', 'Omni dash'];
@@ -1746,6 +1920,7 @@ function renderConfig() {
     const cfg = o.cfg || {};
     html += `<div class="mm-config-title">${item.name}<span>${o.cat === 'objects' ? 'object' : 'decoration'}</span></div>`;
     html += `<div class="mm-config-row">${num('x', 'X', o.x)}${num('y', 'Y', o.y)}</div>`;
+    html += `<div class="mm-config-row"><button class="mm-tool" data-act="front" title="Draw it over the other objects (])">Bring to front</button><button class="mm-tool" data-act="back" title="Draw it under the other objects ([)">Send to back</button></div>`;
     if (isTeleporter(item)) {
       const opts = teleporterTargets(o), sel = (dir) => `<label>${dir === 'up' ? 'Up (▲) to' : 'Down (▼) to'}<select class="mm-input" data-cfg="tp:${dir}"><option value="">Nothing</option>${opts.map(([v, t]) => `<option value="${v}"${o.tp?.[dir] === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
       html += `<div class="mm-config-row">${sel('up')}</div><div class="mm-config-row">${sel('down')}</div>`;
@@ -1761,8 +1936,15 @@ function renderConfig() {
       const len = Math.hypot(...zip.end), ang = (Math.atan2(zip.end[1], zip.end[0]) * 180) / Math.PI;
       html += `<div class="mm-config-sub">Track - drag the end node (8 directions, whole cells)</div>`;
       html += `<div class="mm-config-row">${num('zipLen', 'Length', len, CELL)}${num('zipAng', 'Direction (°)', ang, 45)}</div>`;
-      html += `<div class="mm-config-row">${num('zipTime', 'Travel time (s)', zip.time, 0.1)}${num('zipBack', 'Return time (s)', zip.backTime, 0.1)}</div>`;
-      html += `<div class="mm-config-row">${num('zipSpan', 'Platform length', zip.span, CELL)}</div>`;
+      html += `<div class="mm-config-row">${num('zipTime', 'Move time (s)', zip.time, 0.1)}${num('zipBack', 'Return time (s)', zip.backTime, 0.1)}</div>`;
+      html += `<div class="mm-config-row">${chk('zipAuto', 'Moves on its own', zip.auto)}</div>`;
+      if (zip.auto) html += `<div class="mm-config-row">${num('zipPauseReturn', 'Pause before returning (s)', zip.pauseReturn, 0.1)}${num('zipPauseMove', 'Pause before moving (s)', zip.pauseMove, 0.1)}</div>`;
+      else html += `<div class="mm-config-sub">Moves when touched, like the game's own. Tick "Moves on its own" to have it loop by itself.</div>`;
+      const building = platformEdit === selection.index, shaped = !!cfg.zip?.cells;
+      if (!shaped) html += `<div class="mm-config-row">${num('zipSpan', 'Platform length', zip.span, CELL)}</div>`;
+      html += `<div class="mm-config-row"><button class="mm-tool${building ? ' active' : ''}" data-act="platform">${building ? 'Done building' : 'Build platform (B)'}</button>${shaped ? '<button class="mm-tool" data-act="platformReset">Reset shape</button>' : ''}</div>`;
+      if (building) html += `<div class="mm-config-sub">Drag from empty space to add grate tiles, from a tile to remove them. Every tile hangs off the green root under the gear; cutting a piece off removes it.</div>`;
+      else if (shaped) html += `<div class="mm-config-sub">Built from ${zipShape(o, item).cells.size} grate tiles.</div>`;
     } else {
       html += `<div class="mm-config-row">${num('rot', 'Rotation (°) , .', cfg.rot || 0, 15)}${num('scale', 'Scale = -', cfg.scale || 1, 0.1)}</div>`;
       if (item.stretch) html += `<div class="mm-config-row">${num('width', 'Width (tiles the sprite)', cfg.width || item.stretch.width, 16)}</div>`;
@@ -1789,6 +1971,10 @@ function renderConfig() {
     if (selection.which === 'spawn') {
       if (!draft.spawn) { selection = null; el.hidden = true; return; }
       html += `<div class="mm-config-title">Spawn<span>where the player starts</span></div>`;
+    } else if (selection.which === 'screen') {
+      if (!courseScreen(c)) { selection = null; el.hidden = true; return; }
+      html += `<div class="mm-config-title" style="color:${courseColor(c.id)}">Course ${courseNumber(c.id)}<span>screen</span></div>`;
+      html += `<div class="mm-config-sub">Shows the course's reward, best time and clones in the game. Drag it anywhere; Delete puts it back beside the start gate.</div>`;
     } else {
       if (!c?.[selection.which]) { selection = null; el.hidden = true; return; }
       const n = courseNumber(c.id), rw = c.reward || { currency: 'Cash', amount: 0 };
@@ -1849,6 +2035,9 @@ function applyConfig(inp) {
       if (z.end && !z.end[0] && !z.end[1]) delete z.end;
       if (id === 'zipTime') z.time = v;
       if (id === 'zipBack') z.backTime = v;
+      if (id === 'zipAuto') z.auto = v;
+      if (id === 'zipPauseReturn') z.pauseReturn = Math.max(0, v);
+      if (id === 'zipPauseMove') z.pauseMove = Math.max(0, v);
       if (id === 'zipSpan') z.span = Math.max(CELL, Math.round(v / CELL) * CELL);
       cfg.zip = z;
     } else cfg[id] = v;
@@ -1906,6 +2095,18 @@ function applyCourseConfig(id, raw) {
 
 function configAction(act) {
   if (act === 'delete') return deleteSelection();
+  if (act === 'front' || act === 'back') return restack(act === 'front');
+  if (act === 'platform') return setPlatformEdit(platformEdit === selection?.index ? null : selection?.index);
+  if (act === 'platformReset') {
+    const o = placed[selection.index];
+    pushUndo();
+    const { cells, grid, ...rest } = o.cfg?.zip || {};
+    o.cfg = { ...o.cfg, zip: rest };
+    saveDraft();
+    renderConfig();
+    requestDraw();
+    return;
+  }
   if (act === 'rflipx') return transformRegion('x');
   if (act === 'rflipy') return transformRegion('y');
   if (act === 'rrot') return transformRegion('r');
@@ -2139,7 +2340,7 @@ function cloneConfig(o, item) {
   if ((cfg.scale && cfg.scale !== 1) || cfg.fx || cfg.fy) out.scale = [(cfg.scale || 1) * (cfg.fx ? -1 : 1), (cfg.scale || 1) * (cfg.fy ? -1 : 1)];
   if (cfg.fields && Object.keys(cfg.fields).length) out.fields = cfg.fields;
   const zip = item.zip && cfg.zip ? zipConfig(o, item) : null;
-  if (zip) out.zip = { end: zip.end, time: zip.time, backTime: zip.backTime, size: zip.size };
+  if (zip) out.zip = { end: zip.end, time: zip.time, backTime: zip.backTime, size: zip.size, ...(zip.auto ? { auto: true, pauseMove: zip.pauseMove, pauseReturn: zip.pauseReturn } : {}), ...(cfg.zip?.cells ? { rects: platformRects(zipShape(o, item)) } : {}) };
   if (isLinked(o.course)) out.course = o.course;
   if (isCourseCheckpoint(item)) out.courseCheckpoint = true;
   if (isTeleporter(item)) {
@@ -2234,7 +2435,7 @@ function buildOverlay() {
   });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), order: placed.indexOf(o), ...cloneConfig(o, item) });
   }
 
   const full = completeCourses(), first = full[0], hasGates = !!first;
@@ -2316,7 +2517,7 @@ function buildMap() {
   });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: placed.indexOf(o), ...cloneConfig(o, item) });
   }
 
   return {
@@ -3564,6 +3765,8 @@ function draw() {
   if (!layerHidden('hazards')) vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (near(cx, cy)) drawVine(cx, cy, v.s, rotMatrix(v.q)); });
   if (!layerHidden('blocks')) mossCells.forEach((_, k) => { if (!useArt || !drawMoss(k)) { const c = mossCenter(k), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); } });
   if (useArt && !layerHidden('tiles')) drawPlacedTiles(true);
+  // Course screens show in front of the walls, as in the game; placed objects still go over them.
+  if (!layerHidden('course')) for (const c of courses()) drawCourseScreen(c, courseColor(c.id), courseNumber(c.id));
   for (const o of placed) if (!layerHidden(o.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(o);
   drawSelection();
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
@@ -3612,6 +3815,7 @@ function draw() {
   }
   if (baseOn() && base.scene && cam.scale >= 0.15 && !layerHidden('level')) drawMarkers();
   if (!layerHidden('course')) drawCourses();
+  if (platformEdit != null) drawPlatformEdit();
   if (!layerHidden('objects')) drawTeleportLinks();
 
   const area = baseOn() ? null : exportArea();
@@ -3656,7 +3860,7 @@ function drawMarkers() {
   ctx.globalAlpha = 0.55;
   for (const cp of sc.checkpoints || []) {
     if (!inState(cp) || !cp.box) continue;
-    drawGate({ x: cp.at[0], y: cp.at[1] }, cp.box, cp.course ? COLORS.courseCheckpoint : COLORS.checkpoint, cp.course ? 'COURSE CHECKPOINT' : 'CHECKPOINT');
+    drawGate({ x: cp.at[0], y: cp.at[1] }, cp.box, COLORS.checkpoint, 'CHECKPOINT');
   }
   for (const r of sc.respawns || []) drawGate({ x: r.at[0], y: r.at[1] }, SPAWN_BOX, COLORS.respawn, 'C' + r.course + ' RESPAWN');
   ctx.restore();
@@ -3885,7 +4089,8 @@ const KEY_GUIDE = [
     ['E', 'Erase'],
     ['Delete', 'Delete the selection'],
     ['Esc', 'Deselect / close, then leave fullscreen'],
-    ['Ctrl+C / Ctrl+V, V', 'Copy region / paste'],
+    ['Ctrl+C / Ctrl+V, V', 'Copy the selected object or region / paste (an object pastes at the mouse)'],
+    ['] / [', 'Bring the selected object to front / send it to back'],
     ['Ctrl+S', 'Save to your installed maps'],
     ['Ctrl+D', 'Duplicate the selection'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / redo (Ctrl+Shift+Z too)'],
@@ -3905,6 +4110,7 @@ const KEY_GUIDE = [
     ['Home', 'Jump to the spawn / course start'],
     ['G', 'Grid on / off'],
     ['T', 'Simulate zip movers'],
+    ['B', 'Build a selected zip mover\'s platform from grate tiles'],
     ['H', 'Hitboxes'],
     ['L / P / M / K', 'Layers / Level settings / Map / this guide'],
   ]],
@@ -4153,10 +4359,12 @@ function pruneCourses() {
 }
 function courseJson(c, ox = 0, oy = 0) {
   const r = Math.round;
-  return { id: c.id, startX: r(c.start.x - ox), startY: r(c.start.y - oy), endX: r(c.end.x - ox), endY: r(c.end.y - oy), reward: c.reward || { currency: 'Cash', amount: 0 } };
+  const screen = courseScreen(c);
+  return { id: c.id, startX: r(c.start.x - ox), startY: r(c.start.y - oy), endX: r(c.end.x - ox), endY: r(c.end.y - oy), screenX: r(screen.x - ox), screenY: r(screen.y - oy), reward: c.reward || { currency: 'Cash', amount: 0 } };
 }
 function clearMarker(m) {
   if (m.which === 'spawn') { draft.spawn = null; return; }
+  if (m.which === 'screen') { const c = courseById(m.course); if (c) delete c.screen; return; }
   const c = courseById(m.course);
   if (c) c[m.which] = null;
   pruneCourses();
@@ -4197,6 +4405,84 @@ function viewSpawn() {
   return gateAt(c.cx, c.cy, 'spawn');
 }
 
+// Where a finished course's screen goes: where it was put, or just left of its start gate.
+function courseScreen(c) {
+  if (!c?.start || !c?.end) return null;
+  if (c.screen) return c.screen;
+  const b = screenBox();
+  return { x: Math.round(c.start.x - START_BOX.w / 2 - 40 - b.w / 2 - b.dx), y: Math.round(c.start.y + 20) };
+}
+function markerPos(t) {
+  if (t.which === 'spawn') return draft.spawn;
+  const c = courseById(t.course);
+  return t.which === 'screen' ? courseScreen(c) : c?.[t.which];
+}
+const MARKER_BOX = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX, get screen() { return screenBox(); } };
+const screenBox = () => SCREEN_BOX;
+
+// The game's own board image (the course Canvas's "Screen" Image, Screen_0),
+// stretched the way the game's UI stretches it: 9-sliced, 30px borders at 120
+// pixels per unit on a 100-unit canvas scaled 1.1 x 1.15.
+const BOARD_SLICE = 30, BOARD_EDGE = [(30 / 1.2) * 1.1, (30 / 1.2) * 1.15];
+let boardImg = null;
+function drawBoardSprite(x, y, w, h) {
+  if (!boardImg) { boardImg = new Image(); boardImg.onload = requestDraw; boardImg.src = '/maps/course-screen.png'; }
+  if (!boardImg.complete || !boardImg.naturalWidth) return;
+  const iw = boardImg.naturalWidth, ih = boardImg.naturalHeight, b = BOARD_SLICE;
+  const ex = Math.min(BOARD_EDGE[0] * cam.scale, w / 2), ey = Math.min(BOARD_EDGE[1] * cam.scale, h / 2);
+  const sx = [0, b, iw - b, iw], sy = [0, b, ih - b, ih];
+  const dx = [x, x + ex, x + w - ex, x + w], dy = [y, y + ey, y + h - ey, y + h];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    if (dx[i + 1] - dx[i] <= 0 || dy[j + 1] - dy[j] <= 0) continue;
+    ctx.drawImage(boardImg, sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j], dx[i], dy[j], dx[i + 1] - dx[i], dy[j + 1] - dy[j]);
+  }
+}
+
+// The level's course 1 screen texts, around their centre, as the preview.
+let screenArt;
+function courseScreenArt() {
+  if (!sceneList) return null;
+  if (screenArt !== undefined && screenArt?.list === sceneList) return screenArt?.art ?? null;
+  screenArt = { list: sceneList, art: null };
+  const panel = (sceneList?.items || []).find((p) => (p.p || '').endsWith('course 1/DisableBits/background geometry/entry backround'));
+  if (!panel) return null;
+  const texts = (sceneList.texts || []).filter((t) => Math.abs(t.x - panel.x) < 300 && Math.abs(t.y - panel.y) < 350);
+  const board = texts.filter((t) => !/^[A-Z]+$/.test(t.t));
+  if (!board.length) return null;
+  const ref = { x: board.reduce((a, t) => a + t.x, 0) / board.length, y: board.reduce((a, t) => a + t.y, 0) / board.length };
+  screenArt.art = { panel, ref, texts: board };
+  return screenArt.art;
+}
+function drawCourseScreen(c, col, n) {
+  const at = courseScreen(c);
+  if (!at) return;
+  const art = courseScreenArt(), b = screenBox();
+  const a = toScreen(at.x + b.dx - b.w / 2, at.y + b.dy + b.h / 2), w = b.w * cam.scale, h = b.h * cam.scale;
+  ctx.save();
+  drawBoardSprite(a.x, a.y, w, h);
+  if (cam.scale >= 0.12) {
+    ctx.fillStyle = col;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('COURSE ' + n + ' SCREEN', a.x + w / 2, a.y - 4);
+  }
+  ctx.restore();
+  if (art) {
+    ctx.save();
+    for (const t of art.texts) {
+      let baked = textCache.get(t);
+      if (baked === undefined) { baked = bakeText(t); textCache.set(t, baked); }
+      if (!baked) continue;
+      const p = toScreen(at.x + t.x - art.ref.x, at.y + t.y - art.ref.y);
+      ctx.setTransform(1, 0, 0, 1, p.x, p.y);
+      ctx.rotate(-t.r);
+      ctx.scale(cam.scale / baked.px, cam.scale / baked.px);
+      ctx.drawImage(baked.canvas, baked.x0 * baked.px, -baked.top * baked.px);
+    }
+    ctx.restore();
+  }
+}
+
 function markerAt(wx, wy) {
   const hit = (g, b) => g && Math.abs(wx - (g.x + b.dx)) <= Math.max(b.w / 2, CELL / 2) && Math.abs(wy - (g.y + b.dy)) <= Math.max(b.h / 2, CELL / 2);
   if (hit(draft.spawn, SPAWN_BOX)) return { which: 'spawn' };
@@ -4204,6 +4490,7 @@ function markerAt(wx, wy) {
     if (hit(c.start, START_BOX)) return { which: 'start', course: c.id };
     if (hit(c.end, END_BOX)) return { which: 'end', course: c.id };
   }
+  for (const c of courses()) if (hit(courseScreen(c), screenBox())) return { which: 'screen', course: c.id };
   return null;
 }
 
@@ -4365,8 +4652,6 @@ function updateStatus() {
   el.innerHTML = parts.map((p) => `<span>${p}</span>`).join('')
     + (lonely ? `<span class="mm-warn">a course is missing a gate - it's skipped</span>` : '')
     + (hover ? `<span class="mm-coord">${hover.cx}, ${hover.cy}</span>` : '');
-  const empty = !blocks.size && !spikes.size && !vines.size && !courses().length && !draft.spawn && !baseOn();
-  root.querySelector('#mm-empty').hidden = !empty;
 }
 
 function syncBaseUi() {
@@ -4435,9 +4720,20 @@ function flash(msg, isError) {
   flash.t = setTimeout(() => { el.hidden = true; }, 3500);
 }
 
-function exportZip() {
+// Asks where to save (the app's save dialog); builds without it fall back to a download.
+async function exportZip() {
   let map;
   try { map = buildMap(); } catch (e) { flash(e.message, true); return; }
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (invoke) {
+    try {
+      const path = await invoke('export_map_zip', { mapJson: JSON.stringify(map, null, 2), fileName: slug(map.name) + '.zip' });
+      if (path) flash(`Exported to ${path} · ${map.groups[0].objects.length} objects`);
+      return;
+    } catch (e) {
+      if (!/export_map_zip|unknown command|not found/i.test(String(e))) { flash('Couldn\'t export: ' + e, true); return; }
+    }
+  }
   const blob = zipSingle('map.json', JSON.stringify(map, null, 2));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -4572,7 +4868,8 @@ function bindCanvas() {
     const wp = toWorld(e.clientX - rect.left, e.clientY - rect.top);
     hoverWorld = wp;
     if (e.altKey) { pickAt(wp.x, wp.y); return; }
-    if (tool === 'select') { selectDown(e); return; }
+    if (platformEdit != null) { drag = { pan: false, platform: true, before: snapshot(), changed: false }; platformPaint(wp); return; }
+    if (tool === 'select' || grabsSelection(wp)) { selectDown(e); return; }
     const c = eventCell(e);
     drag = { pan: false, before: snapshot(), changed: false };
     if (tool === 'arrow') { arrowDown(c.cx, c.cy); requestDraw(); return; }
@@ -4595,6 +4892,7 @@ function bindWindow() {
       requestDraw();
       return;
     }
+    if (drag?.platform) { const r = canvas.getBoundingClientRect(); hoverWorld = toWorld(e.clientX - r.left, e.clientY - r.top); platformPaint(hoverWorld); return; }
     if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group)) { selectMove(e); return; }
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
@@ -4607,7 +4905,7 @@ function bindWindow() {
     }
     const c = eventCell(e);
     hoverWorld = worldAt(e);
-    if (hover && hover.cx === c.cx && hover.cy === c.cy) { if (tool === 'select' && !drag) requestDraw(); return; }
+    if (hover && hover.cx === c.cx && hover.cy === c.cy) { if ((tool === 'select' || platformEdit != null) && !drag) requestDraw(); return; }
     hover = c;
     if (drag?.arrow) arrowMove(c.cx, c.cy);
     else if (drag && (BLOCK_KIND[tool] || SPIKE_KIND[tool] || tool === 'erase' || tool === 'tile' || tool === 'moss')) {
@@ -4647,12 +4945,13 @@ function onKeyDown(e) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveMap(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelection(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); return; }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); if (brush) setTool('paste'); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); if (clipObject) pasteObject(); else if (brush) setTool('paste'); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
   if (e.key === 'Escape') {
-    if (popCat) closePopover();
+    if (platformEdit != null) setPlatformEdit(null);
+    else if (popCat) closePopover();
     else if (selection || tool === 'paste') { selection = null; renderConfig(); if (tool === 'paste') setTool('select'); requestDraw(); }
     else if (!draft.inline) { draft.inline = true; saveDraft(); syncChrome(); }
     return;
@@ -4666,6 +4965,7 @@ function onKeyDown(e) {
   }
   if (!e.shiftKey && k === 'h') { toggleHitboxes(); return; }
   if (k === '?' || k === '/' || k === 'k') { togglePanel('mm-keys'); return; }
+  if (k === 'b' && selection?.kind === 'object' && zipShape(placed[selection.index])) { setPlatformEdit(platformEdit === selection.index ? null : selection.index); return; }
   if (k === 't') { draft.simulate = !draft.simulate; saveDraft(); syncChrome(); requestDraw(); flash(draft.simulate ? 'Simulating zip movers (T)' : 'Simulation off'); return; }
   if (k === 'g') { draft.noGrid = !draft.noGrid; saveDraft(); requestDraw(); flash(draft.noGrid ? 'Grid hidden (G)' : 'Grid shown (G)'); return; }
   if (k === 'l') { togglePanel('mm-layers'); return; }
@@ -4676,6 +4976,7 @@ function onKeyDown(e) {
   if (k === 'e') { setTool('erase'); return; }
   if (k === 'a') { const i = categoryItems('decor').findIndex((it) => it.tool === 'arrow'); if (i >= 0) { selectItem('decor', i); updatePopover(); } return; }
   if (k === 'q') { setTool('select'); return; }
+  if (e.key === ']' || e.key === '[') { if (selection?.kind === 'object') restack(e.key === ']'); return; }
   if (k === 'v') { if (brush) setTool('paste'); else flash('Copy a region first: Select (Q), drag, Ctrl+C.', true); return; }
   if (k === 'i') { if (hover) { const w = cellWorld(hover.cx, hover.cy); pickAt(w.x + CELL / 2, w.y + CELL / 2); } return; }
   if (k === 'r') { turnSomething(e.shiftKey ? -1 : 1); return; }
@@ -4730,10 +5031,6 @@ export async function mountEditor(container) {
     </div>
     <div class="mm-canvas-wrap">
       <canvas id="mm-canvas"></canvas>
-      <div class="mm-empty" id="mm-empty" hidden>
-        <div>Paint blocks and spikes, then set a spawn - gates are optional.</div>
-        <div class="mm-empty-sub">Want to build on the real level? Use <b>Base map</b>.</div>
-      </div>
       <div class="mm-views">
         <button class="mm-tool mm-view" id="mm-hitbox" title="Show collision: solid blocks green, deadly shapes red (H)">View hitboxes</button>
       </div>
@@ -4749,7 +5046,7 @@ export async function mountEditor(container) {
         <div class="mm-config-sub" id="mm-save-state"></div>
         <div class="mm-config-row"><button class="mm-tool" id="mm-load" title="Open one of your installed maps to keep editing it">Load installed…</button></div>
         <div class="mm-load-list" id="mm-load-list" hidden></div>
-        <div class="mm-config-row"><button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json) to keep editing it">Open…</button><button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button><button class="mm-tool" id="mm-export">Export .zip</button></div>
+        <div class="mm-config-row"><button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json) to keep editing it">Open…</button><button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button><button class="mm-tool" id="mm-export" title="Choose where to save this map as a .zip">Export .zip…</button></div>
         <input type="file" id="mm-open-file" accept=".zip,.json,application/json,application/zip" hidden>
       </div>
       <div class="mm-hint">Left-click paint · Right-drag / Space-drag pan · Wheel zoom · K keys</div>
