@@ -55,6 +55,7 @@ pub fn run() {
             hub::submit_mod_cmd,
             hub::delete_hub_submission_cmd,
             maps::list_maps,
+            maps::read_map,
             maps::uninstall_map,
             maps::test_launch_map,
             skins::list_installed_skins,

@@ -126,3 +126,39 @@
 .mm-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; color: var(--text-dim); }
 .mm-toggles .mm-check { display: flex; align-items: center; gap: 6px; }
 .mm-config input:disabled, .mm-config button:disabled { opacity: 0.4; }
+
+.mm-file .mm-input { width: 100%; box-sizing: border-box; }
+.mm-file .mm-tool { flex: 1; }
+.mm-layer-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; color: var(--text-dim); }
+.mm-layer-row .mm-check { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.mm-snap { min-width: 118px; }
+
+.mm-keys { width: 340px; max-height: calc(100% - 60px); overflow-y: auto; }
+.mm-keys-group { margin-top: 6px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green); }
+.mm-keys-row { display: grid; grid-template-columns: 128px 1fr; gap: 8px; align-items: baseline; color: var(--text-dim); font-size: 11px; }
+.mm-keys-row kbd { font: inherit; font-size: 10px; color: var(--text); border: 1px solid var(--line); padding: 1px 4px; justify-self: start; white-space: nowrap; }
+
+.map-maker.mm-full { position: fixed; inset: 0; z-index: 900; height: auto; min-height: 0; padding: 0; gap: 0; background: #101010; }
+.mm-full .mm-canvas-wrap { position: absolute; inset: 0; border: none; }
+.mm-full > .mm-bar { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 12; padding: 6px; gap: 6px; background: rgba(16, 16, 16, 0.86); border: 1px solid var(--line); backdrop-filter: blur(6px); }
+.mm-full .mm-bar .mm-tool, .mm-full .mm-bar .mm-input { height: 30px; font-size: 13px; }
+.mm-full .mm-bar .mm-tool { padding: 0 10px; }
+.mm-full .mm-config { top: calc(var(--bar-h, 60px) + 18px); max-height: calc(100% - var(--bar-h, 60px) - 40px); overflow-y: auto; }
+.mm-full .mm-views, .mm-full .mm-flash { top: calc(var(--bar-h, 60px) + 18px); }
+.mm-full .mm-hint { bottom: 10px; }
+.mm-status { display: none; }
+
+.mm-bar { gap: 6px; }
+.mm-bar .mm-tool, .mm-bar .mm-input { height: 30px; font-size: 12px; letter-spacing: 0.3px; }
+.mm-bar .mm-tool { padding: 0 10px; }
+.mm-bar .mm-tools .mm-tool { padding: 0 10px; }
+.mm-bar .mm-cat { min-width: 0; min-height: 30px; padding: 2px 8px 2px 5px; }
+.mm-bar .mm-cat-item { max-width: 90px; }
+.mm-bar .mm-jump { min-width: 150px; }
+.mm-bar .mm-snap { min-width: 104px; }
+.mm-bar .mm-sep { height: 18px; margin: 0 2px; }
+.mm-bar-right { gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.mm-cats { gap: 4px; }
+.mm-load-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+.mm-load-item { justify-content: space-between; text-transform: none; height: auto !important; min-height: 30px; padding: 4px 10px !important; }
+.mm-load-item span { color: var(--text-dim); font-size: 10px; margin-left: 8px; }

@@ -26,6 +26,7 @@ const COLORS = {
   spawn: '#5ec8f0',
   reset: '#f0a040',
   checkpoint: '#5ec8f0',
+  courseCheckpoint: '#ffb347',
   respawn: '#b98cff',
   upgrade: '#f0a040',
   trigger: '#e8d85a',
@@ -47,13 +48,14 @@ let hover = null;
 let drag = null;
 let spaceDown = false;
 let undoStack = [];
+let redoStack = [];
 const DEFAULT_PLAYER = { dashes: 1, airJumps: 1, wallJump: true, blockSwap: false, omniDash: false, zipMovers: true, refreshers: true, cash: 0 };
 let draft = emptyDraft();
 let mounted = false;
 let frameQueued = false;
 
 function emptyDraft() {
-  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, baseEdits: {}, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
+  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, baseEdits: {}, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
 }
 
 let blocks = new Map();
@@ -66,6 +68,9 @@ let removed = new Set();
 let removedVines = new Set();
 let removedObjects = new Set();
 let removedScene = new Set();
+let removedDeco = new Set();
+let removedPaths = [];
+const syncRemovedPaths = () => { removedPaths = baseObjects.filter((o) => removedObjects.has(o.id)).map((o) => o.path); };
 let baseObjects = [];
 
 const key = (cx, cy) => cx + ',' + cy;
@@ -97,6 +102,7 @@ function loadDraft() {
   removedVines = new Set(draft.removedVines);
   removedObjects = new Set(draft.removedObjects);
   removedScene = new Set(draft.removedScene || []);
+  removedDeco = new Set(draft.removedDeco || []);
   removed = new Set(draft.removed);
 }
 
@@ -111,7 +117,9 @@ function saveDraft() {
   draft.removedVines = [...removedVines];
   draft.removedObjects = [...removedObjects];
   draft.removedScene = [...removedScene];
-  const vineSig = [...removedVines].sort().join(';') + '|' + [...removed].sort().join(';') + '|' + [...removedScene].sort().join(';') + '|' + JSON.stringify(draft.baseEdits || {});
+  draft.removedDeco = [...removedDeco];
+  syncRemovedPaths();
+  const vineSig = [...removedVines].sort().join(';') + '|' + [...removed].sort().join(';') + '|' + [...removedScene].sort().join(';') + '|' + [...removedObjects].sort().join(';') + '|' + [...removedDeco].sort().join(';') + '|' + JSON.stringify(draft.baseEdits || {});
   if (vineSig !== lastVineSig) { lastVineSig = vineSig; baseVersion++; artCache.clear(); }
   draft.removed = [...removed];
   try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {}
@@ -119,15 +127,26 @@ function saveDraft() {
 }
 
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
 }
 function pushUndo() {
+  redoStack = [];
   undoStack.push(snapshot());
   if (undoStack.length > 200) undoStack.shift();
 }
 function undo() {
   const s = undoStack.pop();
   if (!s) return;
+  redoStack.push(snapshot());
+  restoreSnapshot(s);
+}
+function redo() {
+  const s = redoStack.pop();
+  if (!s) return;
+  undoStack.push(snapshot());
+  restoreSnapshot(s);
+}
+function restoreSnapshot(s) {
   const o = JSON.parse(s);
   blocks = new Map(o.blocks);
   spikes = new Map(o.spikes);
@@ -139,6 +158,7 @@ function undo() {
   removedVines = new Set(o.removedVines);
   removedObjects = new Set(o.removedObjects);
   removedScene = new Set(o.removedScene || []);
+  removedDeco = new Set(o.removedDeco || []);
   removed = new Set(o.removed);
   draft.courses = o.courses || [];
   draft.baseEdits = o.baseEdits || {};
@@ -242,6 +262,7 @@ function applyBaseState() {
   buildScene();
   baseVersion++;
   baseObjects = [...(base.always.objects || []), ...(st.objects || [])].map((o) => ({ ...o, id: o.path + '@' + o.x + ',' + o.y }));
+  syncRemovedPaths();
   baseHaz = new Map();
   for (const b of [base.always, st]) {
     const h = b.hazards;
@@ -293,7 +314,8 @@ function trueSpikeDef() {
 }
 function trueSpikeJson(sp, cx, cy, at) {
   const d = trueSpikeDef(), c = COLORS.true.match(/\w\w/g).map((h) => Math.round((parseInt(h, 16) / 255) * 1000) / 1000);
-  return { type: 'trueSpike', tileName: d.tile, ...at, rotation: spikeTurn(sp, cx, cy) * 90, color: c, hitbox: d.box };
+  const turn = spikeTurn(sp, cx, cy), t = spikeTile('spike', turn);
+  return { type: 'trueSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: t.matrix, rotation: turn * 90, color: c, hitbox: d.box };
 }
 const tintedTiles = new Map();
 function trueSpikeCanvas() {
@@ -474,7 +496,7 @@ function gateItems() {
     { tool: 'spawn', label: 'Spawn', group: 'Player', thumb: { color: COLORS.spawn } },
     { tool: 'start', label: 'Start gate', group: 'Course', thumb: { color: COLORS.start } },
     { tool: 'end', label: 'End gate', group: 'Course', thumb: { color: COLORS.end } },
-    ...(ccp >= 0 ? [{ tool: 'object', i: ccp, label: 'Course checkpoint', group: 'Course', thumb: { color: COLORS.checkpoint } }] : []),
+    ...(ccp >= 0 ? [{ tool: 'object', i: ccp, label: 'Course checkpoint', group: 'Course', thumb: { color: COLORS.courseCheckpoint } }] : []),
     ...(cp >= 0 ? [{ tool: 'object', i: cp, label: 'Checkpoint', group: 'Checkpoints', thumb: { color: COLORS.checkpoint } }] : []),
   ];
 }
@@ -574,7 +596,7 @@ function renderPopover(filter) {
   const all = categoryItems(cat).map((it, i) => ({ it, i }));
   const searchable = all.length > 12;
   const items = all.filter(({ it }) => !filter || it.label.toLowerCase().includes(filter.toLowerCase()));
-  const cur = currentIndex(cat), active = draft.cat === cat && !['erase', 'select', 'paste'].includes(tool);
+  const cur = currentIndex(cat), active = (draft.cat === cat && !['erase', 'select', 'paste'].includes(tool)) || (tool === 'select' && !!selection && paletteSpotFor(selection)?.[0] === cat);
   let body = '', group = null;
   for (const { it, i } of items) {
     if (it.group !== group) {
@@ -593,7 +615,12 @@ function renderPopover(filter) {
     `<button class="mm-pop-close" data-close title="Close (Esc)">✕</button></div>` +
     `<div class="mm-pop-body">${body}</div>` +
     `<div class="mm-pop-foot"><kbd>${(meta?.key || '').toUpperCase()}</kbd> next · <kbd>Shift</kbd>+<kbd>${(meta?.key || '').toUpperCase()}</kbd> back · <kbd>1</kbd>-<kbd>9</kbd> pick · <kbd>R</kbd> rotate · <kbd>F</kbd> flip</div>`;
-  pop.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => { selectItem(cat, Number(b.dataset.i)); closePopover(); }));
+  pop.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => {
+    const it = categoryItems(cat)[Number(b.dataset.i)];
+    if (tool === 'select' && selection && replaceSelectionWith(it)) { draft.pick[cat] = Number(b.dataset.i); renderPopover(''); return; }
+    selectItem(cat, Number(b.dataset.i));
+    closePopover();
+  }));
   pop.querySelector('[data-close]').addEventListener('click', closePopover);
   const search = pop.querySelector('#mm-pop-search');
   if (search) {
@@ -686,12 +713,18 @@ function drawPlacedObject(o, alpha = 1) {
   let animated = false;
   ctx.save();
   for (const p of parts) {
+    if (draft.simulate && zip && alpha === 1 && ZIP_MOVING.test(p.n || '')) continue;
     let sprite = p.s;
     if (p.frames) { sprite = p.frames[Math.floor(now * p.fps + (p.ph || 0) * p.frames.length) % p.frames.length]; animated = true; }
     blitScene(sprite, p.m, o.x + p.x, o.y + p.y, alpha, p.dm, p.sz, p.c);
   }
   if (zip) {
     for (const p of parts) if (ZIP_MOVING.test(p.n || '')) blitScene(p.s, p.m, o.x + p.x + zip.end[0], o.y + p.y + zip.end[1], 0.35 * alpha, p.dm, p.sz, p.c);
+    if (draft.simulate && alpha === 1) {
+      const f = zipTravel(zip, now);
+      for (const p of parts) if (ZIP_MOVING.test(p.n || '')) blitScene(p.s, p.m, o.x + p.x + zip.end[0] * f, o.y + p.y + zip.end[1] * f, alpha, p.dm, p.sz, p.c);
+      animated = true;
+    }
   }
   ctx.restore();
   if (zip && (tool === 'select' || tool === 'object')) {
@@ -710,7 +743,7 @@ function drawPlacedObject(o, alpha = 1) {
   if (!parts.length) {
     const b = item.box || [-50, -50, 50, 50];
     const a = toScreen(o.x + b[0], o.y + b[3]), z = toScreen(o.x + b[2], o.y + b[1]);
-    const col = o.course && courseById(o.course) ? courseColor(o.course) : COLORS.checkpoint;
+    const cc = isCourseCheckpoint(item), col = isLinked(o.course) ? linkColor(o.course) : cc ? COLORS.courseCheckpoint : COLORS.checkpoint;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = col;
@@ -719,9 +752,19 @@ function drawPlacedObject(o, alpha = 1) {
     ctx.fillStyle = col;
     ctx.font = 'bold 11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(item.name.toUpperCase() + (o.course && courseById(o.course) ? ' ' + courseNumber(o.course) : ''), (a.x + z.x) / 2, a.y - 4);
+    ctx.fillText(item.name.toUpperCase() + (isLinked(o.course) ? ' · ' + linkLabel(o.course).toUpperCase() : cc ? ' · ANY COURSE' : ''), (a.x + z.x) / 2, a.y - 4);
     ctx.restore();
   }
+}
+function zipTravel(zip, now) {
+  const go = Math.max(0.05, zip.time), back = Math.max(0.05, zip.backTime), cycle = go + 0.5 + back + 1;
+  let t = now % cycle;
+  if (t < go) { const x = t / go; return x < 0.75 ? 1.1851852 * x * x * x : 1.1851852 * 0.421875 + 3 * 1.1851852 * 0.5625 * (x - 0.75); }
+  t -= go;
+  if (t < 0.5) return 1;
+  t -= 0.5;
+  if (t < back) return 1 - t / back;
+  return 0;
 }
 function objectReach(item) {
   if (item.reach == null) {
@@ -738,7 +781,9 @@ function objectReach(item) {
 
 const SPRING_FOOT = 44;
 function placementFor(item, cx, cy) {
-  const w = cellWorld(cx, cy), at = { x: w.x + CELL / 2, y: w.y + CELL / 2 };
+  const w = cellWorld(cx, cy);
+  let at = { x: w.x + CELL / 2, y: w.y + CELL / 2 };
+  if (snapV() < CELL && hoverWorld && cellOf(hoverWorld.x, hoverWorld.y).cx === cx && cellOf(hoverWorld.x, hoverWorld.y).cy === cy) at = snapPoint(hoverWorld);
   if (!item?.stretch) return { ...at, ...placementCfg(item) };
   const q = placeRot || (seats(cx, cy)[0] ?? 0), r = rotMatrix(q);
   const up = [r[1], r[3]], lift = SPRING_FOOT * Math.abs(item.parts[0]?.m?.[3] || 1) - CELL / 2;
@@ -815,7 +860,7 @@ function arrowMove(cx, cy) {
     changed = true;
   }
   if (!changed) return;
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
   rebuildArrowTiles();
   saveDraft();
 }
@@ -934,6 +979,10 @@ function worldAt(e) {
 }
 
 function itemAt(wx, wy) {
+  const t = itemAtAny(wx, wy);
+  return t && layerOpen(targetLayer(t)) ? t : null;
+}
+function itemAtAny(wx, wy) {
   const oi = placed.findLastIndex((o) => objectHit(o, wx, wy));
   if (oi >= 0) return { kind: 'object', index: oi };
   const m = markerAt(wx, wy);
@@ -952,6 +1001,8 @@ function itemAt(wx, wy) {
     if (bo) return { kind: 'base', id: bo.id };
     const bc = baseCellsAt(c.cx, c.cy);
     if (bc) return bc;
+    const dt = decoAt(wx, wy);
+    if (dt) return dt;
     const sp = sceneSpriteAt(wx, wy);
     if (sp) return { kind: 'scene', id: sp.id };
   }
@@ -1003,6 +1054,40 @@ function moveCells(sel, dx, dy) {
     for (const k of moving) mossCells.delete(k);
     sel.cells = moving.map((k) => { const [x, y] = unkey(k), nk = key(x + dx, y + dy); mossCells.set(nk, true); return nk; });
   }
+}
+
+const DECO_LAYERS = ['environmentalObjects_front', 'Environmental objects', 'Environmental objects_back'];
+let decoCache = null;
+function decoCells(name) {
+  if (!decoCache || decoCache.state !== draft.baseState) decoCache = { state: draft.baseState, maps: new Map() };
+  let m = decoCache.maps.get(name);
+  if (!m) {
+    m = new Set();
+    for (const l of base.art.layers) {
+      if (l.name !== name || (l.state !== 'always' && l.state !== draft.baseState)) continue;
+      for (let i = 0; i < l.runs.length; i += 5) for (let n = 0; n < l.runs[i + 2]; n++) m.add((l.runs[i + 1] + n) + ',' + l.runs[i]);
+    }
+    decoCache.maps.set(name, m);
+  }
+  return m;
+}
+function decoAt(wx, wy) {
+  if (!base?.art) return null;
+  for (const name of DECO_LAYERS) {
+    const g = layerGrid(name), cells = decoCells(name);
+    const k0 = Math.floor((wx - g.ox) / g.size) + ',' + Math.floor((wy - g.oy) / g.size);
+    if (!cells.has(k0) || removedDeco.has(name + '|' + k0)) continue;
+    const seen = new Set([k0]), stack = [k0];
+    while (stack.length && seen.size <= 800) {
+      const [x, y] = unkey(stack.pop());
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        const k = key(x + dx, y + dy);
+        if (!seen.has(k) && cells.has(k) && !removedDeco.has(name + '|' + k)) { seen.add(k); stack.push(k); }
+      }
+    }
+    return { kind: 'decotiles', layer: name, cells: seen.size > 800 ? [k0] : [...seen] };
+  }
+  return null;
 }
 
 const BASE_SETS = () => [['Ground', groundSet], ['Moss', mossSet], ['Blue blocks', blueSet], ['Orange blocks', orangeSet]];
@@ -1067,6 +1152,9 @@ function drawTarget(t) {
     outlineCells(t.cells, cellRect);
   } else if (t.kind === 'moss') {
     outlineCells(t.cells, mossRect);
+  } else if (t.kind === 'decotiles') {
+    const g = layerGrid(t.layer);
+    outlineCells(t.cells, (x, y) => { const a = toScreen(g.ox + x * g.size, g.oy + (y + 1) * g.size); return { x: a.x, y: a.y, w: g.size * cam.scale, h: g.size * cam.scale }; });
   } else if (t.kind === 'basecells') {
     const set = new Set(t.cells);
     ctx.beginPath();
@@ -1108,6 +1196,7 @@ function selectDown(e) {
   const hit = itemAt(w.x, w.y);
   if (hit) {
     selection = hit;
+    showInDropdown(hit);
     if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
     drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : null, before: snapshot(), changed: false };
   } else {
@@ -1141,7 +1230,7 @@ function selectMove(e) {
   } else if (drag.move) {
     const o = placed[selection.index];
     let mx = w.x - drag.start.x, my = w.y - drag.start.y;
-    if (!e.shiftKey) { mx = Math.round(mx / CELL) * CELL; my = Math.round(my / CELL) * CELL; }
+    if (!e.shiftKey) { mx = Math.round(mx / snapV()) * snapV(); my = Math.round(my / snapV()) * snapV(); }
     const nx = Math.round(drag.orig.x + mx), ny = Math.round(drag.orig.y + my);
     if (nx !== o.x || ny !== o.y) changed(() => { o.x = nx; o.y = ny; });
   } else if (drag.zip) {
@@ -1162,7 +1251,7 @@ function zipPlaceMove(e) {
 }
 
 function changed(fn) {
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
   fn();
   saveDraft();
   renderConfig();
@@ -1180,6 +1269,7 @@ function placementCfg(item) {
 const PLACING = ['object', 'decor', 'stamp', 'vine'];
 function turnSomething(dir, flip = false) {
   let target = tool === 'select' ? selection : null;
+  if (target?.kind === 'region') return transformRegion(flip ? 'x' : 'r');
   if (SPIKE_KIND[tool] && !flip) {
     const w = hover && cellWorld(hover.cx, hover.cy), under = w && itemAt(w.x + CELL / 2, w.y + CELL / 2);
     if (!under || under.kind !== 'cell' || !spikes.has(under.k)) {
@@ -1232,7 +1322,7 @@ function nudgeSelection(dx, dy, fine) {
   const shiftKey = (k) => { const [x, y] = unkey(k); return key(x + dx, y + dy); };
   const moveArrow = (id) => { const a = arrows.find((x) => x.id === id); if (a) a.cells = a.cells.map(([x, y]) => [x + dx, y + dy]); };
   if (sel.kind === 'object') {
-    const o = placed[sel.index], step = fine ? 1 : CELL;
+    const o = placed[sel.index], step = fine ? 1 : snapV();
     o.x += dx * step; o.y += dy * step;
   } else if (sel.kind === 'tile') {
     const t = tiles.get(sel.key);
@@ -1294,6 +1384,7 @@ function deleteSelection() {
   else if (selection.kind === 'moss') selection.cells.forEach((k) => mossCells.delete(k));
   else if (selection.kind === 'basecells') selection.cells.forEach((k) => removed.add(k));
   else if (selection.kind === 'scene') removedScene.add(selection.id);
+  else if (selection.kind === 'decotiles') selection.cells.forEach((k) => removedDeco.add(selection.layer + '|' + k));
   else if (selection.kind === 'tile') { const id = tiles.get(selection.key)?.arrow; if (id) removeArrow(id); else tiles.delete(selection.key); }
   else if (selection.kind === 'cell') { if (selection.vine) vines.delete(selection.k); else { blocks.delete(selection.k); spikes.delete(selection.k); } }
   else if (selection.kind === 'region') {
@@ -1418,6 +1509,10 @@ const UPGRADE_KINDS = [
   { id: 'cloneMult', label: 'Clone reward multiplier', multi: true, local: true },
   { id: 'fastClone', label: 'Fast clone chance', multi: true, local: true },
   { id: 'bigClone', label: 'Big clone chance', multi: true, local: true },
+  { id: 'moreWatts', label: 'More watts', multi: true, local: true },
+  { id: 'greenReward', label: 'Green clone GP reward', multi: true, local: true },
+  { id: 'redReward', label: 'Red clone RP reward', multi: true, local: true },
+  { id: 'cloneDust', label: 'Clone dust generation', local: true },
 ];
 const CURRENCIES = [['Cash', 'Cash'], ['GreenPower', 'Green power'], ['AtomicPower', 'Nuclear power'], ['CloneDust', 'Clone dust'], ['RedPower', 'Red power'], ['BluePower', 'Blue power']];
 
@@ -1459,6 +1554,10 @@ const BOX_TEXT = {
   cloneMult: { name: '0.1x clone reward multiplier', effect: '[+0.1x  Per use]' },
   fastClone: { name: '5% clone speed increase chance', effect: '[+5%  Per use]' },
   bigClone: { name: '5% clone size increase chance', effect: '[+5%  Per use]' },
+  moreWatts: { name: '0% more watts', effect: '[+100%  Per use]' },
+  greenReward: { name: '1x green clone GP reward', effect: '[+1x  Per use]' },
+  redReward: { name: '1x red clone RP reward', effect: '[+1x  Per use]' },
+  cloneDust: { name: 'Enable Clone Dust generation on this course' },
 };
 const CURRENCY_MARK = { Cash: 'w', GreenPower: 'gp', AtomicPower: 'np', CloneDust: 'cd', RedPower: 'rp', BluePower: 'bp' };
 const CURRENCY_COLOUR = { Cash: '#ff6a00', GreenPower: '#00dd5d', AtomicPower: '#9654f0', CloneDust: '#b3905e', RedPower: '#db5246', BluePower: '#9654f0' };
@@ -1546,7 +1645,7 @@ function drawUpgradeLabel(o) {
 function upgradeConfigHtml(o, num) {
   const u = upgradeConfig(o), kind = UPGRADE_KINDS.find((k) => k.id === u.kind);
   const sel = (id, label, options, value) => `<label>${label}<select class="mm-input" data-cfg="${id}">${options.map(([v, t]) => `<option value="${v}"${v === value ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
-  const linked = !!courseById(o.course);
+  const linked = isLinked(o.course);
   let html = `<div class="mm-config-row">${sel('up:kind', 'Gives', UPGRADE_KINDS.filter((k) => !k.local || linked || k.id === u.kind).map((k) => [k.id, k.label + (k.local ? ' (course)' : '')]), u.kind)}${sel('up:currency', 'Paid in', CURRENCIES, u.currency)}</div>`;
   if (kind?.local && !linked) html += `<div class="mm-config-sub mm-warn">Link this box to a course for this upgrade to work.</div>`;
   html += `<div class="mm-config-row"><label>Label<input class="mm-input" type="text" data-cfg="up:label" value="${u.label.replace(/"/g, '&quot;')}" placeholder="${kind?.label || ''}"></label></div>`;
@@ -1647,7 +1746,15 @@ function renderConfig() {
     const cfg = o.cfg || {};
     html += `<div class="mm-config-title">${item.name}<span>${o.cat === 'objects' ? 'object' : 'decoration'}</span></div>`;
     html += `<div class="mm-config-row">${num('x', 'X', o.x)}${num('y', 'Y', o.y)}</div>`;
-    if (LINKABLE(item)) html += `<div class="mm-config-row"><label>Course<select class="mm-input" data-cfg="link"><option value="">None</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}</select></label></div>`;
+    if (isTeleporter(item)) {
+      const opts = teleporterTargets(o), sel = (dir) => `<label>${dir === 'up' ? 'Up (▲) to' : 'Down (▼) to'}<select class="mm-input" data-cfg="tp:${dir}"><option value="">Nothing</option>${opts.map(([v, t]) => `<option value="${v}"${o.tp?.[dir] === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
+      html += `<div class="mm-config-row">${sel('up')}</div><div class="mm-config-row">${sel('down')}</div>`;
+      html += `<div class="mm-config-sub">Links go both ways. In the game a teleporter works once you've touched the one you're going to.</div>`;
+    }
+    if (isCourseCheckpoint(item)) {
+      html += `<div class="mm-config-row"><label>Belongs to<select class="mm-input" data-cfg="link"><option value="">Any course</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
+      html += `<div class="mm-config-sub">Only counts during a run of ${o.course ? linkLabel(o.course).toLowerCase() : 'any course'}: dying in that run brings you back here. Outside a run it does nothing - a normal checkpoint sets where you respawn.</div>`;
+    } else if (LINKABLE(item)) html += `<div class="mm-config-row"><label>Course<select class="mm-input" data-cfg="link"><option value="">None</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
     const zip = zipConfig(o, item);
     if (item.upgradeBox) html += upgradeConfigHtml(o, num);
     else if (zip) {
@@ -1657,7 +1764,7 @@ function renderConfig() {
       html += `<div class="mm-config-row">${num('zipTime', 'Travel time (s)', zip.time, 0.1)}${num('zipBack', 'Return time (s)', zip.backTime, 0.1)}</div>`;
       html += `<div class="mm-config-row">${num('zipSpan', 'Platform length', zip.span, CELL)}</div>`;
     } else {
-      html += `<div class="mm-config-row">${num('rot', 'Rotation (°) R', cfg.rot || 0, 90)}${o.cat === 'decor' ? num('scale', 'Scale', cfg.scale || 1, 0.1) : ''}</div>`;
+      html += `<div class="mm-config-row">${num('rot', 'Rotation (°) , .', cfg.rot || 0, 15)}${num('scale', 'Scale = -', cfg.scale || 1, 0.1)}</div>`;
       if (item.stretch) html += `<div class="mm-config-row">${num('width', 'Width (tiles the sprite)', cfg.width || item.stretch.width, 16)}</div>`;
       html += `<div class="mm-config-row">${chk('fx', 'Flip X (F)', cfg.fx)}${chk('fy', 'Flip Y', cfg.fy)}</div>`;
     }
@@ -1669,6 +1776,8 @@ function renderConfig() {
     if (o.box) html += baseUpgradeHtml(o, num);
   } else if (selection.kind === 'blocks' || selection.kind === 'moss') {
     html += `<div class="mm-config-title">${selection.what}<span>${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'} - drag or arrow keys to move</span></div>`;
+  } else if (selection.kind === 'decotiles') {
+    html += `<div class="mm-config-title">Level decoration<span>${selection.cells.length} tile${selection.cells.length === 1 ? '' : 's'} · ${layerLabel(selection.layer)}</span></div>`;
   } else if (selection.kind === 'basecells') {
     html += `<div class="mm-config-title">${selection.what}<span>level · ${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'}</span></div>`;
   } else if (selection.kind === 'scene') {
@@ -1705,6 +1814,7 @@ function renderConfig() {
     const { x0, y0, x1, y1 } = selection;
     html += `<div class="mm-config-title">Region<span>${x1 - x0 + 1} x ${y1 - y0 + 1} cells</span></div>`;
     html += `<div class="mm-config-row"><button class="mm-tool" data-act="copy">Copy (Ctrl+C)</button><button class="mm-tool" data-act="delete">Delete</button></div>`;
+    html += `<div class="mm-config-row"><button class="mm-tool" data-act="rflipx" title="Mirror left-right (F)">Flip ↔</button><button class="mm-tool" data-act="rflipy" title="Mirror top-bottom (Shift+F)">Flip ↕</button><button class="mm-tool" data-act="rrot" title="Turn 90° (R)">Turn ⟲</button></div>`;
     html += `<div class="mm-config-sub">Copying takes the level's own tiles too - paste them anywhere.</div>`;
   }
   if (selection.kind !== 'region') html += `<div class="mm-config-row"><button class="mm-tool" data-act="delete">Delete (Del)</button></div>`;
@@ -1719,6 +1829,7 @@ function applyConfig(inp) {
   const id = inp.dataset.cfg;
   if (id.startsWith('up:')) return applyUpgradeConfig(id.slice(3), inp.value);
   if (id.startsWith('bu:')) return applyBaseUpgrade(id.slice(3), inp.value);
+  if (id.startsWith('tp:')) return applyTeleport(id.slice(3), inp.value);
   if (id === 'link' || id === 'gatecourse' || id.startsWith('reward:')) return applyCourseConfig(id, inp.value);
   const v = inp.type === 'checkbox' ? inp.checked : Number(inp.value);
   if (inp.type !== 'checkbox' && !Number.isFinite(v)) return;
@@ -1795,6 +1906,9 @@ function applyCourseConfig(id, raw) {
 
 function configAction(act) {
   if (act === 'delete') return deleteSelection();
+  if (act === 'rflipx') return transformRegion('x');
+  if (act === 'rflipy') return transformRegion('y');
+  if (act === 'rrot') return transformRegion('r');
   if (act === 'baseReset') {
     pushUndo();
     delete draft.baseEdits[selection.id];
@@ -1851,8 +1965,8 @@ function drawSelection() {
 
 function editorState() {
   saveDraft();
-  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
-  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, courses: cs, baseEdits: be, spawn, player, ownProgress };
+  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
+  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress };
 }
 
 async function readMapFile(file) {
@@ -1878,10 +1992,34 @@ async function readMapFile(file) {
 async function loadMapFile(file) {
   let map;
   try { map = JSON.parse(await readMapFile(file)); } catch (e) { flash('Couldn\'t read that map: ' + e.message, true); return; }
+  return openMap(map, file.name);
+}
+
+async function toggleInstalledList() {
+  const list = root.querySelector('#mm-load-list');
+  if (!list.hidden) { list.hidden = true; return; }
+  list.hidden = false;
+  list.innerHTML = '<div class="mm-config-sub">Loading…</div>';
+  let maps = [];
+  try { maps = await window.__TAURI__.core.invoke('list_maps'); } catch (e) { list.innerHTML = `<div class="mm-config-sub mm-warn">Couldn't list installed maps: ${e}</div>`; return; }
+  if (!maps.length) { list.innerHTML = '<div class="mm-config-sub">No maps installed.</div>'; return; }
+  list.innerHTML = maps.map((m) => `<button class="mm-tool mm-load-item" data-id="${m.id}" title="${(m.description || '').replace(/"/g, '&quot;')}">${m.name || m.id}<span>${m.id === 'map-maker-test' ? 'last test' : m.id}</span></button>`).join('');
+  list.querySelectorAll('[data-id]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      const text = await window.__TAURI__.core.invoke('read_map', { id: b.dataset.id });
+      await openMap(JSON.parse(text), b.dataset.id);
+      list.hidden = true;
+    } catch (e) {
+      flash(/read_map|not found|unknown command/i.test(String(e)) ? 'This Recharge build can\'t read installed maps yet.' : 'Couldn\'t open that map: ' + e, true);
+    }
+  }));
+}
+
+async function openMap(map, label) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
   pushUndo();
-  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [] }, st);
+  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
   localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   loadDraft();
@@ -1893,7 +2031,7 @@ async function loadMapFile(file) {
   root.querySelector('#mm-desc').value = draft.description || '';
   renderConfig();
   requestDraw();
-  flash(`Loaded ${draft.name || file.name}`);
+  flash(`Loaded ${draft.name || label}`);
 }
 
 function isSolid(cx, cy) {
@@ -1986,7 +2124,7 @@ function cloneConfig(o, item) {
   const cfg = o.cfg || {}, out = {};
   if (item.upgradeBox) {
     const u = upgradeConfig(o);
-    return { ...(courseById(o.course) ? { course: o.course } : {}), upgrade: { id: o.uid || 'box' + Math.round(o.x) + '_' + Math.round(o.y), kind: u.kind, label: u.label || (u.kind === 'omniDash' ? BOX_TEXT.omniDash.name : ''), currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } };
+    return { ...(isLinked(o.course) ? { course: o.course } : {}), upgrade: { id: o.uid || 'box' + Math.round(o.x) + '_' + Math.round(o.y), kind: u.kind, label: u.label || (u.kind === 'omniDash' ? BOX_TEXT.omniDash.name : ''), currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } };
   }
   if (item.worldScale) {
     const S = item.worldScale * (cfg.scale || 1);
@@ -1998,7 +2136,13 @@ function cloneConfig(o, item) {
   if (cfg.fields && Object.keys(cfg.fields).length) out.fields = cfg.fields;
   const zip = item.zip && cfg.zip ? zipConfig(o, item) : null;
   if (zip) out.zip = { end: zip.end, time: zip.time, backTime: zip.backTime, size: zip.size };
-  if (courseById(o.course)) out.course = o.course;
+  if (isLinked(o.course)) out.course = o.course;
+  if (isCourseCheckpoint(item)) out.courseCheckpoint = true;
+  if (isTeleporter(item)) {
+    const ref = (r) => { const t = teleportTarget(r); return t ? (t.uid ? { uid: t.uid } : { path: t.path, x: t.x, y: t.y }) : null; };
+    const zone = baseOn() ? Number(String(zoneAt(o.x, o.y)).replace(/\D+/g, '')) || 1 : 1;
+    out.teleport = { id: o.uid || 'tp' + Math.round(o.x) + '_' + Math.round(o.y), zone, up: ref(o.tp?.up), down: ref(o.tp?.down) };
+  }
   return out;
 }
 
@@ -2048,6 +2192,10 @@ function buildOverlay() {
     if (h) objects.push({ type: 'erase', tilemap: base.defs[h.d].layer, ...at(k) });
   });
   for (const o of baseObjects) if (removedObjects.has(o.id)) objects.push({ type: 'hide', path: o.path, srcX: o.x, srcY: o.y });
+  removedDeco.forEach((rk) => {
+    const bar = rk.lastIndexOf('|'), layerName = rk.slice(0, bar), [gx, gy] = unkey(rk.slice(bar + 1)), g = layerGrid(layerName);
+    objects.push({ type: 'erase', tilemap: layerName, x: g.ox + (gx + 0.5) * g.size, y: g.oy + (gy + 0.5) * g.size });
+  });
   for (const p of sceneList?.items || []) if (p.id && removedScene.has(p.id)) objects.push({ type: 'hide', path: p.p, srcX: p.x, srcY: p.y, rendererOnly: true });
   for (const id of Object.keys(draft.baseEdits || {})) {
     const o = baseObjects.find((x) => x.id === id);
@@ -2087,6 +2235,7 @@ function buildOverlay() {
 
   const full = completeCourses(), first = full[0], hasGates = !!first;
   const spawn = draft.spawn || first?.start || viewSpawn();
+  const keepSpawn = !draft.spawn;
   const r = (v) => Math.round(v);
   return {
     formatVersion: 1,
@@ -2101,7 +2250,7 @@ function buildOverlay() {
     groups: [{
       startX: r((hasGates ? first.start : spawn).x), startY: r((hasGates ? first.start : spawn).y),
       endX: r((hasGates ? first.end : spawn).x), endY: r((hasGates ? first.end : spawn).y),
-      spawnX: r(spawn.x), spawnY: r(spawn.y),
+      ...(keepSpawn ? { keepSpawn: true } : { spawnX: r(spawn.x), spawnY: r(spawn.y) }),
       gates: hasGates,
       reward: first?.reward || { currency: 'Cash', amount: 0 },
       courses: full.map((c) => courseJson(c)),
@@ -2149,15 +2298,13 @@ function buildMap() {
     if (removedObjects.has(o.id) || !inArea(c.cx, c.cy)) continue;
     objects.push({ type: 'clone', path: o.path, srcX: o.x, srcY: o.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y) });
   }
+  const rel = (p) => ({ x: Math.round(p.x - origin.x), y: Math.round(p.y - origin.y) });
   for (const [k, v] of vineCells) {
     const [cx, cy] = unkey(k);
     objects.push({ type: 'tile', tilemap: v.layer, tileName: v.tile, cellX: cx, cellY: cy, matrix: v.matrix });
   }
-  tiles.forEach((t, k) => {
-    const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
-    objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, cellX: cc.cx, cellY: cc.cy, matrix: tileMatrix(t) });
-  });
-  mossCells.forEach((_, k) => { const c = mossCenter(k), cc = cellOf(c.x, c.y); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', cellX: cc.cx, cellY: cc.cy, matrix: [1, 0, 0, 1] }); });
+  tiles.forEach((t, k) => objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, ...rel(tileCenter(t.layer, k)), matrix: tileMatrix(t) }));
+  mossCells.forEach((_, k) => objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', ...rel(mossCenter(k)), matrix: [1, 0, 0, 1] }));
   spikes.forEach((sp, k) => {
     if (sp.c !== 'true') return;
     const [cx, cy] = unkey(k), w = cellWorld(cx, cy);
@@ -2174,6 +2321,7 @@ function buildMap() {
     description: draft.description.trim(),
     images: [],
     customImages: [],
+    levelOrigin: [origin.x, origin.y],
     ...(!draft.ownProgress ? { player: draft.player } : {}),
     editor: editorState(),
     groups: [{
@@ -2390,6 +2538,7 @@ function bakeChunk(lod, band, ccx, ccy) {
 const ERASABLE = new Set(['new awesome nikki ground', 'OvergrowthDestroyedGround', 'moss', 'OvergrowthMoss', 'blueBlocks', 'orangeBlocks',
   'Spikes', 'backgroundSpikes1', 'backgroundSpikes2', 'blueSpikes', 'orangeSpikes']);
 function erasedArt(l, col, row) {
+  if (removedDeco.size && removedDeco.has(l.name + '|' + col + ',' + row)) return true;
   if (!removed.size || !ERASABLE.has(l.name)) return false;
   const n = Math.max(1, Math.round(l.size / CELL));
   const c = cellOf(l.ox + col * l.size + CELL / 2, l.oy + row * l.size + CELL / 2);
@@ -2710,6 +2859,7 @@ function drawSceneItems(W, H, items, from, to) {
     const p = items[i];
     if (p.group) { drawGroups([p], tl, br); continue; }
     if (p.id && removedScene.has(p.id)) continue;
+    if (removedPaths.length && p.p && removedPaths.some((rp) => p.p === rp || p.p.startsWith(rp + '/'))) continue;
     if (p.x + p.reach < tl.x || p.x - p.reach > br.x || p.y + p.reach < br.y || p.y - p.reach > tl.y) continue;
     if (p.live && staticRender && cam.scale >= LIVE_MIN_SCALE) continue;
     let sprite = p.s;
@@ -2903,6 +3053,7 @@ function drawSceneText(tl, br) {
     if (t.x + reach < tl.x || t.x - reach > br.x || t.y + reach < br.y || t.y - reach > tl.y) continue;
     if (!sizeCache.has(t)) sizeCache.set(t, textSize(t));
     if (sizeCache.get(t) * t.k * cam.scale < 2.5) continue;
+    if (removedObjects.size && baseObjects.some((o) => removedObjects.has(o.id) && Math.abs(t.x - o.x) <= o.w / 2 && Math.abs(t.y - o.y) <= o.h / 2)) continue;
     const edited = Object.keys(draft.baseEdits || {}).length ? editedBoxText(t) : null;
     if (edited) { ctx.save(); drawTextAt(edited, t.x, t.y); ctx.restore(); continue; }
     let baked = textCache.get(t);
@@ -2978,7 +3129,7 @@ function drawGate(g, box, color, label) {
 
 const TILE_PX = 128;
 const TILE_BUDGET_MS = 6;
-const MAX_TILES = 2000;
+const MAX_TILES = 3000;
 const tileCache = new Map();
 let baseVersion = 0;
 let staticRender = false;
@@ -3159,14 +3310,68 @@ function drawBaseTiles(W, H, useArt) {
     if (job?.next) ctx.drawImage(job.cv, x0, y0, w, h);
   }
   if (tileJobs.size > 256) {
-    const current = baseVersion + '|' + draft.baseState + '|' + z + '|';
-    for (const k of tileJobs.keys()) if (!k.startsWith(current)) tileJobs.delete(k);
+    const current = baseVersion + '|' + draft.baseState + '|' + z + '|', coarse = baseVersion + '|' + draft.baseState + '|' + PRELOAD_Z + '|';
+    for (const k of tileJobs.keys()) if (!k.startsWith(current) && !k.startsWith(coarse)) tileJobs.delete(k);
   }
-  if (loading?.render) {
-    setLoading(0.7 + (0.3 * shown) / Math.max(1, inView), `Drawing the view ${shown} / ${inView}`);
-    if (!missing) hideLoading();
+  if (loading?.render && !prefetch) planPrefetch(W, H, true);
+  const pending = pumpPrefetch(workers);
+  if (loading?.render && !missing && !pending) hideLoading();
+  if (!loading && !missing && !pending) {
+    const at = z + '|' + Math.floor(cam.x / (T * 4)) + '|' + Math.floor(cam.y / (T * 4));
+    if (at !== prefetchAt) { prefetchAt = at; planPrefetch(W, H, false); }
   }
   if (missing && !workers) requestDraw();
+}
+
+const PRELOAD_Z = -4;
+let prefetch = null;
+let prefetchAt = '';
+let boundsCache = null;
+function levelBounds() {
+  if (boundsCache?.state === draft.baseState) return boundsCache;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const l of base.art.layers) {
+    if (l.state !== 'always' && l.state !== draft.baseState) continue;
+    if (/^(OOB|Background)/.test(l.name)) continue;
+    for (let i = 0; i < l.runs.length; i += 5) {
+      const y = l.oy + l.runs[i] * l.size, x = l.ox + l.runs[i + 1] * l.size;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x + l.runs[i + 2] * l.size); y0 = Math.min(y0, y); y1 = Math.max(y1, y + l.size);
+    }
+  }
+  return (boundsCache = { state: draft.baseState, x0, y0, x1, y1 });
+}
+function planPrefetch(W, H, full) {
+  const q = [], seen = new Set();
+  const add = (z, x0, y0, x1, y1) => {
+    const T = TILE_PX / Math.pow(2, z);
+    for (let ty = Math.floor(y0 / T); ty <= Math.floor(y1 / T); ty++) for (let tx = Math.floor(x0 / T); tx <= Math.floor(x1 / T); tx++) {
+      const k = z + ',' + tx + ',' + ty;
+      if (!seen.has(k)) { seen.add(k); q.push([z, tx, ty]); }
+    }
+  };
+  const z = lodFor(cam.scale), tl = toWorld(0, 0), br = toWorld(W, H), wv = br.x - tl.x, hv = tl.y - br.y;
+  const d = (t) => Math.hypot((t[1] + 0.5) * TILE_PX / Math.pow(2, t[0]) - cam.x, (t[2] + 0.5) * TILE_PX / Math.pow(2, t[0]) - cam.y);
+  add(z, tl.x - wv * (full ? 1 : 0.6), br.y - hv * (full ? 1 : 0.6), br.x + wv * (full ? 1 : 0.6), tl.y + hv * (full ? 1 : 0.6));
+  q.sort((a, b) => d(a) - d(b));
+  if (full && z > PRELOAD_Z) { const b = levelBounds(); if (Number.isFinite(b.x0)) add(PRELOAD_Z, b.x0, b.y0, b.x1, b.y1); }
+  prefetch = { queue: q, total: q.length };
+}
+function pumpPrefetch(workers) {
+  if (!prefetch) return false;
+  prefetch.queue = prefetch.queue.filter(([z, tx, ty]) => !tileCache.has(tileKey(z, tx, ty)));
+  const deadline = performance.now() + (loading ? 40 : 3);
+  for (const [z, tx, ty] of prefetch.queue) {
+    const key = tileKey(z, tx, ty);
+    if (workers) { requestTile(key, z, tx, ty); continue; }
+    if (performance.now() > deadline) break;
+    const job = tileJob(key, z);
+    while (performance.now() < deadline) if (stepTileJob(job, z, tx, ty)) { storeTile(key, job.cv); tileJobs.delete(key); break; }
+  }
+  const left = prefetch.queue.length;
+  if (loading?.render) setLoading(0.7 + 0.3 * (1 - left / Math.max(1, prefetch.total)), `Rendering the level ${prefetch.total - left} / ${prefetch.total}`);
+  if (!left) { prefetch = null; return false; }
+  if (!workers) requestDraw();
+  return true;
 }
 
 const pool = { workers: [], ready: 0, failed: false, inflight: new Map(), version: -1 };
@@ -3199,7 +3404,7 @@ function failWorkers() {
 }
 
 function workerState() {
-  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], baseEdits: draft.baseEdits || {}, version: baseVersion };
+  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], removedDeco: [...removedDeco], removedObjects: [...removedObjects], baseEdits: draft.baseEdits || {}, version: baseVersion };
 }
 
 function onWorkerMessage(worker, m) {
@@ -3259,7 +3464,10 @@ export function workerSetState(state) {
   removed = new Set(state.removed);
   removedVines = new Set(state.removedVines);
   removedScene = new Set(state.removedScene || []);
+  removedObjects = new Set(state.removedObjects || []);
+  removedDeco = new Set(state.removedDeco || []);
   draft.baseEdits = state.baseEdits || {};
+  syncRemovedPaths();
   if (!layer || draft.baseState !== state.baseState) {
     draft.baseState = state.baseState;
     applyBaseState();
@@ -3283,7 +3491,7 @@ function draw() {
   const minCx = tl.cx - 1, maxCx = br.cx + 1, minCy = br.cy - 1, maxCy = tl.cy + 1;
   const cellPx = CELL * cam.scale;
 
-  if (cellPx >= 10) {
+  if (cellPx >= 10 && !draft.noGrid) {
     ctx.strokeStyle = COLORS.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -3304,7 +3512,7 @@ function draw() {
     }
   };
   const useArt = artReady();
-  if (baseOn()) {
+  if (baseOn() && !layerHidden('level')) {
     drawBaseTiles(W, H, useArt);
     if (useArt) drawLiveItems(W, H);
     ctx.save();
@@ -3329,8 +3537,8 @@ function draw() {
     ctx.stroke();
   }
 
-  if (useArt) drawPlacedTiles(false);
-  blocks.forEach((kind, k) => {
+  if (useArt && !layerHidden('tiles')) drawPlacedTiles(false);
+  if (!layerHidden('blocks')) blocks.forEach((kind, k) => {
     const [cx, cy] = unkey(k);
     if (useArt) {
       const art = isGround(kind) ? groundTile(cx, cy, kind === 'dark') : colouredTile(kind, cx, cy);
@@ -3340,31 +3548,25 @@ function draw() {
     ctx.fillStyle = COLORS[kind];
     ctx.fillRect(r.x, r.y, r.w + pad, r.h + pad);
   });
-  spikes.forEach((sp, k) => {
+  if (!layerHidden('hazards')) spikes.forEach((sp, k) => {
     const [cx, cy] = unkey(k);
     const q = spikeTurn(sp, cx, cy);
-    if (useArt && base) { const t = spikeTile(sp.c, q); if (drawTileArt(cx, cy, t.tile, t.matrix)) return; }
     if (sp.c === 'true') return drawTrueSpike(cx, cy, q);
+    if (useArt && base) { const t = spikeTile(sp.c, q); if (drawTileArt(cx, cy, t.tile, t.matrix)) return; }
     drawSpike(cx, cy, q, COLORS[sp.c]);
   });
 
   const near = (cx, cy) => cx >= minCx - 6 && cx <= maxCx + 6 && cy >= minCy - 6 && cy <= maxCy + 6;
-  vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (near(cx, cy)) drawVine(cx, cy, v.s, rotMatrix(v.q)); });
-  mossCells.forEach((_, k) => { if (!useArt || !drawMoss(k)) { const c = mossCenter(k), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); } });
-  if (useArt) drawPlacedTiles(true);
-  for (const o of placed) drawPlacedObject(o);
+  if (!layerHidden('hazards')) vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (near(cx, cy)) drawVine(cx, cy, v.s, rotMatrix(v.q)); });
+  if (!layerHidden('blocks')) mossCells.forEach((_, k) => { if (!useArt || !drawMoss(k)) { const c = mossCenter(k), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); } });
+  if (useArt && !layerHidden('tiles')) drawPlacedTiles(true);
+  for (const o of placed) if (!layerHidden(o.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(o);
   drawSelection();
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
 
   if (baseOn()) for (const o of baseObjects) {
     const c = toScreen(o.x, o.y);
-    if (removedObjects.has(o.id)) {
-      const w = o.w * cam.scale / 2, h = o.h * cam.scale / 2;
-      ctx.save(); ctx.strokeStyle = COLORS.end; ctx.lineWidth = 2; ctx.beginPath();
-      ctx.moveTo(c.x - w, c.y - h); ctx.lineTo(c.x + w, c.y + h); ctx.moveTo(c.x + w, c.y - h); ctx.lineTo(c.x - w, c.y + h);
-      ctx.stroke(); ctx.restore();
-      continue;
-    }
+    if (removedObjects.has(o.id)) continue;
     if (useArt && sceneReady() && o.kind === 'upgrade') continue;
     if (o.kind === 'trigger' && cam.scale < 0.15) continue;
     if (cam.scale < 0.1) {
@@ -3404,8 +3606,9 @@ function draw() {
     }
     ctx.globalAlpha = 1;
   }
-  if (baseOn() && base.scene && cam.scale >= 0.15) drawMarkers();
-  drawCourses();
+  if (baseOn() && base.scene && cam.scale >= 0.15 && !layerHidden('level')) drawMarkers();
+  if (!layerHidden('course')) drawCourses();
+  if (!layerHidden('objects')) drawTeleportLinks();
 
   const area = baseOn() ? null : exportArea();
   if (area) {
@@ -3449,43 +3652,12 @@ function drawMarkers() {
   ctx.globalAlpha = 0.55;
   for (const cp of sc.checkpoints || []) {
     if (!inState(cp) || !cp.box) continue;
-    drawGate({ x: cp.at[0], y: cp.at[1] }, cp.box, COLORS.checkpoint, cp.course ? 'COURSE CHECKPOINT' : 'CHECKPOINT');
+    drawGate({ x: cp.at[0], y: cp.at[1] }, cp.box, cp.course ? COLORS.courseCheckpoint : COLORS.checkpoint, cp.course ? 'COURSE CHECKPOINT' : 'CHECKPOINT');
   }
   for (const r of sc.respawns || []) drawGate({ x: r.at[0], y: r.at[1] }, SPAWN_BOX, COLORS.respawn, 'C' + r.course + ' RESPAWN');
   ctx.restore();
-  ctx.save();
-  ctx.strokeStyle = COLORS.spawn;
-  ctx.lineWidth = 2;
-  for (const tp of sc.teleporters || []) {
-    if (!inState(tp)) continue;
-    for (const side of ['up', 'down']) {
-      const a = tp[side];
-      if (!a) continue;
-      const c = toScreen(a.arrow[0], a.arrow[1]);
-      const hot = hoverArrow === a;
-      ctx.globalAlpha = hot ? 1 : 0.5;
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, Math.max(6, TP_RADIUS * cam.scale), 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
 }
 
-const TP_RADIUS = 22;
-let hoverArrow = null;
-function teleportArrowAt(wx, wy) {
-  if (!baseOn() || !base.scene) return null;
-  const r = Math.max(TP_RADIUS, 6 / cam.scale);
-  for (const tp of base.scene.teleporters || []) {
-    if (tp.state !== 'always' && tp.state !== draft.baseState) continue;
-    for (const side of ['up', 'down']) {
-      const a = tp[side];
-      if (a && Math.hypot(wx - a.arrow[0], wy - a.arrow[1]) <= r) return a;
-    }
-  }
-  return null;
-}
 
 function toggleHitboxes() {
   draft.hitboxes = !draft.hitboxes;
@@ -3662,13 +3834,303 @@ function vineAt(wx, wy) {
   return best;
 }
 
+const LAYER_DEFS = [['level', 'Level (base map)'], ['blocks', 'Blocks & moss'], ['hazards', 'Spikes & vines'], ['tiles', 'Tiles & arrows'], ['objects', 'Objects'], ['decor', 'Decorations'], ['course', 'Course & spawn']];
+const layerHidden = (id) => !!draft.layers?.[id]?.hidden;
+const layerLocked = (id) => !!draft.layers?.[id]?.locked;
+const TOOL_LAYER = { block: 'blocks', dark: 'blocks', blue: 'blocks', orange: 'blocks', moss: 'blocks', spike: 'hazards', blueSpike: 'hazards', orangeSpike: 'hazards', trueSpike: 'hazards', vine: 'hazards', tile: 'tiles', stamp: 'tiles', arrow: 'tiles', object: 'objects', decor: 'decor', start: 'course', end: 'course', spawn: 'course', paste: null };
+function targetLayer(t) {
+  switch (t?.kind) {
+    case 'object': return placed[t.index]?.cat === 'decor' ? 'decor' : 'objects';
+    case 'gate': return 'course';
+    case 'blocks': case 'moss': return 'blocks';
+    case 'cell': return t.vine || spikes.has(t.k) ? 'hazards' : 'blocks';
+    case 'tile': return 'tiles';
+    case 'base': case 'basecells': case 'scene': case 'decotiles': return 'level';
+    default: return null;
+  }
+}
+const layerOpen = (id) => !id || (!layerHidden(id) && !layerLocked(id));
+function renderLayersPanel() {
+  const el = root?.querySelector('#mm-layers');
+  if (!el || el.hidden) return;
+  el.innerHTML = `<div class="mm-config-title">Layers<span>show · lock</span></div>` + LAYER_DEFS.map(([id, label]) =>
+    `<div class="mm-layer-row"><span>${label}</span><label class="mm-check" title="Show"><input type="checkbox" data-layer="${id}" data-f="shown"${layerHidden(id) ? '' : ' checked'}> 👁</label><label class="mm-check" title="Lock: can't be selected, painted or erased"><input type="checkbox" data-layer="${id}" data-f="locked"${layerLocked(id) ? ' checked' : ''}> 🔒</label></div>`).join('')
+    + `<div class="mm-config-sub">Hidden layers aren't drawn; locked ones can't be selected, painted or erased. Export always includes everything.</div>`;
+  el.querySelectorAll('[data-layer]').forEach((inp) => inp.addEventListener('change', () => {
+    const id = inp.dataset.layer, cur = { ...(draft.layers?.[id] || {}) };
+    if (inp.dataset.f === 'shown') cur.hidden = !inp.checked; else cur.locked = inp.checked;
+    draft.layers = { ...(draft.layers || {}), [id]: cur };
+    if (selection && !layerOpen(targetLayer(selection))) { selection = null; renderConfig(); }
+    saveDraft();
+    artCache.clear();
+    invalidateBase();
+    requestDraw();
+  }));
+}
+const KEY_GUIDE = [
+  ['Placing', [
+    ['B / S / O / D / C', 'Blocks, hazards, objects, decor, course - again to step (Shift back)'],
+    ['1-9, [ ]', 'Pick / step through the current dropdown'],
+    ['A', 'Guide arrow (drag a path)'],
+    ['R / Shift+R', 'Turn what you place (spikes: fixed direction)'],
+    ['F', 'Mirror what you place'],
+    ['Alt+click, I', 'Pick up the thing under the cursor'],
+  ]],
+  ['Selecting', [
+    ['Q', 'Select - click a thing (opens it in its dropdown), drag a region'],
+    ['E', 'Erase'],
+    ['Delete', 'Delete the selection'],
+    ['Esc', 'Deselect / close'],
+    ['Ctrl+C / Ctrl+V, V', 'Copy region / paste'],
+    ['Ctrl+D', 'Duplicate the selection'],
+    ['Ctrl+Z / Ctrl+Y', 'Undo / redo (Ctrl+Shift+Z too)'],
+  ]],
+  ['Transforming', [
+    ['Arrows', 'Move the selection (Snap step; Shift: 1 unit) - nothing selected: pan'],
+    ['R / Shift+R', 'Turn 90° (a region turns as a whole)'],
+    [', / .', 'Turn 15° (Shift: 1°)'],
+    ['F / Shift+F', 'Flip left-right / top-bottom'],
+    ['= / -', 'Scale up / down'],
+    ['Drag', 'Move objects, gates, blocks (Shift: free)'],
+  ]],
+  ['View', [
+    ['Wheel', 'Zoom'],
+    ['Right-drag, Space-drag', 'Pan'],
+    ['0', 'Zoom to 100%'],
+    ['Home', 'Jump to the spawn / course start'],
+    ['G', 'Grid on / off'],
+    ['T', 'Simulate zip movers'],
+    ['H', 'Hitboxes'],
+    ['L / P / M / K', 'Layers / Level settings / Map / this guide'],
+  ]],
+];
+function renderKeysPanel() {
+  const el = root?.querySelector('#mm-keys');
+  if (!el || el.hidden) return;
+  el.innerHTML = `<div class="mm-config-title">Keys<span>K or ? to close</span></div>` + KEY_GUIDE.map(([title, rows]) =>
+    `<div class="mm-keys-group">${title}</div>` + rows.map(([k, what]) => `<div class="mm-keys-row"><kbd>${k}</kbd><span>${what}</span></div>`).join('')).join('');
+}
+
+function duplicateSelection() {
+  const sel = selection;
+  if (!sel) { flash('Select something to duplicate (Ctrl+D).'); return; }
+  pushUndo();
+  if (sel.kind === 'object') {
+    const o = placed[sel.index], copy = { ...JSON.parse(JSON.stringify(o)), x: o.x + CELL, y: o.y - CELL };
+    if (copy.uid) copy.uid = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    placed.push(copy);
+    selection = { kind: 'object', index: placed.length - 1 };
+  } else if (sel.kind === 'region') {
+    copySelection();
+    if (brush) { pasteBrush(sel.x1 + 1, sel.y0); selection = { kind: 'region', x0: sel.x1 + 1, y0: sel.y0, x1: sel.x1 + 1 + (sel.x1 - sel.x0), y1: sel.y1 }; setTool('select'); }
+  } else if (sel.kind === 'blocks') {
+    const w = Math.max(...sel.cells.map((k) => unkey(k)[0])) - Math.min(...sel.cells.map((k) => unkey(k)[0])) + 1;
+    const cells = sel.cells.map((k) => { const [x, y] = unkey(k), nk = key(x + w, y); blocks.set(nk, blocks.get(k)); return nk; });
+    selection = { ...sel, cells };
+  } else { flash('That can\'t be duplicated.'); return; }
+  saveDraft(); renderConfig(); requestDraw();
+}
+
+function paletteSpotFor(t) {
+  if (!t) return null;
+  const find = (cat, pred) => { const i = categoryItems(cat).findIndex(pred); return i >= 0 ? [cat, i] : null; };
+  if (t.kind === 'object') {
+    const o = placed[t.index];
+    if (!o) return null;
+    if (o.cat === 'decor') return find('decor', (it) => it.tool === 'decor' && it.i === o.i);
+    return find('objects', (it) => it.tool === 'object' && it.i === o.i) || find('gates', (it) => it.tool === 'object' && it.i === o.i);
+  }
+  if (t.kind === 'blocks') { const kind = blocks.get(t.cells[0]); return find('blocks', (it) => it.tool === Object.keys(BLOCK_KIND).find((k) => BLOCK_KIND[k] === kind)); }
+  if (t.kind === 'moss') return find('blocks', (it) => it.tool === 'moss');
+  if (t.kind === 'cell' && t.vine) { const v = vines.get(t.k); return v && find('hazards', (it) => it.vine === v.s); }
+  if (t.kind === 'cell') { const sp = spikes.get(t.k); return sp && find('hazards', (it) => SPIKE_KIND[it.tool] === sp.c); }
+  if (t.kind === 'gate') return find('gates', (it) => it.tool === t.which);
+  return null;
+}
+function showInDropdown(t) {
+  const spot = paletteSpotFor(t);
+  if (!spot) return;
+  const [cat, i] = spot;
+  draft.pick[cat] = i;
+  const btn = root.querySelector(`[data-cat="${cat}"]`);
+  setTimeout(() => { if (popCat !== cat) openPopover(cat, btn); else renderPopover(''); }, 0);
+}
+function replaceSelectionWith(it) {
+  const t = selection;
+  if (!t) return false;
+  if (t.kind === 'object' && (it.tool === 'object' || it.tool === 'decor')) {
+    pushUndo();
+    const o = placed[t.index], item = base.catalog[it.tool === 'decor' ? 'decor' : 'objects'][it.i];
+    o.cat = it.tool === 'decor' ? 'decor' : 'objects'; o.i = it.i; o.n = item?.name;
+    if (item?.upgradeBox && !o.uid) o.uid = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  } else if (t.kind === 'blocks' && BLOCK_KIND[it.tool]) {
+    pushUndo();
+    for (const k of t.cells) blocks.set(k, BLOCK_KIND[it.tool]);
+    selection = { ...t, what: BLOCK_NAMES[BLOCK_KIND[it.tool]] };
+  } else if (t.kind === 'cell' && !t.vine && SPIKE_KIND[it.tool] && spikes.has(t.k)) {
+    pushUndo();
+    spikes.set(t.k, { ...spikes.get(t.k), c: SPIKE_KIND[it.tool] });
+  } else if (t.kind === 'cell' && t.vine && it.vine) {
+    pushUndo();
+    vines.set(t.k, { ...vines.get(t.k), s: it.vine });
+  } else return false;
+  saveDraft(); renderConfig(); requestDraw();
+  flash('Swapped for ' + it.label);
+  return true;
+}
+
+function syncChrome() {
+  if (!root) return;
+  root.classList.toggle('mm-full', !draft.inline);
+  const full = root.querySelector('#mm-full-btn');
+  if (full) { full.textContent = draft.inline ? '⤢' : '⤡'; full.title = draft.inline ? 'Fullscreen editor' : 'Back to the page'; }
+  root.querySelector('#mm-sim-btn')?.classList.toggle('active', !!draft.simulate);
+  requestAnimationFrame(() => resize());
+}
+
+function togglePanel(id) {
+  for (const other of ['mm-player', 'mm-layers', 'mm-file', 'mm-keys']) {
+    const el = root.querySelector('#' + other), btn = root.querySelector('#' + other + '-btn');
+    const open = other === id ? el.hidden : false;
+    el.hidden = !open;
+    btn?.classList.toggle('active', open);
+  }
+  renderPlayerPanel();
+  renderLayersPanel();
+  renderKeysPanel();
+}
+
+const snapV = () => draft.snap || CELL;
+const snapPoint = (p, s = snapV()) => ({ x: Math.round(p.x / s) * s, y: Math.round((p.y - OFFSET_Y) / s) * s + OFFSET_Y });
+function fineRotate(dir, fine) {
+  const t = selection?.kind === 'object' ? selection : hoverWorld && itemAt(hoverWorld.x, hoverWorld.y);
+  const o = t?.kind === 'object' && placed[t.index], item = o && catalogItem(o);
+  if (!o || item?.zip) { flash('Select an object or decoration to turn it finely (, and . - Shift for 1°).'); return; }
+  pushUndo();
+  o.cfg = { ...o.cfg, rot: ((((o.cfg?.rot || 0) + dir * (fine ? 1 : 15)) % 360) + 360) % 360 };
+  saveDraft(); renderConfig(); requestDraw();
+}
+function scaleSelection(dir) {
+  const t = selection?.kind === 'object' ? selection : hoverWorld && itemAt(hoverWorld.x, hoverWorld.y);
+  const o = t?.kind === 'object' && placed[t.index], item = o && catalogItem(o);
+  if (!o || item?.zip) { flash('Select an object or decoration to scale it (= and -).'); return; }
+  pushUndo();
+  o.cfg = { ...o.cfg, scale: Math.max(0.1, Math.min(10, Math.round(((o.cfg?.scale || 1) + dir * 0.1) * 10) / 10)) };
+  saveDraft(); renderConfig(); requestDraw();
+}
+function flipYSelection() {
+  const t = selection || (hoverWorld && itemAt(hoverWorld.x, hoverWorld.y));
+  if (t?.kind === 'region') return transformRegion('y');
+  pushUndo();
+  if (t?.kind === 'object') { const o = placed[t.index]; o.cfg = { ...o.cfg, fy: !o.cfg?.fy }; }
+  else if (t?.kind === 'tile') { const tl = tiles.get(t.key); tiles.set(t.key, { ...tl, m: undefined, fy: !tl.fy }); }
+  else return;
+  saveDraft(); renderConfig(); requestDraw();
+}
+function transformRegion(mode) {
+  const sel = selection;
+  if (!sel || sel.kind !== 'region') return;
+  pushUndo();
+  const { x0, y0, x1, y1 } = sel, inR = (cx, cy) => cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  const mapCell = (x, y) => (mode === 'x' ? [x0 + x1 - x, y] : mode === 'y' ? [x, y0 + y1 - y] : [Math.round(mx - (y - my)), Math.round(my + (x - mx))]);
+  const M = mode === 'x' ? [-1, 0, 0, 1] : mode === 'y' ? [1, 0, 0, -1] : [0, -1, 1, 0];
+  const mapQ = (q) => (q == null ? q : mode === 'x' ? [0, 3, 2, 1][q] : mode === 'y' ? [2, 1, 0, 3][q] : (q + 1) % 4);
+  for (const m of [blocks, spikes, vines]) {
+    const moving = [...m].filter(([k]) => inR(...unkey(k)));
+    for (const [k] of moving) m.delete(k);
+    for (const [k, v] of moving) {
+      const [x, y] = mapCell(...unkey(k));
+      m.set(key(x, y), m === spikes ? { ...v, q: mapQ(v.q) } : m === vines ? { ...v, q: mode === 'r' ? (v.q + 1) % 4 : v.q } : v);
+    }
+  }
+  const movingT = [];
+  for (const [k, t] of tiles) {
+    const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
+    if (inR(cc.cx, cc.cy) && !t.arrow && layerGrid(t.layer).size === CELL) movingT.push([k, t, cc]);
+  }
+  for (const [k] of movingT) tiles.delete(k);
+  for (const [, t, cc] of movingT) {
+    const [x, y] = mapCell(cc.cx, cc.cy), w = cellWorld(x, y);
+    tiles.set(tileKeyAt(t.layer, w.x + CELL / 2, w.y + CELL / 2), { ...t, m: mul2(M, tileMatrix(t)), q: undefined, fx: undefined, fy: undefined });
+  }
+  const a = cellWorld(x0, y0), b = cellWorld(x1 + 1, y1 + 1), cxW = (a.x + b.x) / 2, cyW = (a.y + b.y) / 2;
+  for (const o of placed) {
+    const c = cellOf(o.x, o.y);
+    if (!inR(c.cx, c.cy)) continue;
+    const dx = o.x - cxW, dy = o.y - cyW, cfg = { ...(o.cfg || {}) }, item = catalogItem(o);
+    if (mode === 'x') o.x = Math.round(cxW - dx); else if (mode === 'y') o.y = Math.round(cyW - dy); else { o.x = Math.round(cxW - dy); o.y = Math.round(cyW + dx); }
+    if (item?.zip) {
+      const [ex, ey] = zipConfig(o, item).end;
+      cfg.zip = { ...cfg.zip, end: mode === 'x' ? [-ex, ey] : mode === 'y' ? [ex, -ey] : [-ey, ex] };
+    } else if (mode === 'r') cfg.rot = ((cfg.rot || 0) + 90) % 360;
+    else { cfg[mode === 'x' ? 'fx' : 'fy'] = !cfg[mode === 'x' ? 'fx' : 'fy']; if (cfg.rot) cfg.rot = (360 - cfg.rot) % 360; }
+    o.cfg = cfg;
+  }
+  if (mode === 'r') {
+    const [ax, ay] = mapCell(x0, y0), [bx, by] = mapCell(x1, y1);
+    Object.assign(sel, { x0: Math.min(ax, bx), x1: Math.max(ax, bx), y0: Math.min(ay, by), y1: Math.max(ay, by) });
+  }
+  saveDraft(); renderConfig(); requestDraw();
+}
+
 const COURSE_COLORS = ['#41f88d', '#4fc3ff', '#ffb347', '#ff6fd8', '#c792ea', '#f5e663', '#7ee0c3', '#ff8a80'];
 const courses = () => (draft.courses ||= []);
 const courseById = (id) => courses().find((c) => c.id === id);
 const courseNumber = (id) => courses().findIndex((c) => c.id === id) + 1;
 const courseColor = (id) => COURSE_COLORS[Math.max(0, courseNumber(id) - 1) % COURSE_COLORS.length];
 const completeCourses = () => courses().filter((c) => c.start && c.end);
-const LINKABLE = (item) => !!(item?.upgradeBox || item?.name === 'Course checkpoint');
+const levelCourseN = (id) => (typeof id === 'string' && id.startsWith('level:') ? Number(id.slice(6)) : 0);
+const levelCourse = (id) => { const n = levelCourseN(id); return n && baseOn() ? base.courses[n - 1] : null; };
+const isLinked = (id) => !!(courseById(id) || levelCourse(id));
+const linkLabel = (id) => (courseById(id) ? 'Course ' + courseNumber(id) : levelCourseN(id) ? 'Level course ' + levelCourseN(id) : '');
+const linkColor = (id) => (courseById(id) ? courseColor(id) : '#e8d85a');
+const isTeleporter = (item) => item?.name === 'Teleporter';
+function teleporterTargets(o) {
+  const own = placed.filter((x) => x !== o && isTeleporter(catalogItem(x)) && x.uid).map((x) => ['p:' + x.uid, 'Teleporter ' + (placed.filter((y) => isTeleporter(catalogItem(y))).indexOf(x) + 1)]);
+  const level = baseOn() ? baseObjects.filter((b) => b.kind === 'teleporter' && !removedObjects.has(b.id)).map((b, i) => ['l:' + b.id, 'Level teleporter ' + (i + 1) + ' (' + b.path.split('/').slice(-2).join(' ') + ')']) : [];
+  return [...own, ...level];
+}
+function teleportTarget(ref) {
+  if (!ref) return null;
+  if (ref.startsWith('p:')) { const t = placed.find((x) => x.uid === ref.slice(2)); return t ? { x: t.x, y: t.y, uid: t.uid } : null; }
+  const b = baseObjects.find((x) => x.id === ref.slice(2) && !removedObjects.has(x.id));
+  return b ? { x: b.x, y: b.y, path: b.path } : null;
+}
+function applyTeleport(dir, ref) {
+  const o = placed[selection.index];
+  pushUndo();
+  const other = dir === 'up' ? 'down' : 'up';
+  const old = o.tp?.[dir];
+  o.tp = { ...(o.tp || {}), [dir]: ref || null };
+  if (old && old.startsWith('p:')) { const t = placed.find((x) => x.uid === old.slice(2)); if (t?.tp?.[other] === 'p:' + o.uid) t.tp = { ...t.tp, [other]: null }; }
+  if (ref && ref.startsWith('p:')) { const t = placed.find((x) => x.uid === ref.slice(2)); if (t) t.tp = { ...(t.tp || {}), [other]: 'p:' + o.uid }; }
+  saveDraft(); renderConfig(); requestDraw();
+}
+function drawTeleportLinks() {
+  ctx.save();
+  ctx.strokeStyle = '#b48cff';
+  ctx.fillStyle = '#b48cff';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 5]);
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+  for (const o of placed) {
+    if (!o.tp || !isTeleporter(catalogItem(o))) continue;
+    for (const dir of ['up', 'down']) {
+      const t = teleportTarget(o.tp[dir]);
+      if (!t) continue;
+      const a = toScreen(o.x, o.y), b = toScreen(t.x, t.y);
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillText(dir === 'up' ? '▲' : '▼', a.x + (b.x - a.x) * 0.15, a.y + (b.y - a.y) * 0.15);
+    }
+  }
+  ctx.restore();
+}
+const isCourseCheckpoint = (item) => item?.name === 'Course checkpoint';
+const LINKABLE = (item) => !!(item?.upgradeBox || isCourseCheckpoint(item));
 function newCourse() {
   const c = { id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: null, end: null, reward: { currency: 'Cash', amount: 0 } };
   courses().push(c);
@@ -3681,7 +4143,7 @@ function migrateGates() {
 }
 function pruneCourses() {
   draft.courses = courses().filter((c) => c.start || c.end);
-  for (const o of placed) if (o.course && !courseById(o.course)) delete o.course;
+  for (const o of placed) if (o.course && !levelCourseN(o.course) && !courseById(o.course)) delete o.course;
   if (!courseById(draft.activeCourse)) draft.activeCourse = courses().at(-1)?.id || null;
 }
 function courseJson(c, ox = 0, oy = 0) {
@@ -3709,10 +4171,10 @@ function drawCourses() {
     if (c.end) drawGate(c.end, END_BOX, col, 'END ' + n);
   }
   for (const o of placed) {
-    const c = o.course && courseById(o.course), g = c && (c.start || c.end);
+    const c = o.course && (courseById(o.course) || levelCourse(o.course)), g = c && (c.start || c.end);
     if (!g) continue;
     const a = toScreen(o.x, o.y), b = centre(g, c.start ? START_BOX : END_BOX);
-    ctx.strokeStyle = courseColor(c.id); ctx.globalAlpha = 0.4; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = linkColor(o.course); ctx.globalAlpha = 0.4; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
   }
   ctx.restore();
@@ -3742,6 +4204,11 @@ function markerAt(wx, wy) {
 
 function applyTool(cx, cy) {
   const k = key(cx, cy);
+  if (tool !== 'erase' && TOOL_LAYER[tool] && layerLocked(TOOL_LAYER[tool])) { flash('That layer is locked (Layers).', true); return false; }
+  if (tool === 'erase') {
+    const w0 = cellWorld(cx, cy), t = itemAtAny(w0.x + CELL / 2, w0.y + CELL / 2);
+    if (t && !layerOpen(targetLayer(t))) return false;
+  }
   if (BLOCK_KIND[tool]) {
     if (blocks.get(k) === BLOCK_KIND[tool]) return false;
     spikes.delete(k);
@@ -3768,7 +4235,7 @@ function applyTool(cx, cy) {
     const cat = tool === 'object' ? 'objects' : 'decor', i = tool === 'object' ? draft.pick.obj ?? 0 : draft.pick.decorObj ?? 0;
     if (!catalogItem({ cat, i })) return false;
     const item = catalogItem({ cat, i });
-    placed.push({ cat, i, n: item.name, ...placementFor(item, cx, cy), ...(item.upgradeBox ? { uid: 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) } : {}), ...(item.name === 'Course checkpoint' && courseById(draft.activeCourse) ? { course: draft.activeCourse } : {}) });
+    placed.push({ cat, i, n: item.name, ...placementFor(item, cx, cy), ...(item.upgradeBox || isTeleporter(item) ? { uid: 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) } : {}), ...(item.name === 'Course checkpoint' && courseById(draft.activeCourse) ? { course: draft.activeCourse } : {}) });
     if (drag) { drag.placedObject = true; if (item.zip) drag.zipPlace = placed.length - 1; }
   } else if (tool === 'stamp') {
     if (drag?.placedObject || !base?.art?.stamps?.[draft.pick.stamp]) return false;
@@ -3798,6 +4265,8 @@ function applyTool(cx, cy) {
     if (obj) { removedObjects.add(obj.id); return true; }
     const hit = vineAt(w.x + CELL / 2, w.y + CELL / 2);
     if (!hit) {
+      const dt = baseOn() && decoAt(w.x + CELL / 2, w.y + CELL / 2);
+      if (dt) { dt.cells.forEach((k2) => removedDeco.add(dt.layer + '|' + k2)); return true; }
       const sp = baseOn() && sceneSpriteAt(w.x + CELL / 2, w.y + CELL / 2);
       if (!sp) return false;
       removedScene.add(sp.id);
@@ -3824,6 +4293,7 @@ function strokeAt(cx, cy) {
   if (!drag.changed) {
     drag.changed = true;
     undoStack.push(before);
+    redoStack = [];
     if (undoStack.length > 200) undoStack.shift();
   }
   saveDraft();
@@ -3870,7 +4340,7 @@ function updateStatus() {
   if (mossCells.size) parts.push(`${mossCells.size} moss`);
   if (PLACING.includes(tool) && (placeRot || placeFlip)) parts.push(`placing at ${placeRot * 90}°${placeFlip ? ' mirrored' : ''}`);
   if (placed.length) parts.push(`${placed.length} objects`);
-  const gone = removed.size + removedVines.size + removedObjects.size + removedScene.size;
+  const gone = removed.size + removedVines.size + removedObjects.size + removedScene.size + removedDeco.size;
   if (baseOn() && gone) parts.push(`${gone} removed`);
   let lonely = false;
   if (baseOn()) {
@@ -3897,7 +4367,7 @@ function updateStatus() {
 function syncBaseUi() {
   const on = baseOn();
   const btn = root.querySelector('#mm-base');
-  btn.textContent = on ? 'Remove base map' : 'Import base map';
+  btn.textContent = on ? 'Base map ✓' : 'Base map';
   btn.classList.toggle('active', on);
   root.querySelector('#mm-jump').hidden = !on;
   root.querySelector('#mm-state').hidden = !on;
@@ -4017,6 +4487,7 @@ function clearAll() {
   removedVines.clear();
   removedObjects.clear();
   removedScene.clear();
+  removedDeco.clear();
   selection = null;
   renderConfig();
   draft.courses = [];
@@ -4058,10 +4529,9 @@ function bindCanvas() {
     if (e.button !== 0) return;
     const rect = canvas.getBoundingClientRect();
     const wp = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    hoverWorld = wp;
     if (e.altKey) { pickAt(wp.x, wp.y); return; }
     if (tool === 'select') { selectDown(e); return; }
-    const arrow = teleportArrowAt(wp.x, wp.y);
-    if (arrow) { jumpTo(arrow.to[0], arrow.to[1]); flash('Teleported'); return; }
     const c = eventCell(e);
     drag = { pan: false, before: snapshot(), changed: false };
     if (tool === 'arrow') { arrowDown(c.cx, c.cy); requestDraw(); return; }
@@ -4093,8 +4563,6 @@ function bindWindow() {
     if (!drag) {
       const rect = canvas.getBoundingClientRect();
       const wp = toWorld(e.clientX - rect.left, e.clientY - rect.top);
-      const arrow = teleportArrowAt(wp.x, wp.y);
-      if (arrow !== hoverArrow) { hoverArrow = arrow; canvas.style.cursor = arrow ? 'pointer' : ''; requestDraw(); }
     }
     const c = eventCell(e);
     hoverWorld = worldAt(e);
@@ -4133,7 +4601,9 @@ function onWheel(e) {
 function onKeyDown(e) {
   if (!mounted || !canvas.isConnected || canvas.offsetParent === null) return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelection(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); if (brush) setTool('paste'); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -4148,13 +4618,23 @@ function onKeyDown(e) {
     return;
   }
   if (!e.shiftKey && k === 'h') { toggleHitboxes(); return; }
+  if (k === '?' || k === '/' || k === 'k') { togglePanel('mm-keys'); return; }
+  if (k === 't') { draft.simulate = !draft.simulate; saveDraft(); syncChrome(); requestDraw(); flash(draft.simulate ? 'Simulating zip movers (T)' : 'Simulation off'); return; }
+  if (k === 'g') { draft.noGrid = !draft.noGrid; saveDraft(); requestDraw(); flash(draft.noGrid ? 'Grid hidden (G)' : 'Grid shown (G)'); return; }
+  if (k === 'l') { togglePanel('mm-layers'); return; }
+  if (k === 'm') { togglePanel('mm-file'); return; }
+  if (k === 'p') { togglePanel('mm-player'); return; }
+  if (k === '0') { cam.scale = 1; requestDraw(); return; }
+  if (e.key === 'Home') { const h = draft.spawn || courses()[0]?.start || (baseOn() && base.courses[0]?.start); if (h) jumpTo(h.x, h.y); return; }
   if (k === 'e') { setTool('erase'); return; }
   if (k === 'a') { const i = categoryItems('decor').findIndex((it) => it.tool === 'arrow'); if (i >= 0) { selectItem('decor', i); updatePopover(); } return; }
   if (k === 'q') { setTool('select'); return; }
   if (k === 'v') { if (brush) setTool('paste'); else flash('Copy a region first: Select (Q), drag, Ctrl+C.', true); return; }
   if (k === 'i') { if (hover) { const w = cellWorld(hover.cx, hover.cy); pickAt(w.x + CELL / 2, w.y + CELL / 2); } return; }
   if (k === 'r') { turnSomething(e.shiftKey ? -1 : 1); return; }
-  if (k === 'f') { turnSomething(0, true); return; }
+  if (k === 'f') { if (e.shiftKey) flipYSelection(); else turnSomething(0, true); return; }
+  if (k === ',' || k === '.' || k === '<' || k === '>') { fineRotate(k === '.' || k === '>' ? -1 : 1, e.shiftKey); return; }
+  if (k === '=' || k === '+' || k === '-' || k === '_') { scaleSelection(k === '=' || k === '+' ? 1 : -1); return; }
   if (e.key === '[' || e.key === ']') { stepItem(e.key === ']' ? 1 : -1); updatePopover(); return; }
   if (/^[1-9]$/.test(e.key)) { selectItem(draft.cat, Number(e.key) - 1); updatePopover(); return; }
   const cat = CATEGORIES.find((c) => c.key === k);
@@ -4183,54 +4663,67 @@ export async function mountEditor(container) {
       <div class="mm-pop" id="mm-pop" hidden></div>
       <div class="mm-bar-right">
         <div class="mm-tools" id="mm-state" hidden>
-          <button class="mm-tool" data-state="start" title="Area 1 as it is at the start of the game">Start of game</button>
+          <button class="mm-tool" data-state="start" title="Area 1 as it is at the start of the game">Start</button>
           <button class="mm-tool" data-state="overgrown" title="Area 1 after the breaker is tripped">Overgrown</button>
         </div>
         <select class="mm-input mm-jump" id="mm-jump" hidden><option value="">Jump to course…</option></select>
         <button class="mm-tool" id="mm-base" title="Show the real Overworld under your map; the area around your edits is exported with it"></button>
-        <button class="mm-tool" id="mm-player-btn" title="What the player starts the level with: dashes, double jumps, abilities, unlocks and cash">Level settings</button>
+        <select class="mm-input mm-snap" id="mm-snap" title="Snap for objects and decorations: placing, dragging and arrow keys (Shift+arrow: 1 unit)"><option value="32">Snap: cell</option><option value="16">Snap: ½</option><option value="8">Snap: ¼</option><option value="4">Snap: ⅛</option><option value="1">Snap: free</option></select>
+        <button class="mm-tool" id="mm-layers-btn" title="Show, hide and lock layers">Layers</button>
+        <button class="mm-tool" id="mm-player-btn" title="Level settings: what the player starts with - dashes, double jumps, abilities, unlocks and cash (P)">Level</button>
         <span class="mm-sep"></span>
         <button class="mm-tool" id="mm-undo" title="Undo (Ctrl+Z)">Undo</button>
         <button class="mm-tool" id="mm-clear" title="Clear the whole draft">Clear</button>
+        <button class="mm-tool" id="mm-sim-btn" title="Play zip movers along their tracks (T)">▶ Simulate</button>
+        <button class="mm-tool" id="mm-full-btn" title="Fullscreen editor, or back to the page"></button>
+        <button class="mm-tool" id="mm-keys-btn" title="Every keyboard shortcut (K or ?)">?</button>
+        <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, test in game, open and export">Map ▾</button>
       </div>
     </div>
     <div class="mm-canvas-wrap">
       <canvas id="mm-canvas"></canvas>
       <div class="mm-empty" id="mm-empty" hidden>
         <div>Paint blocks and spikes, then set a spawn - gates are optional.</div>
-        <div class="mm-empty-sub">Want to build on the real level? Use <b>Import base map</b>.</div>
+        <div class="mm-empty-sub">Want to build on the real level? Use <b>Base map</b>.</div>
       </div>
       <div class="mm-views">
         <button class="mm-tool mm-view" id="mm-hitbox" title="Show collision: solid blocks green, deadly shapes red (H)">View hitboxes</button>
       </div>
       <div class="mm-config" id="mm-config" hidden></div>
       <div class="mm-config mm-player" id="mm-player" hidden></div>
-      <div class="mm-hint">Left-click paint · Right-drag / Space-drag pan · Wheel zoom</div>
+      <div class="mm-config mm-player" id="mm-layers" hidden></div>
+      <div class="mm-config mm-player mm-keys" id="mm-keys" hidden></div>
+      <div class="mm-config mm-player mm-file" id="mm-file" hidden>
+        <div class="mm-config-title">Map<span>name, testing and files</span></div>
+        <div class="mm-config-row"><label>Name<input class="mm-input" id="mm-name" type="text" placeholder="Map name" /></label></div>
+        <div class="mm-config-row"><label>Description<input class="mm-input" id="mm-desc" type="text" placeholder="Optional" /></label></div>
+        <div class="mm-config-row"><button class="mm-tool mm-primary" id="mm-test" title="Install this map and launch the game straight into it">Test in game</button></div>
+        <div class="mm-config-row"><button class="mm-tool" id="mm-load" title="Open one of your installed maps to keep editing it">Load installed…</button></div>
+        <div class="mm-load-list" id="mm-load-list" hidden></div>
+        <div class="mm-config-row"><button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json) to keep editing it">Open…</button><button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button><button class="mm-tool" id="mm-export">Export .zip</button></div>
+        <input type="file" id="mm-open-file" accept=".zip,.json,application/json,application/zip" hidden>
+      </div>
+      <div class="mm-hint">Left-click paint · Right-drag / Space-drag pan · Wheel zoom · K keys</div>
       <div class="mm-flash" id="mm-flash" hidden></div>
     </div>
     <div class="mm-status" id="mm-status"></div>
-    <div class="mm-bar mm-footer">
-      <input class="mm-input mm-name" id="mm-name" type="text" placeholder="Map name" />
-      <input class="mm-input mm-desc" id="mm-desc" type="text" placeholder="Description (optional)" />
-      <div class="mm-bar-right">
-        <button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json) to keep editing it">Open…</button>
-        <input type="file" id="mm-open-file" accept=".zip,.json,application/json,application/zip" hidden>
-        <button class="mm-tool" id="mm-test" title="Install this map and launch the game straight into it">Test in game</button>
-        <button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button>
-        <button class="mm-tool mm-primary" id="mm-export">Export .zip</button>
-      </div>
-    </div>`;
+`;
 
   canvas = root.querySelector('#mm-canvas');
   ctx = canvas.getContext('2d');
   root.querySelector('[data-tool="erase"]').addEventListener('click', () => { closePopover(); setTool('erase'); });
   root.querySelector('[data-tool="select"]').addEventListener('click', () => { closePopover(); setTool('select'); });
-  root.querySelector('#mm-player-btn').addEventListener('click', () => {
-    const el = root.querySelector('#mm-player'), btn = root.querySelector('#mm-player-btn');
-    el.hidden = !el.hidden;
-    btn.classList.toggle('active', !el.hidden);
-    renderPlayerPanel();
-  });
+  root.querySelector('#mm-layers-btn').addEventListener('click', () => togglePanel('mm-layers'));
+  root.querySelector('#mm-keys-btn').addEventListener('click', () => togglePanel('mm-keys'));
+  root.querySelector('#mm-sim-btn').addEventListener('click', () => { draft.simulate = !draft.simulate; saveDraft(); syncChrome(); requestDraw(); });
+  root.querySelector('#mm-full-btn').addEventListener('click', () => { draft.inline = !draft.inline; saveDraft(); syncChrome(); });
+  new ResizeObserver(() => { const h = root.querySelector('.mm-bar')?.offsetHeight || 0; root.style.setProperty('--bar-h', h + 'px'); }).observe(root.querySelector('.mm-bar'));
+  root.querySelector('#mm-file-btn').addEventListener('click', () => togglePanel('mm-file'));
+  const snapSel = root.querySelector('#mm-snap');
+  snapSel.value = String(draft.snap || CELL);
+  snapSel.addEventListener('change', () => { draft.snap = Number(snapSel.value) || CELL; saveDraft(); flash(draft.snap === 1 ? 'Objects and decorations move freely' : `Objects and decorations snap to ${draft.snap} units`); });
+  root.querySelector('#mm-player-btn').addEventListener('click', () => togglePanel('mm-player'));
+  root.querySelector('#mm-load').addEventListener('click', toggleInstalledList);
   root.querySelector('#mm-open').addEventListener('click', () => root.querySelector('#mm-open-file').click());
   root.querySelector('#mm-open-file').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadMapFile(f); });
   root.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
@@ -4272,6 +4765,7 @@ export async function mountEditor(container) {
   root.querySelector('#mm-copy').addEventListener('click', copyJson);
   root.querySelector('#mm-export').addEventListener('click', exportZip);
 
+  syncChrome();
   const home = draft.spawn || courses()[0]?.start;
   if (home) { cam.x = home.x; cam.y = home.y; }
   mounted = true;
