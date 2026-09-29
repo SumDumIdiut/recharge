@@ -39,6 +39,15 @@ pub fn uninstall_map(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn read_map(app: AppHandle, id: String) -> Result<String, String> {
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return Err(format!("invalid id: '{id}'"));
+    }
+    let dir = maps_dir(&app).ok_or("game path not set")?;
+    std::fs::read_to_string(dir.join(&id).join("map.json")).map_err(|e| format!("couldn't read map '{id}': {e}"))
+}
+
+#[tauri::command]
 pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     let mut maps = Vec::new();
     let Some(dir) = maps_dir(&app) else {
