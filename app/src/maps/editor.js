@@ -67,6 +67,8 @@ let spikes = new Map();
 let vines = new Map();
 let tiles = new Map();
 let placed = [];
+// Spikes placed off the grid (a finer snap than a cell): { x, y, c, q }.
+let freeSpikes = [];
 let arrows = [];
 let removed = new Set();
 let removedVines = new Set();
@@ -101,6 +103,7 @@ function loadDraft() {
   tiles = new Map(Object.entries(draft.tiles || {}));
   mossCells = new Map(Object.entries(draft.moss || {}));
   placed = [...(draft.placed || [])];
+  freeSpikes = [...(draft.freeSpikes || [])];
   arrows = (draft.arrows || []).map((a) => ({ ...a, cells: a.cells.map((c) => [...c]) }));
   for (const [k, v] of spikes) if (v.c === 'vine') { spikes.delete(k); vines.set(k, { s: 'smallArc', q: v.q }); }
   removedVines = new Set(draft.removedVines);
@@ -117,6 +120,7 @@ function saveDraft() {
   draft.tiles = Object.fromEntries(tiles);
   draft.moss = Object.fromEntries(mossCells);
   draft.placed = placed;
+  draft.freeSpikes = freeSpikes;
   draft.arrows = arrows;
   draft.removedVines = [...removedVines];
   draft.removedObjects = [...removedObjects];
@@ -131,7 +135,7 @@ function saveDraft() {
 }
 
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
 }
 function pushUndo() {
   redoStack = [];
@@ -158,6 +162,7 @@ function restoreSnapshot(s) {
   tiles = new Map(o.tiles || []);
   mossCells = new Map(o.moss || []);
   placed = o.placed || [];
+  freeSpikes = o.freeSpikes || [];
   arrows = o.arrows || [];
   removedVines = new Set(o.removedVines);
   removedObjects = new Set(o.removedObjects);
@@ -342,8 +347,12 @@ function trueSpikeCanvas() {
 }
 function drawTrueSpike(cx, cy, q) {
   if (!artReady()) return drawSpike(cx, cy, q, COLORS.true);
+  const wc = cellWorld(cx, cy);
+  drawTrueSpikeAt(wc.x + CELL / 2, wc.y + CELL / 2, q);
+}
+function drawTrueSpikeAt(x, y, q) {
   const d = trueSpikeDef(), cv = trueSpikeCanvas();
-  const wc = cellWorld(cx, cy), c = toScreen(wc.x + CELL / 2, wc.y + CELL / 2), m = rotMatrix(q), px = cam.scale, w = cv.width, h = cv.height;
+  const wc = { x: x - CELL / 2, y: y - CELL / 2 }, c = toScreen(x, y), m = rotMatrix(q), px = cam.scale, w = cv.width, h = cv.height;
   ctx.save();
   ctx.setTransform(px * m[0], -px * m[2], -px * m[1], px * m[3], c.x + px * (-m[0] * w / 2 + m[1] * h / 2), c.y + px * (m[2] * w / 2 - m[3] * h / 2));
   ctx.drawImage(cv, 0, 0);
@@ -1109,8 +1118,8 @@ function itemAt(wx, wy) {
   return t && layerOpen(targetLayer(t)) ? t : null;
 }
 function itemAtAny(wx, wy) {
-  const oi = placed.findLastIndex((o) => objectHit(o, wx, wy));
-  if (oi >= 0) return { kind: 'object', index: oi };
+  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy) : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
+  if (top) return { kind: top.kind, index: top.index };
   const m = markerAt(wx, wy);
   if (m) return { kind: 'gate', ...m };
   const c = cellOf(wx, wy), k = key(c.cx, c.cy);
@@ -1261,6 +1270,7 @@ const sameTarget = (a, b) => !!a && !!b && a.kind === b.kind && a.index === b.in
 function drawTarget(t) {
   const rectW = (x0, y0, x1, y1) => { const a = toScreen(x0, y1), b = toScreen(x1, y0); ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4); };
   if (t.kind === 'object') { const b = placed[t.index] && objectBounds(placed[t.index]); if (b) rectW(b.x0, b.y0, b.x1, b.y1); }
+  else if (t.kind === 'fspike') { const f = freeSpikes[t.index]; if (f) rectW(f.x - CELL / 2, f.y - CELL / 2, f.x + CELL / 2, f.y + CELL / 2); }
   else if (t.kind === 'gate') {
     const g = markerPos(t), b = MARKER_BOX[t.which];
     if (g) rectW(g.x + b.dx - Math.max(b.w, CELL) / 2, g.y + b.dy - Math.max(b.h, CELL) / 2, g.x + b.dx + Math.max(b.w, CELL) / 2, g.y + b.dy + Math.max(b.h, CELL) / 2);
@@ -1312,10 +1322,10 @@ function zipHandle(o) {
 
 // Pressing on what's already selected picks it up to drag, whatever tool is active.
 function grabsSelection(wp) {
-  if (selection?.kind !== 'object' && selection?.kind !== 'gate') return false;
+  if (selection?.kind !== 'object' && selection?.kind !== 'gate' && selection?.kind !== 'fspike') return false;
   const hit = itemAt(wp.x, wp.y);
   if (!hit || hit.kind !== selection.kind) return false;
-  return hit.kind === 'object' ? hit.index === selection.index : hit.which === selection.which && hit.course === selection.course;
+  return hit.kind === 'object' || hit.kind === 'fspike' ? hit.index === selection.index : hit.which === selection.which && hit.course === selection.course;
 }
 
 function selectDown(e) {
@@ -1331,7 +1341,7 @@ function selectDown(e) {
     selection = hit;
     showInDropdown(hit);
     if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
-    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
+    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, fspike: hit.kind === 'fspike', start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'fspike' ? { x: freeSpikes[hit.index].x, y: freeSpikes[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
   } else {
     const c = cellOf(w.x, w.y);
     selection = null;
@@ -1356,6 +1366,10 @@ function selectMove(e) {
       changed(() => moveCells(selection, bx - ax, by - ay));
       drag.group.at = now;
     }
+  } else if (drag.fspike) {
+    const f = freeSpikes[selection.index], snap = e.shiftKey ? 1 : snapV();
+    const x = Math.round((drag.orig.x + w.x - drag.start.x) / snap) * snap, y = drag.orig.y + Math.round((w.y - drag.start.y) / snap) * snap;
+    if (f && (f.x !== x || f.y !== y)) changed(() => { f.x = x; f.y = y; });
   } else if (drag.gate && drag.gate.which === 'screen') {
     const course = courseById(drag.gate.course), snap = e.shiftKey ? 1 : snapV();
     const at = { x: Math.round((drag.orig.x + w.x - drag.start.x) / snap) * snap, y: Math.round((drag.orig.y + w.y - drag.start.y) / snap) * snap };
@@ -1407,6 +1421,11 @@ const PLACING = ['object', 'decor', 'stamp', 'vine'];
 function turnSomething(dir, flip = false) {
   let target = tool === 'select' ? selection : null;
   if (target?.kind === 'region') return transformRegion(flip ? 'x' : 'r');
+  if (selection?.kind === 'fspike' && !flip) {
+    const f = freeSpikes[selection.index];
+    if (f) { pushUndo(); f.q = ((f.q ?? 0) + (dir < 0 ? 1 : 3)) % 4; saveDraft(); requestDraw(); }
+    return;
+  }
   if (SPIKE_KIND[tool] && !flip) {
     const w = hover && cellWorld(hover.cx, hover.cy), under = w && itemAt(w.x + CELL / 2, w.y + CELL / 2);
     if (!under || under.kind !== 'cell' || !spikes.has(under.k)) {
@@ -1476,6 +1495,10 @@ function nudgeSelection(dx, dy, fine) {
     moveCells(sel, dx, dy);
   } else if (sel.kind === 'base' || sel.kind === 'basecells' || sel.kind === 'scene') {
     return false;
+  } else if (sel.kind === 'fspike') {
+    const f = freeSpikes[sel.index], step = fine ? 1 : snapV();
+    if (!f) return false;
+    f.x += dx * step; f.y += dy * step;
   } else if (sel.kind === 'gate') {
     const g = markerPos(sel);
     if (!g) return false;
@@ -1515,6 +1538,7 @@ function deleteSelection() {
   if (!selection) return;
   pushUndo();
   if (selection.kind === 'object') placed.splice(selection.index, 1);
+  else if (selection.kind === 'fspike') freeSpikes.splice(selection.index, 1);
   else if (selection.kind === 'gate') clearMarker(selection);
   else if (selection.kind === 'base') removedObjects.add(selection.id);
   else if (selection.kind === 'blocks') selection.cells.forEach((k) => blocks.delete(k));
@@ -1570,25 +1594,50 @@ function baseTilesIn(x0, y0, x1, y1) {
 }
 
 // Layering: objects draw in list order, so the end of the list is the front.
-function restack(toFront) {
-  if (selection?.kind !== 'object') { flash('Select an object to move it in front or behind.', true); return; }
-  const i = selection.index, o = placed[i];
-  if (!o || (toFront ? i === placed.length - 1 : i === 0)) return;
+// The stack: placed objects, decorations and free spikes in draw order,
+// back to front. Each keeps a z; new things (no z yet) go on top as made.
+function stack() {
+  const all = [...placed.map((it, i) => ({ kind: 'object', index: i, it })), ...freeSpikes.map((it, i) => ({ kind: 'fspike', index: i, it }))];
+  const z = (e) => e.it.z ?? Infinity;
+  return all.sort((a, b) => z(a) - z(b) || (a.kind === b.kind ? a.index - b.index : a.kind === 'object' ? -1 : 1));
+}
+function stackRank() {
+  const rank = new Map();
+  stack().forEach((e, n) => rank.set(e.it, n));
+  return rank;
+}
+// Moves the selection in the stack: 'front', 'back', or one step 'up' / 'down'.
+function restack(how) {
+  if (selection?.kind !== 'object' && selection?.kind !== 'fspike') { flash('Select an object or a free spike to move it in front or behind.', true); return; }
+  const list = stack(), pos = list.findIndex((e) => e.kind === selection.kind && e.index === selection.index);
+  if (pos < 0) return;
+  const to = how === 'front' ? list.length - 1 : how === 'back' ? 0 : Math.max(0, Math.min(list.length - 1, pos + (how === 'up' ? 1 : -1)));
+  if (to === pos) { flash(how === 'up' || how === 'front' ? 'Already at the front' : 'Already at the back'); return; }
   pushUndo();
-  placed.splice(i, 1);
-  if (toFront) placed.push(o); else placed.unshift(o);
-  selection = { kind: 'object', index: toFront ? placed.length - 1 : 0 };
-  if (platformEdit === i) platformEdit = selection.index;
+  const [moved] = list.splice(pos, 1);
+  list.splice(to, 0, moved);
+  list.forEach((e, n) => { e.it.z = n; });
   saveDraft();
   renderConfig();
   requestDraw();
-  flash(toFront ? 'Brought to front' : 'Sent to back');
+  flash({ front: 'Brought to front', back: 'Sent to back', up: 'Moved up one', down: 'Moved down one' }[how]);
+}
+function stackButtons() {
+  return `<div class="mm-config-row"><button class="mm-tool" data-act="stack:front" title="In front of everything (Shift+])">⤒ Front</button><button class="mm-tool" data-act="stack:up" title="Up one (])">↑ Up</button><button class="mm-tool" data-act="stack:down" title="Down one ([)">↓ Down</button><button class="mm-tool" data-act="stack:back" title="Behind everything (Shift+[)">⤓ Back</button></div>`;
 }
 
 // A copied object: Ctrl+V puts a copy under the mouse (a region copy pastes with a click instead).
 let clipObject = null;
 function pasteObject() {
   const at = hoverWorld || { x: cam.x, y: cam.y }, snap = snapV();
+  if (clipObject.freeSpike) {
+    const p = snapPoint(at, snap);
+    pushUndo();
+    freeSpikes.push({ ...clipObject.freeSpike, x: p.x, y: p.y });
+    selection = { kind: 'fspike', index: freeSpikes.length - 1 };
+    saveDraft(); renderConfig(); requestDraw();
+    return;
+  }
   const copy = { ...JSON.parse(JSON.stringify(clipObject)), x: Math.round(at.x / snap) * snap, y: Math.round(at.y / snap) * snap };
   if (copy.uid) copy.uid = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   delete copy.tp;
@@ -1601,6 +1650,11 @@ function pasteObject() {
 }
 
 function copySelection() {
+  if (selection?.kind === 'fspike' && freeSpikes[selection.index]) {
+    clipObject = { freeSpike: { ...freeSpikes[selection.index] } };
+    flash('Copied spike - Ctrl+V pastes it at the mouse');
+    return;
+  }
   if (selection?.kind === 'object' && placed[selection.index]) {
     clipObject = JSON.parse(JSON.stringify(placed[selection.index]));
     flash(`Copied ${catalogItem(clipObject)?.name || 'object'} - Ctrl+V pastes it at the mouse`);
@@ -1920,7 +1974,7 @@ function renderConfig() {
     const cfg = o.cfg || {};
     html += `<div class="mm-config-title">${item.name}<span>${o.cat === 'objects' ? 'object' : 'decoration'}</span></div>`;
     html += `<div class="mm-config-row">${num('x', 'X', o.x)}${num('y', 'Y', o.y)}</div>`;
-    html += `<div class="mm-config-row"><button class="mm-tool" data-act="front" title="Draw it over the other objects (])">Bring to front</button><button class="mm-tool" data-act="back" title="Draw it under the other objects ([)">Send to back</button></div>`;
+    html += stackButtons();
     if (isTeleporter(item)) {
       const opts = teleporterTargets(o), sel = (dir) => `<label>${dir === 'up' ? 'Up (▲) to' : 'Down (▼) to'}<select class="mm-input" data-cfg="tp:${dir}"><option value="">Nothing</option>${opts.map(([v, t]) => `<option value="${v}"${o.tp?.[dir] === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
       html += `<div class="mm-config-row">${sel('up')}</div><div class="mm-config-row">${sel('down')}</div>`;
@@ -1992,6 +2046,13 @@ function renderConfig() {
     html += `<div class="mm-config-thumb">${thumbHtml({ art: t.tile }, 48)}</div>`;
     html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotL">⟲ Rotate</button><button class="mm-tool" data-act="rotR">Rotate ⟳</button></div>`;
     html += `<div class="mm-config-row">${chk('fx', 'Flip X', t.fx)}${chk('fy', 'Flip Y', t.fy)}</div>`;
+  } else if (selection.kind === 'fspike') {
+    const f = freeSpikes[selection.index];
+    if (!f) { selection = null; el.hidden = true; return; }
+    html += `<div class="mm-config-title">${{ spike: 'Spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[f.c]}<span>off the grid</span></div>`;
+    html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotFree">Rotate ⟳ (R)</button></div>`;
+    html += stackButtons();
+    html += `<div class="mm-config-sub">Placed with a finer snap than a cell. Drag it, or nudge it with the arrow keys.</div>`;
   } else if (selection.kind === 'cell') {
     const sp = spikes.get(selection.k), kind = selection.vine ? 'Vine' : sp ? { spike: 'Spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[sp.c] : { ground: 'Ground', dark: 'Dark ground', blue: 'Blue block', orange: 'Orange block' }[blocks.get(selection.k)];
     html += `<div class="mm-config-title">${kind}<span>cell ${selection.k}</span></div>`;
@@ -2095,7 +2156,8 @@ function applyCourseConfig(id, raw) {
 
 function configAction(act) {
   if (act === 'delete') return deleteSelection();
-  if (act === 'front' || act === 'back') return restack(act === 'front');
+  if (act.startsWith('stack:')) return restack(act.slice(6));
+  if (act === 'rotFree') { const f = freeSpikes[selection?.index]; if (!f) return; pushUndo(); f.q = ((f.q ?? 0) + 3) % 4; saveDraft(); requestDraw(); return; }
   if (act === 'platform') return setPlatformEdit(platformEdit === selection?.index ? null : selection?.index);
   if (act === 'platformReset') {
     const o = placed[selection.index];
@@ -2166,8 +2228,8 @@ function drawSelection() {
 
 function editorState() {
   saveDraft();
-  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
-  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress };
+  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
+  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress };
 }
 
 async function readMapFile(file) {
@@ -2220,7 +2282,7 @@ async function openMap(map, label, installedId = null) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
   pushUndo();
-  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] }, st);
+  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
   localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   loadDraft();
@@ -2419,6 +2481,8 @@ function buildOverlay() {
     }
   });
   mossCells.forEach((_, k) => { const c = mossCenter(k); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', x: c.x, y: c.y, matrix: [1, 0, 0, 1] }); });
+  const ranks = stackRank();
+  for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f), order: ranks.get(f) });
   spikes.forEach((sp, k) => {
     const [cx, cy] = unkey(k);
     if (sp.c === 'true') { objects.push(trueSpikeJson(sp, cx, cy, at(k))); return; }
@@ -2435,7 +2499,7 @@ function buildOverlay() {
   });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), order: placed.indexOf(o), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), order: ranks.get(o), ...cloneConfig(o, item) });
   }
 
   const full = completeCourses(), first = full[0], hasGates = !!first;
@@ -2515,9 +2579,11 @@ function buildMap() {
     const [cx, cy] = unkey(k), w = cellWorld(cx, cy);
     objects.push(trueSpikeJson(sp, cx, cy, { x: Math.round(w.x + CELL / 2 - origin.x), y: Math.round(w.y + CELL / 2 - origin.y) }));
   });
+  const ranks = stackRank();
+  for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f, origin.x, origin.y), order: ranks.get(f) });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: placed.indexOf(o), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: ranks.get(o), ...cloneConfig(o, item) });
   }
 
   return {
@@ -3249,11 +3315,15 @@ function bakeText(t) {
   return { canvas: cv, x0: minX, top: maxY, px };
 }
 
+// Level texts that only appear later in the game (the statue's line once its power is awakened).
+const LATER_TEXTS = new Set(['I have boosted all previous courses']);
+
 function drawSceneText(tl, br) {
   const fonts = base.scene.fonts || [];
   if (!fonts.length || !fonts.every((f, i) => !f || fontImage(i).complete)) return;
   ctx.save();
   for (const t of sceneList.texts) {
+    if (LATER_TEXTS.has(t.t)) continue;
     const reach = Math.max(t.w, t.h) + t.size * t.k * 4;
     if (t.x + reach < tl.x || t.x - reach > br.x || t.y + reach < br.y || t.y - reach > tl.y) continue;
     if (!sizeCache.has(t)) sizeCache.set(t, textSize(t));
@@ -3767,7 +3837,10 @@ function draw() {
   if (useArt && !layerHidden('tiles')) drawPlacedTiles(true);
   // Course screens show in front of the walls, as in the game; placed objects still go over them.
   if (!layerHidden('course')) for (const c of courses()) drawCourseScreen(c, courseColor(c.id), courseNumber(c.id));
-  for (const o of placed) if (!layerHidden(o.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(o);
+  for (const e of stack()) {
+    if (e.kind === 'fspike') { if (!layerHidden('hazards')) drawFreeSpike(e.it); }
+    else if (!layerHidden(e.it.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(e.it);
+  }
   drawSelection();
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
 
@@ -4024,6 +4097,35 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
 const BLOCK_KIND = { block: 'ground', dark: 'dark', blue: 'blue', orange: 'orange' };
 const SPIKE_KIND = { spike: 'spike', blueSpike: 'blue', orangeSpike: 'orange', trueSpike: 'true' };
 
+// ---- free spikes: the Hazards spikes, placed off the grid with a finer snap ----
+function placeFreeSpike(c, at) {
+  const snap = snapV(), p = snapPoint(at, snap);
+  if (freeSpikes.some((f) => Math.abs(f.x - p.x) < snap && Math.abs(f.y - p.y) < snap)) return false;
+  const cell = cellOf(p.x, p.y);
+  freeSpikes.push({ x: p.x, y: p.y, c, q: spikePlaceTurn ?? autoSpikeTurn(cell.cx, cell.cy) });
+  return true;
+}
+const freeSpikeAt = (wx, wy) => freeSpikes.findLastIndex((f) => Math.abs(wx - f.x) <= CELL / 2 && Math.abs(wy - f.y) <= CELL / 2);
+function drawFreeSpike(f) {
+  if (f.c === 'true' && artReady()) return drawTrueSpikeAt(f.x, f.y, f.q);
+  const t = spikeTile(f.c === 'true' ? 'spike' : f.c, f.q), sprite = base?.art?.tiles?.[t.tile], c = toScreen(f.x, f.y);
+  if (sprite !== undefined && artReady()) { ctx.save(); blitSprite(ctx, sprite, t.matrix, cam.scale, c.x, c.y); ctx.restore(); return; }
+  const r = rotMatrix(f.q), h = (CELL / 2) * cam.scale, pt = (x, y) => [c.x + r[0] * x * h + r[1] * y * h, c.y - (r[2] * x * h + r[3] * y * h)];
+  ctx.fillStyle = COLORS[f.c] || COLORS.spike;
+  ctx.beginPath(); ctx.moveTo(...pt(-1, -1)); ctx.lineTo(...pt(1, -1)); ctx.lineTo(...pt(0, 1)); ctx.closePath(); ctx.fill();
+}
+// A free spike for the game: its tile, turned, and its hitbox in its own units.
+function freeSpikeJson(f, ox = 0, oy = 0) {
+  const at = { x: Math.round(f.x - ox), y: Math.round(f.y - oy) };
+  const turn = (shape, m) => shape.map((poly) => poly.map(([x, y]) => [Math.round((m[0] * x + m[1] * y) * 100) / 100, Math.round((m[2] * x + m[3] * y) * 100) / 100]));
+  if (f.c === 'true') {
+    const d = trueSpikeDef(), t = spikeTile('spike', f.q), col = COLORS.true.match(/\w\w/g).map((h) => Math.round((parseInt(h, 16) / 255) * 1000) / 1000);
+    return { type: 'freeSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: t.matrix, color: col, shape: turn(d.shape, rotMatrix(f.q)) };
+  }
+  const t = spikeTile(f.c, f.q), d = defByTile(t.layer + '|' + t.tile);
+  return { type: 'freeSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: t.matrix, shape: turn(d?.shape || [[[-12, -16], [12, -16], [0, 14]]], t.matrix) };
+}
+
 const spikeTurn = (sp, cx, cy) => sp.q ?? autoSpikeTurn(cx, cy);
 
 function vineAt(wx, wy) {
@@ -4052,6 +4154,7 @@ function targetLayer(t) {
     case 'gate': return 'course';
     case 'blocks': case 'moss': return 'blocks';
     case 'cell': return t.vine || spikes.has(t.k) ? 'hazards' : 'blocks';
+    case 'fspike': return 'hazards';
     case 'tile': return 'tiles';
     case 'base': case 'basecells': case 'scene': case 'decotiles': return 'level';
     default: return null;
@@ -4090,7 +4193,8 @@ const KEY_GUIDE = [
     ['Delete', 'Delete the selection'],
     ['Esc', 'Deselect / close, then leave fullscreen'],
     ['Ctrl+C / Ctrl+V, V', 'Copy the selected object or region / paste (an object pastes at the mouse)'],
-    ['] / [', 'Bring the selected object to front / send it to back'],
+    ['] / [', 'Move the selected object or free spike up / down one layer'],
+    ['Shift+] / Shift+[', 'Bring it to the front / send it to the back'],
     ['Ctrl+S', 'Save to your installed maps'],
     ['Ctrl+D', 'Duplicate the selection'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / redo (Ctrl+Shift+Z too)'],
@@ -4192,6 +4296,8 @@ function replaceSelectionWith(it) {
 
 function syncChrome() {
   if (!root) return;
+  const snapSel = root.querySelector('#mm-snap');
+  if (snapSel) snapSel.value = String(draft.snap || CELL);
   root.classList.toggle('mm-full', !draft.inline);
   const full = root.querySelector('#mm-full-btn');
   if (full) { full.textContent = draft.inline ? '⤢' : '⤡'; full.title = draft.inline ? 'Fullscreen editor' : 'Back to the page'; }
@@ -4506,6 +4612,7 @@ function applyTool(cx, cy) {
     spikes.delete(k);
     blocks.set(k, BLOCK_KIND[tool]);
   } else if (SPIKE_KIND[tool]) {
+    if (snapV() < CELL && hoverWorld) return placeFreeSpike(SPIKE_KIND[tool], hoverWorld);
     if (spikes.get(k)?.c === SPIKE_KIND[tool]) return false;
     blocks.delete(k);
     spikes.set(k, spikePlaceTurn === null ? { c: SPIKE_KIND[tool] } : { c: SPIKE_KIND[tool], q: spikePlaceTurn });
@@ -4544,6 +4651,8 @@ function applyTool(cx, cy) {
       const w = cellWorld(cx, cy), px = w.x + CELL / 2, py = w.y + CELL / 2;
       const oi = placed.findLastIndex((o) => objectHit(o, px, py));
       if (oi >= 0) { placed.splice(oi, 1); return true; }
+      const fi = freeSpikeAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
+      if (fi >= 0) { freeSpikes.splice(fi, 1); return true; }
       const t = tileAt(px, py);
       if (t) { if (t[1].arrow) removeArrow(t[1].arrow); else tiles.delete(t[0]); return true; }
       if (mossCells.delete(mossKeyAt(px, py))) return true;
@@ -4819,6 +4928,7 @@ function clearAll() {
   tiles.clear();
   mossCells.clear();
   placed = [];
+  freeSpikes = [];
   arrows = [];
   removed.clear();
   removedVines.clear();
@@ -4893,7 +5003,7 @@ function bindWindow() {
       return;
     }
     if (drag?.platform) { const r = canvas.getBoundingClientRect(); hoverWorld = toWorld(e.clientX - r.left, e.clientY - r.top); platformPaint(hoverWorld); return; }
-    if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group)) { selectMove(e); return; }
+    if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group || drag.fspike)) { selectMove(e); return; }
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
       if (hover) { hover = null; updateStatus(); requestDraw(); }
@@ -4976,7 +5086,11 @@ function onKeyDown(e) {
   if (k === 'e') { setTool('erase'); return; }
   if (k === 'a') { const i = categoryItems('decor').findIndex((it) => it.tool === 'arrow'); if (i >= 0) { selectItem('decor', i); updatePopover(); } return; }
   if (k === 'q') { setTool('select'); return; }
-  if (e.key === ']' || e.key === '[') { if (selection?.kind === 'object') restack(e.key === ']'); return; }
+  if (e.key === ']' || e.key === '[' || e.key === '}' || e.key === '{') {
+    const up = e.key === ']' || e.key === '}';
+    restack(e.shiftKey ? (up ? 'front' : 'back') : up ? 'up' : 'down');
+    return;
+  }
   if (k === 'v') { if (brush) setTool('paste'); else flash('Copy a region first: Select (Q), drag, Ctrl+C.', true); return; }
   if (k === 'i') { if (hover) { const w = cellWorld(hover.cx, hover.cy); pickAt(w.x + CELL / 2, w.y + CELL / 2); } return; }
   if (k === 'r') { turnSomething(e.shiftKey ? -1 : 1); return; }
@@ -5016,7 +5130,7 @@ export async function mountEditor(container) {
         </div>
         <select class="mm-input mm-jump" id="mm-jump" hidden><option value="">Jump to course…</option></select>
         <button class="mm-tool" id="mm-base" title="Show the real Overworld under your map; the area around your edits is exported with it"></button>
-        <select class="mm-input mm-snap" id="mm-snap" title="Snap for objects and decorations: placing, dragging and arrow keys (Shift+arrow: 1 unit)"><option value="32">Snap: cell</option><option value="16">Snap: ½</option><option value="8">Snap: ¼</option><option value="4">Snap: ⅛</option><option value="1">Snap: free</option></select>
+        <select class="mm-input mm-snap" id="mm-snap" title="Snap for objects and decorations: placing, dragging and arrow keys (Shift+arrow: 1 unit). Blocks and spikes are tiles on the game's grid, so they always fill whole cells"><option value="32">Snap: cell</option><option value="16">Snap: ½</option><option value="8">Snap: ¼</option><option value="4">Snap: ⅛</option><option value="1">Snap: free</option></select>
         <button class="mm-tool" id="mm-layers-btn" title="Show, hide and lock layers">Layers</button>
         <button class="mm-tool" id="mm-player-btn" title="Level settings: what the player starts with - dashes, double jumps, abilities, unlocks and cash (P)">Level</button>
         <span class="mm-sep"></span>
