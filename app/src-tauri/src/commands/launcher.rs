@@ -5,8 +5,9 @@ use tauri::{AppHandle, Emitter};
 
 use super::settings;
 
-const RELEASES_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases/latest";
-const RECENT_RELEASES_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases?per_page=10";
+// One permanent, reused release per channel (see autorelease.yml), fetched by tag rather than /releases/latest so old releases can't confuse it.
+const STABLE_RELEASE_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases/tags/latest";
+const BETA_RELEASE_API: &str = "https://api.github.com/repos/SumDumIdiut/recharge/releases/tags/latest-beta";
 #[cfg(not(windows))]
 const INSTALLER_SCRIPT_URL: &str = "https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh";
 const MAX_INSTALLER_BYTES: u64 = 200 * 1024 * 1024;
@@ -16,7 +17,7 @@ fn built_sha() -> &'static str {
     env!("RECHARGE_BUILD_SHA")
 }
 
-// When this backend was built (UTC, same format as GitHub's created_at) - lets a SHA mismatch be checked for direction.
+// When this backend was built (UTC, same format as GitHub's published_at) - lets a SHA mismatch be checked for direction.
 fn built_at() -> &'static str {
     env!("RECHARGE_BUILD_TIME")
 }
@@ -35,18 +36,14 @@ fn null_as_default<'de, D: serde::Deserializer<'de>, T: Default + Deserialize<'d
 
 #[derive(Deserialize)]
 struct GithubRelease {
-    tag_name: String,
     #[serde(default, deserialize_with = "null_as_default")]
     body: String,
     html_url: String,
     #[serde(default)]
     assets: Vec<GithubAsset>,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    created_at: String,
+    // Refreshed every un-draft (every build), unlike created_at which freezes at first creation - needed for the downgrade check below on a reused release.
+    #[serde(default, deserialize_with = "null_as_default")]
+    published_at: String,
 }
 
 #[derive(Serialize)]
@@ -104,8 +101,8 @@ fn is_newer(a: &str, b: &str) -> bool {
     false
 }
 
-fn source_sha_of(assets: &[GithubAsset]) -> Option<String> {
-    let url = assets.iter().find(|a| a.name == "SOURCE_SHA.txt")?.browser_download_url.clone();
+fn fetch_asset_text(assets: &[GithubAsset], name: &str) -> Option<String> {
+    let url = assets.iter().find(|a| a.name == name)?.browser_download_url.clone();
     let mut r = ureq::get(&url).header("User-Agent", "Recharge").call().ok()?;
     Some(r.body_mut().read_to_string().ok()?.trim().to_string())
 }
@@ -192,9 +189,8 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
     };
 
     let beta = settings::update_channel(&app) == "beta";
-    let api = if beta { RECENT_RELEASES_API } else { RELEASES_API };
-    // A transient DNS blip (EAI_AGAIN) shouldn't surface as a hard error on
-    // the very first retry - one retry after a short wait smooths that over.
+    let api = if beta { BETA_RELEASE_API } else { STABLE_RELEASE_API };
+    // A draft release (briefly, mid-build) 404s same as "doesn't exist yet" - a transient DNS blip gets one retry so it isn't a hard error either.
     let mut response = match ureq::get(api).header("User-Agent", "Recharge").call() {
         Err(ureq::Error::StatusCode(404)) => return Ok(no_release_info()),
         Err(_) => {
@@ -208,31 +204,19 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
         Ok(r) => r,
     };
 
-    let release: Option<GithubRelease> = if beta {
-        let releases: Vec<GithubRelease> = response
-            .body_mut()
-            .with_config()
-            .limit(1024 * 1024)
-            .read_json()
-            .map_err(|e| format!("bad response from GitHub: {e}"))?;
-        releases.into_iter().find(|r| r.prerelease && !r.draft)
-    } else {
-        response
-            .body_mut()
-            .with_config()
-            .limit(1024 * 1024)
-            .read_json()
-            .map(Some)
-            .map_err(|e| format!("bad response from GitHub: {e}"))?
-    };
-    let Some(release) = release else { return Ok(no_release_info()) };
+    let release: GithubRelease = response
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_json()
+        .map_err(|e| format!("bad response from GitHub: {e}"))?;
 
-    let latest_version = release.tag_name.trim_start_matches('v').trim_start_matches("beta-").to_string();
+    let latest_version = fetch_asset_text(&release.assets, "VERSION.txt").unwrap_or_else(|| current_version.clone());
     let download_url = self_update_asset_url(&release.assets);
 
     // No SOURCE_SHA.txt - fall back to version. A SHA mismatch alone isn't "behind".
-    let app_update_available = match source_sha_of(&release.assets) {
-        Some(sha) => sha != built_sha() && release.created_at.as_str() > built_at(),
+    let app_update_available = match fetch_asset_text(&release.assets, "SOURCE_SHA.txt") {
+        Some(sha) => sha != built_sha() && release.published_at.as_str() > built_at(),
         None => is_newer(&latest_version, &current_version),
     };
 
