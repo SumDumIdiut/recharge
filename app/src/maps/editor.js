@@ -1,3 +1,6 @@
+import { TileStore } from './tilestore.js';
+import { readDraft, writeDraft } from './draftdb.js';
+
 const DRAFT_KEY = 'rechargeMapMakerDraft';
 const START_BOX = { dx: 0, dy: 0, w: 60, h: 250 };
 const END_BOX = { dx: 0, dy: -26, w: 240, h: 13 };
@@ -67,7 +70,7 @@ function emptyDraft() {
 let blocks = new Map();
 let spikes = new Map();
 let vines = new Map();
-let tiles = new Map();
+let tiles = newTileStore();
 let placed = [];
 // Spikes placed off the grid (a finer snap than a cell): { x, y, c, q }.
 let freeSpikes = [];
@@ -105,17 +108,37 @@ function cellWorld(cx, cy) {
 }
 const baseOn = () => draft.useBase && base !== null;
 
-function loadDraft() {
+function newTileStore() {
+  const t = new TileStore(layerGrid, tileMatrix, base?.mats);
+  t.journal = [];
+  return t;
+}
+// The saved draft: IndexedDB, or (the first time) the old localStorage one.
+async function readSavedDraft() {
   try {
-    const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-    if (saved) draft = Object.assign(emptyDraft(), saved);
+    const got = await readDraft();
+    if (got) return got;
+  } catch (e) { console.warn('[map editor] no IndexedDB draft', e); }
+  try {
+    const old = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+    if (old) return { draft: old };
   } catch {}
+  return null;
+}
+// tiles: { meta, chunks } from IndexedDB, { layers, mats } from a map file, or none (the draft's own old `tiles`).
+function loadDraft(saved = null, tileSource = null) {
+  draft = Object.assign(emptyDraft(), saved || {});
   draft.player = { ...DEFAULT_PLAYER, ...(draft.player || {}) };
   migrateGates();
   blocks = new Map(Array.isArray(draft.blocks) ? draft.blocks.map((k) => [k, 'ground']) : Object.entries(draft.blocks));
   spikes = new Map(Object.entries(draft.spikes).map(([k, v]) => [k, typeof v === 'number' ? { q: v, c: 'spike' } : v]));
   vines = new Map(Object.entries(draft.vines));
-  tiles = new Map(Object.entries(draft.tiles || {}));
+  tiles = newTileStore();
+  if (tileSource?.meta) tiles.load(tileSource.meta, tileSource.chunks || []);
+  else if (tileSource?.layers) for (const l of tileSource.layers) tiles.addRuns(l.tilemap === 'ground' ? 'new awesome nikki ground' : l.tilemap, l.names, l.runs, tileSource.mats);
+  else for (const [k, t] of Object.entries(draft.tiles || {})) tiles.set(k, t);
+  if (!tileSource?.meta) tilesReplaced = true;
+  delete draft.tiles;
   mossCells = new Map(Object.entries(draft.moss || {}));
   cellGroups = new Map(Object.entries(draft.cellGroups || {}));
   placed = [...(draft.placed || [])];
@@ -142,7 +165,6 @@ function saveDraft() {
   draft.blocks = Object.fromEntries(blocks);
   draft.spikes = Object.fromEntries(spikes);
   draft.vines = Object.fromEntries(vines);
-  draft.tiles = Object.fromEntries(tiles);
   draft.moss = Object.fromEntries(mossCells);
   draft.cellGroups = Object.fromEntries(cellGroups);
   draft.placed = placed;
@@ -167,29 +189,80 @@ function saveDraft() {
   applyBaseMoves();
   redrawChangedLevel();
   draft.removed = [...removed];
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {}
+  persistSoon();
   updateStatus();
 }
 
-function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, signs, triggers, csprites, xspawns, cellGroups: [...cellGroups], hiddenGroups: draft.hiddenGroups || [], arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], levelGroups: [...levelGroups], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+// Written a moment after the last change: the draft, and the tile chunks that changed.
+let tilesReplaced = false, persistTimer = 0, persisting = Promise.resolve();
+function persistSoon() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(persistNow, 300);
 }
+function persistNow() {
+  clearTimeout(persistTimer);
+  const all = tilesReplaced;
+  tilesReplaced = false;
+  const chunks = all ? [...tiles.layers.values()].flatMap((l) => [...l.chunks].map(([ck, c]) => [l.name + '|' + ck, c.slice()])) : tiles.takeDirty();
+  if (all) tiles.dirty.clear();
+  const copy = JSON.parse(JSON.stringify(draft));
+  persisting = persisting.then(() => writeDraft(copy, tiles.meta(), chunks, all)).catch((e) => {
+    console.warn('[map editor] saving the draft failed', e);
+    tilesReplaced = true;
+  });
+  try { localStorage.removeItem(DRAFT_KEY); } catch {}
+  return persisting;
+}
+
+// The latest snapshot, with where the tile journal was at the time.
+let snapMark = null;
+function snapshot() {
+  const out = snapshotState();
+  snapMark = { s: out, j: tiles.journal, n: tiles.journal.length };
+  return out;
+}
+function snapshotState() {
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], moss: [...mossCells], placed, freeSpikes, signs, triggers, csprites, xspawns, cellGroups: [...cellGroups], hiddenGroups: draft.hiddenGroups || [], arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], levelGroups: [...levelGroups], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+}
+// An undo step: the state as a snapshot (s), and the tile changes made since (tj).
 function pushUndo() {
+  pushUndoEntry(snapshot());
+}
+function pushUndoEntry(s) {
   redoStack = [];
-  undoStack.push(snapshot());
-  if (undoStack.length > 200) undoStack.shift();
+  // Tile changes made since that snapshot was taken belong to this step.
+  tiles.journal = snapMark?.s === s && snapMark.j === tiles.journal ? tiles.journal.splice(snapMark.n) : [];
+  undoStack.push({ s, tj: tiles.journal });
+  let size = 0;
+  for (const e of undoStack) size += e.s.length + e.tj.length * 40;
+  while (undoStack.length > 200 || (undoStack.length > 1 && size > 64e6)) { const e = undoStack.shift(); size -= e.s.length + e.tj.length * 40; }
+}
+// The last step taken back off the stack without undoing it (nothing changed).
+function popUndo() {
+  const e = undoStack.pop();
+  if (e) e.tj.push(...(tiles.journal === e.tj ? [] : tiles.journal));
+  tiles.journal = undoStack.at(-1)?.tj || [];
+}
+// A drag's changes so far taken back, to redo them from its start.
+function restoreDragStart(d) {
+  tiles.rollback(0);
+  applyState(JSON.parse(d.before));
 }
 function undo() {
-  const s = undoStack.pop();
-  if (!s) return;
-  redoStack.push(snapshot());
-  restoreSnapshot(s);
+  const e = undoStack.pop();
+  if (!e) return;
+  const redoTiles = tiles.revert(e.tj);
+  redoStack.push({ s: snapshot(), tj: redoTiles });
+  tiles.journal = undoStack.at(-1)?.tj || [];
+  restoreSnapshot(e.s);
 }
 function redo() {
-  const s = redoStack.pop();
-  if (!s) return;
-  undoStack.push(snapshot());
-  restoreSnapshot(s);
+  const e = redoStack.pop();
+  if (!e) return;
+  const undoTiles = tiles.revert(e.tj);
+  undoStack.push({ s: snapshot(), tj: undoTiles });
+  tiles.journal = undoTiles;
+  restoreSnapshot(e.s);
 }
 function restoreSnapshot(s) {
   applyState(JSON.parse(s));
@@ -201,7 +274,6 @@ function applyState(o) {
   blocks = new Map(o.blocks);
   spikes = new Map(o.spikes);
   vines = new Map(o.vines);
-  tiles = new Map(o.tiles || []);
   mossCells = new Map(o.moss || []);
   cellGroups = new Map(o.cellGroups || []);
   placed = o.placed || [];
@@ -973,7 +1045,7 @@ function platformPaint(wp) {
     const kept = attachedCells(sh, cells);
     for (const c of [...cells]) if (!kept.has(c)) cells.delete(c);
   }
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; pushUndoEntry(drag.before); }
   o.cfg = { ...o.cfg, zip: { ...(o.cfg?.zip || {}), grid: sh.grid, cells: [...cells] } };
   saveDraft();
   renderConfig();
@@ -1203,7 +1275,7 @@ function arrowMove(cx, cy) {
     changed = true;
   }
   if (!changed) return;
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; pushUndoEntry(drag.before); }
   rebuildArrowTiles();
   saveDraft();
 }
@@ -1635,7 +1707,7 @@ function resizeMove(e) {
   const sig = [b.x0, b.y0, b.x1, b.y1].join(',');
   if (sig === drag.sig) return;
   drag.sig = sig;
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; }
+  if (!drag.changed) { drag.changed = true; pushUndoEntry(drag.before); }
   const w2 = b.x1 - b.x0, h2 = b.y1 - b.y0, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
   if (selection.kind === 'mtrig') Object.assign(triggers[selection.index], { x: cx, y: cy, w: w2, h: h2 });
   else { const o = placed[selection.index]; o.cfg = { ...o.cfg, trig: { w: w2, h: h2, dx: cx - o.x, dy: cy - o.y } }; }
@@ -1693,8 +1765,8 @@ function selectMove(e) {
     const sig = [Math.round(dx / snap), Math.round(dy / snap), cx, cy].join(',');
     if (sig === (drag.sig ?? '0,0,0,0')) return;
     drag.sig = sig;
-    if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
-    applyState(JSON.parse(drag.before));
+    if (!drag.changed) { drag.changed = true; pushUndoEntry(drag.before); }
+    restoreDragStart(drag);
     selection = JSON.parse(drag.selOrig);
     moveTargets(targetsOf(selection), dx, dy, cx, cy, fine);
     requestDraw();
@@ -1755,7 +1827,7 @@ function zipPlaceMove(e) {
 }
 
 function changed(fn) {
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; pushUndoEntry(drag.before); }
   fn();
   saveDraft();
   renderConfig();
@@ -1948,7 +2020,7 @@ function nudgeSelection(dx, dy, fine) {
   pushUndo();
   const step = fine ? 1 : snapV();
   const moved = moveTargets(targets, dx * step, dy * step, dx, dy, fine);
-  if (!moved) undoStack.pop();
+  if (!moved) popUndo();
   saveDraft();
   renderConfig();
   requestDraw();
@@ -3178,8 +3250,7 @@ async function openMap(map, label, installedId = null) {
   pushUndo();
   Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], triggers: [], csprites: [], xspawns: [], cellGroups: {}, hiddenGroups: [], music: undefined, background: undefined, stageEdits: undefined, courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], movedScene: {}, movedObjects: {}, levelOrder: {}, levelTf: {}, levelGroups: {} }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-  loadDraft();
+  loadDraft(JSON.parse(JSON.stringify(draft)), map.tileLayers ? { layers: map.tileLayers, mats: map.mats || [] } : null);
   applyBaseState();
   selection = null;
   saveDraft();
@@ -3395,10 +3466,11 @@ function buildOverlay() {
   for (let i = 0; i < objs.length; i++) { const t = tag(objs[i], draft.baseState); if (t) objs[i] = t; }
   const other = otherState(draft.baseState), kept = draft.stageEdits?.[other];
   if (kept) {
-    const snap = snapshot();
+    const snap = snapshotState(), mark = tiles.journal.length;
     takeStageEdits();
     putStageEdits(kept);
     const theirs = buildOverlayCore().groups[0].objects;
+    tiles.rollback(mark);
     applyState(JSON.parse(snap));
     saveDraft();
     for (const o of theirs) { const t = tag(o, other); if (t) objs.push(t); }
@@ -6554,9 +6626,7 @@ function strokeAt(cx, cy) {
   { const w = cellWorld(cx, cy); addFx(tool === 'erase' ? 'burst' : 'ripple', w.x + CELL / 2, w.y + CELL / 2, tool === 'erase' ? COLORS.end : COLORS[BLOCK_KIND[tool]] || COLORS.start); }
   if (!drag.changed) {
     drag.changed = true;
-    undoStack.push(before);
-    redoStack = [];
-    if (undoStack.length > 200) undoStack.shift();
+    pushUndoEntry(before);
   }
   saveDraft();
 }
@@ -6755,6 +6825,7 @@ function setBaseState(state) {
     selection = null;
     undoStack = [];
     redoStack = [];
+    tiles.journal = [];
     renderConfig();
     flash(`Editing the ${state === 'overgrown' ? 'Overgrown' : 'Start'} version of the overgrown stages (dashed) - the rest of the map is shared`);
   }
@@ -7174,11 +7245,10 @@ export async function mountEditor(container) {
   root.addEventListener('mousedown', (e) => { if (popCat && !e.target.closest('#mm-pop, [data-cat]')) closePopover(); });
   root.querySelectorAll('[data-state]').forEach((b) => b.addEventListener('click', () => setBaseState(b.dataset.state)));
 
-  loadDraft();
-  if (!draft.useBase) loadBase().then(() => { fillJumpList(); requestDraw(); }).catch(() => {});
-  if (draft.useBase) {
-    try { await loadBase(true); } catch { draft.useBase = false; }
-  }
+  // The level data first: the palette, the art and every tile's grid come from it.
+  try { await loadBase(true); } catch (e) { console.warn('[map editor] no level data', e); }
+  const saved = await readSavedDraft();
+  loadDraft(saved?.draft, saved?.meta ? { meta: saved.meta, chunks: saved.chunks } : null);
   applyBaseState();
 
   const jump = root.querySelector('#mm-jump');

@@ -2,10 +2,13 @@ name: Auto release
 
 # Screens, the loader and Navigator's mod source reach everyone live, no
 # package needed. The compiled backend can't be live-updated, so this builds
-# and publishes it automatically whenever app/src-tauri changes - master gets
-# a normal (stable) release, dev gets a prerelease (beta). The app compares
-# its own build against a release's SOURCE_SHA.txt to detect an update, then
-# installs and relaunches itself with no user action needed.
+# it and republishes it in place to one of two permanent releases - "latest"
+# (master/stable) or "latest-beta" (dev/beta) - whenever app/src-tauri
+# changes. No new release ever appears on the Releases page; each build just
+# replaces that release's installer asset. The app fetches that fixed
+# release by tag and compares its VERSION.txt/SOURCE_SHA.txt against its own
+# build to detect an update, then installs and relaunches itself with no
+# user action needed.
 on:
   workflow_dispatch:
   push:
@@ -36,18 +39,19 @@ jobs:
             base=$(python3 -c "import json; print(json.load(open('app/src/version.json'))['version'])")
             build=$(python3 -c "import json; print(json.load(open('app/src/beta.json'))['build'])")
             version="$base-beta.$build"
-            echo "tag=beta-$build" >> "$GITHUB_OUTPUT"
+            echo "tag=latest-beta" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             echo "latest=false" >> "$GITHUB_OUTPUT"
           else
             version=$(python3 -c "import json; print(json.load(open('app/src/version.json'))['version'])")
-            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "latest=true" >> "$GITHUB_OUTPUT"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # Create the draft here so the two platform builds below can't race to create it themselves.
+      # Created once, ever, per tag - reused in place by every future build.
+      # Drafted here so the two platform builds below can't race to create it.
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.v.outputs.tag }}
@@ -55,10 +59,12 @@ jobs:
         run: |
           set -euo pipefail
           flag=""
-          [ "$PRERELEASE" = true ] && flag="--prerelease"
+          channel="stable"
+          [ "$PRERELEASE" = true ] && { flag="--prerelease"; channel="beta"; }
           gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "${{ github.repository }}" --draft $flag \
-              --title "Recharge $TAG" --target "${{ github.sha }}" --notes "Built automatically from ${{ github.sha }}."
+              --title "Recharge ($channel)" --target "${{ github.sha }}" \
+              --notes "Always the newest $channel build - this release is reused in place, never replaced by a new one."
 
   build:
     needs: prepare
@@ -118,7 +124,7 @@ jobs:
         working-directory: app
         run: npm install
 
-      - name: Build and attach to a draft release
+      - name: Build and attach to the permanent release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -126,7 +132,7 @@ jobs:
         with:
           projectPath: app
           tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: 'Recharge ${{ needs.prepare.outputs.tag }}'
+          releaseName: 'Recharge v${{ needs.prepare.outputs.version }}'
           releaseDraft: true
           prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
           args: ${{ matrix.args }}
@@ -142,9 +148,23 @@ jobs:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           LATEST: ${{ needs.prepare.outputs.latest }}
         run: |
           set -euo pipefail
           echo -n "$GITHUB_SHA" > SOURCE_SHA.txt
-          gh release upload "$TAG" SOURCE_SHA.txt --repo "${{ github.repository }}" --clobber
+          echo -n "$VERSION" > VERSION.txt
+          gh release upload "$TAG" SOURCE_SHA.txt VERSION.txt --repo "${{ github.repository }}" --clobber
+
+          # Each build attaches a freshly-versioned installer filename rather
+          # than overwriting one by name, so old ones pile up on this same
+          # permanent release unless pruned - keep only the newest per type.
+          for pattern in '-setup\.exe$' '\.deb$'; do
+            gh release view "$TAG" --repo "${{ github.repository }}" --json assets \
+              --jq "[.assets[] | select(.name | test(\"$pattern\"))] | sort_by(.createdAt) | .[:-1][].name" |
+            while IFS= read -r name; do
+              [ -n "$name" ] && gh release delete-asset "$TAG" "$name" --repo "${{ github.repository }}" -y
+            done
+          done
+
           gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest="$LATEST"
