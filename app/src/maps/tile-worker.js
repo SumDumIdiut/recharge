@@ -18,7 +18,7 @@ self.onmessage = async (e) => {
   } else if (m.type === 'tile') {
     await ready;
     let bitmap = null;
-    try { bitmap = workerRenderTile(m.z, m.tx, m.ty); } catch (err) { console.warn('[map editor] tile failed', err); }
-    self.postMessage({ type: 'tile', key: m.key, bitmap }, bitmap ? [bitmap] : []);
+    try { bitmap = workerRenderTile(m.z, m.tx, m.ty, m.part); } catch (err) { console.warn('[map editor] tile failed', err); }
+    self.postMessage({ type: 'tile', key: m.key, gen: m.gen, bitmap }, bitmap ? [bitmap] : []);
   }
 };

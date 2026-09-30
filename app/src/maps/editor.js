@@ -23,6 +23,7 @@ const COLORS = {
   blue: '#3f7fe0',
   orange: '#e08a3f',
   spike: '#d0d4c4',
+  darkSpike: '#6a6d72',
   true: '#ff2020',
   kill: 'rgba(214, 64, 88, 0.35)',
   removed: 'rgba(198, 62, 216, 0.6)',
@@ -34,6 +35,7 @@ const COLORS = {
   respawn: '#b98cff',
   upgrade: '#f0a040',
   trigger: '#e8d85a',
+  fall: '#7ad7f0',
   end: '#c63ed8',
   area: 'rgba(249, 255, 228, 0.55)',
 };
@@ -71,12 +73,23 @@ let placed = [];
 let freeSpikes = [];
 // Text placed in the map, in the style of the level's green signs: { x, y, t, w, h, c, r }.
 let signs = [];
+// Zones switching the map's music / background: { x, y, w, h, music, background }.
+let triggers = [];
+// Your own images placed in the map: { x, y, image, scale, r, fx, fy }.
+let csprites = [];
+// Extra spawns: the game cycles through them (and the main spawn) with Q / E.
+let xspawns = [];
 let arrows = [];
 let removed = new Set();
 let removedVines = new Set();
 let removedObjects = new Set();
 let removedScene = new Set();
 let removedDeco = new Set();
+// The level's own sprites and objects moved in the editor: id -> [dx, dy].
+let movedScene = new Map(), movedObjects = new Map();
+// The level's own things' draw order, turn / size / flips and groups, by level id ('o:' + id for level objects).
+let levelOrder = new Map(), levelTf = new Map(), levelGroups = new Map();
+const levelKey = (t) => (t.kind === 'base' ? 'o:' + t.id : t.id);
 let removedPaths = [];
 const syncRemovedPaths = () => { removedPaths = baseObjects.filter((o) => removedObjects.has(o.id)).map((o) => o.path); };
 let baseObjects = [];
@@ -104,15 +117,24 @@ function loadDraft() {
   vines = new Map(Object.entries(draft.vines));
   tiles = new Map(Object.entries(draft.tiles || {}));
   mossCells = new Map(Object.entries(draft.moss || {}));
+  cellGroups = new Map(Object.entries(draft.cellGroups || {}));
   placed = [...(draft.placed || [])];
   freeSpikes = [...(draft.freeSpikes || [])];
   signs = [...(draft.signs || [])];
+  triggers = [...(draft.triggers || [])];
+  csprites = [...(draft.csprites || [])];
+  xspawns = [...(draft.xspawns || [])];
   arrows = (draft.arrows || []).map((a) => ({ ...a, cells: a.cells.map((c) => [...c]) }));
   for (const [k, v] of spikes) if (v.c === 'vine') { spikes.delete(k); vines.set(k, { s: 'smallArc', q: v.q }); }
   removedVines = new Set(draft.removedVines);
   removedObjects = new Set(draft.removedObjects);
   removedScene = new Set(draft.removedScene || []);
   removedDeco = new Set(draft.removedDeco || []);
+  movedScene = new Map(Object.entries(draft.movedScene || {}));
+  movedObjects = new Map(Object.entries(draft.movedObjects || {}));
+  levelOrder = new Map(Object.entries(draft.levelOrder || {}));
+  levelTf = new Map(Object.entries(draft.levelTf || {}));
+  levelGroups = new Map(Object.entries(draft.levelGroups || {}));
   removed = new Set(draft.removed);
 }
 
@@ -122,24 +144,35 @@ function saveDraft() {
   draft.vines = Object.fromEntries(vines);
   draft.tiles = Object.fromEntries(tiles);
   draft.moss = Object.fromEntries(mossCells);
+  draft.cellGroups = Object.fromEntries(cellGroups);
   draft.placed = placed;
   draft.freeSpikes = freeSpikes;
   draft.signs = signs;
+  draft.triggers = triggers;
+  draft.csprites = csprites;
+  draft.xspawns = xspawns;
   draft.arrows = arrows;
   draft.removedVines = [...removedVines];
   draft.removedObjects = [...removedObjects];
   draft.removedScene = [...removedScene];
   draft.removedDeco = [...removedDeco];
+  for (const [k, d] of [...movedScene]) if (!d[0] && !d[1]) movedScene.delete(k);
+  for (const [k, d] of [...movedObjects]) if (!d[0] && !d[1]) movedObjects.delete(k);
+  draft.movedScene = Object.fromEntries(movedScene);
+  draft.movedObjects = Object.fromEntries(movedObjects);
+  draft.levelOrder = Object.fromEntries(levelOrder);
+  draft.levelTf = Object.fromEntries(levelTf);
+  draft.levelGroups = Object.fromEntries(levelGroups);
   syncRemovedPaths();
-  const vineSig = [...removedVines].sort().join(';') + '|' + [...removed].sort().join(';') + '|' + [...removedScene].sort().join(';') + '|' + [...removedObjects].sort().join(';') + '|' + [...removedDeco].sort().join(';') + '|' + JSON.stringify(draft.baseEdits || {});
-  if (vineSig !== lastVineSig) { lastVineSig = vineSig; baseVersion++; artCache.clear(); }
+  applyBaseMoves();
+  redrawChangedLevel();
   draft.removed = [...removed];
   try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {}
   updateStatus();
 }
 
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, signs, arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, signs, triggers, csprites, xspawns, cellGroups: [...cellGroups], hiddenGroups: draft.hiddenGroups || [], arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], levelGroups: [...levelGroups], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
 }
 function pushUndo() {
   redoStack = [];
@@ -159,27 +192,41 @@ function redo() {
   restoreSnapshot(s);
 }
 function restoreSnapshot(s) {
-  const o = JSON.parse(s);
+  applyState(JSON.parse(s));
+  saveDraft();
+  requestDraw();
+}
+// A snapshot's state put back, without saving (a drag rebuilds from its start on every move).
+function applyState(o) {
   blocks = new Map(o.blocks);
   spikes = new Map(o.spikes);
   vines = new Map(o.vines);
   tiles = new Map(o.tiles || []);
   mossCells = new Map(o.moss || []);
+  cellGroups = new Map(o.cellGroups || []);
   placed = o.placed || [];
   freeSpikes = o.freeSpikes || [];
   signs = o.signs || [];
+  triggers = o.triggers || [];
+  csprites = o.csprites || [];
+  xspawns = o.xspawns || [];
+  draft.hiddenGroups = o.hiddenGroups || [];
   arrows = o.arrows || [];
   removedVines = new Set(o.removedVines);
   removedObjects = new Set(o.removedObjects);
   removedScene = new Set(o.removedScene || []);
   removedDeco = new Set(o.removedDeco || []);
+  movedScene = new Map(o.movedScene || []);
+  movedObjects = new Map(o.movedObjects || []);
+  levelOrder = new Map(o.levelOrder || []);
+  levelTf = new Map(o.levelTf || []);
+  levelGroups = new Map(o.levelGroups || []);
+  applyBaseMoves();
   removed = new Set(o.removed);
   draft.courses = o.courses || [];
   draft.baseEdits = o.baseEdits || {};
   if (o.start || o.end) { draft.start = o.start; draft.end = o.end; migrateGates(); }
   draft.spawn = o.spawn;
-  saveDraft();
-  requestDraw();
 }
 
 let basePromise = null;
@@ -208,6 +255,7 @@ async function fetchBase() {
     text = await new Blob(chunks).text();
   } else text = await res.text();
   base = JSON.parse(text);
+  try { plantList = await (await fetch('/maps/plants/plants.json')).json(); } catch { plantList = []; }
   await preloadImages();
   applyBaseState();
   startTileWorkers();
@@ -259,6 +307,7 @@ function hideLoading() {
 let layer = null;
 function applyBaseState() {
   if (!base) return;
+  stageMask = null;
   baseMossGrid = null;
   const st = base.states[draft.baseState] || base.states.start;
   const both = (kind) => [base.always[kind], st[kind]];
@@ -277,6 +326,7 @@ function applyBaseState() {
   baseVersion++;
   baseObjects = [...(base.always.objects || []), ...(st.objects || [])].map((o) => ({ ...o, id: o.path + '@' + o.x + ',' + o.y }));
   syncRemovedPaths();
+  applyBaseMoves();
   baseHaz = new Map();
   for (const b of [base.always, st]) {
     const h = b.hazards;
@@ -288,7 +338,9 @@ function applyBaseState() {
 }
 
 const layerColor = (layer) => (/^blue/.test(layer) ? 'blue' : /^orange/.test(layer) ? 'orange' : 'spike');
-const SPIKE_LAYER = { spike: 'Spikes', blue: 'blueSpikes', orange: 'orangeSpikes' };
+const SPIKE_LAYER = { spike: 'Spikes', dark: 'Spikes', blue: 'blueSpikes', orange: 'orangeSpikes' };
+// The game's darker spikes: their own tiles on the Spikes layer, one per direction.
+const DARK_SPIKE_TILES = new Set(['spike_tileset_8', 'spike_tileset_11', 'spike_tileset_13', 'spike_tileset_14']);
 const VINE_LAYER = 'OvergrowthSpikes';
 
 function rotMatrix(k) {
@@ -312,7 +364,7 @@ function defUses() {
 function spikeTile(c, q) {
   const layer = SPIKE_LAYER[c] || SPIKE_LAYER.spike;
   const uses = defUses();
-  const spikes = base.defs.map((d, i) => [d, uses.get(i) || 0]).filter(([d]) => d.layer === layer && d.kind === 'spike');
+  const spikes = base.defs.map((d, i) => [d, uses.get(i) || 0]).filter(([d]) => d.layer === layer && d.kind === 'spike' && (layer !== 'Spikes' || DARK_SPIKE_TILES.has(d.tile) === (c === 'dark')));
   const best = (want) => spikes.filter(([d]) => d.base === want).sort((a, b) => b[1] - a[1])[0]?.[0];
   const d = (q === 1 && best(3)) || best(q) || best(0) || spikes[0][0];
   return { layer, tile: d.tile, matrix: rotMatrix(q - d.base) };
@@ -391,7 +443,15 @@ const CATEGORIES = [
 const LAYER_LABELS = { 'new awesome nikki ground': 'Ground' };
 const layerLabel = (name) => LAYER_LABELS[name] || prettySprite(name.replace(/_/g, ' '));
 const tilemapName = (layer) => (layer === 'new awesome nikki ground' ? 'ground' : layer);
-const catalogItem = (o) => base?.catalog?.[o.cat]?.[o.i];
+// A placed thing's catalog entry: by its index, or by its saved name if a newer base map moved it.
+function catalogItem(o) {
+  const list = base?.catalog?.[o.cat], item = list?.[o.i];
+  if (!item || !o.n || item.name === o.n) return item;
+  const i = list.findIndex((x) => x.name === o.n);
+  if (i < 0) return item;
+  o.i = i;
+  return list[i];
+}
 
 function layerGrid(name) {
   const l = base?.art?.layers.find((x) => x.name === name);
@@ -424,14 +484,19 @@ function autotilePick(table, has, x, y) {
 }
 
 const PANEL = { TL: 1, T: 2, TR: 3, L: 9, C: 10, R: 11, BL: 17, B: 18, BR: 19 };
+// The ground sheets' panel set: a lone cell, a 1-wide column and a 1-high row each have their own pieces.
+const PANEL_SET = { ...PANEL, single: 0, v: [8, 16, 26], h: [27, 28, 29] };
+const GRATE_SET = { ...PANEL, single: 0, v: [8, 16, 24], h: [25, 26, 27] };
 function colouredTile(kind, cx, cy) {
   if (!base?.art) return null;
   const set = kind === 'blue' ? blueSet : orangeSet;
   const has = (x, y) => { const k = key(x, y); return blocks.get(k) === kind || (baseOn() && !!set?.has(k) && !removed.has(k)); };
-  return plateTile(kind === 'blue' ? 'blueBlocks' : 'orangeBlocks', kind + '_ground_tileset_', PANEL, has, cx, cy);
+  return plateTile(kind === 'blue' ? 'blueBlocks' : 'orangeBlocks', kind + '_ground_tileset_', PANEL_SET, has, cx, cy);
 }
 
 let mossCells = new Map();
+// Group ids of your block and spike cells (placed things carry their own .group).
+let cellGroups = new Map();
 let baseMossGrid = null;
 function baseMoss() {
   if (baseMossGrid) return baseMossGrid;
@@ -475,48 +540,103 @@ function mossCovers(cx, cy) {
 }
 
 function categoryItems(cat) {
+  if (cat === 'triggers') return triggerItems();
   if (!base) return cat === 'gates' ? gateItems() : cat === 'blocks' ? blockItems() : [];
   switch (cat) {
     case 'blocks': return blockItems();
     case 'hazards': return [
       { tool: 'spike', label: 'Spike', group: 'Spikes', thumb: { art: spikeTile('spike', 0).tile } },
+      { tool: 'darkSpike', label: 'Dark spike', group: 'Spikes', thumb: { art: spikeTile('dark', 0).tile } },
       { tool: 'blueSpike', label: 'Blue spike', group: 'Spikes', thumb: { art: spikeTile('blue', 0).tile } },
       { tool: 'orangeSpike', label: 'Orange spike', group: 'Spikes', thumb: { art: spikeTile('orange', 0).tile } },
       { tool: 'trueSpike', label: 'True spike', group: 'Spikes', thumb: { trueSpike: true, color: COLORS.true } },
       ...vineSprites().filter((v) => base.catalog?.vineNames?.[v] !== null).map((v) => ({ tool: 'vine', vine: v, group: 'Thorn vines', label: base.catalog?.vineNames?.[v] || prettySprite(v), thumb: { img: '/maps/vines/' + encodeURIComponent(v) + '.png' } })),
     ];
     case 'objects':
-      return (base.catalog?.objects || []).map((o, i) => ({ tool: 'object', i, label: o.name, group: 'Gameplay', thumb: { scene: mainSprite(o) } }))
+      return (base.catalog?.objects || []).map((o, i) => ({ tool: 'object', i, label: o.name, group: 'Gameplay', thumb: /^Long fall/.test(o.name) ? { icon: 'fall', color: COLORS.fall } : { scene: mainSprite(o) } }))
         .filter((it) => !/checkpoint/i.test(it.label));
+    case 'tiles':
+      return tileTabItems();
     case 'decor':
       return [
         { tool: 'sign', label: 'Text', group: 'Text', thumb: { color: SIGN_COLOR } },
+        { tool: 'csprite', image: null, label: 'Add an image…', group: 'Your images', thumb: { color: '#8aa0b8' } },
+        ...assetList('image').map((a) => ({ tool: 'csprite', image: a.file, label: a.name, group: 'Your images', thumb: { color: '#8aa0b8' } })),
         { tool: 'arrow', label: 'Guide arrow', group: 'Paths', thumb: { arrow: true } },
-        ...(base.catalog?.decor || []).map((o, i) => ({ tool: 'decor', i, label: o.name, group: 'Props', thumb: { scene: mainSprite(o) } })),
+        ...(base.catalog?.decor || []).map((o, i) => ({ tool: 'decor', i, label: o.name, group: PLANT_DECOR.test(o.name) ? 'Plants' : 'Props', thumb: { scene: mainSprite(o) } }))
+          .sort((a, b) => (a.group === 'Plants' ? 0 : 1) - (b.group === 'Plants' ? 0 : 1)),
+        ...plantItems(),
         ...(base.art.stamps || []).map((st, si) => ({ tool: 'stamp', si, label: st.name, group: 'Tile pieces', thumb: { stamp: si } }))
           .filter((it) => !/^Guide arrow /.test(it.label)),
       ];
     default: return gateItems();
   }
 }
+// Trigger zones: each acts when the player walks in.
+const TRIGGER_KINDS = {
+  media: { icon: 'music', label: 'Music / background', group: 'Level', color: '#c792ff', about: 'switches them when the player walks in' },
+  show: { icon: 'eye', label: 'Show group', group: 'Groups', color: '#5fd4a0', about: 'turns a group on' },
+  hide: { icon: 'eyeOff', label: 'Hide group', group: 'Groups', color: '#e0736a', about: 'turns a group off' },
+  toggle: { icon: 'toggle', label: 'Toggle group', group: 'Groups', color: '#e0c36a', about: 'flips a group on / off' },
+  move: { icon: 'move', label: 'Move group', group: 'Groups', color: '#6aa8e0', about: 'slides a group by an offset' },
+  teleport: { icon: 'portal', label: 'Teleport', group: 'Player', color: '#b07bff', about: 'sends the player to the marker' },
+  kill: { icon: 'skull', label: 'Kill zone', group: 'Player', color: '#ff4f6d', about: 'kills the player like a spike' },
+  respawn: { icon: 'respawn', label: 'Set respawn', group: 'Player', color: '#41f88d', about: 'the player respawns at the marker' },
+  zoom: { icon: 'zoom', label: 'Camera zoom', group: 'Camera', color: '#7ad7f0', about: 'zooms the camera while inside' },
+  message: { icon: 'message', label: 'Message', group: 'Camera', color: '#f0f07a', about: 'shows text on screen' },
+};
+const GROUP_KINDS = new Set(['show', 'hide', 'toggle', 'move']);
+const MARKER_KINDS = new Set(['teleport', 'respawn']);
+function triggerItems() {
+  return Object.entries(TRIGGER_KINDS).map(([k, d]) => ({ tool: 'mtrigger', trigKind: k, label: d.label, group: d.group, thumb: { icon: d.icon, color: d.color } }));
+}
+function newTrigger(kind, x, y) {
+  const t = { kind, x, y, w: 256, h: 256 };
+  if (kind === 'move') Object.assign(t, { dx: 0, dy: 256, time: 1 });
+  if (MARKER_KINDS.has(kind)) Object.assign(t, { tx: 512, ty: 0 });
+  if (kind === 'zoom') t.size = 1.5;
+  if (kind === 'message') Object.assign(t, { text: 'Hello!', seconds: 3 });
+  if (GROUP_KINDS.has(kind)) t.group = [...new Set([...cellGroups.values(), ...[...WORLD_KINDS].flatMap((k) => listOfKind(k).map((i) => i.group))].filter(Boolean))][0] || '1';
+  return t;
+}
+const trigKind = (t) => t.kind || 'media';
+
+// The game's plant art the level never places (the Mossy sheets), placed like your own images.
+let plantList = [];
+const PLANT_DECOR = /trunk|glow/i;
+function plantItems() {
+  const count = {};
+  return plantList.map((pl, pi) => ({ tool: 'gsprite', pi, label: `${pl.kind} ${(count[pl.kind] = (count[pl.kind] || 0) + 1)}`, group: 'Plants', thumb: { img: '/maps/plants/' + pl.file } }));
+}
+const plantOf = (cs) => plantList.find((p) => p.sprite === cs.game);
+
 function blockItems() {
+  const sets = (group) => Object.entries(BLOCK_SETS).filter(([, b]) => b.group === group)
+    .map(([kind, b]) => ({ tool: kind, label: b.label, group: b.group, thumb: { art: b.thumb || b.family + b.plate.C, color: b.color } }));
   return [
-    { tool: 'block', label: 'Ground', group: 'Solid', thumb: { art: 'ground1_tileset_64' } },
-    { tool: 'dark', label: 'Dark ground', group: 'Solid', thumb: { art: 'dark_ground_tileset_64' } },
+    { tool: 'block', label: 'Ground', group: 'Solid', thumb: { art: 'ground1_tileset_59' } },
+    { tool: 'dark', label: 'Dark ground', group: 'Solid', thumb: { art: 'dark_ground_tileset_59' } },
+    ...sets('Solid'),
     { tool: 'blue', label: 'Blue block', group: 'Colour swap', thumb: { art: 'blue_ground_tileset_10', color: COLORS.blue } },
     { tool: 'orange', label: 'Orange block', group: 'Colour swap', thumb: { art: 'orange_ground_tileset_10', color: COLORS.orange } },
+    ...sets('Colour swap'),
     { tool: 'moss', label: 'Moss', group: 'Overgrowth', thumb: { sprite: base?.art?.autotiles?.moss?.['255']?.[0], color: COLORS.moss } },
+    ...sets('Overgrowth'),
+    ...sets('Walk-through'),
   ];
 }
 function gateItems() {
   const obj = (name) => base?.catalog?.objects?.findIndex((o) => o.name === name) ?? -1;
-  const cp = obj('Checkpoint'), ccp = obj('Course checkpoint');
+  const cp = obj('Checkpoint'), ccp = obj('Course checkpoint'), lfs = obj('Long fall start'), lfe = obj('Long fall end');
   return [
-    { tool: 'spawn', label: 'Spawn', group: 'Player', thumb: { color: COLORS.spawn } },
-    { tool: 'start', label: 'Start gate', group: 'Course', thumb: { color: COLORS.start } },
-    { tool: 'end', label: 'End gate', group: 'Course', thumb: { color: COLORS.end } },
-    ...(ccp >= 0 ? [{ tool: 'object', i: ccp, label: 'Course checkpoint', group: 'Course', thumb: { color: COLORS.courseCheckpoint } }] : []),
-    ...(cp >= 0 ? [{ tool: 'object', i: cp, label: 'Checkpoint', group: 'Checkpoints', thumb: { color: COLORS.checkpoint } }] : []),
+    { tool: 'spawn', label: 'Spawn', group: 'Player', thumb: { icon: 'spawn', color: COLORS.spawn } },
+    { tool: 'xspawn', label: 'Extra spawn (Q / E in game)', group: 'Player', thumb: { icon: 'pin', color: COLORS.spawn } },
+    { tool: 'start', label: 'Start gate', group: 'Course', thumb: { icon: 'flag', color: COLORS.start } },
+    { tool: 'end', label: 'End gate', group: 'Course', thumb: { icon: 'finish', color: COLORS.end } },
+    ...(ccp >= 0 ? [{ tool: 'object', i: ccp, label: 'Course checkpoint', group: 'Course', thumb: { scene: base?.catalog ? mainSprite(base.catalog.objects[ccp]) : null, icon: 'checkpoint', color: COLORS.courseCheckpoint } }] : []),
+    ...(lfs >= 0 ? [{ tool: 'object', i: lfs, label: 'Long fall start', group: 'Long fall', thumb: { icon: 'fall', color: COLORS.fall } }] : []),
+    ...(lfe >= 0 ? [{ tool: 'object', i: lfe, label: 'Long fall end', group: 'Long fall', thumb: { icon: 'fall', color: COLORS.fall } }] : []),
+    ...(cp >= 0 ? [{ tool: 'object', i: cp, label: 'Checkpoint', group: 'Checkpoints', thumb: { scene: base?.catalog ? mainSprite(base.catalog.objects[cp]) : null, icon: 'checkpoint', color: COLORS.checkpoint } }] : []),
   ];
 }
 function mainSprite(o) {
@@ -546,6 +666,18 @@ function selectItem(cat, index) {
   if (it.tool === 'decor') draft.pick.decorObj = it.i;
   if (it.tool === 'object') draft.pick.obj = it.i;
   if (it.tool === 'stamp') draft.pick.stamp = it.si;
+  if (it.tool === 'tile') { draft.pick.tile = it.tile; draft.pick.tileLayer = it.tileLayer; }
+  if (it.tool === 'mtrigger') draft.pick.trigKind = it.trigKind;
+  if (it.tool === 'gsprite') draft.pick.gsprite = plantList[it.pi]?.sprite;
+  if (it.tool === 'csprite') {
+    if (it.image) draft.pick.csprite = it.image;
+    else pickFile('image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp').then(async (f) => {
+      if (!f) return;
+      draft.pick.csprite = await addAsset('image', f);
+      saveDraft();
+      flash('Click to place ' + f.name);
+    });
+  }
   setTool(it.tool);
   saveDraft();
 }
@@ -561,6 +693,82 @@ function stepItem(dir) {
   selectItem(draft.cat, currentIndex(draft.cat) + dir);
 }
 
+// Line icons (24-unit grid) for triggers and course markers: canvas badges and palette thumbs alike.
+const ICONS = {
+  music: 'M9 18V5l12-2v13 M9 18a3 3 0 1 1-6 0a3 3 0 0 1 6 0z M21 16a3 3 0 1 1-6 0a3 3 0 0 1 6 0z',
+  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6a3 3 0 0 0 0-6z',
+  eyeOff: 'M3 3l18 18 M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2 M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6 M9.9 9.9a3 3 0 0 0 4.2 4.2',
+  toggle: 'M8 6h8a6 6 0 0 1 0 12H8A6 6 0 0 1 8 6z M16 9a3 3 0 1 0 0 6a3 3 0 0 0 0-6z',
+  move: 'M5 9l-3 3 3 3 M9 5l3-3 3 3 M15 19l-3 3-3-3 M19 9l3 3-3 3 M2 12h20 M12 2v20',
+  portal: 'M12 3a9 9 0 1 0 9 9 M12 7a5 5 0 1 0 5 5 M12 11a1 1 0 1 0 1 1',
+  skull: 'M12 3a8 8 0 0 0-5 14.2V21h10v-3.8A8 8 0 0 0 12 3z M9 10a1.5 1.5 0 1 0 0 3a1.5 1.5 0 1 0 0-3z M15 10a1.5 1.5 0 1 0 0 3a1.5 1.5 0 1 0 0-3z M10 21v-2 M14 21v-2',
+  respawn: 'M3 12a9 9 0 1 0 3-6.7L3 8 M3 3v5h5 M12 8v4l3 2',
+  zoom: 'M11 4a7 7 0 1 0 0 14a7 7 0 0 0 0-14z M21 21l-5-5 M11 8v6 M8 11h6',
+  message: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z M7 8h10 M7 12h6',
+  flag: 'M5 22V3 M5 4h12l-2.5 4.5L17 13H5',
+  finish: 'M5 22V3 M5 4h14v10H5 M9.7 4v10 M14.3 4v10 M5 9h14',
+  spawn: 'M12 3a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7z M5 21v-1.5a7 7 0 0 1 14 0V21',
+  pin: 'M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z M12 7a3 3 0 1 0 0 6a3 3 0 0 0 0-6z',
+  timer: 'M12 5a8 8 0 1 0 0 16a8 8 0 0 0 0-16z M12 9v4l2.5 2 M9 2h6',
+  checkpoint: 'M6 22V3 M6 4c3-1.5 5 1.5 8 0s4-1 4-1v8s-1-.5-4 1-5-1.5-8 0',
+  cursor: 'M5 3l14 8-6 1.5L10 19z M13 12.5l5 6',
+  credits: 'M5 3h14v18H5z M8 7h8 M8 11h8 M8 15h5',
+  fall: 'M12 3v15 M6 12l6 6 6-6 M5 21h14',
+  eraser: 'M7 21h13 M5.5 14.5l8-8a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8L12 20H8.5l-3-3a2 2 0 0 1 0-2.5z M9 11l6 6',
+  undo: 'M9 14L4 9l5-5 M4 9h11a5 5 0 0 1 0 10h-3',
+  redo: 'M15 14l5-5-5-5 M20 9H9a5 5 0 0 0 0 10h3',
+  hitbox: 'M4 4h16v16H4z M4 12h16 M12 4v16',
+  play: 'M7 4l13 8-13 8z',
+  sliders: 'M4 6h10 M18 6h2 M4 12h4 M12 12h8 M4 18h12 M20 18h0 M14 4v4 M8 10v4 M16 16v4',
+  layers: 'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5 M3 17.5l9 5 9-5',
+  keys: 'M3 6h18v12H3z M7 10h.01 M11 10h.01 M15 10h.01 M7 14h10',
+  save: 'M5 3h11l3 3v15H5z M8 3v6h8V3 M8 21v-7h8v7',
+  basemap: 'M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z M9 3v15 M15 6v15',
+  expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+  shrink: 'M9 4v5H4 M15 4v5h5 M9 20v-5H4 M15 20v-5h5',
+};
+const icon = (name, size = 16) => iconSvg(name, 'currentColor', size);
+const iconPaths = new Map();
+function drawIcon(name, x, y, size, color, lw = 2) {
+  if (!ICONS[name]) return;
+  let p = iconPaths.get(name);
+  if (!p) { p = new Path2D(ICONS[name]); iconPaths.set(name, p); }
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.translate(x - size / 2, y - size / 2);
+  ctx.scale(size / 24, size / 24);
+  ctx.lineWidth = lw;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
+  ctx.stroke(p);
+  ctx.restore();
+}
+// A round icon badge with an optional name pill beside it.
+function drawBadge(icon, x, y, color, label = '') {
+  const r = 11;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+  ctx.beginPath(); ctx.arc(x, y + 1, r + 2, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(14, 14, 14, 0.9)';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+  drawIcon(icon, x, y, 14, color, 2.2);
+  if (label) {
+    ctx.font = '600 10px sans-serif';
+    const w = ctx.measureText(label).width + 12, lx = x + r + 3, ly = y - 8;
+    ctx.fillStyle = 'rgba(14, 14, 14, 0.88)';
+    ctx.beginPath(); ctx.roundRect(lx, ly, w, 16, 8); ctx.fill();
+    ctx.globalAlpha = 0.55; ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, lx + 6, y + 0.5);
+  }
+  ctx.restore();
+}
+const iconSvg = (name, color, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[name]}"/></svg>`;
+
 function thumbHtml(th, size = 32) {
   const sheet = (atlas, img, rect) => {
     if (!img?.naturalWidth || !rect) return null;
@@ -575,6 +783,7 @@ function thumbHtml(th, size = 32) {
   else if (th.trueSpike && artReady()) { const url = (trueSpikeCanvas.url ||= trueSpikeCanvas().toDataURL()); inner = `<img src="${url}" alt="" style="width:${size}px;height:${size}px;image-rendering:pixelated">`; }
   else if (th.arrow && base) { const url = arrowThumb(); if (url) inner = `<img src="${url}" alt="" style="max-width:${size}px;max-height:${size}px;image-rendering:pixelated">`; }
   else if (th.stamp != null && base) { const url = stampThumb(th.stamp); if (url) inner = `<img src="${url}" alt="" style="max-width:${size}px;max-height:${size}px;image-rendering:pixelated">`; }
+  if (!inner && th.icon && ICONS[th.icon]) inner = `<span class="mm-thumb-icon" style="--c:${th.color || '#aaa'}">${iconSvg(th.icon, th.color || '#aaa', Math.round(size * 0.62))}</span>`;
   if (!inner) inner = `<span class="mm-thumb-swatch" style="background:${th.color || '#666'}"></span>`;
   return `<span class="mm-thumb" style="width:${size}px;height:${size}px">${inner}</span>`;
 }
@@ -808,7 +1017,7 @@ function snapZipEnd(dx, dy) {
 function objectParts(o, item = catalogItem(o)) {
   if (!item) return [];
   const cfg = o.cfg || {};
-  const T = mul2(rot2(((cfg.rot || 0) * Math.PI) / 180), [(cfg.scale || 1) * (cfg.fx ? -1 : 1), 0, 0, (cfg.scale || 1) * (cfg.fy ? -1 : 1)]);
+  const T = mul2(rot2(((cfg.rot || 0) * Math.PI) / 180), [(cfg.scale || 1) * (cfg.sx || 1) * (cfg.fx ? -1 : 1), 0, 0, (cfg.scale || 1) * (cfg.sy || 1) * (cfg.fy ? -1 : 1)]);
   const zip = zipConfig(o, item);
   let parts = item.parts;
   if (zip) {
@@ -843,22 +1052,23 @@ function drawPlacedObject(o, alpha = 1) {
   const item = catalogItem(o);
   if (!item || !sceneReady()) return;
   const zip = zipConfig(o, item);
-  const r = objectReach(item) + (zip ? Math.hypot(...zip.end) : 0);
+  const r = objectReach(item) + (zip ? Math.hypot(...zip.end) : 0) + (o.cfg?.trig ? Math.hypot(o.cfg.trig.w, o.cfg.trig.h) + Math.hypot(o.cfg.trig.dx, o.cfg.trig.dy) : 0);
   const tl = toWorld(0, 0), br = toWorld(canvas.width, canvas.height);
   if (o.x + r < tl.x || o.x - r > br.x || o.y + r < br.y || o.y - r > tl.y) return;
   const parts = objectParts(o, item).filter((p) => !HIDDEN_PART(p)).sort((a, b) => a.o - b.o);
-  const now = performance.now() / 1000;
+  const now = performance.now() / 1000, ghost = alpha !== 1;
+  alpha *= o.cfg?.alpha ?? 1;
   let animated = false;
   ctx.save();
   for (const p of parts) {
-    if (draft.simulate && zip && alpha === 1 && ZIP_MOVING.test(p.n || '')) continue;
+    if (draft.simulate && zip && !ghost && ZIP_MOVING.test(p.n || '')) continue;
     let sprite = p.s;
     if (p.frames) { sprite = p.frames[Math.floor(now * p.fps + (p.ph || 0) * p.frames.length) % p.frames.length]; animated = true; }
     blitScene(sprite, p.m, o.x + p.x, o.y + p.y, alpha, p.dm, p.sz, p.c);
   }
   if (zip) {
     for (const p of parts) if (ZIP_MOVING.test(p.n || '')) blitScene(p.s, p.m, o.x + p.x + zip.end[0], o.y + p.y + zip.end[1], 0.35 * alpha, p.dm, p.sz, p.c);
-    if (draft.simulate && alpha === 1) {
+    if (draft.simulate && !ghost) {
       const f = zipTravel(zip, now);
       for (const p of parts) if (ZIP_MOVING.test(p.n || '')) blitScene(p.s, p.m, o.x + p.x + zip.end[0] * f, o.y + p.y + zip.end[1] * f, alpha, p.dm, p.sz, p.c);
       animated = true;
@@ -877,20 +1087,12 @@ function drawPlacedObject(o, alpha = 1) {
     ctx.restore();
   }
   if (item.upgradeBox) drawBoxTexts(o, alpha);
-  if (animated && !animTimer) animTimer = setTimeout(() => { animTimer = 0; requestDraw(); }, 60);
-  if (!parts.length) {
-    const b = item.box || [-50, -50, 50, 50];
-    const a = toScreen(o.x + b[0], o.y + b[3]), z = toScreen(o.x + b[2], o.y + b[1]);
-    const cc = isCourseCheckpoint(item), col = isLinked(o.course) ? linkColor(o.course) : cc ? COLORS.courseCheckpoint : COLORS.checkpoint;
+  if (animated && !animTimer) animTimer = setTimeout(() => { animTimer = 0; requestDraw(); }, 100);
+  if (!parts.length || isSizable(item)) {
+    const t = trigOf(o, item), cc = isCourseCheckpoint(item), col = isLongFall(item) ? COLORS.fall : isLinked(o.course) ? linkColor(o.course) : cc ? COLORS.courseCheckpoint : COLORS.checkpoint;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = col;
-    ctx.setLineDash([5, 4]);
-    ctx.strokeRect(a.x, a.y, z.x - a.x, z.y - a.y);
-    ctx.fillStyle = col;
-    ctx.font = 'bold 11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(item.name.toUpperCase() + (isLinked(o.course) ? ' · ' + linkLabel(o.course).toUpperCase() : cc ? ' · ANY COURSE' : ''), (a.x + z.x) / 2, a.y - 4);
+    drawGate(o, { dx: t.dx, dy: t.dy, w: t.w, h: t.h }, col, item.name.toUpperCase() + (isLinked(o.course) ? ' · ' + linkLabel(o.course).toUpperCase() : cc ? ' · ANY COURSE' : ''));
     ctx.restore();
   }
 }
@@ -1070,10 +1272,57 @@ function stampTiles(st, wx, wy, rot = 0, flip = false) {
   }
   return out;
 }
+// ---- the Tiles tab: every tileset's sprites, joined into the pieces they were drawn as ----
+const TILESET_NAMES = {
+  ground1_tileset: 'Ground', dark_ground_tileset: 'Dark ground', blue_ground_tileset: 'Blue ground', orange_ground_tileset: 'Orange ground',
+  gril_tileset: 'Grate', spike_tileset: 'Spikes', 'Spikes Tileset': 'Spike rows', 'TILE V2 Tileset': 'Plate', 'FLOOR V2 Tileset': 'Floor plate',
+  Asset_Sheet: 'Props, plates, vines and ice', '@tile': 'Wall panels', '@tile lighter': 'Light wall', broken_beam: 'Broken beams',
+  line_tileset: 'Guide lines', 'Line Start': 'Guide line starts', 'Line end': 'Guide line ends', 'Line Corner': 'Guide line corners',
+  'OOB areas': 'Out-of-bounds backdrop', '@ BANNER': 'Banner', Fresco: 'Fresco',
+};
+// Where a tileset's pieces go when the level itself never uses them.
+const TILESET_LAYER = {
+  ground1_tileset: 'new awesome nikki ground', dark_ground_tileset: 'new awesome nikki ground', gril_tileset: 'new awesome nikki ground',
+  blue_ground_tileset: 'blueBlocks', orange_ground_tileset: 'orangeBlocks', spike_tileset: 'Spikes', 'Spikes Tileset': 'Spikes',
+  line_tileset: 'environmentalObjects_front', 'OOB areas': 'OOB areas', '@ BANNER': 'Environmental objects', Fresco: 'Environmental objects',
+};
+let pieceStamps = null;
+// The level's decoration stamps, then every tileset piece, as one list the stamp tool places from.
+function allStamps() {
+  if (!base?.art) return [];
+  if (!pieceStamps) {
+    pieceStamps = [];
+    const layers = new Set((base.art.layers || []).map((l) => l.name));
+    for (const [fam, list] of Object.entries(base.art.pieces || {})) {
+      for (const p of list) {
+        const layer = p.layer && layers.has(p.layer) ? p.layer : TILESET_LAYER[fam] || 'Background';
+        const cells = [];
+        for (let i = 0; i < p.cells.length; i += 4) cells.push(p.cells[i], p.h - 1 - p.cells[i + 1], p.cells[i + 2], p.cells[i + 3]);
+        pieceStamps.push({ fam, layer, name: p.name || (TILESET_NAMES[fam] || fam) + (p.n > 1 ? ` ${p.w}×${p.h}` : ''), label: p.name, w: p.w, h: p.h, cells, n: p.n });
+      }
+    }
+  }
+  return [...(base.art.stamps || []), ...pieceStamps];
+}
+function tileTabItems() {
+  const own = base.art.stamps?.length || 0, all = allStamps(), items = [];
+  const order = Object.keys(TILESET_NAMES), rank = (f) => (order.includes(f) ? order.indexOf(f) : order.length);
+  const fams = [...new Set(all.slice(own).map((st) => st.fam))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  for (const fam of fams) {
+    const group = TILESET_NAMES[fam] || prettySprite(fam);
+    all.forEach((st, si) => {
+      if (si < own || st.fam !== fam) return;
+      if (st.n > 1 || st.label) items.push({ tool: 'stamp', si, label: st.label ? `${st.label} ${st.w}×${st.h}` : `${st.w}×${st.h}`, group, thumb: { stamp: si } });
+      else items.push({ tool: 'tile', tileLayer: st.layer, tile: st.cells[2], label: prettySprite(st.cells[2].replace(/_/g, ' ')), group, thumb: { art: st.cells[2] } });
+    });
+  }
+  return items;
+}
+
 function stampThumb(si) {
   stampThumb.cache ||= new Map();
   if (stampThumb.cache.has(si)) return stampThumb.cache.get(si);
-  const st = base.art.stamps[si], g = layerGrid(st.layer);
+  const st = allStamps()[si], g = layerGrid(st.layer);
   if (!artReady()) return null;
   const cv = makeCanvas(), k = Math.min(1, 96 / (Math.max(st.w, st.h) * g.size));
   cv.width = Math.max(1, Math.ceil(st.w * g.size * k)); cv.height = Math.max(1, Math.ceil(st.h * g.size * k));
@@ -1091,7 +1340,8 @@ function stampThumb(si) {
 function objectHit(o, wx, wy) {
   const item = catalogItem(o);
   if (!item) return false;
-  if (item.box && wx >= o.x + item.box[0] && wx <= o.x + item.box[2] && wy >= o.y + item.box[1] && wy <= o.y + item.box[3]) return true;
+  const box = objectBox(o, item);
+  if (box && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3]) return true;
   return objectParts(o, item).some((p) => {
     const [, , w, h] = base.scene.sprites[p.s];
     const r = (Math.max(w, h) / 2) * Math.max(Math.abs(p.m[0]) + Math.abs(p.m[1]), Math.abs(p.m[2]) + Math.abs(p.m[3]));
@@ -1124,7 +1374,12 @@ function itemAt(wx, wy) {
   return t && layerOpen(targetLayer(t)) ? t : null;
 }
 function itemAtAny(wx, wy) {
-  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy) : e.kind === 'sign' ? Math.abs(wx - e.it.x) <= e.it.w / 2 && Math.abs(wy - e.it.y) <= e.it.h / 2 : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
+  // A trigger zone wins on its edge; inside, anything else there comes first.
+  const ti = layerHidden('course') ? -1 : triggerAt(wx, wy), tg = triggers[ti];
+  if (tg && (Math.abs(Math.abs(wx - tg.x) - tg.w / 2) * cam.scale < 8 || Math.abs(Math.abs(wy - tg.y) - tg.h / 2) * cam.scale < 8)) return { kind: 'mtrig', index: ti };
+  const xi = layerHidden('course') ? -1 : xspawnAt(wx, wy);
+  if (xi >= 0) return { kind: 'xspawn', index: xi };
+  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy) : e.kind === 'csprite' ? customSpriteHit(e.it, wx, wy) : e.kind === 'sign' ? Math.abs(wx - e.it.x) <= e.it.w / 2 && Math.abs(wy - e.it.y) <= e.it.h / 2 : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
   if (top) return { kind: top.kind, index: top.index };
   const m = markerAt(wx, wy);
   if (m) return { kind: 'gate', ...m };
@@ -1147,8 +1402,10 @@ function itemAtAny(wx, wy) {
     const sp = sceneSpriteAt(wx, wy);
     if (sp) return { kind: 'scene', id: sp.id };
   }
+  if (ti >= 0) return { kind: 'mtrig', index: ti };
   return null;
 }
+const xspawnAt = (wx, wy) => xspawns.findLastIndex((s) => Math.abs(wx - s.x) <= SPAWN_BOX.w / 2 + 4 && Math.abs(wy - (s.y + SPAWN_BOX.dy)) <= SPAWN_BOX.h / 2 + 4);
 
 const BLOCK_NAMES = { ground: 'Ground', dark: 'Dark ground', blue: 'Blue blocks', orange: 'Orange blocks' };
 function floodKeys(start, has) {
@@ -1164,7 +1421,7 @@ function floodKeys(start, has) {
 }
 function ownBlocksAt(cx, cy) {
   const kind = blocks.get(key(cx, cy));
-  return { kind: 'blocks', what: BLOCK_NAMES[kind] || 'Blocks', cells: floodKeys(key(cx, cy), (k) => blocks.get(k) === kind) };
+  return { kind: 'blocks', what: blockName(kind), cells: floodKeys(key(cx, cy), (k) => blocks.get(k) === kind) };
 }
 function ownMossAt(mk) {
   return { kind: 'moss', what: 'Moss', cells: floodKeys(mk, (k) => mossCells.has(k)) };
@@ -1231,7 +1488,8 @@ function decoAt(wx, wy) {
   return null;
 }
 
-const BASE_SETS = () => [['Ground', groundSet], ['Moss', mossSet], ['Blue blocks', blueSet], ['Orange blocks', orangeSet]];
+// Moss first: it grows over the ground's edge cells, and a click there means the moss.
+const BASE_SETS = () => [['Moss', mossSet], ['Ground', groundSet], ['Blue blocks', blueSet], ['Orange blocks', orangeSet]];
 function baseCellsAt(cx, cy) {
   const k0 = key(cx, cy);
   if (removed.has(k0)) return null;
@@ -1239,17 +1497,21 @@ function baseCellsAt(cx, cy) {
   if (h && h.kind !== 'vine') return { kind: 'basecells', cells: [k0], what: 'Spike' };
   const hit = BASE_SETS().find(([, set]) => set?.has(k0));
   if (!hit) return null;
-  const [what, set] = hit, seen = new Set([k0]), stack = [[cx, cy]];
-  while (stack.length && seen.size <= 400) {
-    const [x, y] = stack.pop();
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  // The patch around the click, spreading outward (moss counts corners too), up to a bunch's worth:
+  // the level's moss and ground are mostly one connected mass.
+  const [what, set] = hit, seen = new Set([k0]), queue = [[cx, cy]], LIMIT = what === 'Moss' ? 160 : 600;
+  const around = what === 'Moss' ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] : [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (let qi = 0; qi < queue.length && seen.size < LIMIT; qi++) {
+    const [x, y] = queue[qi];
+    for (const [dx, dy] of around) {
       const k = key(x + dx, y + dy);
       if (seen.has(k) || !set.has(k) || removed.has(k)) continue;
       seen.add(k);
-      stack.push([x + dx, y + dy]);
+      queue.push([x + dx, y + dy]);
+      if (seen.size >= LIMIT) break;
     }
   }
-  return { kind: 'basecells', cells: seen.size > 400 ? [k0] : [...seen], what };
+  return { kind: 'basecells', cells: [...seen], what };
 }
 
 function objectBounds(o) {
@@ -1265,19 +1527,21 @@ function objectBounds(o) {
     }
   }
   if (!shown.length || !Number.isFinite(x0)) {
-    const b = item.box || [-CELL / 2, -CELL / 2, CELL / 2, CELL / 2];
+    const b = objectBox(o, item) || [-CELL / 2, -CELL / 2, CELL / 2, CELL / 2];
     return { x0: o.x + b[0], y0: o.y + b[1], x1: o.x + b[2], y1: o.y + b[3] };
   }
   return { x0, y0, x1, y1 };
 }
 
-const sameTarget = (a, b) => !!a && !!b && a.kind === b.kind && a.index === b.index && a.key === b.key && a.k === b.k && a.id === b.id && a.which === b.which && a.course === b.course && (a.cells?.[0] ?? null) === (b.cells?.[0] ?? null);
 
 function drawTarget(t) {
   const rectW = (x0, y0, x1, y1) => { const a = toScreen(x0, y1), b = toScreen(x1, y0); ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4); };
   if (t.kind === 'object') { const b = placed[t.index] && objectBounds(placed[t.index]); if (b) rectW(b.x0, b.y0, b.x1, b.y1); }
-  else if (t.kind === 'fspike') { const f = freeSpikes[t.index]; if (f) rectW(f.x - CELL / 2, f.y - CELL / 2, f.x + CELL / 2, f.y + CELL / 2); }
+  else if (t.kind === 'fspike') { const f = freeSpikes[t.index], r = (CELL / 2) * (f?.s || 1) * (f?.r ? Math.SQRT2 : 1); if (f) rectW(f.x - r, f.y - r, f.x + r, f.y + r); }
   else if (t.kind === 'sign') { const sg = signs[t.index]; if (sg) rectW(sg.x - sg.w / 2, sg.y - sg.h / 2, sg.x + sg.w / 2, sg.y + sg.h / 2); }
+  else if (t.kind === 'csprite') { const cs = csprites[t.index], b = cs && customSpriteSize(cs); if (b) rectW(cs.x - b.w / 2, cs.y - b.h / 2, cs.x + b.w / 2, cs.y + b.h / 2); }
+  else if (t.kind === 'xspawn') { const s = xspawns[t.index]; if (s) rectW(s.x - SPAWN_BOX.w / 2, s.y + SPAWN_BOX.dy - SPAWN_BOX.h / 2, s.x + SPAWN_BOX.w / 2, s.y + SPAWN_BOX.dy + SPAWN_BOX.h / 2); }
+  else if (t.kind === 'mtrig') { const tg = triggers[t.index]; if (tg) rectW(tg.x - tg.w / 2, tg.y - tg.h / 2, tg.x + tg.w / 2, tg.y + tg.h / 2); }
   else if (t.kind === 'gate') {
     const g = markerPos(t), b = MARKER_BOX[t.which];
     if (g) rectW(g.x + b.dx - Math.max(b.w, CELL) / 2, g.y + b.dy - Math.max(b.h, CELL) / 2, g.x + b.dx + Math.max(b.w, CELL) / 2, g.y + b.dy + Math.max(b.h, CELL) / 2);
@@ -1329,14 +1593,62 @@ function zipHandle(o) {
 
 // Pressing on what's already selected picks it up to drag, whatever tool is active.
 function grabsSelection(wp) {
-  if (!['object', 'gate', 'fspike', 'sign'].includes(selection?.kind)) return false;
+  const targets = targetsOf(selection);
+  if (!targets.length) return false;
+  const c = cellOf(wp.x, wp.y);
+  if (targets.some((t) => t.kind === 'region' && c.cx >= t.x0 && c.cx <= t.x1 && c.cy >= t.y0 && c.cy <= t.y1)) return true;
   const hit = itemAt(wp.x, wp.y);
-  if (!hit || hit.kind !== selection.kind) return false;
-  return hit.kind === 'object' || hit.kind === 'fspike' || hit.kind === 'sign' ? hit.index === selection.index : hit.which === selection.which && hit.course === selection.course;
+  return !!hit && targets.some((t) => sameTarget(t, hit));
+}
+
+// A selected trigger zone's or checkpoint's box, in world units, to size by its edges.
+function sizableBox() {
+  if (selection?.kind === 'mtrig') { const t = triggers[selection.index]; return t ? { x0: t.x - t.w / 2, y0: t.y - t.h / 2, x1: t.x + t.w / 2, y1: t.y + t.h / 2 } : null; }
+  if (selection?.kind === 'object') {
+    const o = placed[selection.index], item = o && catalogItem(o);
+    if (!isSizable(item)) return null;
+    const t = trigOf(o, item);
+    return { x0: o.x + t.dx - t.w / 2, y0: o.y + t.dy - t.h / 2, x1: o.x + t.dx + t.w / 2, y1: o.y + t.dy + t.h / 2 };
+  }
+  return null;
+}
+function edgesAt(w) {
+  const b = sizableBox();
+  if (!b) return null;
+  const near = 7 / cam.scale, inX = w.x > b.x0 - near && w.x < b.x1 + near, inY = w.y > b.y0 - near && w.y < b.y1 + near;
+  const e = { l: inY && Math.abs(w.x - b.x0) < near, r: inY && Math.abs(w.x - b.x1) < near, b: inX && Math.abs(w.y - b.y0) < near, t: inX && Math.abs(w.y - b.y1) < near };
+  return e.l || e.r || e.b || e.t ? { ...e, box: b } : null;
+}
+function edgeCursor(e) {
+  if (!e) return '';
+  if ((e.l && e.t) || (e.r && e.b)) return 'nwse-resize';
+  if ((e.r && e.t) || (e.l && e.b)) return 'nesw-resize';
+  return e.l || e.r ? 'ew-resize' : 'ns-resize';
+}
+function resizeMove(e) {
+  const w = worldAt(e), snap = e.shiftKey ? 1 : snapV(), d = drag.resize, b = { ...d.box };
+  const sx = Math.round((w.x - drag.start.x) / snap) * snap, sy = Math.round((w.y - drag.start.y) / snap) * snap;
+  if (d.l) b.x0 = Math.min(b.x1 - 16, b.x0 + sx);
+  if (d.r) b.x1 = Math.max(b.x0 + 16, b.x1 + sx);
+  if (d.b) b.y0 = Math.min(b.y1 - 16, b.y0 + sy);
+  if (d.t) b.y1 = Math.max(b.y0 + 16, b.y1 + sy);
+  const sig = [b.x0, b.y0, b.x1, b.y1].join(',');
+  if (sig === drag.sig) return;
+  drag.sig = sig;
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; }
+  const w2 = b.x1 - b.x0, h2 = b.y1 - b.y0, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+  if (selection.kind === 'mtrig') Object.assign(triggers[selection.index], { x: cx, y: cy, w: w2, h: h2 });
+  else { const o = placed[selection.index]; o.cfg = { ...o.cfg, trig: { w: w2, h: h2, dx: cx - o.x, dy: cy - o.y } }; }
+  requestDraw();
 }
 
 function selectDown(e) {
   const w = worldAt(e);
+  const edges = edgesAt(w);
+  if (edges) {
+    drag = { pan: false, resize: edges, start: w, before: snapshot(), changed: false };
+    return;
+  }
   const sel = selection?.kind === 'object' ? placed[selection.index] : null;
   const h = sel && zipHandle(sel);
   if (h && Math.hypot(w.x - h.x, w.y - h.y) * cam.scale < 12) {
@@ -1344,15 +1656,28 @@ function selectDown(e) {
     return;
   }
   const hit = itemAt(w.x, w.y);
+  if (hit && e.shiftKey) {
+    toggleInSelection(hit);
+    drag = null;
+    renderConfig();
+    requestDraw();
+    return;
+  }
+  if (grabsSelection(w)) {
+    drag = { pan: false, moveSel: true, start: w, before: snapshot(), selOrig: JSON.stringify(selection), changed: false };
+    requestDraw();
+    return;
+  }
   if (hit) {
     selection = hit;
     showInDropdown(hit);
     if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
-    drag = { pan: false, move: hit.kind === 'object', gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, fspike: hit.kind === 'fspike', sign: hit.kind === 'sign', start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'fspike' ? { x: freeSpikes[hit.index].x, y: freeSpikes[hit.index].y } : hit.kind === 'sign' ? { x: signs[hit.index].x, y: signs[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
+    drag = { pan: false, moveSel: true, selOrig: JSON.stringify(hit), move: false, gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, fspike: hit.kind === 'fspike', sign: hit.kind === 'sign', start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'fspike' ? { x: freeSpikes[hit.index].x, y: freeSpikes[hit.index].y } : hit.kind === 'sign' ? { x: signs[hit.index].x, y: signs[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
   } else {
     const c = cellOf(w.x, w.y);
-    selection = null;
-    drag = { pan: false, region: c };
+    const keep = e.shiftKey ? targetsOf(selection) : [];
+    if (!e.shiftKey) selection = null;
+    drag = { pan: false, region: c, keep };
   }
   renderConfig();
   requestDraw();
@@ -1360,11 +1685,28 @@ function selectDown(e) {
 
 function selectMove(e) {
   const w = worldAt(e);
+  if (drag.moveSel) {
+    // Rebuilt from the drag's start every time, so whatever the moving things
+    // pass over is only covered, never lost.
+    const dx = w.x - drag.start.x, dy = w.y - drag.start.y, fine = e.shiftKey, snap = fine ? 1 : snapV();
+    const cx = Math.round(dx / CELL), cy = Math.round(dy / CELL);
+    const sig = [Math.round(dx / snap), Math.round(dy / snap), cx, cy].join(',');
+    if (sig === (drag.sig ?? '0,0,0,0')) return;
+    drag.sig = sig;
+    if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+    applyState(JSON.parse(drag.before));
+    selection = JSON.parse(drag.selOrig);
+    moveTargets(targetsOf(selection), dx, dy, cx, cy, fine);
+    requestDraw();
+    return;
+  }
   if (drag.region) {
     const c = cellOf(w.x, w.y);
     if (c.cx !== drag.region.cx || c.cy !== drag.region.cy) drag.regionMoved = true;
     if (!drag.regionMoved) return;
-    selection = { kind: 'region', x0: Math.min(drag.region.cx, c.cx), y0: Math.min(drag.region.cy, c.cy), x1: Math.max(drag.region.cx, c.cx), y1: Math.max(drag.region.cy, c.cy) };
+    const r = { x0: Math.min(drag.region.cx, c.cx), y0: Math.min(drag.region.cy, c.cy), x1: Math.max(drag.region.cx, c.cx), y1: Math.max(drag.region.cy, c.cy) };
+    const add = marqueeTargets(r).filter((t) => !drag.keep.some((k) => sameTarget(k, t)));
+    setSelection([...drag.keep, ...add]);
     renderConfig();
   } else if (drag.group) {
     const now = selection.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy);
@@ -1431,12 +1773,15 @@ function placementCfg(item) {
 const PLACING = ['object', 'decor', 'stamp', 'vine'];
 function turnSomething(dir, flip = false) {
   let target = tool === 'select' ? selection : null;
-  if (target?.kind === 'region') return transformRegion(flip ? 'x' : 'r');
+  if (target?.kind === 'region' || (target?.kind === 'multi' && target.items.some((t) => t.kind === 'region'))) return transformRegion(flip ? 'x' : 'r');
   if (selection?.kind === 'fspike' && !flip) {
     const f = freeSpikes[selection.index];
-    if (f) { pushUndo(); f.q = ((f.q ?? 0) + (dir < 0 ? 1 : 3)) % 4; saveDraft(); requestDraw(); }
+    if (f) { pushUndo(); f.q = ((f.q ?? 0) + (dir < 0 ? 1 : 3)) % 4; saveDraft(); renderConfig(); requestDraw(); }
     return;
   }
+  const tfs = targetsOf(target).filter((t) => t.kind === 'csprite' || t.kind === 'sign' || t.kind === 'fspike');
+  if (tfs.length && !flip) { tfTurn(tfs, dir < 0 ? 90 : -90); return; }
+  if (tfs.length && flip) { pushUndo(); for (const t of tfs) if (tfFields(t).includes('flip')) tfSet(t, 'fx', !tfGet(t).fx); saveDraft(); renderConfig(); requestDraw(); return; }
   if (SPIKE_KIND[tool] && !flip) {
     const w = hover && cellWorld(hover.cx, hover.cy), under = w && itemAt(w.x + CELL / 2, w.y + CELL / 2);
     if (!under || under.kind !== 'cell' || !spikes.has(under.k)) {
@@ -1482,10 +1827,9 @@ function turnSomething(dir, flip = false) {
   requestDraw();
 }
 
-function nudgeSelection(dx, dy, fine) {
-  const sel = selection;
-  if (!sel) return false;
-  pushUndo();
+// Moves one selected thing: dx, dy in cells for cell content and markers, in
+// snap steps for placed things. False for the level's own things (they can't move).
+function shiftTarget(sel, dx, dy, fine) {
   const shiftKey = (k) => { const [x, y] = unkey(k); return key(x + dx, y + dy); };
   const moveArrow = (id) => { const a = arrows.find((x) => x.id === id); if (a) a.cells = a.cells.map(([x, y]) => [x + dx, y + dy]); };
   if (sel.kind === 'object') {
@@ -1504,7 +1848,10 @@ function nudgeSelection(dx, dy, fine) {
     sel.k = nk;
   } else if (sel.kind === 'blocks' || sel.kind === 'moss') {
     moveCells(sel, dx, dy);
-  } else if (sel.kind === 'base' || sel.kind === 'basecells' || sel.kind === 'scene') {
+  } else if (sel.kind === 'base' || sel.kind === 'scene') {
+    const step = fine ? 1 : snapV();
+    return moveLevelThing(sel, dx * step, dy * step);
+  } else if (sel.kind === 'basecells') {
     return false;
   } else if (sel.kind === 'sign') {
     const sg = signs[sel.index], step = fine ? 1 : snapV();
@@ -1526,7 +1873,7 @@ function nudgeSelection(dx, dy, fine) {
       for (const [k] of moving) m.delete(k);
       for (const [k, v] of moving) m.set(shiftKey(k), v);
     }
-    for (const o of placed) { const c = cellOf(o.x, o.y); if (inR(c.cx, c.cy)) { o.x += dx * CELL; o.y += dy * CELL; } }
+    if (!sel.cellsOnly) for (const o of placed) { const c = cellOf(o.x, o.y); if (inR(c.cx, c.cy)) { o.x += dx * CELL; o.y += dy * CELL; } }
     const ids = new Set(), movingTiles = [];
     for (const [k, t] of tiles) {
       const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
@@ -1539,28 +1886,141 @@ function nudgeSelection(dx, dy, fine) {
     ids.forEach(moveArrow);
     if (ids.size) rebuildArrowTiles();
     const shiftG = (m) => { if (!m) return m; const c = cellOf(m.x, m.y); return inR(c.cx, c.cy) ? { ...m, x: m.x + dx * CELL, y: m.y + dy * CELL } : m; };
-    draft.spawn = shiftG(draft.spawn);
-    for (const c of courses()) { c.start = shiftG(c.start); c.end = shiftG(c.end); }
+    if (!sel.cellsOnly) {
+      draft.spawn = shiftG(draft.spawn);
+      for (const c of courses()) { c.start = shiftG(c.start); c.end = shiftG(c.end); }
+    }
     Object.assign(sel, { x0: sel.x0 + dx, x1: sel.x1 + dx, y0: sel.y0 + dy, y1: sel.y1 + dy });
   }
+  return true;
+}
+
+// ---- the selection: one thing, or several of any kinds ('multi') ----
+const targetsOf = (sel) => (!sel ? [] : sel.kind === 'multi' ? sel.items : [sel]);
+const WORLD_KINDS = new Set(['object', 'fspike', 'sign', 'mtrig', 'csprite', 'xspawn']);
+const STACKABLE = new Set(['object', 'fspike', 'sign', 'csprite', 'base', 'scene']);
+const listOfKind = (kind) => ({ object: placed, fspike: freeSpikes, sign: signs, mtrig: triggers, csprite: csprites, xspawn: xspawns })[kind];
+function sameTarget(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (WORLD_KINDS.has(a.kind)) return a.index === b.index;
+  if (a.kind === 'gate') return a.which === b.which && a.course === b.course;
+  if (a.kind === 'region') return a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
+  if (a.kind === 'cell') return a.k === b.k && !!a.vine === !!b.vine;
+  if (a.kind === 'tile') return a.key === b.key;
+  if (a.kind === 'base' || a.kind === 'scene') return a.id === b.id;
+  return JSON.stringify(a.cells) === JSON.stringify(b.cells);
+}
+function setSelection(items) {
+  selection = !items.length ? null : items.length === 1 ? items[0] : { kind: 'multi', items };
+}
+function toggleInSelection(t) {
+  const items = targetsOf(selection);
+  const at = items.findIndex((x) => sameTarget(x, t));
+  setSelection(at >= 0 ? items.filter((_, i) => i !== at) : [...items, t]);
+}
+// Moves every selected thing: placed things by the world offset (snapped),
+// cell content and markers by whole cells. Returns false if nothing could move.
+function moveTargets(targets, wx, wy, cx, cy, fine) {
+  const snap = fine ? 1 : snapV(), sx = Math.round(wx / snap) * snap, sy = Math.round(wy / snap) * snap;
+  let moved = false, fixed = false;
+  for (const t of targets) {
+    if (WORLD_KINDS.has(t.kind)) {
+      const it = listOfKind(t.kind)[t.index];
+      if (it) { it.x += sx; it.y += sy; moved = moved || sx !== 0 || sy !== 0; }
+    } else if (t.kind === 'gate' && t.which === 'screen') {
+      const c = courseById(t.course), at = courseScreen(c);
+      if (c && at) { c.screen = { x: at.x + sx, y: at.y + sy }; moved = true; }
+    } else if (t.kind === 'base' || t.kind === 'scene') {
+      if (sx || sy) { moveLevelThing(t, sx, sy); moved = true; }
+    } else if (t.kind === 'moss') {
+      const g = layerGrid('moss').size, mx = Math.round((cx * CELL) / g), my = Math.round((cy * CELL) / g);
+      if (mx || my) { moveCells(t, mx, my); moved = true; }
+    } else if (cx || cy) {
+      if (shiftTarget(t, cx, cy, fine)) moved = true; else fixed = true;
+    }
+  }
+  if (fixed) flash('The level\'s own ground stays put - erase it and place your own blocks.');
+  return moved;
+}
+function nudgeSelection(dx, dy, fine) {
+  const targets = targetsOf(selection);
+  if (!targets.length) return false;
+  pushUndo();
+  const step = fine ? 1 : snapV();
+  const moved = moveTargets(targets, dx * step, dy * step, dx, dy, fine);
+  if (!moved) undoStack.pop();
   saveDraft();
   renderConfig();
   requestDraw();
-  return true;
+  return moved;
+}
+// Everything a dragged-out box covers: the placed things and markers whose
+// centre is inside, and the cells (for their content and region tools).
+function marqueeTargets(r) {
+  const a = cellWorld(r.x0, r.y0), b = cellWorld(r.x1 + 1, r.y1 + 1);
+  const inside = (p) => p && p.x >= a.x && p.x < b.x && p.y >= a.y && p.y < b.y;
+  const out = [];
+  for (const e of stack()) if (inside(e.it) && layerOpen(targetLayer({ kind: e.kind, index: e.index }))) out.push({ kind: e.kind, index: e.index });
+  if (layerOpen('course')) triggers.forEach((t, i) => { if (inside(t)) out.push({ kind: 'mtrig', index: i }); });
+  if (layerOpen('course')) xspawns.forEach((t, i) => { if (inside(t)) out.push({ kind: 'xspawn', index: i }); });
+  if (layerOpen('tiles')) tiles.forEach((t, k) => { if (!t.arrow && inside(tileCenter(t.layer, k))) out.push({ kind: 'tile', key: k }); });
+  if (baseOn() && layerOpen('level')) {
+    for (const o of baseObjects) if (!removedObjects.has(o.id) && inside(o)) out.push({ kind: 'base', id: o.id });
+    for (const p of sceneList?.items || []) if (p.id && !p.group && p.a !== 0 && !removedScene.has(p.id) && p.reach < 400 && inside(p)) out.push({ kind: 'scene', id: p.id });
+  }
+  if (!layerLocked('course')) {
+    if (inside(draft.spawn)) out.push({ kind: 'gate', which: 'spawn' });
+    for (const c of courses()) for (const which of ['start', 'end', 'screen']) {
+      const p = which === 'screen' ? courseScreen(c) : c[which];
+      if (inside(p)) out.push({ kind: 'gate', which, course: c.id });
+    }
+  }
+  out.push({ kind: 'region', ...r, cellsOnly: true });
+  return out;
+}
+// The cells in a region that hold something of yours.
+function regionContent(r) {
+  const cells = [];
+  for (let cy = r.y0; cy <= r.y1; cy++) for (let cx = r.x0; cx <= r.x1; cx++) {
+    const k = key(cx, cy);
+    if (blocks.has(k) || spikes.has(k) || vines.has(k)) cells.push(k);
+  }
+  return cells;
 }
 
 function deleteSelection() {
   if (!selection) return;
+  for (const t of targetsOf(selection).slice(0, 30)) { const p = targetPoint(t); if (p) addFx('burst', p.x, p.y, COLORS.end, 48); }
   pushUndo();
+  // Highest index first, so earlier deletions don't shift the later ones.
+  const all = [...targetsOf(selection)].sort((a, b) => (b.index ?? -1) - (a.index ?? -1));
+  for (const t of all) { selection = t; deleteOne(); }
+  selection = null;
+  saveDraft();
+  renderConfig();
+  requestDraw();
+}
+// A level sprite goes; a refresher's goes with all its other sprites (wings, dotted outline).
+function removeScene(id) {
+  removedScene.add(id);
+  const item = sceneList?.items.find((x) => x.id === id), path = item?.p || '';
+  const m = path.match(/^(.*?\/[^/]*Resetter[^/]*)(\/|$)/);
+  if (!m) return;
+  for (const x of sceneList.items) if (x.id && (x.p === m[1] || x.p?.startsWith(m[1] + '/')) && Math.hypot(x.x - item.x, x.y - item.y) < 200) removedScene.add(x.id);
+}
+function deleteOne() {
   if (selection.kind === 'object') placed.splice(selection.index, 1);
   else if (selection.kind === 'fspike') freeSpikes.splice(selection.index, 1);
   else if (selection.kind === 'sign') signs.splice(selection.index, 1);
+  else if (selection.kind === 'csprite') csprites.splice(selection.index, 1);
+  else if (selection.kind === 'mtrig') triggers.splice(selection.index, 1);
+  else if (selection.kind === 'xspawn') xspawns.splice(selection.index, 1);
   else if (selection.kind === 'gate') clearMarker(selection);
   else if (selection.kind === 'base') removedObjects.add(selection.id);
   else if (selection.kind === 'blocks') selection.cells.forEach((k) => blocks.delete(k));
   else if (selection.kind === 'moss') selection.cells.forEach((k) => mossCells.delete(k));
   else if (selection.kind === 'basecells') selection.cells.forEach((k) => removed.add(k));
-  else if (selection.kind === 'scene') removedScene.add(selection.id);
+  else if (selection.kind === 'scene') removeScene(selection.id);
   else if (selection.kind === 'decotiles') selection.cells.forEach((k) => removedDeco.add(selection.layer + '|' + k));
   else if (selection.kind === 'tile') { const id = tiles.get(selection.key)?.arrow; if (id) removeArrow(id); else tiles.delete(selection.key); }
   else if (selection.kind === 'cell') { if (selection.vine) vines.delete(selection.k); else { blocks.delete(selection.k); spikes.delete(selection.k); } }
@@ -1568,7 +2028,7 @@ function deleteSelection() {
     const saveTool = tool;
     tool = 'erase';
     const inRegion = (cx, cy) => cx >= selection.x0 && cx <= selection.x1 && cy >= selection.y0 && cy <= selection.y1;
-    placed = placed.filter((o) => { const c = cellOf(o.x, o.y); return !inRegion(c.cx, c.cy); });
+    if (!selection.cellsOnly) placed = placed.filter((o) => { const c = cellOf(o.x, o.y); return !inRegion(c.cx, c.cy); });
     const cut = new Set();
     for (const [k, t] of [...tiles]) { const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y); if (inRegion(cc.cx, cc.cy)) { tiles.delete(k); if (t.arrow) cut.add(t.arrow); } }
     if (cut.size) { arrows = arrows.filter((ar) => !cut.has(ar.id)); rebuildArrowTiles(); }
@@ -1580,10 +2040,6 @@ function deleteSelection() {
     }
     tool = saveTool;
   }
-  selection = null;
-  saveDraft();
-  renderConfig();
-  requestDraw();
 }
 
 function baseTilesIn(x0, y0, x1, y1) {
@@ -1610,13 +2066,22 @@ function baseTilesIn(x0, y0, x1, y1) {
 }
 
 // Layering: objects draw in list order, so the end of the list is the front.
+function drawStackEntries(list) {
+  for (const e of list) {
+    if (e.kind === 'fspike') { if (!layerHidden('hazards')) drawFreeSpike(e.it); }
+    else if (e.kind === 'sign') { if (!layerHidden('decor')) drawSign(e.it); }
+    else if (e.kind === 'csprite') { if (!layerHidden('decor')) drawCustomSprite(e.it); }
+    else if (!layerHidden(e.it.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(e.it);
+  }
+}
+
 // The stack: placed objects, decorations and free spikes in draw order,
 // back to front. Each keeps a z; new things (no z yet) go on top as made.
 function stack() {
-  const all = [...placed.map((it, i) => ({ kind: 'object', index: i, it })), ...freeSpikes.map((it, i) => ({ kind: 'fspike', index: i, it })), ...signs.map((it, i) => ({ kind: 'sign', index: i, it }))];
+  const all = [...placed.map((it, i) => ({ kind: 'object', index: i, it })), ...freeSpikes.map((it, i) => ({ kind: 'fspike', index: i, it })), ...signs.map((it, i) => ({ kind: 'sign', index: i, it })), ...csprites.map((it, i) => ({ kind: 'csprite', index: i, it }))];
   const z = (e) => e.it.z ?? Infinity;
-  const kindOrder = { object: 0, fspike: 1, sign: 2 };
-  return all.sort((a, b) => z(a) - z(b) || (a.kind === b.kind ? a.index - b.index : kindOrder[a.kind] - kindOrder[b.kind]));
+  const kindOrder = { object: 0, fspike: 1, sign: 2, csprite: 3 };
+  return all.sort((a, b) => (a.it.behind ? 0 : 1) - (b.it.behind ? 0 : 1) || z(a) - z(b) || (a.kind === b.kind ? a.index - b.index : kindOrder[a.kind] - kindOrder[b.kind]));
 }
 function stackRank() {
   const rank = new Map();
@@ -1625,28 +2090,98 @@ function stackRank() {
 }
 // Moves the selection in the stack: 'front', 'back', or one step 'up' / 'down'.
 function restack(how) {
-  if (!['object', 'fspike', 'sign'].includes(selection?.kind)) { flash('Select an object, text or a free spike to move it in front or behind.', true); return; }
-  const list = stack(), pos = list.findIndex((e) => e.kind === selection.kind && e.index === selection.index);
+  if (selection?.kind === 'multi') {
+    const pos = (t) => stack().findIndex((e) => e.kind === t.kind && e.index === t.index);
+    const items = selection.items.filter((t) => STACKABLE.has(t.kind)).sort((a, b) => pos(a) - pos(b));
+    if (!items.length) { flash('Nothing here goes in the layer stack.', true); return; }
+    if (how === 'up' || how === 'front') items.reverse();
+    const all = selection;
+    for (const t of items) { selection = t; restack(how); }
+    selection = all;
+    renderConfig();
+    return;
+  }
+  if (selection?.kind === 'base' || selection?.kind === 'scene') {
+    // The level's own: its draw order among the level's layers (below 0 is behind the ground).
+    const k = levelKey(selection), cur = levelOrder.get(k) || 0, step = { up: 1, down: -1, front: 40, back: -40 }[how];
+    pushUndo();
+    const next = Math.max(-400, Math.min(400, cur + step));
+    if (next) levelOrder.set(k, next); else levelOrder.delete(k);
+    applyBaseMoves();
+    saveDraft(); renderConfig(); requestDraw();
+    flash(`Draw order ${next > 0 ? '+' : ''}${next}`);
+    return;
+  }
+  if (!STACKABLE.has(selection?.kind)) { flash('Select an object, image, text or a free spike to move it in front or behind.', true); return; }
+  // The level sits in the stack as a divider: what's below it is behind the level.
+  const list = stack(), split = list.filter((e) => e.it.behind).length;
+  const full = [...list.slice(0, split), { divider: true }, ...list.slice(split)];
+  const pos = full.findIndex((e) => !e.divider && e.kind === selection.kind && e.index === selection.index);
   if (pos < 0) return;
-  const to = how === 'front' ? list.length - 1 : how === 'back' ? 0 : Math.max(0, Math.min(list.length - 1, pos + (how === 'up' ? 1 : -1)));
-  if (to === pos) { flash(how === 'up' || how === 'front' ? 'Already at the front' : 'Already at the back'); return; }
+  const to = how === 'front' ? full.length - 1 : how === 'back' ? 0 : Math.max(0, Math.min(full.length - 1, pos + (how === 'up' ? 1 : -1)));
+  if (to === pos) {
+    // Already the furthest back behind the ground: the next step back is behind the walls.
+    if ((how === 'down' || how === 'back') && selection && full[pos]?.it?.behind && full[pos].it.depth !== 2) {
+      pushUndo(); full[pos].it.depth = 2; saveDraft(); renderConfig(); requestDraw(); flash('Behind the walls now'); return;
+    }
+    flash(how === 'up' || how === 'front' ? 'Already at the front' : 'Already behind everything'); return;
+  }
   pushUndo();
-  const [moved] = list.splice(pos, 1);
-  list.splice(to, 0, moved);
-  list.forEach((e, n) => { e.it.z = n; });
+  const [moved] = full.splice(pos, 1);
+  full.splice(to, 0, moved);
+  const was = !!moved.it.behind;
+  let behind = true, n = 0;
+  for (const e of full) {
+    if (e.divider) { behind = false; continue; }
+    if (behind) e.it.behind = true; else delete e.it.behind;
+    e.it.z = n++;
+  }
   saveDraft();
   renderConfig();
   requestDraw();
-  flash({ front: 'Brought to front', back: 'Sent to back', up: 'Moved up one', down: 'Moved down one' }[how]);
+  flash(was !== !!moved.it.behind ? (moved.it.behind ? 'Behind the level now' : 'In front of the level now') : { front: 'Brought to front', back: 'Sent to back', up: 'Moved up one', down: 'Moved down one' }[how]);
+}
+function levelOrderRow() {
+  const n = levelOrder.get(levelKey(selection)) || 0;
+  return `<div class="mm-config-sub" style="display:block">Draw order ${n ? (n > 0 ? '+' : '') + n : 'as the level has it'} - below the level's ground once it's far enough back.</div>`;
+}
+const OWN_STACK = ['object', 'fspike', 'sign', 'csprite'];
+function depthRow() {
+  const own = targetsOf(selection).filter((t) => OWN_STACK.includes(t.kind)).map((t) => listOfKind(t.kind)[t.index]).filter(Boolean);
+  if (!own.length) return '';
+  const d = own[0].behind ? (own[0].depth === 2 ? 2 : 1) : 0;
+  const opt = (v, t) => `<option value="${v}"${v === d ? ' selected' : ''}>${t}</option>`;
+  return `<div class="mm-config-row"><label>Depth<select class="mm-input" data-depth="1">${opt(0, 'In front of the level')}${opt(1, 'Behind the ground and objects')}${opt(2, 'Behind the walls too')}</select></label></div>`;
+}
+function bindDepth(el) {
+  el.querySelectorAll('[data-depth]').forEach((inp) => inp.addEventListener('change', () => {
+    const v = Number(inp.value);
+    pushUndo();
+    for (const t of targetsOf(selection)) {
+      if (!OWN_STACK.includes(t.kind)) continue;
+      const it = listOfKind(t.kind)[t.index];
+      if (!it) continue;
+      if (!v) { delete it.behind; delete it.depth; } else { it.behind = true; if (v === 2) it.depth = 2; else delete it.depth; }
+    }
+    saveDraft(); renderConfig(); requestDraw();
+  }));
 }
 function stackButtons() {
-  return `<div class="mm-config-row"><button class="mm-tool" data-act="stack:front" title="In front of everything (Shift+])">⤒ Front</button><button class="mm-tool" data-act="stack:up" title="Up one (])">↑ Up</button><button class="mm-tool" data-act="stack:down" title="Down one ([)">↓ Down</button><button class="mm-tool" data-act="stack:back" title="Behind everything (Shift+[)">⤓ Back</button></div>`;
+  const listOf = { object: placed, fspike: freeSpikes, sign: signs };
+  const behind = targetsOf(selection).some((t) => listOf[t.kind]?.[t.index]?.behind);
+  return (behind ? `<div class="mm-config-sub">Behind the level: drawn under its ground and objects, over its background.</div>` : '') + `<div class="mm-config-row"><button class="mm-tool" data-act="stack:front" title="In front of everything (Shift+])">⤒ Front</button><button class="mm-tool" data-act="stack:up" title="Up one (])">↑ Up</button><button class="mm-tool" data-act="stack:down" title="Down one ([)">↓ Down</button><button class="mm-tool" data-act="stack:back" title="Behind everything (Shift+[)">⤓ Back</button></div>`;
 }
 
 // A copied object: Ctrl+V puts a copy under the mouse (a region copy pastes with a click instead).
 let clipObject = null;
 function pasteObject() {
   const at = hoverWorld || { x: cam.x, y: cam.y }, snap = snapV();
+  if (clipObject.many) {
+    pushUndo();
+    pasteMany(clipObject.many, cellOf(at.x, at.y));
+    saveDraft(); renderConfig(); requestDraw();
+    return;
+  }
   if (clipObject.sign) {
     const p = snapPoint(at, snap);
     pushUndo();
@@ -1674,7 +2209,66 @@ function pasteObject() {
   requestDraw();
 }
 
+// Several things copied together: placed things by their offset, cell content by cells.
+function copyMany(items) {
+  const region = items.find((t) => t.kind === 'region');
+  const things = items.filter((t) => WORLD_KINDS.has(t.kind)).map((t) => {
+    return { kind: t.kind, data: JSON.parse(JSON.stringify(listOfKind(t.kind)[t.index])) };
+  }).filter((t) => t.data);
+  const cells = [];
+  if (region) for (const k of regionContent(region)) {
+    const [cx, cy] = unkey(k);
+    cells.push({ cx, cy, block: blocks.get(k), spike: spikes.get(k), vine: vines.get(k) });
+  }
+  const xs = [...things.map((t) => t.data.x), ...cells.map((c) => cellWorld(c.cx, c.cy).x + CELL / 2)];
+  const ys = [...things.map((t) => t.data.y), ...cells.map((c) => cellWorld(c.cx, c.cy).y + CELL / 2)];
+  if (!xs.length) return null;
+  const anchor = cellOf(Math.min(...xs), Math.min(...ys)), a = cellWorld(anchor.cx, anchor.cy);
+  return {
+    anchor,
+    many: {
+      things: things.map((t) => ({ ...t, dx: t.data.x - a.x, dy: t.data.y - a.y })),
+      cells: cells.map((c) => ({ ...c, dcx: c.cx - anchor.cx, dcy: c.cy - anchor.cy })),
+    },
+  };
+}
+function pasteMany(many, anchorCell) {
+  const a = cellWorld(anchorCell.cx, anchorCell.cy), out = [];
+  for (const t of many.things) {
+    const copy = { ...JSON.parse(JSON.stringify(t.data)), x: Math.round(a.x + t.dx), y: Math.round(a.y + t.dy) };
+    delete copy.z;
+    if (copy.uid) copy.uid = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    delete copy.tp;
+    const list = listOfKind(t.kind);
+    list.push(copy);
+    out.push({ kind: t.kind, index: list.length - 1 });
+  }
+  for (const c of many.cells) {
+    const k = key(anchorCell.cx + c.dcx, anchorCell.cy + c.dcy);
+    if (c.block) { blocks.set(k, c.block); spikes.delete(k); }
+    if (c.spike) { spikes.set(k, c.spike); blocks.delete(k); }
+    if (c.vine) vines.set(k, c.vine);
+  }
+  if (many.cells.length) {
+    const xs = many.cells.map((c) => c.dcx), ys = many.cells.map((c) => c.dcy);
+    out.push({ kind: 'region', x0: anchorCell.cx + Math.min(...xs), y0: anchorCell.cy + Math.min(...ys), x1: anchorCell.cx + Math.max(...xs), y1: anchorCell.cy + Math.max(...ys), cellsOnly: true });
+  }
+  setSelection(out);
+}
+
 function copySelection() {
+  if (selection?.kind === 'multi') {
+    const clip = copyMany(selection.items);
+    if (!clip) { flash('Nothing in the selection can be copied.', true); return; }
+    clipObject = clip;
+    flash(`Copied ${clip.many.things.length + (clip.many.cells.length ? 1 : 0) > 1 ? 'the selection' : 'it'} - Ctrl+V pastes at the mouse`);
+    return;
+  }
+  if (selection?.kind === 'csprite' && csprites[selection.index]) {
+    clipObject = copyMany([selection]);
+    flash('Copied image - Ctrl+V pastes it at the mouse');
+    return;
+  }
   if (selection?.kind === 'sign' && signs[selection.index]) {
     clipObject = { sign: { ...signs[selection.index] } };
     flash('Copied text - Ctrl+V pastes it at the mouse');
@@ -1977,10 +2571,37 @@ function renderPlayerPanel() {
   html += `<div class="mm-config-row"><label>Starting cash<input class="mm-input" type="number" min="0" data-pl="cash" value="${pl.cash}"${own ? ' disabled' : ''}></label></div>`;
   html += `<div class="mm-config-sub">Upgrade boxes in the level add to these.</div>`;
   html += `<div class="mm-config-row"><label class="mm-check"><input type="checkbox" data-pl="own"${own ? ' checked' : ''}> Use the player's own save instead</label></div>`;
+  const bg = draft.background;
+  html += `<div class="mm-config-sub" style="margin-top:8px">Music and background - for the whole map; a trigger (Course) switches them</div>`;
+  html += `<div class="mm-config-row"><label>Music<select class="mm-input" data-media="music">${musicOptions(draft.music || 'level')}</select></label></div>`;
+  html += `<div class="mm-config-row"><label>Background<select class="mm-input" data-media="background">${backgroundOptions(bg?.image || 'level')}</select></label></div>`;
+  if (bg?.image) html += `<div class="mm-config-row"><label>Parallax (0 moves with the level, 1 stays put)<input class="mm-input" type="number" min="0" max="1" step="0.05" data-media="parallax" value="${bg.parallax ?? 0.8}"></label><label>Scale<input class="mm-input" type="number" min="0.05" step="0.1" data-media="scale" value="${bg.scale ?? 1}"></label></div>`;
   el.innerHTML = html;
   const set = (id, v) => { pushUndo(); draft.player = { ...draft.player, [id]: v }; saveDraft(); renderPlayerPanel(); };
   el.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => set(b.dataset.step, Math.max(0, Math.min(99, (draft.player[b.dataset.step] || 0) + Number(b.dataset.d))))));
-  el.querySelectorAll('input').forEach((inp) => {
+  el.querySelectorAll('[data-media]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => e.stopPropagation());
+    inp.addEventListener('change', async () => {
+      const f = inp.dataset.media;
+      if (f === 'music' || f === 'background') {
+        const v = await resolveMediaChoice(f === 'music' ? 'music' : 'image', inp.value);
+        if (v === null) { renderPlayerPanel(); return; }
+        pushUndo();
+        if (f === 'music') draft.music = v === 'level' ? undefined : v;
+        else draft.background = v === 'level' ? undefined : { parallax: 0.8, scale: 1, ...(draft.background || {}), image: v };
+      } else {
+        const n = Number(inp.value);
+        if (!Number.isFinite(n) || !draft.background) return;
+        pushUndo();
+        draft.background = { ...draft.background, [f]: f === 'parallax' ? Math.min(1, Math.max(0, n)) : Math.max(0.05, n) };
+      }
+      saveDraft();
+      renderPlayerPanel();
+      invalidateBase?.();
+      requestDraw();
+    });
+  });
+  el.querySelectorAll('input[data-pl]').forEach((inp) => {
     inp.addEventListener('keydown', (e) => e.stopPropagation());
     inp.addEventListener('change', () => {
       const id = inp.dataset.pl;
@@ -1991,6 +2612,39 @@ function renderPlayerPanel() {
   });
 }
 
+function bindGroupFields(el) {
+  el.querySelectorAll('[data-grp]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => e.stopPropagation());
+    inp.addEventListener('change', () => {
+      pushUndo();
+      if (inp.dataset.grp === 'id') setGroup(targetsOf(selection), inp.value.trim());
+      else {
+        const g = groupOf(targetsOf(selection)[0]), set = new Set(draft.hiddenGroups || []);
+        if (inp.checked) set.add(g); else set.delete(g);
+        draft.hiddenGroups = [...set];
+      }
+      saveDraft(); renderConfig(); requestDraw();
+    });
+  });
+}
+
+// Copy / duplicate / delete as icons under the title, and the hints toggle.
+let showHints = false;
+try { showHints = localStorage.getItem('mapMakerHints') === '1'; } catch { /* private window */ }
+function actionBar(many = false) {
+  const b = (act, icon, title, cls = '') => `<button class="mm-act${cls}" data-act="${act}" title="${title}">${icon}</button>`;
+  return `<div class="mm-actions">${b('copy', '⧉', 'Copy (Ctrl+C)')}${many ? '' : b('dup', '⊕', 'Duplicate (Ctrl+D)')}${b('delete', '✕', 'Delete (Del)', ' mm-act-danger')}<span class="mm-actions-gap"></span>${b('hints', 'ⓘ', 'Show / hide the help lines', showHints ? ' active' : '')}</div>`;
+}
+// Swaps the panel's contents, keeping its scroll, and animates it in when it opens.
+function showPanel(el, html) {
+  const opening = el.hidden, top = el.scrollTop;
+  el.innerHTML = html;
+  el.classList.toggle('mm-hints', showHints);
+  el.hidden = false;
+  el.scrollTop = top;
+  if (opening) { el.classList.remove('mm-anim'); void el.offsetWidth; el.classList.add('mm-anim'); }
+}
+
 function renderConfig() {
   const el = root?.querySelector('#mm-config');
   if (!el) return;
@@ -1998,50 +2652,78 @@ function renderConfig() {
   const num = (id, label, value, step = 1) => `<label>${label}<input class="mm-input" type="number" data-cfg="${id}" value="${Math.round(value * 1000) / 1000}" step="${step}"></label>`;
   const chk = (id, label, on) => `<label class="mm-check"><input type="checkbox" data-cfg="${id}"${on ? ' checked' : ''}> ${label}</label>`;
   let html = '';
+  if (selection.kind === 'multi') {
+    const ts = selection.items, region = ts.find((t) => t.kind === 'region');
+    const things = ts.filter((t) => t.kind !== 'region').length, cells = region ? regionContent(region).length : 0;
+    html += `<div class="mm-config-title">${things + (cells ? 1 : 0) > 1 || !region ? `${things} selected` : 'Region'}<span>${[things ? `${things} thing${things === 1 ? '' : 's'}` : '', cells ? `${cells} cell${cells === 1 ? '' : 's'}` : ''].filter(Boolean).join(' + ') || 'empty'}</span></div>`;
+    html += actionBar(true);
+    html += `<div class="mm-config-sub">Drag any of it to move it all, or use the arrow keys. Shift+click adds or removes things; Shift+drag adds a box.</div>`;
+    html += transformSection();
+    if (region) html += sec('region', 'Region', `<div class="mm-config-row"><button class="mm-tool" data-act="rflipx" title="Mirror left-right (F)">↔ Flip</button><button class="mm-tool" data-act="rflipy" title="Mirror top-bottom (Shift+F)">↕ Flip</button><button class="mm-tool" data-act="rrot" title="Turn 90° (R)">⟲ Turn</button></div>`);
+    html += sec('group', 'Group & layer', groupRow() + depthRow() + (ts.some((t) => STACKABLE.has(t.kind)) ? stackButtons() : ''));
+    showPanel(el, html);
+    el.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => configAction(b.dataset.act)));
+    bindGroupFields(el);
+    bindTransform(el);
+    bindDepth(el);
+    bindSections(el);
+    return;
+  }
   if (selection.kind === 'object') {
     const o = placed[selection.index], item = catalogItem(o);
     if (!o || !item) { selection = null; el.hidden = true; return; }
     const cfg = o.cfg || {};
     html += `<div class="mm-config-title">${item.name}<span>${o.cat === 'objects' ? 'object' : 'decoration'}</span></div>`;
-    html += `<div class="mm-config-row">${num('x', 'X', o.x)}${num('y', 'Y', o.y)}</div>`;
-    html += stackButtons();
+    html += actionBar();
+    let more = '';
     if (isTeleporter(item)) {
       const opts = teleporterTargets(o), sel = (dir) => `<label>${dir === 'up' ? 'Up (▲) to' : 'Down (▼) to'}<select class="mm-input" data-cfg="tp:${dir}"><option value="">Nothing</option>${opts.map(([v, t]) => `<option value="${v}"${o.tp?.[dir] === v ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
-      html += `<div class="mm-config-row">${sel('up')}</div><div class="mm-config-row">${sel('down')}</div>`;
-      html += `<div class="mm-config-sub">Links go both ways. In the game a teleporter works once you've touched the one you're going to.</div>`;
+      more += `<div class="mm-config-row">${sel('up')}</div><div class="mm-config-row">${sel('down')}</div>`;
+      more += `<div class="mm-config-sub">Links go both ways. In the game a teleporter works once you've touched the one you're going to.</div>`;
     }
     if (isCourseCheckpoint(item)) {
-      html += `<div class="mm-config-row"><label>Belongs to<select class="mm-input" data-cfg="link"><option value="">Any course</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
-      html += `<div class="mm-config-sub">Only counts during a run of ${o.course ? linkLabel(o.course).toLowerCase() : 'any course'}: dying in that run brings you back here. Outside a run it does nothing - a normal checkpoint sets where you respawn.</div>`;
-    } else if (LINKABLE(item)) html += `<div class="mm-config-row"><label>Course<select class="mm-input" data-cfg="link"><option value="">None</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
+      more += `<div class="mm-config-row"><label>Belongs to<select class="mm-input" data-cfg="link"><option value="">Any course</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
+      more += `<div class="mm-config-sub">The game's own course checkpoint, working exactly as in the game. "Belongs to" files it under that course.</div>`;
+    } else if (LINKABLE(item)) more += `<div class="mm-config-row"><label>Course<select class="mm-input" data-cfg="link"><option value="">None</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
     const zip = zipConfig(o, item);
-    if (item.upgradeBox) html += upgradeConfigHtml(o, num);
+    if (item.upgradeBox) more += upgradeConfigHtml(o, num);
     else if (zip) {
       const len = Math.hypot(...zip.end), ang = (Math.atan2(zip.end[1], zip.end[0]) * 180) / Math.PI;
-      html += `<div class="mm-config-sub">Track - drag the end node (8 directions, whole cells)</div>`;
-      html += `<div class="mm-config-row">${num('zipLen', 'Length', len, CELL)}${num('zipAng', 'Direction (°)', ang, 45)}</div>`;
-      html += `<div class="mm-config-row">${num('zipTime', 'Move time (s)', zip.time, 0.1)}${num('zipBack', 'Return time (s)', zip.backTime, 0.1)}</div>`;
-      html += `<div class="mm-config-row">${chk('zipAuto', 'Moves on its own', zip.auto)}</div>`;
-      if (zip.auto) html += `<div class="mm-config-row">${num('zipPauseReturn', 'Pause before returning (s)', zip.pauseReturn, 0.1)}${num('zipPauseMove', 'Pause before moving (s)', zip.pauseMove, 0.1)}</div>`;
-      else html += `<div class="mm-config-sub">Moves when touched, like the game's own. Tick "Moves on its own" to have it loop by itself.</div>`;
+      more += `<div class="mm-config-sub">Track - drag the end node (8 directions, whole cells)</div>`;
+      more += `<div class="mm-config-row">${num('zipLen', 'Length', len, CELL)}${num('zipAng', 'Direction (°)', ang, 45)}</div>`;
+      more += `<div class="mm-config-row">${num('zipTime', 'Move time (s)', zip.time, 0.1)}${num('zipBack', 'Return time (s)', zip.backTime, 0.1)}</div>`;
+      more += `<div class="mm-config-row">${chk('zipAuto', 'Moves on its own', zip.auto)}</div>`;
+      if (zip.auto) more += `<div class="mm-config-row">${num('zipPauseReturn', 'Pause before returning (s)', zip.pauseReturn, 0.1)}${num('zipPauseMove', 'Pause before moving (s)', zip.pauseMove, 0.1)}</div>`;
+      else more += `<div class="mm-config-sub">Moves when touched, like the game's own. Tick "Moves on its own" to have it loop by itself.</div>`;
       const building = platformEdit === selection.index, shaped = !!cfg.zip?.cells;
-      if (!shaped) html += `<div class="mm-config-row">${num('zipSpan', 'Platform length', zip.span, CELL)}</div>`;
-      html += `<div class="mm-config-row"><button class="mm-tool${building ? ' active' : ''}" data-act="platform">${building ? 'Done building' : 'Build platform (B)'}</button>${shaped ? '<button class="mm-tool" data-act="platformReset">Reset shape</button>' : ''}</div>`;
-      if (building) html += `<div class="mm-config-sub">Drag from empty space to add grate tiles, from a tile to remove them. Every tile hangs off the green root under the gear; cutting a piece off removes it.</div>`;
-      else if (shaped) html += `<div class="mm-config-sub">Built from ${zipShape(o, item).cells.size} grate tiles.</div>`;
+      if (!shaped) more += `<div class="mm-config-row">${num('zipSpan', 'Platform length', zip.span, CELL)}</div>`;
+      more += `<div class="mm-config-row"><button class="mm-tool${building ? ' active' : ''}" data-act="platform">${building ? 'Done building' : 'Build platform (B)'}</button>${shaped ? '<button class="mm-tool" data-act="platformReset">Reset shape</button>' : ''}</div>`;
+      if (building) more += `<div class="mm-config-sub">Drag from empty space to add grate tiles, from a tile to remove them. Every tile hangs off the green root under the gear; cutting a piece off removes it.</div>`;
+      else if (shaped) more += `<div class="mm-config-sub">Built from ${zipShape(o, item).cells.size} grate tiles.</div>`;
     } else {
-      html += `<div class="mm-config-row">${num('rot', 'Rotation (°) , .', cfg.rot || 0, 15)}${num('scale', 'Scale = -', cfg.scale || 1, 0.1)}</div>`;
-      if (item.stretch) html += `<div class="mm-config-row">${num('width', 'Width (tiles the sprite)', cfg.width || item.stretch.width, 16)}</div>`;
-      html += `<div class="mm-config-row">${chk('fx', 'Flip X (F)', cfg.fx)}${chk('fy', 'Flip Y', cfg.fy)}</div>`;
+      if (item.stretch) more += `<div class="mm-config-row">${num('width', 'Width (tiles the sprite)', cfg.width || item.stretch.width, 16)}</div>`;
     }
-    for (const [f, def] of Object.entries(item.fields || {})) html += `<div class="mm-config-row">${num('field:' + f, FIELD_LABELS[f] || f, cfg.fields?.[f] ?? def, 0.1)}</div>`;
+    if (isSizable(item)) {
+      const t = trigOf(o, item);
+      more += `<div class="mm-config-row">${num('trig:w', 'Trigger width', t.w, 16)}${num('trig:h', 'Trigger height', t.h, 16)}</div>`;
+      more += `<div class="mm-config-row">${num('trig:dx', 'Offset right', t.dx, 8)}${num('trig:dy', 'Offset up', t.dy, 8)}</div>`;
+      if (o.cfg?.trig) more += `<div class="mm-config-row"><button class="mm-tool" data-act="trigReset">Game's own size</button></div>`;
+      more += `<div class="mm-config-sub">${isLongFall(item) ? (item.name === 'Long fall start' ? 'Falling through this box starts the game\'s long fall: the player falls faster and survives the drop. Put a Long fall end where it lands.' : 'Falling through this box ends a long fall.') : 'Touching this box sets where the player respawns.'} Drag its edges on the map to size it.</div>`;
+    }
+    for (const [f, def] of Object.entries(item.fields || {})) more += `<div class="mm-config-row">${num('field:' + f, FIELD_LABELS[f] || f, cfg.fields?.[f] ?? def, 0.1)}</div>`;
+    html += sec('settings', item.upgradeBox ? 'Upgrade' : zip ? 'Zip mover' : 'Settings', more);
+    html += transformSection() + sec('group', 'Group & layer', groupRow() + depthRow() + stackButtons());
   } else if (selection.kind === 'base') {
     const o = baseObjects.find((x) => x.id === selection.id);
     if (!o || removedObjects.has(o.id)) { selection = null; el.hidden = true; return; }
     html += `<div class="mm-config-title">${o.kind === 'upgrade' ? boxKindName(o) : o.label}<span>level ${o.kind === 'upgrade' ? 'upgrade box' : 'object'}</span></div>`;
-    if (o.box) html += baseUpgradeHtml(o, num);
+    html += actionBar();
+    if (o.box) html += sec('settings', 'Upgrade', baseUpgradeHtml(o, num) + (o.box.door ? `<div class="mm-config-sub" style="display:block">Opens ${o.box.door.path.includes('Atom') ? 'the atom room\'s gate' : 'the door to the facility\'s lower section'} (the yellow line) - shut until this box is bought, in custom maps too.</div>` : ''));
+    html += transformSection() + sec('group', 'Group & layer', groupRow() + levelOrderRow() + stackButtons());
   } else if (selection.kind === 'blocks' || selection.kind === 'moss') {
     html += `<div class="mm-config-title">${selection.what}<span>${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'} - drag or arrow keys to move</span></div>`;
+    html += actionBar();
+    if (selection.kind === 'blocks') html += sec('group', 'Group', groupRow());
   } else if (selection.kind === 'decotiles') {
     html += `<div class="mm-config-title">Level decoration<span>${selection.cells.length} tile${selection.cells.length === 1 ? '' : 's'} · ${layerLabel(selection.layer)}</span></div>`;
   } else if (selection.kind === 'basecells') {
@@ -2050,6 +2732,7 @@ function renderConfig() {
     const p = sceneList?.items.find((x) => x.id === selection.id);
     if (!p || removedScene.has(p.id)) { selection = null; el.hidden = true; return; }
     html += `<div class="mm-config-title">${prettySprite(p.p.split('/').pop().replace(/ \(\d+\)$/, ''))}<span>level decoration</span></div>`;
+    html += actionBar() + transformSection() + sec('group', 'Group & layer', groupRow() + levelOrderRow() + stackButtons());
   } else if (selection.kind === 'gate') {
     const c = courseById(selection.course);
     if (selection.which === 'spawn') {
@@ -2074,42 +2757,131 @@ function renderConfig() {
     if (!t) { selection = null; el.hidden = true; return; }
     html += `<div class="mm-config-title">${t.tile}<span>${layerLabel(t.layer)}</span></div>`;
     html += `<div class="mm-config-thumb">${thumbHtml({ art: t.tile }, 48)}</div>`;
-    html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotL">⟲ Rotate</button><button class="mm-tool" data-act="rotR">Rotate ⟳</button></div>`;
-    html += `<div class="mm-config-row">${chk('fx', 'Flip X', t.fx)}${chk('fy', 'Flip Y', t.fy)}</div>`;
+    html += actionBar();
+    html += sec('transform', 'Transform', `<div class="mm-config-row"><button class="mm-tool" data-act="rotL">⟲ Rotate</button><button class="mm-tool" data-act="rotR">Rotate ⟳</button></div><div class="mm-config-row">${chk('fx', 'Flip X', t.fx)}${chk('fy', 'Flip Y', t.fy)}</div>`);
+    const g = layerGrid(t.layer).size, choices = (base?.art?.layers || []).filter((l) => l.size === g && !['moss', 'OvergrowthMoss', 'OOB areas'].includes(l.name)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    html += sec('group', 'Group & layer', groupRow() + `<div class="mm-config-row"><label>Game layer (back to front)<select class="mm-input" data-cfg="tilelayer">${choices.map((l) => `<option value="${l.name}"${l.name === t.layer ? ' selected' : ''}>${layerLabel(l.name)} (${l.order ?? 0})</option>`).join('')}</select></label></div>`);
+  } else if (selection.kind === 'csprite') {
+    const cs = csprites[selection.index];
+    if (!cs) { selection = null; el.hidden = true; return; }
+    html += cs.game ? `<div class="mm-config-title">Plant<span>${cs.game}</span></div>` : `<div class="mm-config-title">Image<span>${assetName(cs.image)}</span></div>`;
+    html += actionBar() + transformSection();
+    if (!cs.game) html += `<div class="mm-config-row"><label>Image<select class="mm-input" data-cs="image">${backgroundOptions(cs.image).replace(/<option value="level"[^>]*>[^<]*<\/option>/, '')}</select></label></div>`;
+    html += sec('group', 'Group & layer', groupRow() + depthRow() + stackButtons());
+  } else if (selection.kind === 'mtrig') {
+    const tg = triggers[selection.index];
+    if (!tg) { selection = null; el.hidden = true; return; }
+    const k = trigKind(tg), d = TRIGGER_KINDS[k] || TRIGGER_KINDS.media, esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const num = (f, label, v, step = 16) => `<label>${label}<input class="mm-input" type="number" step="${step}" data-trig="${f}" value="${v}"></label>`;
+    html += `<div class="mm-config-title">${d.label} trigger<span>${d.about}</span></div>`;
+    html += `<div class="mm-config-row"><label>Kind<select class="mm-input" data-trig="kind">${Object.entries(TRIGGER_KINDS).map(([v, x]) => `<option value="${v}"${v === k ? ' selected' : ''}>${x.label}</option>`).join('')}</select></label></div>`;
+    if (k === 'media') {
+      const bgv = !tg.background ? '' : tg.background === 'level' ? 'level' : tg.background.image;
+      html += `<div class="mm-config-row"><label>Music<select class="mm-input" data-trig="music">${musicOptions(tg.music || '', true)}</select></label></div>`;
+      html += `<div class="mm-config-row"><label>Background<select class="mm-input" data-trig="background">${backgroundOptions(bgv, true)}</select></label></div>`;
+      if (tg.background?.image) html += `<div class="mm-config-row"><label>Parallax<input class="mm-input" type="number" min="0" max="1" step="0.05" data-trig="parallax" value="${tg.background.parallax ?? 0.8}"></label><label>Scale<input class="mm-input" type="number" min="0.05" step="0.1" data-trig="scale" value="${tg.background.scale ?? 1}"></label></div>`;
+    }
+    if (GROUP_KINDS.has(k)) {
+      const all = [...new Set([...cellGroups.values(), ...[...WORLD_KINDS].flatMap((x) => listOfKind(x).map((i) => i.group))].filter(Boolean))].sort();
+      const m = groupMembers(tg.group || '');
+      html += `<div class="mm-config-row"><label>Group<input class="mm-input" type="text" list="mm-groups" data-trig="group" value="${esc(tg.group)}"><datalist id="mm-groups">${all.map((g) => `<option value="${esc(g)}">`).join('')}</datalist></label></div>`;
+      html += `<div class="mm-config-sub">${m.targets.length + m.cells.length ? `${m.targets.length} thing${m.targets.length === 1 ? '' : 's'} and ${m.cells.length} cell${m.cells.length === 1 ? '' : 's'} in it, outlined.` : 'Nothing is in this group yet - select things and give them this group.'}</div>`;
+    }
+    if (k === 'move') {
+      html += `<div class="mm-config-row">${num('dx', 'Right', tg.dx || 0)}${num('dy', 'Up', tg.dy || 0)}</div>`;
+      html += `<div class="mm-config-row">${num('time', 'Seconds', tg.time ?? 1, 0.1)}<label class="mm-check"><input type="checkbox" data-trig="back"${tg.back ? ' checked' : ''}> Back on leaving</label></div>`;
+    }
+    if (MARKER_KINDS.has(k)) html += `<div class="mm-config-row">${num('tx', 'Marker right', tg.tx || 0)}${num('ty', 'Marker up', tg.ty || 0)}</div><div class="mm-config-sub">The circle is where the player ends up.</div>`;
+    if (k === 'zoom') html += `<div class="mm-config-row">${num('size', 'Zoom (1 = normal, 2 = see twice as far)', tg.size || 1, 0.1)}</div>`;
+    if (k === 'message') html += `<div class="mm-config-row"><label>Text<textarea class="mm-input" rows="2" data-trig="text">${esc(tg.text)}</textarea></label></div><div class="mm-config-row">${num('seconds', 'Seconds on screen', tg.seconds ?? 3, 0.5)}</div>`;
+    if (k !== 'zoom' && k !== 'kill') html += `<div class="mm-config-row"><label class="mm-check"><input type="checkbox" data-trig="once"${tg.once ? ' checked' : ''}> Only the first time</label></div>`;
+    html += `<div class="mm-config-row"><label>Width<input class="mm-input" type="number" min="16" step="16" data-trig="w" value="${tg.w}"></label><label>Height<input class="mm-input" type="number" min="16" step="16" data-trig="h" value="${tg.h}"></label></div>`;
+  } else if (selection.kind === 'xspawn') {
+    html += `<div class="mm-config-title">Spawn ${selection.index + 2}<span>Q / E in game cycles the spawns</span></div>`;
+    html += actionBar() + transformSection();
   } else if (selection.kind === 'sign') {
     const sg = signs[selection.index];
     if (!sg) { selection = null; el.hidden = true; return; }
     const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
     html += `<div class="mm-config-title">Text<span>says anything, in the level's sign style</span></div>`;
+    html += actionBar();
     html += `<div class="mm-config-row"><label>Text<textarea class="mm-input" rows="2" data-sign="t">${esc(sg.t)}</textarea></label></div>`;
-    html += `<div class="mm-config-row"><label>Width<input class="mm-input" type="number" min="16" step="8" data-sign="w" value="${sg.w}"></label><label>Height<input class="mm-input" type="number" min="8" step="8" data-sign="h" value="${sg.h}"></label></div>`;
-    html += `<div class="mm-config-row"><label>Colour<input class="mm-input" type="color" data-sign="c" value="${sg.c || SIGN_COLOR}"></label><label>Rotation (°)<input class="mm-input" type="number" step="5" data-sign="r" value="${sg.r || 0}"></label></div>`;
+    html += `<div class="mm-config-row"><label>Colour<input class="mm-input" type="color" data-sign="c" value="${sg.c || SIGN_COLOR}"></label></div>`;
     html += `<div class="mm-config-sub">The text shrinks to fit its box, like the game's signs.</div>`;
-    html += stackButtons();
+    html += transformSection() + sec('group', 'Group & layer', groupRow() + depthRow() + stackButtons());
   } else if (selection.kind === 'fspike') {
     const f = freeSpikes[selection.index];
     if (!f) { selection = null; el.hidden = true; return; }
-    html += `<div class="mm-config-title">${{ spike: 'Spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[f.c]}<span>off the grid</span></div>`;
-    html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotFree">Rotate ⟳ (R)</button></div>`;
-    html += stackButtons();
+    html += `<div class="mm-config-title">${{ spike: 'Spike', dark: 'Dark spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[f.c]}<span>off the grid</span></div>`;
+    html += actionBar();
     html += `<div class="mm-config-sub">Placed with a finer snap than a cell. Drag it, or nudge it with the arrow keys.</div>`;
+    html += transformSection() + sec('group', 'Group & layer', groupRow() + depthRow() + stackButtons());
   } else if (selection.kind === 'cell') {
-    const sp = spikes.get(selection.k), kind = selection.vine ? 'Vine' : sp ? { spike: 'Spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[sp.c] : { ground: 'Ground', dark: 'Dark ground', blue: 'Blue block', orange: 'Orange block' }[blocks.get(selection.k)];
+    const sp = spikes.get(selection.k), kind = selection.vine ? 'Vine' : sp ? { spike: 'Spike', dark: 'Dark spike', blue: 'Blue spike', orange: 'Orange spike', true: 'True spike' }[sp.c] : { ground: 'Ground', dark: 'Dark ground', blue: 'Blue block', orange: 'Orange block' }[blocks.get(selection.k)];
     html += `<div class="mm-config-title">${kind}<span>cell ${selection.k}</span></div>`;
-    if (sp || selection.vine) html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotCell">Rotate ⟳ (R)</button></div>`;
+    html += actionBar();
+    if (sp || selection.vine) html += `<div class="mm-config-row"><button class="mm-tool" data-act="rotCell">⟳ Rotate (R)</button></div>`;
+    html += sec('group', 'Group', groupRow());
   } else {
     const { x0, y0, x1, y1 } = selection;
     html += `<div class="mm-config-title">Region<span>${x1 - x0 + 1} x ${y1 - y0 + 1} cells</span></div>`;
-    html += `<div class="mm-config-row"><button class="mm-tool" data-act="copy">Copy (Ctrl+C)</button><button class="mm-tool" data-act="delete">Delete</button></div>`;
-    html += `<div class="mm-config-row"><button class="mm-tool" data-act="rflipx" title="Mirror left-right (F)">Flip ↔</button><button class="mm-tool" data-act="rflipy" title="Mirror top-bottom (Shift+F)">Flip ↕</button><button class="mm-tool" data-act="rrot" title="Turn 90° (R)">Turn ⟲</button></div>`;
+    html += actionBar(true);
+    html += `<div class="mm-config-row"><button class="mm-tool" data-act="rflipx" title="Mirror left-right (F)">↔ Flip</button><button class="mm-tool" data-act="rflipy" title="Mirror top-bottom (Shift+F)">↕ Flip</button><button class="mm-tool" data-act="rrot" title="Turn 90° (R)">⟲ Turn</button></div>`;
     html += `<div class="mm-config-sub">Copying takes the level's own tiles too - paste them anywhere.</div>`;
   }
-  if (selection.kind !== 'region') html += `<div class="mm-config-row"><button class="mm-tool" data-act="delete">Delete (Del)</button></div>`;
-  el.innerHTML = html;
-  el.hidden = false;
+  if (!html.includes('mm-actions')) html = html.replace(/(<div class="mm-config-title"[^]*?<\/div>)/, '$1' + actionBar());
+  showPanel(el, html);
   el.querySelectorAll('[data-cfg]').forEach((inp) => inp.addEventListener('change', () => applyConfig(inp)));
   el.querySelectorAll('input').forEach((inp) => inp.addEventListener('keydown', (e) => e.stopPropagation()));
   el.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => configAction(b.dataset.act)));
+  bindGroupFields(el);
+  bindTransform(el);
+  bindDepth(el);
+  bindSections(el);
+  el.querySelectorAll('[data-cs]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => e.stopPropagation());
+    inp.addEventListener('change', async () => {
+      const cs = csprites[selection?.index];
+      if (!cs) return;
+      const f = inp.dataset.cs;
+      if (f === 'image') {
+        const v = await resolveMediaChoice('image', inp.value);
+        if (!v) { renderConfig(); return; }
+        pushUndo(); cs.image = v;
+      } else if (f === 'fx' || f === 'fy') { pushUndo(); cs[f] = inp.checked || undefined; }
+      else { const n = Number(inp.value); if (!Number.isFinite(n)) return; pushUndo(); cs[f] = f === 'scale' ? Math.max(0.05, n) : n; }
+      saveDraft(); renderConfig(); requestDraw();
+    });
+  });
+  el.querySelectorAll('[data-trig]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => e.stopPropagation());
+    inp.addEventListener('change', async () => {
+      const tg = triggers[selection?.index];
+      if (!tg) return;
+      const f = inp.dataset.trig;
+      if (f === 'kind') { pushUndo(); const n = newTrigger(inp.value, tg.x, tg.y); for (const x of Object.keys(tg)) if (!['x', 'y', 'w', 'h', 'once'].includes(x)) delete tg[x]; Object.assign(tg, n, { w: tg.w, h: tg.h }); }
+      else if (f === 'group' || f === 'text') { pushUndo(); tg[f] = inp.value; }
+      else if (f === 'once' || f === 'back') { pushUndo(); tg[f] = inp.checked || undefined; }
+      else if (f === 'music' || f === 'background') {
+        const v = await resolveMediaChoice(f === 'music' ? 'music' : 'image', inp.value);
+        if (v === null) { renderConfig(); return; }
+        pushUndo();
+        if (f === 'music') { if (v) tg.music = v; else delete tg.music; }
+        else if (!v) delete tg.background;
+        else tg.background = v === 'level' ? 'level' : { parallax: 0.8, scale: 1, ...(typeof tg.background === 'object' ? tg.background : {}), image: v };
+      } else {
+        const n = Number(inp.value);
+        if (!Number.isFinite(n)) return;
+        pushUndo();
+        if (f === 'w' || f === 'h') tg[f] = Math.max(16, n);
+        else if (['dx', 'dy', 'tx', 'ty', 'time', 'size', 'seconds'].includes(f)) tg[f] = f === 'size' ? Math.max(0.2, n) : f === 'time' || f === 'seconds' ? Math.max(0, n) : n;
+        else if (typeof tg.background === 'object') tg.background = { ...tg.background, [f]: f === 'parallax' ? Math.min(1, Math.max(0, n)) : Math.max(0.05, n) };
+      }
+      saveDraft();
+      renderConfig();
+      requestDraw();
+    });
+  });
   el.querySelectorAll('[data-sign]').forEach((inp) => {
     inp.addEventListener('keydown', (e) => e.stopPropagation());
     inp.addEventListener(inp.tagName === 'TEXTAREA' ? 'input' : 'change', () => {
@@ -2132,6 +2904,18 @@ function applyConfig(inp) {
   if (id.startsWith('bu:')) return applyBaseUpgrade(id.slice(3), inp.value);
   if (id.startsWith('tp:')) return applyTeleport(id.slice(3), inp.value);
   if (id === 'link' || id === 'gatecourse' || id.startsWith('reward:')) return applyCourseConfig(id, inp.value);
+  if (id === 'tilelayer') {
+    const t = tiles.get(selection.key);
+    if (!t || t.layer === inp.value) return;
+    pushUndo();
+    const c = tileCenter(t.layer, selection.key), nk = tileKeyAt(inp.value, c.x, c.y), g = cellGroups.get(selection.key);
+    tiles.delete(selection.key);
+    tiles.set(nk, { ...t, layer: inp.value });
+    if (g) { cellGroups.delete(selection.key); cellGroups.set(nk, g); }
+    selection = { ...selection, key: nk };
+    saveDraft(); renderConfig(); requestDraw();
+    return;
+  }
   const v = inp.type === 'checkbox' ? inp.checked : Number(inp.value);
   if (inp.type !== 'checkbox' && !Number.isFinite(v)) return;
   pushUndo();
@@ -2142,6 +2926,7 @@ function applyConfig(inp) {
     const o = placed[selection.index], cfg = { ...(o.cfg || {}) };
     if (id === 'x' || id === 'y') o[id] = v;
     else if (id.startsWith('field:')) cfg.fields = { ...cfg.fields, [id.slice(6)]: v };
+    else if (id.startsWith('trig:')) { const k = id.slice(5); cfg.trig = { ...trigOf(o), [k]: k === 'w' || k === 'h' ? Math.max(8, v) : v }; }
     else if (id.startsWith('zip')) {
       const cur = zipConfig(o), z = { ...cfg.zip };
       const len = Math.hypot(...cur.end), ang = Math.atan2(cur.end[1], cur.end[0]);
@@ -2244,7 +3029,10 @@ function configAction(act) {
     requestDraw();
     return;
   }
+  if (act === 'trigReset') { const o = placed[selection?.index]; if (o?.cfg?.trig) { pushUndo(); const c = { ...o.cfg }; delete c.trig; o.cfg = c; saveDraft(); renderConfig(); requestDraw(); } return; }
+  if (act === 'hints') { showHints = !showHints; try { localStorage.setItem('mapMakerHints', showHints ? '1' : '0'); } catch { /* private window */ } return renderConfig(); }
   if (act === 'copy') return copySelection();
+  if (act === 'dup') return duplicateSelection();
   if (act === 'rotCell') { hover = cellOf(...(() => { const [cx, cy] = unkey(selection.k); const w = cellWorld(cx, cy); return [w.x + 1, w.y + 1]; })()); return rotateSpikeAtHover(); }
   if (selection?.kind !== 'tile') return;
   const t = tiles.get(selection.key);
@@ -2255,18 +3043,70 @@ function configAction(act) {
   requestDraw();
 }
 
+// Each placed long-fall start, joined to the end below it (or a hint to place one).
+function drawLongFallLinks() {
+  const starts = placed.filter((o) => catalogItem(o)?.name === 'Long fall start'), ends = placed.filter((o) => catalogItem(o)?.name === 'Long fall end');
+  for (const st of starts) {
+    const end = ends.filter((e) => e.y < st.y && Math.abs(e.x - st.x) < 1500).sort((a, b) => b.y - a.y)[0];
+    const a = toScreen(st.x, st.y);
+    ctx.save();
+    ctx.strokeStyle = COLORS.fall; ctx.lineWidth = 1.5; ctx.setLineDash([4, 6]);
+    ctx.lineDashOffset = CALM ? 0 : (performance.now() / 50) % 20;
+    ctx.globalAlpha = 0.8;
+    if (end) { const b = toScreen(end.x, end.y); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+    else if (cam.scale >= 0.1) { ctx.font = '600 11px sans-serif'; ctx.fillStyle = COLORS.fall; ctx.textAlign = 'center'; ctx.fillText('↓ place a Long fall end where it lands', a.x, a.y + trigOf(st).h / 2 * cam.scale + 16); }
+    ctx.restore();
+  }
+}
+function drawDoorLinks() {
+  for (const t of targetsOf(selection)) {
+    const o = t.kind === 'base' && levelThing(t), door = o?.box?.door;
+    if (!door) continue;
+    const a = toScreen(o.x, o.y), b = toScreen(door.x, door.y);
+    ctx.save();
+    ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 5]);
+    ctx.lineDashOffset = CALM ? 0 : -(performance.now() / 40) % 22;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.restore();
+    drawBadge('toggle', b.x, b.y, '#f0c040', 'OPENS THIS DOOR');
+  }
+}
 function drawSelection() {
+  drawLongFallLinks();
   if (!selection) return;
+  drawDoorLinks();
+  const tsel = selection.kind === 'mtrig' && triggers[selection.index];
+  if (tsel && GROUP_KINDS.has(trigKind(tsel)) && tsel.group) {
+    const m = groupMembers(tsel.group);
+    ctx.save();
+    ctx.strokeStyle = TRIGGER_KINDS[trigKind(tsel)].color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([2, 3]);
+    m.targets.forEach(drawTarget);
+    if (m.cells.length) outlineCells(m.cells, cellRect);
+    ctx.restore();
+  }
   ctx.save();
   ctx.strokeStyle = COLORS.start;
   ctx.lineWidth = 1.5;
   ctx.setLineDash([5, 3]);
-  if (selection.kind === 'region') {
-    const a = cellRect(selection.x0, selection.y1), b = cellRect(selection.x1, selection.y0);
-    ctx.fillStyle = 'rgba(65, 248, 141, 0.08)';
+  if (!CALM) {
+    const now = performance.now();
+    ctx.lineDashOffset = -(now / 60) % 16;
+    if (!drawSelection.timer) drawSelection.timer = setTimeout(() => { drawSelection.timer = 0; if (selection) requestDraw(); }, 120);
+  }
+  for (const t of targetsOf(selection)) {
+    if (t.kind !== 'region') { drawTarget(t); continue; }
+    const a = cellRect(t.x0, t.y1), b = cellRect(t.x1, t.y0);
+    ctx.save();
+    ctx.fillStyle = 'rgba(65, 248, 141, 0.05)';
     ctx.fillRect(a.x, a.y, b.x + b.w - a.x, b.y + b.h - a.y);
+    ctx.globalAlpha = 0.35;
     ctx.strokeRect(a.x, a.y, b.x + b.w - a.x, b.y + b.h - a.y);
-  } else drawTarget(selection);
+    ctx.restore();
+    const cells = regionContent(t);
+    if (cells.length) { ctx.save(); ctx.setLineDash([]); ctx.lineWidth = 2; outlineCells(cells, (x, y) => cellRect(x, y)); ctx.stroke(); ctx.restore(); }
+  }
   if (selection.kind === 'object') {
     const o = placed[selection.index], h = o && zipHandle(o);
     if (h) {
@@ -2282,8 +3122,8 @@ function drawSelection() {
 
 function editorState() {
   saveDraft();
-  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress } = draft;
-  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, courses: cs, baseEdits: be, spawn, player, ownProgress };
+  const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, triggers: tg, csprites: cs2, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, movedScene: ms, movedObjects: mob, levelOrder: lo, levelTf: ltf, levelGroups: lg, courses: cs, baseEdits: be, spawn, player, ownProgress, music, background, assets, stageEdits, cellGroups: cg, hiddenGroups, xspawns: xs } = draft;
+  return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, triggers: tg, csprites: cs2, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, movedScene: ms, movedObjects: mob, levelOrder: lo, levelTf: ltf, levelGroups: lg, courses: cs, baseEdits: be, spawn, player, ownProgress, music, background, assets, stageEdits, cellGroups: cg, hiddenGroups, xspawns: xs };
 }
 
 async function readMapFile(file) {
@@ -2336,7 +3176,7 @@ async function openMap(map, label, installedId = null) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
   pushUndo();
-  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] }, st);
+  Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], triggers: [], csprites: [], xspawns: [], cellGroups: {}, hiddenGroups: [], music: undefined, background: undefined, stageEdits: undefined, courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], movedScene: {}, movedObjects: {}, levelOrder: {}, levelTf: {}, levelGroups: {} }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
   localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   loadDraft();
@@ -2345,6 +3185,7 @@ async function openMap(map, label, installedId = null) {
   saveDraft();
   syncBaseUi();
   draft.savedId = installedId && installedId !== TEST_MAP_ID ? installedId : null;
+  if (installedId && window.__TAURI__) fetchInstalledAssets(installedId).then(requestDraw);
   draft.savedAt = null;
   saveDraft();
   syncSaveState();
@@ -2387,6 +3228,38 @@ function autoSpikeTurn(cx, cy) {
 }
 
 const PLATE = { TL: 56, T: 57, TR: 58, L: 63, C: 64, R: 65, BL: 70, B: 71, BR: 72 };
+const PLATE3 = { TL: 0, T: 1, TR: 2, L: 3, C: 4, R: 5, BL: 6, B: 7, BR: 8 };
+// The level's other block tilesets, each autotiled on its own game tilemap like ground is.
+const ASSET_PLATE = (tl, l, bl, bar) => ({ TL: tl, T: tl + 1, TR: tl + 2, L: l, C: l + 1, R: l + 2, BL: bl, B: bl + 1, BR: bl + 2, ...(bar ? { h: [bar, bar + 1, bar + 2] } : {}) });
+const BLOCK_SETS = {
+  panel: { label: 'Panel', group: 'Solid', layer: 'ground', family: 'ground1_tileset_', plate: PANEL_SET, thumb: 'ground1_tileset_6', color: '#55584f' },
+  darkpanel: { label: 'Dark panel', group: 'Solid', layer: 'ground', family: 'dark_ground_tileset_', plate: PANEL_SET, thumb: 'dark_ground_tileset_6', color: '#3a3c40' },
+  grate: { label: 'Grate', group: 'Solid', layer: 'ground', family: 'gril_tileset_', plate: GRATE_SET, thumb: 'gril_tileset_0', color: '#5d6160' },
+  plate: { label: 'Plate', group: 'Solid', layer: 'ground', family: 'TILE V2 Tileset_', plate: PLATE3, thumb: 'TILE V2 Tileset_4', color: '#50534c' },
+  floorplate: { label: 'Floor plate', group: 'Solid', layer: 'ground', family: 'FLOOR V2 Tileset_', plate: PLATE3, thumb: 'FLOOR V2 Tileset_1', color: '#50534c' },
+  lightplate: { label: 'Light plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(241, 253, 265, 186), thumb: 'Asset_Sheet_254', color: '#6a6c68' },
+  lightfloor: { label: 'Light floor plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(192, 211, 226, 186), thumb: 'Asset_Sheet_193', color: '#6a6c68' },
+  darkplate: { label: 'Dark plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(238, 250, 262, 235), thumb: 'Asset_Sheet_251', color: '#35373a' },
+  darkfloor: { label: 'Dark floor plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(189, 207, 223, 235), thumb: 'Asset_Sheet_190', color: '#35373a' },
+  blueplate: { label: 'Blue plate', group: 'Colour swap', layer: 'blueBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(229, 244, 256, 220), thumb: 'Asset_Sheet_245', color: COLORS.blue },
+  bluefloor: { label: 'Blue floor plate', group: 'Colour swap', layer: 'blueBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(180, 196, 214, 220), thumb: 'Asset_Sheet_181', color: COLORS.blue },
+  orangeplate: { label: 'Orange plate', group: 'Colour swap', layer: 'orangeBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(232, 247, 259, 203), thumb: 'Asset_Sheet_248', color: COLORS.orange },
+  orangefloor: { label: 'Orange floor plate', group: 'Colour swap', layer: 'orangeBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(183, 200, 217, 203), thumb: 'Asset_Sheet_184', color: COLORS.orange },
+  breakable: { label: 'Breakable ground', group: 'Overgrowth', layer: 'OvergrowthDestroyedGround', family: 'ground1_tileset_', plate: PLATE, thumb: 'ground1_tileset_59', color: '#6b5d48' },
+  illusory: { label: 'Illusory wall', group: 'Walk-through', layer: 'Ilusorywalls', family: 'ground1_tileset_', plate: PLATE, thumb: 'ground1_tileset_59', color: 'rgba(74, 77, 68, 0.55)' },
+  bgwall: { label: 'Background wall', group: 'Walk-through', layer: 'Background', family: 'TILE V2 Tileset_', plate: PLATE3, thumb: 'TILE V2 Tileset_4', color: '#26282b' },
+  bgfloor: { label: 'Background floor plate', group: 'Walk-through', layer: 'Background', family: 'FLOOR V2 Tileset_', plate: PLATE3, thumb: 'FLOOR V2 Tileset_1', color: '#26282b' },
+  bgplate: { label: 'Background dark plate', group: 'Walk-through', layer: 'Background', family: 'Asset_Sheet_', plate: ASSET_PLATE(238, 250, 262, 235), thumb: 'Asset_Sheet_251', color: '#1d1e21' },
+  bglight: { label: 'Background ground', group: 'Walk-through', layer: 'Background', family: 'ground1_tileset_', plate: PLATE, thumb: 'ground1_tileset_59', color: '#2c2e2a' },
+  bgdark: { label: 'Dark background ground', group: 'Walk-through', layer: 'Background', family: 'dark_ground_tileset_', plate: PLATE, thumb: 'dark_ground_tileset_59', color: '#1d1e21' },
+};
+const blockName = (kind) => BLOCK_NAMES[kind] || BLOCK_SETS[kind]?.label || 'Blocks';
+function blockArt(kind, cx, cy) {
+  if (isGround(kind)) return groundTile(cx, cy, kind === 'dark');
+  const set = BLOCK_SETS[kind];
+  if (set) return base?.art ? plateTile(set.layer, set.family, set.plate, (x, y) => blocks.get(key(x, y)) === kind, cx, cy) : null;
+  return colouredTile(kind, cx, cy);
+}
 const isGround = (kind) => kind === 'ground' || kind === 'dark';
 
 function groundTile(cx, cy, dark = false) {
@@ -2409,6 +3282,9 @@ function plateTile(layer, family, plate, solid, cx, cy) {
   const n = solid(cx, cy + 1), e = solid(cx + 1, cy), s = solid(cx, cy - 1), w = solid(cx - 1, cy);
   const name = (piece) => family + plate[piece];
   const id = [1, 0, 0, 1];
+  if (!n && !e && !s && !w && plate.single != null) return { layer, tile: family + plate.single, matrix: id };
+  if (plate.v && (n || s) && !e && !w) return { layer, tile: family + plate.v[!n ? 0 : !s ? 2 : 1], matrix: id };
+  if (plate.h && (e || w) && !n && !s) return { layer, tile: family + plate.h[!w ? 0 : !e ? 2 : 1], matrix: id };
   if ((n || s) && (e || w)) {
     const row = !n ? 'T' : !s ? 'B' : '', col = !w ? 'L' : !e ? 'R' : '';
     return { layer, ...usedPiece(layer, family, plate, row + col || 'C') };
@@ -2441,24 +3317,31 @@ function drawGroundArt(cx, cy, art) {
   return true;
 }
 
+function objectTransformJson(cfg) {
+  const out = {}, X = (cfg.scale || 1) * (cfg.sx || 1), Y = (cfg.scale || 1) * (cfg.sy || 1);
+  if (cfg.rot) out.rotation = cfg.rot;
+  if (X !== 1 || Y !== 1 || cfg.fx || cfg.fy) out.scale = [X * (cfg.fx ? -1 : 1), Y * (cfg.fy ? -1 : 1)];
+  if (cfg.alpha != null && cfg.alpha !== 1) out.alpha = cfg.alpha;
+  return out;
+}
 function cloneConfig(o, item) {
   const cfg = o.cfg || {}, out = {};
   if (item.upgradeBox) {
     const u = upgradeConfig(o);
-    return { ...(isLinked(o.course) ? { course: o.course } : {}), upgrade: { id: o.uid || 'box' + Math.round(o.x) + '_' + Math.round(o.y), kind: u.kind, label: u.label || (u.kind === 'omniDash' ? BOX_TEXT.omniDash.name : ''), currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } };
+    return { ...objectTransformJson(cfg), ...(isLinked(o.course) ? { course: o.course } : {}), upgrade: { id: o.uid || 'box' + Math.round(o.x) + '_' + Math.round(o.y), kind: u.kind, label: u.label || (u.kind === 'omniDash' ? BOX_TEXT.omniDash.name : ''), currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } };
   }
   if (item.worldScale) {
     const S = item.worldScale * (cfg.scale || 1);
-    return { absolute: true, rotation: cfg.rot || 0, scale: [S * (cfg.fx ? -1 : 1), S * (cfg.fy ? -1 : 1)], tint: [1, 1, 1] };
+    return { absolute: true, rotation: cfg.rot || 0, scale: [S * (cfg.sx || 1) * (cfg.fx ? -1 : 1), S * (cfg.sy || 1) * (cfg.fy ? -1 : 1)], tint: [1, 1, 1], ...(cfg.alpha != null && cfg.alpha !== 1 ? { alpha: cfg.alpha } : {}) };
   }
   if (item.stretch && cfg.width && cfg.width !== item.stretch.width) out.width = cfg.width;
-  if (cfg.rot) out.rotation = cfg.rot;
-  if ((cfg.scale && cfg.scale !== 1) || cfg.fx || cfg.fy) out.scale = [(cfg.scale || 1) * (cfg.fx ? -1 : 1), (cfg.scale || 1) * (cfg.fy ? -1 : 1)];
+  Object.assign(out, objectTransformJson(cfg));
   if (cfg.fields && Object.keys(cfg.fields).length) out.fields = cfg.fields;
   const zip = item.zip && cfg.zip ? zipConfig(o, item) : null;
   if (zip) out.zip = { end: zip.end, time: zip.time, backTime: zip.backTime, size: zip.size, ...(zip.auto ? { auto: true, pauseMove: zip.pauseMove, pauseReturn: zip.pauseReturn } : {}), ...(cfg.zip?.cells ? { rects: platformRects(zipShape(o, item)) } : {}) };
   if (isLinked(o.course)) out.course = o.course;
   if (isCourseCheckpoint(item)) out.courseCheckpoint = true;
+  if (isSizable(item) && cfg.trig) out.trigger = { w: cfg.trig.w, h: cfg.trig.h, dx: cfg.trig.dx, dy: cfg.trig.dy };
   if (isTeleporter(item)) {
     const ref = (r) => { const t = teleportTarget(r); return t ? (t.uid ? { uid: t.uid } : { path: t.path, x: t.x, y: t.y }) : null; };
     const zone = baseOn() ? Number(String(zoneAt(o.x, o.y)).replace(/\D+/g, '')) || 1 : 1;
@@ -2504,7 +3387,40 @@ function effectiveGates(area = exportArea()) {
   return { start, end };
 }
 
+// Stage edits carry their state; the other state's stage edits are built from where they're kept.
 function buildOverlay() {
+  const map = buildOverlayCore(), objs = map.groups[0].objects;
+  const pos = (o) => (o.type === 'hide' ? { x: o.srcX, y: o.srcY } : { x: o.x, y: o.y });
+  const tag = (o, st) => (o.type !== 'modify' && o.x !== undefined || o.type === 'hide') && inStage(pos(o).x, pos(o).y) ? { ...o, state: st } : null;
+  for (let i = 0; i < objs.length; i++) { const t = tag(objs[i], draft.baseState); if (t) objs[i] = t; }
+  const other = otherState(draft.baseState), kept = draft.stageEdits?.[other];
+  if (kept) {
+    const snap = snapshot();
+    takeStageEdits();
+    putStageEdits(kept);
+    const theirs = buildOverlayCore().groups[0].objects;
+    applyState(JSON.parse(snap));
+    saveDraft();
+    for (const o of theirs) { const t = tag(o, other); if (t) objs.push(t); }
+  }
+  if (objs.some((o) => o.state)) map.stages = true;
+  return withGroups(map);
+}
+// Group ids onto the exported objects: placed things carry theirs; tiles take their cell's.
+function withGroups(map) {
+  const objs = map.groups[0].objects, origin = baseOn() ? { x: 0, y: 0 } : cellWorld(0, 0);
+  for (const o of objs) {
+    if (o.group || !(o.type === 'tile' || o.type === 'ground' || o.type === 'coloredGround' || o.type === 'trueSpike')) continue;
+    const k = o.cellX !== undefined ? key(o.cellX, o.cellY) : (() => { const c = cellOf(o.x + origin.x, o.y + origin.y); return key(c.cx, c.cy); })();
+    const g = cellGroups.get(k);
+    if (g && (blocks.has(k) || spikes.has(k))) o.group = g;
+  }
+  const used = new Set(objs.map((o) => o.group).filter(Boolean));
+  const hidden = (draft.hiddenGroups || []).filter((g) => used.has(g));
+  if (hidden.length) map.hiddenGroups = hidden;
+  return map;
+}
+function buildOverlayCore() {
   const at = (k) => { const [cx, cy] = unkey(k); const w = cellWorld(cx, cy); return { x: w.x + CELL / 2, y: w.y + CELL / 2 }; };
   const objects = [];
   removed.forEach((k) => objects.push({ type: 'erase', ...at(k) }));
@@ -2517,7 +3433,14 @@ function buildOverlay() {
     const bar = rk.lastIndexOf('|'), layerName = rk.slice(0, bar), [gx, gy] = unkey(rk.slice(bar + 1)), g = layerGrid(layerName);
     objects.push({ type: 'erase', tilemap: layerName, x: g.ox + (gx + 0.5) * g.size, y: g.oy + (gy + 0.5) * g.size });
   });
-  for (const p of sceneList?.items || []) if (p.id && removedScene.has(p.id)) objects.push({ type: 'hide', path: p.p, srcX: p.x, srcY: p.y, rendererOnly: true });
+  for (const p of sceneList?.items || []) if (p.id && removedScene.has(p.id)) objects.push({ type: 'hide', path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y, rendererOnly: true });
+  // The level's own things, moved: the game moves the real object by the same amount.
+  for (const o of baseObjects) { const d = movedObjects.get(o.id); if (d && !removedObjects.has(o.id)) objects.push({ type: 'move', path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y, dx: d[0], dy: d[1] }); }
+  for (const p of sceneList?.items || []) { const d = p.id && movedScene.get(p.id); if (d && !removedScene.has(p.id)) objects.push({ type: 'move', path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y, dx: d[0], dy: d[1] }); }
+  const levelAt = (k) => { if (k.startsWith('o:')) { const o = baseObjects.find((x) => x.id === k.slice(2)); return o && !removedObjects.has(o.id) ? { path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y } : null; } const p = sceneList?.items.find((x) => x.id === k); return p && !removedScene.has(p.id) ? { path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y } : null; };
+  for (const [k, tf] of levelTf) { const at = levelAt(k); if (at) objects.push({ type: 'transform', ...at, rotation: tf.rot || 0, scale: [(tf.scale || 1) * (tf.sx || 1) * (tf.fx ? -1 : 1), (tf.scale || 1) * (tf.sy || 1) * (tf.fy ? -1 : 1)] }); }
+  for (const [k, n] of levelOrder) { const at = levelAt(k); if (at) objects.push({ type: 'order', ...at, delta: n }); }
+  for (const [k, g] of levelGroups) { const at = levelAt(k); if (at) objects.push({ type: 'group', ...at, group: g }); }
   for (const id of Object.keys(draft.baseEdits || {})) {
     const o = baseObjects.find((x) => x.id === id);
     if (!o || removedObjects.has(id)) continue;
@@ -2526,7 +3449,7 @@ function buildOverlay() {
   }
   blocks.forEach((kind, k) => {
     const [cx, cy] = unkey(k);
-    const art = isGround(kind) && groundTile(cx, cy, kind === 'dark');
+    const art = (isGround(kind) || BLOCK_SETS[kind]) && blockArt(kind, cx, cy);
     if (art) objects.push({ type: 'tile', tilemap: art.layer, tileName: art.tile, ...at(k), matrix: art.matrix, ...(art.spriteFrom ? { spriteFrom: art.spriteFrom } : {}) });
     else if (isGround(kind)) objects.push({ type: 'ground', ...at(k) });
     else {
@@ -2536,8 +3459,10 @@ function buildOverlay() {
   });
   mossCells.forEach((_, k) => { const c = mossCenter(k); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', x: c.x, y: c.y, matrix: [1, 0, 0, 1] }); });
   const ranks = stackRank();
-  for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f), order: ranks.get(f) });
-  for (const sg of signs) objects.push({ ...signJson(sg), order: ranks.get(sg) });
+  for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f), order: ranks.get(f), ...(f.behind ? { behind: true, ...(f.depth === 2 ? { depth: 2 } : {}) } : {}), ...(f.group ? { group: f.group } : {}) });
+  for (const sg of signs) objects.push({ ...signJson(sg), order: ranks.get(sg), ...(sg.behind ? { behind: true, ...(sg.depth === 2 ? { depth: 2 } : {}) } : {}), ...(sg.group ? { group: sg.group } : {}) });
+  for (const tg of triggers) objects.push(triggerJson(tg));
+  for (const cs of csprites) objects.push({ ...customSpriteJson(cs), order: ranks.get(cs), ...(cs.behind ? { behind: true, ...(cs.depth === 2 ? { depth: 2 } : {}) } : {}), ...(cs.group ? { group: cs.group } : {}) });
   spikes.forEach((sp, k) => {
     const [cx, cy] = unkey(k);
     if (sp.c === 'true') { objects.push(trueSpikeJson(sp, cx, cy, at(k))); return; }
@@ -2550,11 +3475,11 @@ function buildOverlay() {
   });
   tiles.forEach((t, k) => {
     const c = tileCenter(t.layer, k);
-    objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, x: c.x, y: c.y, matrix: tileMatrix(t) });
+    objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, x: c.x, y: c.y, matrix: tileMatrix(t), ...(cellGroups.get(k) ? { group: cellGroups.get(k) } : {}) });
   });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), order: ranks.get(o), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), order: ranks.get(o), ...(o.behind ? { behind: true, ...(o.depth === 2 ? { depth: 2 } : {}) } : {}), ...(o.group ? { group: o.group } : {}), ...cloneConfig(o, item) });
   }
 
   const full = completeCourses(), first = full[0], hasGates = !!first;
@@ -2570,11 +3495,14 @@ function buildOverlay() {
     overlay: true,
     baseState: draft.baseState,
     ...(!draft.ownProgress ? { player: draft.player } : {}),
+    music: draft.music || 'level',
+    background: backgroundJson(draft.background),
     editor: editorState(),
     groups: [{
       startX: r((hasGates ? first.start : spawn).x), startY: r((hasGates ? first.start : spawn).y),
       endX: r((hasGates ? first.end : spawn).x), endY: r((hasGates ? first.end : spawn).y),
       ...(keepSpawn ? { keepSpawn: true } : { spawnX: r(spawn.x), spawnY: r(spawn.y) }),
+      ...(xspawns.length ? { spawns: xspawns.map((s) => ({ x: r(s.x), y: r(s.y) })) } : {}),
       gates: hasGates,
       reward: first?.reward || { currency: 'Cash', amount: 0 },
       courses: full.map((c) => courseJson(c)),
@@ -2585,6 +3513,9 @@ function buildOverlay() {
 
 function buildMap() {
   if (baseOn()) return buildOverlay();
+  return withGroups(buildCustomMap());
+}
+function buildCustomMap() {
   const area = exportArea();
   if (!area) throw new Error('Place something first, or import the base map.');
   const gates = effectiveGates(area);
@@ -2608,7 +3539,7 @@ function buildMap() {
   const sorted = [...cells].map(([k, v]) => [unkey(k), v]).sort((a, b) => a[0][1] - b[0][1] || a[0][0] - b[0][0]);
   for (const [[cx, cy], v] of sorted) {
     const cellX = cx, cellY = cy;
-    const art = isGround(v.t) && groundTile(cx, cy, v.t === 'dark');
+    const art = (isGround(v.t) || BLOCK_SETS[v.t]) && blockArt(v.t, cx, cy);
     if (art) objects.push({ type: 'tile', tilemap: art.layer, tileName: art.tile, cellX, cellY, matrix: art.matrix, ...(art.spriteFrom ? { spriteFrom: art.spriteFrom } : {}) });
     else if (isGround(v.t)) objects.push({ type: 'ground', cellX, cellY });
     else if (v.t === 'blue' || v.t === 'orange') {
@@ -2620,14 +3551,17 @@ function buildMap() {
   if (baseOn()) for (const o of baseObjects) {
     const c = cellOf(o.x, o.y);
     if (removedObjects.has(o.id) || !inArea(c.cx, c.cy)) continue;
-    objects.push({ type: 'clone', path: o.path, srcX: o.x, srcY: o.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y) });
+    const door = o.box?.door;
+    objects.push({ type: 'clone', path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), ...(door ? { door: door.path } : {}) });
+    // The door this box opens comes along, shut until the box is bought.
+    if (door && !objects.some((x) => x.type === 'clone' && x.path === door.path)) objects.push({ type: 'clone', path: door.path, srcX: door.x, srcY: door.y, x: Math.round(door.x - origin.x), y: Math.round(door.y - origin.y) });
   }
   const rel = (p) => ({ x: Math.round(p.x - origin.x), y: Math.round(p.y - origin.y) });
   for (const [k, v] of vineCells) {
     const [cx, cy] = unkey(k);
     objects.push({ type: 'tile', tilemap: v.layer, tileName: v.tile, cellX: cx, cellY: cy, matrix: v.matrix });
   }
-  tiles.forEach((t, k) => objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, ...rel(tileCenter(t.layer, k)), matrix: tileMatrix(t) }));
+  tiles.forEach((t, k) => objects.push({ type: 'tile', tilemap: tilemapName(t.layer), tileName: t.tile, ...rel(tileCenter(t.layer, k)), matrix: tileMatrix(t), ...(cellGroups.get(k) ? { group: cellGroups.get(k) } : {}) }));
   mossCells.forEach((_, k) => objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', ...rel(mossCenter(k)), matrix: [1, 0, 0, 1] }));
   spikes.forEach((sp, k) => {
     if (sp.c !== 'true') return;
@@ -2635,11 +3569,13 @@ function buildMap() {
     objects.push(trueSpikeJson(sp, cx, cy, { x: Math.round(w.x + CELL / 2 - origin.x), y: Math.round(w.y + CELL / 2 - origin.y) }));
   });
   const ranks = stackRank();
-  for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f, origin.x, origin.y), order: ranks.get(f) });
-  for (const sg of signs) objects.push({ ...signJson(sg, origin.x, origin.y), order: ranks.get(sg) });
+  for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f, origin.x, origin.y), order: ranks.get(f), ...(f.behind ? { behind: true, ...(f.depth === 2 ? { depth: 2 } : {}) } : {}), ...(f.group ? { group: f.group } : {}) });
+  for (const sg of signs) objects.push({ ...signJson(sg, origin.x, origin.y), order: ranks.get(sg), ...(sg.behind ? { behind: true, ...(sg.depth === 2 ? { depth: 2 } : {}) } : {}), ...(sg.group ? { group: sg.group } : {}) });
+  for (const tg of triggers) objects.push(triggerJson(tg, origin.x, origin.y));
+  for (const cs of csprites) objects.push({ ...customSpriteJson(cs, origin.x, origin.y), order: ranks.get(cs), ...(cs.behind ? { behind: true, ...(cs.depth === 2 ? { depth: 2 } : {}) } : {}), ...(cs.group ? { group: cs.group } : {}) });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: ranks.get(o), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: ranks.get(o), ...(o.behind ? { behind: true, ...(o.depth === 2 ? { depth: 2 } : {}) } : {}), ...(o.group ? { group: o.group } : {}), ...cloneConfig(o, item) });
   }
 
   return {
@@ -2650,11 +3586,14 @@ function buildMap() {
     customImages: [],
     levelOrigin: [origin.x, origin.y],
     ...(!draft.ownProgress ? { player: draft.player } : {}),
+    music: draft.music || 'level',
+    background: backgroundJson(draft.background),
     editor: editorState(),
     groups: [{
       startX: Math.round((hasGates ? gates.start : spawn).x - origin.x), startY: Math.round((hasGates ? gates.start : spawn).y - origin.y),
       endX: Math.round((hasGates ? gates.end : spawn).x - origin.x), endY: Math.round((hasGates ? gates.end : spawn).y - origin.y),
       spawnX: Math.round(spawn.x - origin.x), spawnY: Math.round(spawn.y - origin.y),
+      ...(xspawns.length ? { spawns: xspawns.map((s) => ({ x: Math.round(s.x - origin.x), y: Math.round(s.y - origin.y) })) } : {}),
       gates: hasGates,
       reward: completeCourses()[0]?.reward || { currency: 'Cash', amount: 0 },
       courses: completeCourses().map((c) => courseJson(c, origin.x, origin.y)),
@@ -2741,10 +3680,82 @@ function makeCanvas() {
   return IN_WORKER ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
 }
 
+// ---- motion: eased camera, living selection outlines, place / delete effects ----
+const CALM = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const fx = [];
+let lastFx = 0;
+function addFx(kind, x, y, color = COLORS.start, size = CELL) {
+  if (CALM || IN_WORKER) return;
+  const now = performance.now();
+  if (kind === 'ripple' && now - lastFx < 45) return;
+  lastFx = now;
+  fx.push({ kind, x, y, color, size, t0: now });
+  if (fx.length > 40) fx.shift();
+  requestDraw();
+}
+function drawFx() {
+  if (!fx.length) return;
+  const now = performance.now();
+  ctx.save();
+  ctx.setLineDash([]);
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const f = fx[i], life = f.kind === 'burst' ? 420 : 360, t = (now - f.t0) / life;
+    if (t >= 1) { fx.splice(i, 1); continue; }
+    const e = 1 - Math.pow(1 - t, 3), c = toScreen(f.x, f.y), base = Math.max(10, f.size * cam.scale * 0.6);
+    ctx.globalAlpha = (1 - t) * 0.9;
+    ctx.strokeStyle = f.color;
+    ctx.fillStyle = f.color;
+    if (f.kind === 'ripple') {
+      ctx.lineWidth = 2 * (1 - t) + 0.5;
+      ctx.beginPath(); ctx.arc(c.x, c.y, base * (0.4 + e * 1.1), 0, Math.PI * 2); ctx.stroke();
+    } else {
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2 + 0.3, r = base * (0.3 + e * 1.3);
+        ctx.beginPath(); ctx.arc(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, Math.max(1, 3.2 * (1 - t)), 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+  requestDraw();
+}
+// The camera glides to where it's sent (wheel zoom, jumps) instead of snapping.
+const camGoal = { active: false };
+function glideCamera(goal) {
+  if (CALM) { Object.assign(cam, { x: goal.x ?? cam.x, y: goal.y ?? cam.y, scale: goal.scale ?? cam.scale }); requestDraw(); return; }
+  Object.assign(camGoal, goal, { active: true });
+  requestDraw();
+}
+function stepCamera() {
+  if (!camGoal.active) return;
+  const k = 0.28;
+  if (camGoal.scale != null) {
+    const anchor = camGoal.anchor, before = anchor && toWorld(anchor.sx, anchor.sy);
+    cam.scale += (camGoal.scale - cam.scale) * k;
+    if (Math.abs(camGoal.scale - cam.scale) < camGoal.scale * 0.002) cam.scale = camGoal.scale;
+    if (anchor) { const after = toWorld(anchor.sx, anchor.sy); cam.x += before.x - after.x; cam.y += before.y - after.y; }
+  }
+  if (camGoal.x != null) {
+    cam.x += (camGoal.x - cam.x) * k; cam.y += (camGoal.y - cam.y) * k;
+    if (Math.hypot(camGoal.x - cam.x, camGoal.y - cam.y) * cam.scale < 0.5) { cam.x = camGoal.x; cam.y = camGoal.y; camGoal.x = camGoal.y = null; }
+  }
+  if (camGoal.scale != null && cam.scale === camGoal.scale) camGoal.scale = null;
+  if (camGoal.x == null && camGoal.scale == null) camGoal.active = false;
+  requestDraw();
+}
+// Where a target sits, for effects.
+function targetPoint(t) {
+  if (WORLD_KINDS.has(t.kind)) { const it = listOfKind(t.kind)[t.index]; return it && { x: it.x, y: it.y }; }
+  if (t.kind === 'base' || t.kind === 'scene') return levelThing(t);
+  if (t.kind === 'cell') { const [cx, cy] = unkey(t.k), w = cellWorld(cx, cy); return { x: w.x + CELL / 2, y: w.y + CELL / 2 }; }
+  if (t.kind === 'tile') { const tl = tiles.get(t.key); return tl && tileCenter(tl.layer, t.key); }
+  if (t.kind === 'blocks' && t.cells.length) { const [cx, cy] = unkey(t.cells[0]), w = cellWorld(cx, cy); return { x: w.x + CELL / 2, y: w.y + CELL / 2 }; }
+  return null;
+}
+
 function requestDraw() {
   if (IN_WORKER || frameQueued) return;
   frameQueued = true;
-  requestAnimationFrame(() => { frameQueued = false; draw(); });
+  requestAnimationFrame(() => { frameQueued = false; stepCamera(); draw(); drawFx(); });
 }
 
 function cellRect(cx, cy, len = 1) {
@@ -2784,6 +3795,16 @@ const ART_CHUNK = 512;
 let atlasImg = null;
 let artIndex = null;
 let spriteOrders = [];
+// Drawing order where the level splits for things put behind it: below it are the
+// backgrounds and wall art, from it up the ground, objects and spikes.
+const LEVEL_CUT = 0;
+// Further back still: under every level tile layer (walls, wall art), over the far backdrop.
+const WALL_CUT = -20;
+// Where a thing put behind the level sits: behind the ground (1) or behind the walls (2).
+const cutOf = (it) => (it.depth === 2 ? WALL_CUT : LEVEL_CUT);
+// null: the whole level; 'lo:hi': the part of it drawn at orders lo (inclusive) to hi.
+let renderPart = null;
+const partRange = (part = renderPart) => (part ? part.split(':').map(Number) : [-Infinity, Infinity]);
 const artCache = new Map();
 
 function artReady() {
@@ -2811,7 +3832,7 @@ function buildArtIndex() {
     .sort((a, b) => (a.order ?? artRank(a.name)) - (b.order ?? artRank(b.name)));
   const sc = base.scene;
   const pick = (byState) => [...(byState?.always || []), ...(byState?.[draft.baseState] || [])];
-  spriteOrders = [...new Set([...pick(sc?.placements).map((p) => p.o), ...(sc?.groups || []).map((g) => g.o)])].sort((a, b) => a - b);
+  spriteOrders = [...new Set([...pick(sc?.placements).map((p) => p.o), ...(sc?.groups || []).map((g) => g.o), LEVEL_CUT, WALL_CUT])].sort((a, b) => a - b);
   const bandOf = (order) => spriteOrders.filter((o) => o <= order).length;
   artIndex = new Map();
   for (const l of layers) {
@@ -2936,17 +3957,22 @@ function drawLayered(W, H, budget = 10) {
   ctx.imageSmoothingEnabled = true;
   const items = sceneReady() && sceneList ? sceneList.items : [];
   let next = 0, pending = false;
+  const [lo, hi] = partRange();
+  const bandLo = lo === -Infinity ? -1 : spriteOrders.indexOf(lo), bandHi = hi === Infinity ? Infinity : spriteOrders.indexOf(hi);
+  if (lo !== -Infinity) while (next < items.length && items[next].o < lo) next++;
   const drawItemsBelow = (limit) => {
     const from = next;
     while (next < items.length && items[next].o < limit) next++;
     if (next > from) drawSceneItems(W, H, items, from, next);
   };
   for (const band of [...artIndex.keys()].sort((a, b) => a - b)) {
+    if (band > bandHi) break;
+    if (band <= bandLo) continue;
     drawItemsBelow(band < spriteOrders.length ? spriteOrders[band] : Infinity);
     if (staticRender) drawBandDirect(W, H, band);
     else pending = drawArtBand(W, H, band, lod) || pending;
   }
-  drawItemsBelow(Infinity);
+  drawItemsBelow(hi);
   if (pending) requestDraw();
 }
 
@@ -2984,7 +4010,18 @@ function zoneAt(x, y) {
   return 'zone 1';
 }
 
+// Far out, the backdrop would be hundreds of tiny copies: it fades away and the level sits on plain dark.
+const backdropFade = () => Math.max(0, Math.min(1, (cam.scale - 0.1) / 0.1));
 function drawBackground(W, H) {
+  const fade = backdropFade();
+  if (!fade) return;
+  ctx.save();
+  ctx.globalAlpha = fade;
+  try { drawBackdrop(W, H); if (!draft.background?.image) drawWorldBackdrops(W, H); } finally { ctx.restore(); }
+  drawCredits(W, H, 'end');
+}
+function drawBackdrop(W, H) {
+  if (draft.background?.image) return drawCustomBackground(W, H, draft.background);
   const sc = base.scene;
   if (!sc?.backgrounds?.length) return;
   const zone = zoneAt(cam.x, cam.y);
@@ -2996,13 +4033,138 @@ function drawBackground(W, H) {
     if (!img.complete || !img.naturalWidth) continue;
     const w = b.size[0] * Math.abs(b.sx), h = b.size[1] * Math.abs(b.sy);
     const ox = cam.x * b.fx - w / 2, oy = cam.y * b.fy - h / 2;
-    ctx.globalAlpha = b.a ?? 1;
+    ctx.globalAlpha = (b.a ?? 1) * backdropFade();
     for (let tx = Math.floor((tl.x - ox) / w); ox + tx * w < br.x; tx++) {
       for (let ty = Math.floor((br.y - oy) / h); oy + ty * h < tl.y; ty++) {
         const a = toScreen(ox + tx * w, oy + (ty + 1) * h), sw = w * cam.scale, sh = h * cam.scale;
         if (b.sx < 0) { ctx.setTransform(-1, 0, 0, 1, a.x + sw, a.y); ctx.drawImage(img, 0, 0, sw + 1, sh + 1); ctx.setTransform(1, 0, 0, 1, 0, 0); }
         else ctx.drawImage(img, a.x, a.y, sw + 1, sh + 1);
       }
+    }
+  }
+  ctx.restore();
+}
+
+// A parallax layer (area 3's ParallaxController) sits between its parent and the camera.
+const layerAt = (b) => (b.par ? { x: b.px + (cam.x - b.px) * b.par[0], y: b.py + (cam.y - b.py) * b.par[1] } : { x: b.x, y: b.y });
+// Area 3's wallpaper: big tiled strips behind the level, each drifting with the view by its parallax.
+// Area 3's layers follow the camera (parallax), so they're only there while the view is in area 3.
+const inAreaOf = (path) => zoneAt(cam.x, cam.y) === String(path || '').split('/')[0].toLowerCase();
+function drawWorldBackdrops(W, H) {
+  const list = base?.scene?.worldBackdrops;
+  if (!list?.length || !inAreaOf(list[0].path)) return;
+  const k = cam.scale;
+  for (const b of list) {
+    const img = bgImage(b.img);
+    if (!img.complete || !img.naturalWidth) continue;
+    const [a, bb, c, d] = b.m, reach = Math.hypot(b.size[0], b.size[1]) * Math.max(Math.hypot(a, c), Math.hypot(bb, d)) / 2;
+    const at = layerAt(b), tl = toWorld(0, 0), br = toWorld(W, H);
+    if (at.x + reach < tl.x || at.x - reach > br.x || at.y + reach < br.y || at.y - reach > tl.y) continue;
+    const o = toScreen(at.x, at.y);
+    ctx.save();
+    ctx.globalAlpha *= b.a ?? 1;
+    ctx.setTransform(k * a, -k * c, -k * bb, k * d, o.x, o.y);
+    const [w, h] = b.size, [tw, th] = b.tile;
+    // The screen's corners in the strip's own units: only the tiles they cover are drawn.
+    const inv = ctx.getTransform().inverse(), pts = [[0, 0], [W, 0], [0, H], [W, H]].map(([px, py]) => inv.transformPoint(new DOMPoint(px, py)));
+    const u0 = Math.max(-w / 2, Math.min(...pts.map((q) => q.x))), u1 = Math.min(w / 2, Math.max(...pts.map((q) => q.x)));
+    const v0 = Math.max(-h / 2, Math.min(...pts.map((q) => q.y))), v1 = Math.min(h / 2, Math.max(...pts.map((q) => q.y)));
+    if (u1 <= u0 || v1 <= v0) { ctx.restore(); continue; }
+    const su = -w / 2 + Math.floor((u0 + w / 2) / tw) * tw, sv = -h / 2 + Math.floor((v0 + h / 2) / th) * th;
+    for (let u = su; u < u1; u += tw) for (let v = sv; v < v1; v += th) {
+      const cw = Math.min(tw, w / 2 - u), ch = Math.min(th, h / 2 - v);
+      ctx.drawImage(img, 0, 0, img.naturalWidth * (cw / tw), img.naturalHeight * (ch / th), u, v, cw + 0.5, ch + 0.5);
+    }
+    ctx.restore();
+  }
+}
+
+// ---- the game's credits (the end credits, the fake credits), played while Simulate is on ----
+let simStart = 0;
+const CREDIT_ICON = 'credits';
+function creditsTimeline(g, t) {
+  // What the game's scripts do, second by second (their fades step every 0.02 s fixed update).
+  const sc = g.scroll, scrollFor = sc ? (sc.to - sc.from) / sc.rate : 0;
+  const out = { scrollAt: null, alpha: {} };
+  if (g.kind === 'end') {
+    out.scrollAt = sc ? sc.from + sc.rate * Math.min(t, scrollFor) : null;
+    const logo = t < 0.75 ? 0 : t < 1 ? (t - 0.75) / 0.25 : t < 4.2 ? 1 : Math.max(0, 1 - (t - 4.2) / 1.25);
+    out.alpha.logo = logo;
+    out.length = Math.max(scrollFor, 5.5) + 3;
+  } else {
+    const n = g.texts.filter((x) => x.role === 'message').length, each = 1.11 + 1.2, fadeAt = n * each + 1.2, scrollFrom = fadeAt + 5;
+    out.alpha.message = (i) => {
+      if (t < i * each) return 0;
+      const up = Math.min(1, (t - i * each) / 1.11);
+      if (t < fadeAt) return up;
+      if (t < scrollFrom) return Math.max(0, 1 - (t - fadeAt) / 5);
+      return t > scrollFrom + scrollFor ? Math.min(1, (t - scrollFrom - scrollFor) / 1.11) : 0;
+    };
+    out.scrollAt = sc && t >= scrollFrom ? sc.from + sc.rate * Math.min(t - scrollFrom, scrollFor) : null;
+    out.length = scrollFrom + scrollFor + 5;
+  }
+  return out;
+}
+function drawCreditText(tx, x, y, alpha) {
+  if (alpha <= 0.01) return;
+  let baked = textCache.get(tx);
+  if (baked === undefined) { baked = bakeText(tx); textCache.set(tx, baked); }
+  if (!baked) return;
+  const c = toScreen(x, y);
+  ctx.setTransform(1, 0, 0, 1, c.x, c.y);
+  ctx.rotate(-(tx.r || 0));
+  ctx.scale(cam.scale / baked.px, cam.scale / baked.px);
+  ctx.globalAlpha = alpha * (tx.a ?? 1);
+  ctx.drawImage(baked.canvas, baked.x0 * baked.px, -baked.top * baked.px);
+}
+function drawCredits(W, H, kind) {
+  const list = base?.scene?.credits;
+  if (!draft.simulate || !list?.length) return;
+  const fonts = base.scene.fonts || [];
+  if (!fonts.every((f, i) => !f || fontImage(i).complete)) return;
+  const tl = toWorld(0, 0), br = toWorld(W, H), now = (performance.now() - simStart) / 1000;
+  let shown = false;
+  for (const g of list) {
+    if (g.kind !== kind) continue;
+    const tr = g.trigger;
+    if (g.layer && !inAreaOf(tr?.path)) continue;
+    // The fake credits play on their screen; the end credits across area 3's sky, riding their parallax layer.
+    const lay = g.layer ? layerAt(g.layer) : null, ox = lay ? lay.x - g.layer.x : 0, oy = lay ? lay.y - g.layer.y : 0;
+    const tlAll = creditsTimeline(g, 0), t = now % tlAll.length, s = creditsTimeline(g, t);
+    ctx.save();
+    if (kind === 'fake' && tr?.box) {
+      const a = toScreen(tr.x + tr.box.dx - tr.box.w / 2, tr.y + tr.box.dy + tr.box.h / 2);
+      ctx.beginPath(); ctx.rect(a.x, a.y, tr.box.w * cam.scale, tr.box.h * cam.scale); ctx.clip();
+    }
+    for (const tx of g.texts) {
+      let x = tx.x + ox, y = tx.y + oy, alpha = 1;
+      if (tx.role === 'scroll') {
+        if (s.scrollAt == null) continue;
+        const d = s.scrollAt - (g.scroll.y0 || 0);
+        x += g.scroll.up[0] * d; y += g.scroll.up[1] * d;
+      } else if (tx.role === 'logo') alpha = s.alpha.logo;
+      else if (tx.role === 'message') alpha = s.alpha.message(tx.n);
+      if (x < tl.x - 3000 || x > br.x + 3000 || y < br.y - 3000 || y > tl.y + 3000) continue;
+      drawCreditText(tx, x, y, alpha);
+      shown = true;
+    }
+    ctx.restore();
+  }
+  if (shown && !drawCredits.timer) drawCredits.timer = setTimeout(() => { drawCredits.timer = 0; requestDraw(); }, 33);
+}
+
+// The map's own background image, drifting with the view by its parallax and tiled.
+function drawCustomBackground(W, H, bg) {
+  const img = assetImage(bg.image);
+  if (!img.complete || !img.naturalWidth) return;
+  const s = bg.scale ?? 1, p = bg.parallax ?? 0.8, w = img.naturalWidth * s, h = img.naturalHeight * s;
+  const tl = toWorld(0, 0), br = toWorld(W, H);
+  const ox = cam.x - (((cam.x * (1 - p)) % w) + w) % w - w / 2, oy = cam.y - (((cam.y * (1 - p)) % h) + h) % h - h / 2;
+  ctx.save();
+  for (let tx = Math.floor((tl.x - ox) / w) - 1; ox + tx * w < br.x; tx++) {
+    for (let ty = Math.floor((br.y - oy) / h) - 1; oy + ty * h < tl.y; ty++) {
+      const a = toScreen(ox + tx * w, oy + (ty + 1) * h);
+      ctx.drawImage(img, a.x, a.y, w * cam.scale + 1, h * cam.scale + 1);
     }
   }
   ctx.restore();
@@ -3030,7 +4192,7 @@ function buildScene() {
     const [, , sw, sh] = sc.sprites[p.s];
     const [w, h] = p.dm ? p.sz : [sw, sh];
     const reach = Math.hypot(w, h) * Math.max(Math.hypot(p.m[0], p.m[2]), Math.hypot(p.m[1], p.m[3]));
-    return { ...p, reach, live: !!(p.frames || p.sc), id: p.p ? p.p + '@' + p.x + ',' + p.y : null };
+    return { ...p, reach, anim: !!(p.frames || p.sc), live: false, id: p.p ? p.p + '@' + p.x + ',' + p.y : null };
   }).sort((a, b) => a.o - b.o);
   const groups = (sc.groups || []).map((g) => ({ ...g, group: true, canvas: null }));
   sceneList = {
@@ -3188,55 +4350,42 @@ function drawSceneItems(W, H, items, from, to) {
     if (p.id && removedScene.has(p.id)) continue;
     if (removedPaths.length && p.p && removedPaths.some((rp) => p.p === rp || p.p.startsWith(rp + '/'))) continue;
     if (p.x + p.reach < tl.x || p.x - p.reach > br.x || p.y + p.reach < br.y || p.y - p.reach > tl.y) continue;
-    if (p.live && staticRender && cam.scale >= LIVE_MIN_SCALE) continue;
+    if (p.live && (skipLive || (staticRender && cam.scale >= LIVE_MIN_SCALE))) continue;
     let sprite = p.s;
     if (p.frames && !staticRender) { sprite = p.frames[Math.floor(now * p.fps + (p.ph || 0) * p.frames.length) % p.frames.length]; animated = true; }
     if (p.sc && !staticRender) animated = true;
     blitScene(sprite, p.m, p.x, p.y, p.a, p.dm, p.sz, p.c, p.sc && !staticRender ? p.sc : null, now);
   }
   ctx.restore();
-  if (animated && !animTimer) animTimer = setTimeout(() => { animTimer = 0; requestDraw(); }, 40);
+  if (animated && !animTimer) animTimer = setTimeout(() => { animTimer = 0; requestDraw(); }, 100);
 }
 
-const LIVE_MIN_SCALE = 0.25;
+const LIVE_MIN_SCALE = 0.51;
+// Set while the level above live sprites is drawn again over them: the live ones themselves are skipped.
+let skipLive = false;
 
 function drawLiveItems(W, H) {
   if (!sceneReady() || !sceneList || cam.scale < LIVE_MIN_SCALE) return;
   const tl = toWorld(0, 0), br = toWorld(W, H);
   const visible = sceneList.items.filter((p) => p.live && !(p.id && removedScene.has(p.id)) && !(p.x + p.reach < tl.x || p.x - p.reach > br.x || p.y + p.reach < br.y || p.y - p.reach > tl.y));
   if (!visible.length) return;
-  const orderOf = (name, fallback) => base.art.layers.find((l) => l.name === name)?.order ?? fallback;
-  const covers = [[groundSet, orderOf('new awesome nikki ground', 5)], [mossSet, orderOf('moss', 7)], [blueSet, orderOf('blueBlocks', 4)], [orangeSet, orderOf('orangeBlocks', 4)]];
-  const layerCv = scratchCanvas('live');
-  const g = layerCv.getContext('2d');
-  const saved = ctx;
+  // Each order's live sprites, then the level's layers above them drawn again over just
+  // that patch - so the ground and its moss cover them exactly as in the game.
   for (let i = 0; i < visible.length;) {
     const o = visible[i].o;
     let j = i;
     while (j < visible.length && visible[j].o === o) j++;
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.globalCompositeOperation = 'source-over';
-    g.clearRect(0, 0, layerCv.width, layerCv.height);
-    ctx = g;
     drawSceneItems(W, H, visible, i, j);
-    ctx = saved;
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (let n = i; n < j; n++) { const p = visible[n]; x0 = Math.min(x0, p.x - p.reach); x1 = Math.max(x1, p.x + p.reach); y0 = Math.min(y0, p.y - p.reach); y1 = Math.max(y1, p.y + p.reach); }
-    const a = cellOf(Math.max(x0, tl.x), Math.max(y0, br.y)), b = cellOf(Math.min(x1, br.x), Math.min(y1, tl.y));
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.globalCompositeOperation = 'destination-out';
-    g.fillStyle = '#000';
-    for (let cy = a.cy; cy <= b.cy; cy++) for (let cx = a.cx; cx <= b.cx; cx++) {
-      const k = key(cx, cy);
-      if (removed.has(k) || !covers.some(([set, order]) => order >= o && set?.has(k))) continue;
-      const r = cellRect(cx, cy);
-      g.fillRect(Math.floor(r.x), Math.floor(r.y), Math.ceil(r.w) + 1, Math.ceil(r.h) + 1);
+    const a = toScreen(Math.max(x0, tl.x), Math.min(y1, tl.y)), b = toScreen(Math.min(x1, br.x), Math.max(y0, br.y));
+    if (b.x > a.x && b.y > a.y && spriteOrders.includes(o)) {
+      const savedPart = renderPart;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(Math.floor(a.x), Math.floor(a.y), Math.ceil(b.x - a.x) + 1, Math.ceil(b.y - a.y) + 1); ctx.clip();
+      renderPart = o + ':Infinity'; skipLive = true;
+      try { drawLayered(W, H, 4); } finally { renderPart = savedPart; skipLive = false; ctx.restore(); }
     }
-    g.globalCompositeOperation = 'source-over';
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(layerCv, 0, 0);
-    ctx.restore();
     i = j;
   }
 }
@@ -3372,19 +4521,20 @@ function bakeText(t) {
 }
 
 // Level texts that only appear later in the game (the statue's line once its power is awakened).
-const LATER_TEXTS = new Set(['I have boosted all previous courses']);
+const LATER_TEXTS = new Set(['I have boosted all previous courses', 'Quaeso, ad locum generatoris redi;', 'ulteriores decessiones ruina violenta punientur.']);
 
-function drawSceneText(tl, br) {
+function drawSceneText(tl, br, liveOnly = false) {
   const fonts = base.scene.fonts || [];
   if (!fonts.length || !fonts.every((f, i) => !f || fontImage(i).complete)) return;
   ctx.save();
   for (const t of sceneList.texts) {
     if (LATER_TEXTS.has(t.t)) continue;
+    if (liveOnly ? !t.mover : t.mover && staticRender && cam.scale >= LIVE_MIN_SCALE) continue;
     const reach = Math.max(t.w, t.h) + t.size * t.k * 4;
     if (t.x + reach < tl.x || t.x - reach > br.x || t.y + reach < br.y || t.y - reach > tl.y) continue;
     if (!sizeCache.has(t)) sizeCache.set(t, textSize(t));
     if (sizeCache.get(t) * t.k * cam.scale < 2.5) continue;
-    if (removedObjects.size && baseObjects.some((o) => removedObjects.has(o.id) && Math.abs(t.x - o.x) <= o.w / 2 && Math.abs(t.y - o.y) <= o.h / 2)) continue;
+    if (removedObjects.size && baseObjects.some((o) => removedObjects.has(o.id) && Math.abs((t.x0 ?? t.x) - (o.x0 ?? o.x)) <= o.w / 2 && Math.abs((t.y0 ?? t.y) - (o.y0 ?? o.y)) <= o.h / 2)) continue;
     const edited = Object.keys(draft.baseEdits || {}).length ? editedBoxText(t) : null;
     if (edited) { ctx.save(); drawTextAt(edited, t.x, t.y); ctx.restore(); continue; }
     let baked = textCache.get(t);
@@ -3452,10 +4602,9 @@ function drawGate(g, box, color, label) {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
   ctx.strokeRect(c.x - w / 2, c.y - h / 2, w, h);
-  if (cam.scale < 0.2) return;
-  ctx.font = 'bold 11px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(label, c.x, c.y - h / 2 - 4);
+  if (cam.scale < 0.05) return;
+  const icon = /^LONG FALL/.test(label) ? 'fall' : /^START/.test(label) ? 'flag' : /^END/.test(label) ? 'finish' : /^SPAWN \d/.test(label) ? 'pin' : /^SPAWN/.test(label) ? 'spawn' : /TIMER/.test(label) ? 'timer' : /RESPAWN/.test(label) ? 'respawn' : 'checkpoint';
+  drawBadge(icon, c.x, c.y - h / 2 - 14, color, cam.scale >= 0.2 ? label : '');
 }
 
 const TILE_PX = 128;
@@ -3466,10 +4615,127 @@ let baseVersion = 0;
 let staticRender = false;
 let lastVineSig = '';
 
-function invalidateBase() { baseVersion++; requestDraw(); }
+function invalidateBase() { baseVersion++; stateVersion++; requestDraw(); }
+
+// Only the cached level tiles over what changed are drawn again, not the whole level.
+let stateVersion = 0, lastLevelEdits = null;
+const dirtyGen = new Map();
+function invalidateRegion(rects, belowZ = Infinity) {
+  if (!rects.length) return;
+  stateVersion++;
+  const hits = (k) => {
+    const parts = k.split('|'), z = +parts[2], tx = +parts[3], ty = +parts[4], T = TILE_PX / Math.pow(2, z);
+    if (z >= belowZ) return false;
+    const x0 = tx * T, y0 = ty * T, x1 = x0 + T, y1 = y0 + T;
+    return rects.some((r) => r[0] < x1 && r[2] > x0 && r[1] < y1 && r[3] > y0);
+  };
+  for (const [k, c] of [...tileCache]) if (hits(k)) { tileCache.delete(k); c?.close?.(); dirtyGen.set(k, stateVersion); }
+  for (const k of pool.inflight?.keys?.() || []) if (hits(k)) dirtyGen.set(k, stateVersion);
+  for (const k of [...tileJobs.keys()]) if (hits(k)) tileJobs.delete(k);
+  requestDraw();
+}
+const levelEditSets = () => ({ removed: new Set(removed), removedVines: new Set(removedVines), removedScene: new Set(removedScene), removedObjects: new Set(removedObjects), removedDeco: new Set(removedDeco), movedScene: new Map([...movedScene].map(([k, d]) => [k, d.join(',')])), movedObjects: new Map([...movedObjects].map(([k, d]) => [k, d.join(',')])), levelTf: new Map([...levelTf].map(([k, v]) => [k, JSON.stringify(v)])), levelOrder: new Map([...levelOrder].map(([k, v]) => [k, String(v)])), baseEdits: new Map(Object.entries(draft.baseEdits || {}).map(([k, v]) => [k, JSON.stringify(v)])) });
+function changedKeys(a, b) {
+  const out = [];
+  if (a instanceof Map) { for (const [k, v] of a) if (b.get(k) !== v) out.push(k); for (const k of b.keys()) if (!a.has(k)) out.push(k); }
+  else { for (const k of a) if (!b.has(k)) out.push(k); for (const k of b) if (!a.has(k)) out.push(k); }
+  return out;
+}
+function sceneRects(p, out) {
+  if (!p) return;
+  for (const [x, y] of [[p.x, p.y], [p.x0 ?? p.x, p.y0 ?? p.y], ...(p.drawnAt ? [p.drawnAt] : [])]) out.push([x - p.reach, y - p.reach, x + p.reach, y + p.reach]);
+  p.drawnAt = [p.x, p.y];
+}
+function objectRects(o, out) {
+  if (!o) return;
+  const r = Math.max(o.w || 64, o.h || 64);
+  for (const [x, y] of [[o.x, o.y], [o.x0 ?? o.x, o.y0 ?? o.y]]) out.push([x - r, y - r, x + r, y + r]);
+  for (const p of sceneList?.items || []) if (p.p && (p.p === o.path || p.p.startsWith(o.path + '/'))) sceneRects(p, out);
+}
+function redrawChangedLevel() {
+  const now = levelEditSets(), was = lastLevelEdits;
+  lastLevelEdits = now;
+  if (!was || !baseOn()) return;
+  const rects = [], byId = new Map((sceneList?.items || []).filter((p) => p.id).map((p) => [p.id, p]));
+  const cellRect = (k, m) => { const [cx, cy] = unkey(k), w = cellWorld(cx, cy); rects.push([w.x - m * CELL, w.y - m * CELL, w.x + (m + 1) * CELL, w.y + (m + 1) * CELL]); };
+  changedKeys(was.removed, now.removed).forEach((k) => cellRect(k, 2));
+  changedKeys(was.removedVines, now.removedVines).forEach((k) => cellRect(k, 5));
+  changedKeys(was.removedDeco, now.removedDeco).forEach((k) => { const layer = k.slice(0, k.lastIndexOf('|')), c = tileCenter(layer, k), g = layerGrid(layer).size * 2; rects.push([c.x - g, c.y - g, c.x + g, c.y + g]); });
+  // A moved thing that only moved further is drawn live: only far zooms, where it's part of the cached level, redraw.
+  const slid = [], onlySlid = (a, b) => (k) => a.has(k) && b.has(k);
+  const ms = changedKeys(was.movedScene, now.movedScene), mo = changedKeys(was.movedObjects, now.movedObjects);
+  ms.filter(onlySlid(was.movedScene, now.movedScene)).forEach((id) => sceneRects(byId.get(id), slid));
+  mo.filter(onlySlid(was.movedObjects, now.movedObjects)).forEach((id) => objectRects(baseObjects.find((o) => o.id === id), slid));
+  [...changedKeys(was.removedScene, now.removedScene), ...ms.filter((k) => !onlySlid(was.movedScene, now.movedScene)(k))].forEach((id) => sceneRects(byId.get(id), rects));
+  [...changedKeys(was.removedObjects, now.removedObjects), ...mo.filter((k) => !onlySlid(was.movedObjects, now.movedObjects)(k)), ...changedKeys(was.baseEdits, now.baseEdits)].forEach((id) => objectRects(baseObjects.find((o) => o.id === id), rects));
+  [...changedKeys(was.levelTf, now.levelTf), ...changedKeys(was.levelOrder, now.levelOrder)].forEach((k) => (k.startsWith('o:') ? objectRects(baseObjects.find((o) => o.id === k.slice(2)), rects) : sceneRects(byId.get(k), rects)));
+  if (rects.length > 600) { baseVersion++; stateVersion++; requestDraw(); return; }
+  invalidateRegion(rects);
+  invalidateRegion(slid, lodFor(LIVE_MIN_SCALE) + 1);
+}
+// Moved level things sit at their new place and are drawn live, over the cached level.
+const tfMatrix = (tf) => mul2(rot2(((tf.rot || 0) * Math.PI) / 180), [(tf.scale || 1) * (tf.sx || 1) * (tf.fx ? -1 : 1), 0, 0, (tf.scale || 1) * (tf.sy || 1) * (tf.fy ? -1 : 1)]);
+let lastOrderSig = '';
+function applyBaseMoves() {
+  if (!sceneList) return;
+  const objMoves = baseObjects.filter((o) => movedObjects.has(o.id)).map((o) => [o.path, movedObjects.get(o.id)]);
+  const objTf = baseObjects.filter((o) => levelTf.has('o:' + o.id)).map((o) => [o, tfMatrix(levelTf.get('o:' + o.id))]);
+  const objOrder = baseObjects.filter((o) => levelOrder.has('o:' + o.id)).map((o) => [o.path, levelOrder.get('o:' + o.id)]);
+  for (const o of baseObjects) {
+    o.x0 ??= o.x; o.y0 ??= o.y;
+    const d = movedObjects.get(o.id) || [0, 0];
+    o.x = o.x0 + d[0]; o.y = o.y0 + d[1];
+  }
+  for (const p of sceneList.items) {
+    if (!p.id) continue;
+    p.x0 ??= p.x; p.y0 ??= p.y; p.m0 ??= p.m; p.o0 ??= p.o; p.reach0 ??= p.reach;
+    const under = (path) => p.p === path || p.p.startsWith(path + '/');
+    let dx = 0, dy = 0, bx = p.x0, by = p.y0, m = p.m0, grow = 1, order = p.o0, touched = false;
+    const own = movedScene.get(p.id);
+    if (own) { dx += own[0]; dy += own[1]; touched = true; }
+    for (const [path, d] of objMoves) if (under(path)) { dx += d[0]; dy += d[1]; touched = true; }
+    const ownTf = levelTf.get(p.id);
+    if (ownTf) { const M = tfMatrix(ownTf); m = mul2(M, m); grow *= Math.max(Math.hypot(M[0], M[2]), Math.hypot(M[1], M[3])); touched = true; }
+    for (const [o, M] of objTf) if (under(o.path)) {
+      const rx = bx - o.x0, ry = by - o.y0;
+      bx = o.x0 + M[0] * rx + M[1] * ry; by = o.y0 + M[2] * rx + M[3] * ry;
+      m = mul2(M, m); grow *= Math.max(Math.hypot(M[0], M[2]), Math.hypot(M[1], M[3])); touched = true;
+    }
+    if (levelOrder.has(p.id)) { order += levelOrder.get(p.id); touched = true; }
+    for (const [path, d] of objOrder) if (under(path)) { order += d; touched = true; }
+    p.x = bx + dx; p.y = by + dy; p.m = m; p.o = order; p.reach = p.reach0 * grow;
+    // Animated level sprites move only while Simulate is on; otherwise they're part of the cached level.
+    p.live = (p.anim && !!draft.simulate) || touched;
+  }
+  const orderSig = [...levelOrder].join(';');
+  if (orderSig !== lastOrderSig) { lastOrderSig = orderSig; sceneList.items.sort((a, b) => a.o - b.o); }
+  // A moved box's texts (price, label) have no path: they go with the box they sit in.
+  const movers = baseObjects.filter((o) => movedObjects.has(o.id) || levelTf.has('o:' + o.id));
+  for (const t of sceneList.texts || []) {
+    t.x0 ??= t.x; t.y0 ??= t.y; t.r0 ??= t.r || 0;
+    const o = movers.find((b) => Math.abs(t.x0 - b.x0) <= b.w / 2 && Math.abs(t.y0 - b.y0) <= b.h / 2);
+    const d = (o && movedObjects.get(o.id)) || [0, 0], tf = o && levelTf.get('o:' + o.id);
+    let x = t.x0, y = t.y0, r = t.r0;
+    if (tf) {
+      const M = tfMatrix(tf), rx = x - o.x0, ry = y - o.y0;
+      x = o.x0 + M[0] * rx + M[1] * ry; y = o.y0 + M[2] * rx + M[3] * ry;
+      r = t.r0 + ((tf.rot || 0) * Math.PI) / 180;
+    }
+    if (t.r !== r) textCache.delete(t);
+    t.x = x + d[0]; t.y = y + d[1]; t.r = r; t.mover = !!o;
+  }
+}
+function moveLevelThing(t, dx, dy) {
+  if (t.kind === 'scene') { const d = movedScene.get(t.id) || [0, 0]; if (!movedScene.has(t.id)) liftForMove(); movedScene.set(t.id, [d[0] + dx, d[1] + dy]); }
+  else { const d = movedObjects.get(t.id) || [0, 0]; if (!movedObjects.has(t.id)) liftForMove(); movedObjects.set(t.id, [d[0] + dx, d[1] + dy]); }
+  applyBaseMoves();
+  return true;
+}
+// A level thing about to move leaves the cached level: redraw only where it was.
+function liftForMove() { queueMicrotask(() => { redrawChangedLevel(); tileWorkersReady(); }); }
 
 function lodFor(scale) { return Math.max(-8, Math.min(1, Math.ceil(Math.log2(scale)))); }
-function tileKey(z, tx, ty) { return baseVersion + '|' + draft.baseState + '|' + z + '|' + tx + '|' + ty; }
+function tileKey(z, tx, ty, part = null) { return baseVersion + '|' + draft.baseState + '|' + z + '|' + tx + '|' + ty + (part ? '|' + part : ''); }
 
 function cachedTile(key) {
   const c = tileCache.get(key);
@@ -3481,6 +4747,7 @@ function renderBaseLayer(W, H, useArt) {
   const tl = cellOf(toWorld(0, 0).x, toWorld(0, 0).y);
   const br = cellOf(toWorld(W, H).x, toWorld(W, H).y);
   const minCx = tl.cx - 1, maxCx = br.cx + 1, minCy = br.cy - 1, maxCy = tl.cy + 1;
+  if (partRange()[1] !== Infinity) { if (useArt) drawLayered(W, H, Infinity); return; }
   if (useArt) {
     drawLayered(W, H, Infinity);
   } else {
@@ -3520,8 +4787,9 @@ function renderBaseLayer(W, H, useArt) {
   if (useArt) drawSceneOverlays(W, H);
 }
 
-function renderRegion(cv, x, y, scale) {
-  const saved = [canvas, ctx, cam];
+function renderRegion(cv, x, y, scale, part = null) {
+  const saved = [canvas, ctx, cam, renderPart];
+  renderPart = part;
   canvas = cv;
   ctx = cv.getContext('2d');
   cam = { x, y, scale };
@@ -3530,15 +4798,15 @@ function renderRegion(cv, x, y, scale) {
     renderBaseLayer(cv.width, cv.height, artReady());
   } finally {
     staticRender = false;
-    [canvas, ctx, cam] = saved;
+    [canvas, ctx, cam, renderPart] = saved;
   }
 }
 
-function renderTile(z, tx, ty) {
+function renderTile(z, tx, ty, part = null) {
   const s = Math.pow(2, z), T = TILE_PX / s;
   const cv = makeCanvas();
   cv.width = cv.height = TILE_PX;
-  renderRegion(cv, (tx + 0.5) * T, (ty + 0.5) * T, s);
+  renderRegion(cv, (tx + 0.5) * T, (ty + 0.5) * T, s, part);
   return cv;
 }
 
@@ -3557,32 +4825,32 @@ function tileJob(key, z) {
   return job;
 }
 
-function stepTileJob(job, z, tx, ty) {
+function stepTileJob(job, z, tx, ty, part = null) {
   const s = Math.pow(2, z), T = TILE_PX / s, size = TILE_PX / job.n;
   const px = job.next % job.n, py = Math.floor(job.next / job.n);
   if (!pieceCanvas) pieceCanvas = makeCanvas();
   pieceCanvas.width = pieceCanvas.height = size;
-  renderRegion(pieceCanvas, tx * T + ((px + 0.5) * T) / job.n, (ty + 1) * T - ((py + 0.5) * T) / job.n, s);
+  renderRegion(pieceCanvas, tx * T + ((px + 0.5) * T) / job.n, (ty + 1) * T - ((py + 0.5) * T) / job.n, s, part);
   job.g.drawImage(pieceCanvas, px * size, py * size);
   return ++job.next >= job.n * job.n;
 }
 
-function coarserTile(z, tx, ty) {
+function coarserTile(z, tx, ty, part = null) {
   const T = TILE_PX / Math.pow(2, z);
   for (let z2 = z - 1; z2 >= z - 4; z2--) {
     const s2 = Math.pow(2, z2), T2 = TILE_PX / s2;
     const tx2 = Math.floor((tx * T) / T2), ty2 = Math.floor((ty * T) / T2);
-    const c = tileCache.get(tileKey(z2, tx2, ty2));
+    const c = tileCache.get(tileKey(z2, tx2, ty2, part));
     if (c) return [c, (tx * T - tx2 * T2) * s2, (T2 * (ty2 + 1) - (ty + 1) * T) * s2, T * s2, T * s2];
   }
   return null;
 }
 
-function drawFromFiner(z, tx, ty, x0, y0, w, h) {
+function drawFromFiner(z, tx, ty, x0, y0, w, h, part = null) {
   let any = false;
   for (let dy = 0; dy < 2; dy++) {
     for (let dx = 0; dx < 2; dx++) {
-      const c = tileCache.get(tileKey(z + 1, tx * 2 + dx, ty * 2 + dy));
+      const c = tileCache.get(tileKey(z + 1, tx * 2 + dx, ty * 2 + dy, part));
       if (!c) continue;
       ctx.drawImage(c, x0 + (dx * w) / 2, y0 + ((1 - dy) * h) / 2, w / 2, h / 2);
       any = true;
@@ -3600,9 +4868,31 @@ function storeTile(key, tile) {
   }
 }
 
-function drawBaseTiles(W, H, useArt) {
-  if (useArt) drawBackground(W, H);
-  const z = lodFor(cam.scale), s = Math.pow(2, z), T = TILE_PX / s;
+// Without workers: the tiles just outside the view, drawn in idle moments so panning finds them ready.
+const aheadQueue = new Map();
+let aheadTimer = 0;
+function drawAhead() {
+  aheadTimer = 0;
+  const deadline = performance.now() + 6;
+  for (const [key, [z, tx, ty, part]] of aheadQueue) {
+    aheadQueue.delete(key);
+    if (tileCache.has(key) || !key.startsWith(baseVersion + '|')) continue;
+    const job = tileJob(key, z);
+    while (!stepTileJob(job, z, tx, ty, part)) { /* finish it */ }
+    storeTile(key, job.cv); tileJobs.delete(key);
+    if (performance.now() > deadline) break;
+  }
+  if (aheadQueue.size) scheduleAhead();
+}
+function scheduleAhead() {
+  if (aheadTimer || !aheadQueue.size) return;
+  aheadTimer = typeof requestIdleCallback === 'function' ? requestIdleCallback(drawAhead, { timeout: 200 }) : setTimeout(drawAhead, 30);
+}
+function drawBaseTiles(W, H, useArt, part = null) {
+  aheadQueue.clear();
+  if (useArt && partRange(part)[0] === -Infinity) drawBackground(W, H);
+  // While the camera glides, tiles are drawn once for the zoom it's heading to, not every zoom on the way.
+  const z = lodFor(camGoal.active && camGoal.scale != null ? camGoal.scale : cam.scale), s = Math.pow(2, z), T = TILE_PX / s;
   const tl = toWorld(0, 0), br = toWorld(W, H);
   const tiles = [];
   for (let ty = Math.floor(br.y / T) - 1; ty <= Math.floor(tl.y / T) + 1; ty++) {
@@ -3617,17 +4907,18 @@ function drawBaseTiles(W, H, useArt) {
   const deadline = performance.now() + (loading ? 40 : TILE_BUDGET_MS);
   let missing = false, shown = 0, inView = 0;
   for (const [tx, ty, visible] of tiles) {
-    const key = tileKey(z, tx, ty);
+    const key = tileKey(z, tx, ty, part);
     let c = cachedTile(key);
     let job = null;
     if (!c) {
-      if (workers) requestTile(key, z, tx, ty);
-      else if (visible) {
+      // Every tile in view is drawn now, never left for later; the workers only draw ahead.
+      if (visible) {
         job = tileJob(key, z);
-        while (performance.now() < deadline) {
-          if (stepTileJob(job, z, tx, ty)) { c = job.cv; storeTile(key, c); tileJobs.delete(key); job = null; break; }
-        }
-      }
+        while (!stepTileJob(job, z, tx, ty, part)) { /* finish it */ }
+        c = job.cv; storeTile(key, c); tileJobs.delete(key); job = null;
+        if (pool.inflight?.has(key)) dirtyGen.set(key, stateVersion + 1);
+      } else if (workers) requestTile(key, z, tx, ty, part);
+      else aheadQueue.set(key, [z, tx, ty, part]);
     }
     if (!visible) continue;
     inView++;
@@ -3635,9 +4926,9 @@ function drawBaseTiles(W, H, useArt) {
     const x0 = Math.round(a.x), y0 = Math.round(a.y), w = Math.round(b.x) - x0, h = Math.round(b.y) - y0;
     if (c) { ctx.drawImage(c, x0, y0, w, h); shown++; continue; }
     missing = true;
-    const coarse = coarserTile(z, tx, ty);
+    const coarse = coarserTile(z, tx, ty, part);
     if (coarse) ctx.drawImage(coarse[0], coarse[1], coarse[2], coarse[3], coarse[4], x0, y0, w, h);
-    else drawFromFiner(z, tx, ty, x0, y0, w, h);
+    else drawFromFiner(z, tx, ty, x0, y0, w, h, part);
     if (job?.next) ctx.drawImage(job.cv, x0, y0, w, h);
   }
   if (tileJobs.size > 256) {
@@ -3652,6 +4943,7 @@ function drawBaseTiles(W, H, useArt) {
     if (at !== prefetchAt) { prefetchAt = at; planPrefetch(W, H, false); }
   }
   if (missing && !workers) requestDraw();
+  scheduleAhead();
 }
 
 const PRELOAD_Z = -4;
@@ -3735,7 +5027,7 @@ function failWorkers() {
 }
 
 function workerState() {
-  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], removedDeco: [...removedDeco], removedObjects: [...removedObjects], baseEdits: draft.baseEdits || {}, version: baseVersion };
+  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], removedDeco: [...removedDeco], removedObjects: [...removedObjects], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], simulate: !!draft.simulate, baseEdits: draft.baseEdits || {}, version: baseVersion };
 }
 
 function onWorkerMessage(worker, m) {
@@ -3744,14 +5036,14 @@ function onWorkerMessage(worker, m) {
   if (m.type !== 'tile') return;
   worker.jobs--;
   pool.inflight.delete(m.key);
-  if (m.bitmap && m.key.startsWith(baseVersion + '|')) { storeTile(m.key, m.bitmap); requestDraw(); }
+  if (m.bitmap && m.key.startsWith(baseVersion + '|') && (m.gen ?? 0) >= (dirtyGen.get(m.key) || 0)) { storeTile(m.key, m.bitmap); requestDraw(); }
   else m.bitmap?.close?.();
 }
 
 function tileWorkersReady() {
   if (!pool.ready) return false;
-  if (pool.version !== baseVersion) {
-    pool.version = baseVersion;
+  if (pool.version !== baseVersion + '/' + stateVersion) {
+    pool.version = baseVersion + '/' + stateVersion;
     pool.inflight.clear();
     const state = workerState();
     for (const w of pool.workers) w.postMessage({ type: 'state', state });
@@ -3759,13 +5051,13 @@ function tileWorkersReady() {
   return true;
 }
 
-function requestTile(key, z, tx, ty) {
+function requestTile(key, z, tx, ty, part = null) {
   if (pool.inflight.has(key)) return;
   const free = pool.workers.filter((w) => w.ready).sort((a, b) => a.jobs - b.jobs)[0];
   if (!free || free.jobs >= 3) return;
   free.jobs++;
   pool.inflight.set(key, free);
-  free.postMessage({ type: 'tile', key, z, tx, ty });
+  free.postMessage({ type: 'tile', key, z, tx, ty, part, gen: stateVersion });
 }
 
 export async function workerInit(state) {
@@ -3778,6 +5070,7 @@ export async function workerInit(state) {
     return img;
   };
   base = await (await fetch('/maps/basemap.json')).json();
+  pieceStamps = null;
   const vines = [...new Set(base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite))];
   [atlasImg, sceneImg] = await Promise.all([bitmap('/maps/' + base.art.atlas), bitmap('/maps/' + base.scene.atlas)]);
   const fonts = await Promise.all((base.scene.fonts || []).map((f) => (f ? bitmap('/maps/' + f.atlas) : null)));
@@ -3797,17 +5090,23 @@ export function workerSetState(state) {
   removedScene = new Set(state.removedScene || []);
   removedObjects = new Set(state.removedObjects || []);
   removedDeco = new Set(state.removedDeco || []);
+  movedScene = new Map(state.movedScene || []);
+  movedObjects = new Map(state.movedObjects || []);
+  levelOrder = new Map(state.levelOrder || []);
+  levelTf = new Map(state.levelTf || []);
+  draft.simulate = !!state.simulate;
   draft.baseEdits = state.baseEdits || {};
   syncRemovedPaths();
   if (!layer || draft.baseState !== state.baseState) {
     draft.baseState = state.baseState;
     applyBaseState();
   }
+  applyBaseMoves();
   baseVersion = state.version;
 }
 
-export function workerRenderTile(z, tx, ty) {
-  return renderTile(z, tx, ty).transferToImageBitmap();
+export function workerRenderTile(z, tx, ty, part = null) {
+  return renderTile(z, tx, ty, part).transferToImageBitmap();
 }
 
 function draw() {
@@ -3844,8 +5143,21 @@ function draw() {
   };
   const useArt = artReady();
   if (baseOn() && !layerHidden('level')) {
-    drawBaseTiles(W, H, useArt);
+    const behind = stack().filter((e) => e.it.behind);
+    if (behind.length && useArt) {
+      // The level in bands, split where things were put behind it, each thing between them.
+      const cuts = [...new Set(behind.map((e) => cutOf(e.it)))].sort((a, b) => a - b);
+      let lo = -Infinity;
+      for (const cut of cuts) {
+        drawBaseTiles(W, H, useArt, lo + ':' + cut);
+        drawStackEntries(behind.filter((e) => cutOf(e.it) === cut));
+        lo = cut;
+      }
+      drawBaseTiles(W, H, useArt, lo + ':Infinity');
+    } else drawBaseTiles(W, H, useArt);
     if (useArt) drawLiveItems(W, H);
+    if (useArt) drawCredits(W, H, 'fake');
+    if (useArt && cam.scale >= LIVE_MIN_SCALE && sceneList?.texts?.some((t) => t.mover)) drawSceneText(toWorld(0, 0), toWorld(W, H), true);
     ctx.save();
     ctx.strokeStyle = COLORS.removed;
     ctx.lineWidth = 1;
@@ -3872,11 +5184,11 @@ function draw() {
   if (!layerHidden('blocks')) blocks.forEach((kind, k) => {
     const [cx, cy] = unkey(k);
     if (useArt) {
-      const art = isGround(kind) ? groundTile(cx, cy, kind === 'dark') : colouredTile(kind, cx, cy);
+      const art = blockArt(kind, cx, cy);
       if (art && drawGroundArt(cx, cy, art)) return;
     }
     const r = cellRect(cx, cy);
-    ctx.fillStyle = COLORS[kind];
+    ctx.fillStyle = COLORS[kind] || BLOCK_SETS[kind]?.color || COLORS.ground;
     ctx.fillRect(r.x, r.y, r.w + pad, r.h + pad);
   });
   if (!layerHidden('hazards')) spikes.forEach((sp, k) => {
@@ -3893,11 +5205,9 @@ function draw() {
   if (useArt && !layerHidden('tiles')) drawPlacedTiles(true);
   // Course screens show in front of the walls, as in the game; placed objects still go over them.
   if (!layerHidden('course')) for (const c of courses()) drawCourseScreen(c, courseColor(c.id), courseNumber(c.id));
-  for (const e of stack()) {
-    if (e.kind === 'fspike') { if (!layerHidden('hazards')) drawFreeSpike(e.it); }
-    else if (e.kind === 'sign') { if (!layerHidden('decor')) drawSign(e.it); }
-    else if (!layerHidden(e.it.cat === 'decor' ? 'decor' : 'objects')) drawPlacedObject(e.it);
-  }
+  // Things behind the level are drawn with it (above); without the level, before your blocks.
+  if (!(baseOn() && !layerHidden('level') && useArt)) drawStackEntries(stack().filter((e) => e.it.behind));
+  drawStackEntries(stack().filter((e) => !e.it.behind));
   drawSelection();
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
 
@@ -3905,7 +5215,7 @@ function draw() {
     const c = toScreen(o.x, o.y);
     if (removedObjects.has(o.id)) continue;
     if (useArt && sceneReady() && o.kind === 'upgrade') continue;
-    if (o.kind === 'trigger' && cam.scale < 0.15) continue;
+    if (o.kind === 'trigger' && cam.scale < (o.cls === 'EndCreditsTrigger' || o.cls === 'FakeCreditsControlScript' ? 0.03 : 0.15)) continue;
     if (cam.scale < 0.1) {
       ctx.fillStyle = COLORS.upgrade;
       ctx.globalAlpha = 0.8;
@@ -3915,7 +5225,8 @@ function draw() {
     }
     const w = Math.max(4, o.w * cam.scale), h = Math.max(4, o.h * cam.scale);
     if (c.x + w < 0 || c.x - w > W || c.y + h < 0 || c.y - h > H) continue;
-    const color = o.kind === 'upgrade' ? COLORS.upgrade : COLORS.trigger;
+    const credits = o.cls === 'EndCreditsTrigger' || o.cls === 'FakeCreditsControlScript';
+    const color = o.kind === 'upgrade' ? COLORS.upgrade : o.cls === 'longFallColliderController' ? COLORS.fall : credits ? '#f0a0d0' : COLORS.trigger;
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
@@ -3929,6 +5240,8 @@ function draw() {
       ctx.fillText(o.label, c.x, c.y - h / 2 - 4);
     }
     ctx.restore();
+    if (o.cls === 'longFallColliderController') drawBadge('fall', c.x, c.y - h / 2 - 14, color, cam.scale >= 0.2 ? o.label.toUpperCase() : '');
+    if (credits && cam.scale >= 0.03) drawBadge(CREDIT_ICON, c.x, c.y - h / 2 - 14, color, (o.cls === 'EndCreditsTrigger' ? 'END CREDITS' : 'FAKE CREDITS') + (draft.simulate ? ' ▶ PLAYING' : ' · SIMULATE (T) TO PLAY'));
   }
 
   if (baseOn()) {
@@ -3944,7 +5257,8 @@ function draw() {
     ctx.globalAlpha = 1;
   }
   if (baseOn() && base.scene && cam.scale >= 0.15 && !layerHidden('level')) drawMarkers();
-  if (!layerHidden('course')) drawCourses();
+  if (baseOn() && !layerHidden('level')) drawStageMask(minCx, maxCx, minCy, maxCy);
+  if (!layerHidden('course')) { drawCourses(); triggers.forEach(drawTrigger); }
   if (platformEdit != null) drawPlatformEdit();
   if (!layerHidden('objects')) drawTeleportLinks();
 
@@ -3969,12 +5283,12 @@ function draw() {
     else if (tool === 'moss' && base) { const w = cellWorld(cx, cy), c = mossCenter(mossKeyAt(w.x + CELL / 2, w.y + CELL / 2)), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); }
     else if (tool === 'tile' && base && draft.pick.tile) { const w = cellWorld(cx, cy); const tk = tileKeyAt(draft.pick.tileLayer, w.x + CELL / 2, w.y + CELL / 2); ctx.globalAlpha = 1; drawPlacedTile({ layer: draft.pick.tileLayer, tile: draft.pick.tile, q: 0 }, tk, 0.6); }
     else if ((tool === 'object' || tool === 'decor') && base) { const w = cellWorld(cx, cy); const cat = tool === 'object' ? 'objects' : 'decor'; ctx.globalAlpha = 1; (() => { const i = tool === 'object' ? draft.pick.obj ?? 0 : draft.pick.decorObj ?? 0; drawPlacedObject({ cat, i, ...placementFor(catalogItem({ cat, i }), cx, cy) }, 0.6); })(); }
-    else if (tool === 'stamp' && base?.art?.stamps?.[draft.pick.stamp]) { const w = cellWorld(cx, cy); ctx.globalAlpha = 1; for (const [tk, t] of stampTiles(base.art.stamps[draft.pick.stamp], w.x + CELL / 2, w.y + CELL / 2, placeRot, placeFlip)) drawPlacedTile(t, tk, 0.6); }
+    else if (tool === 'stamp' && allStamps()[draft.pick.stamp]) { const w = cellWorld(cx, cy); ctx.globalAlpha = 1; for (const [tk, t] of stampTiles(allStamps()[draft.pick.stamp], w.x + CELL / 2, w.y + CELL / 2, placeRot, placeFlip)) drawPlacedTile(t, tk, 0.6); }
     else if (tool === 'arrow' && base) { ctx.globalAlpha = 1; drawArrowNodes(cx, cy); }
     else if (tool === 'paste' && brush) { ctx.globalAlpha = 1; drawBrush(cx, cy); }
     else if (tool === 'select') {
       const t = hoverWorld && !drag && itemAt(hoverWorld.x, hoverWorld.y);
-      if (t && !sameTarget(t, selection)) { ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.setLineDash([]); drawTarget(t); }
+      if (t && !targetsOf(selection).some((x) => sameTarget(x, t))) { ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.setLineDash([]); drawTarget(t); }
     }
     else if (tool === 'start') drawGate(gateAt(cx, cy, 'start'), START_BOX, COLORS.start, 'START');
     else if (tool === 'end') drawGate(gateAt(cx, cy, 'end'), END_BOX, COLORS.end, 'END');
@@ -4151,8 +5465,8 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
   ctx.restore();
 }
 
-const BLOCK_KIND = { block: 'ground', dark: 'dark', blue: 'blue', orange: 'orange' };
-const SPIKE_KIND = { spike: 'spike', blueSpike: 'blue', orangeSpike: 'orange', trueSpike: 'true' };
+const BLOCK_KIND = { block: 'ground', dark: 'dark', blue: 'blue', orange: 'orange', ...Object.fromEntries(Object.keys(BLOCK_SETS).map((k) => [k, k])) };
+const SPIKE_KIND = { spike: 'spike', darkSpike: 'dark', blueSpike: 'blue', orangeSpike: 'orange', trueSpike: 'true' };
 
 // ---- free spikes: the Hazards spikes, placed off the grid with a finer snap ----
 function placeFreeSpike(c, at) {
@@ -4163,14 +5477,380 @@ function placeFreeSpike(c, at) {
   return true;
 }
 const freeSpikeAt = (wx, wy) => freeSpikes.findLastIndex((f) => Math.abs(wx - f.x) <= CELL / 2 && Math.abs(wy - f.y) <= CELL / 2);
+// A free spike's own turn (past its quarter turn), size and flips, as a world matrix.
+const freeSpikeExtra = (f) => mul2(rot2(((f.r || 0) * Math.PI) / 180), [(f.s || 1) * (f.fx ? -1 : 1), 0, 0, (f.s || 1) * (f.fy ? -1 : 1)]);
 function drawFreeSpike(f) {
+  if (!f.r && !f.s && !f.fx && !f.fy) return drawFreeSpikeCore(f);
+  const c = toScreen(f.x, f.y);
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(-((f.r || 0) * Math.PI) / 180);
+  ctx.scale((f.s || 1) * (f.fx ? -1 : 1), (f.s || 1) * (f.fy ? -1 : 1));
+  ctx.translate(-c.x, -c.y);
+  drawFreeSpikeCore(f);
+  ctx.restore();
+}
+function drawFreeSpikeCore(f) {
   if (f.c === 'true' && artReady()) return drawTrueSpikeAt(f.x, f.y, f.q);
-  const t = spikeTile(f.c === 'true' ? 'spike' : f.c, f.q), sprite = base?.art?.tiles?.[t.tile], c = toScreen(f.x, f.y);
-  if (sprite !== undefined && artReady()) { ctx.save(); blitSprite(ctx, sprite, t.matrix, cam.scale, c.x, c.y); ctx.restore(); return; }
+  const c = toScreen(f.x, f.y);
+  if (base && artReady()) {
+    const t = spikeTile(f.c === 'true' ? 'spike' : f.c, f.q), sprite = base.art?.tiles?.[t.tile];
+    if (sprite !== undefined) { ctx.save(); blitSprite(ctx, sprite, t.matrix, cam.scale, c.x, c.y); ctx.restore(); return; }
+  }
   const r = rotMatrix(f.q), h = (CELL / 2) * cam.scale, pt = (x, y) => [c.x + r[0] * x * h + r[1] * y * h, c.y - (r[2] * x * h + r[3] * y * h)];
   ctx.fillStyle = COLORS[f.c] || COLORS.spike;
   ctx.beginPath(); ctx.moveTo(...pt(-1, -1)); ctx.lineTo(...pt(1, -1)); ctx.lineTo(...pt(0, 1)); ctx.closePath(); ctx.fill();
 }
+// ---- music and backgrounds: files kept in IndexedDB, chosen map-wide or by triggers ----
+const GAME_TRACKS = [['Area1Track1', 'Area 1 - track 1'], ['Area1Track2', 'Area 1 - track 2'], ['Area2Track1', 'Area 2 - track 1'], ['Area2Track2', 'Area 2 - track 2'], ['TripBreaker', 'Trip breaker'], ['Overgrowth', 'Overgrowth']];
+let assetDbPromise = null;
+function assetDb() {
+  assetDbPromise ||= new Promise((ok, fail) => {
+    const req = indexedDB.open('rechargeMapAssets', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('files');
+    req.onsuccess = () => ok(req.result);
+    req.onerror = () => fail(req.error);
+  });
+  return assetDbPromise;
+}
+async function assetBlob(file) {
+  const db = await assetDb();
+  return new Promise((ok) => { const r = db.transaction('files').objectStore('files').get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); });
+}
+async function putAsset(file, blob) {
+  const db = await assetDb();
+  return new Promise((ok, fail) => { const t = db.transaction('files', 'readwrite'); t.objectStore('files').put(blob, file); t.oncomplete = ok; t.onerror = () => fail(t.error); });
+}
+const assetList = (kind) => (draft.assets || []).filter((a) => a.kind === kind);
+// Adds a picked file to the map: stored under a unique file name, listed in draft.assets.
+async function addAsset(kind, fileObj) {
+  const ext = (fileObj.name.match(/\.[a-z0-9]+$/i)?.[0] || '').toLowerCase();
+  const file = kind + '-' + Date.now().toString(36) + ext;
+  await putAsset(file, fileObj);
+  draft.assets = [...(draft.assets || []), { file, name: fileObj.name, kind }];
+  saveDraft();
+  return file;
+}
+function pickFile(accept) {
+  return new Promise((ok) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = accept;
+    inp.onchange = () => ok(inp.files[0] || null);
+    inp.click();
+  });
+}
+const assetName = (file) => (draft.assets || []).find((a) => a.file === file)?.name || file;
+function musicOptions(current, withKeep) {
+  const opt = (v, t) => `<option value="${v}"${current === v ? ' selected' : ''}>${t}</option>`;
+  return (withKeep ? opt('', 'No change') : '') + opt('level', 'The level\'s own') + opt('none', 'Silence')
+    + GAME_TRACKS.map(([id, t]) => opt('game:' + id, t)).join('')
+    + assetList('music').map((a) => opt('asset:' + a.file, '♪ ' + a.name)).join('')
+    + opt('add', 'Add a music file…');
+}
+function backgroundOptions(current, withKeep) {
+  const opt = (v, t) => `<option value="${v}"${current === v ? ' selected' : ''}>${t}</option>`;
+  return (withKeep ? opt('', 'No change') : '') + opt('level', 'The level\'s own')
+    + assetList('image').map((a) => opt(a.file, '🖼 ' + a.name)).join('')
+    + opt('add', 'Add an image…');
+}
+const musicLabel = (m) => !m ? '' : m === 'level' ? 'level music' : m === 'none' ? 'silence' : m.startsWith('game:') ? (GAME_TRACKS.find(([id]) => 'game:' + id === m)?.[1] || m) : assetName(m.slice(6));
+// A picked option: 'add' asks for a file first. Resolves to the stored value.
+async function resolveMediaChoice(kind, value) {
+  if (value !== 'add') return value;
+  const f = await pickFile(kind === 'music' ? 'audio/ogg,audio/mpeg,audio/wav,.ogg,.mp3,.wav' : 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp');
+  if (!f) return null;
+  const file = await addAsset(kind, f);
+  return kind === 'music' ? 'asset:' + file : file;
+}
+// The background as the map file stores it.
+function backgroundJson(bg) {
+  if (!bg?.image) return 'level';
+  return { image: bg.image, parallax: bg.parallax ?? 0.8, scale: bg.scale ?? 1 };
+}
+// The files the exported map uses, base64 - sent along to be saved in its assets folder.
+async function mapAssets() {
+  const used = new Set();
+  const note = (m) => { if (typeof m === 'string' && m.startsWith('asset:')) used.add(m.slice(6)); };
+  note(draft.music);
+  if (draft.background?.image) used.add(draft.background.image);
+  for (const cs of [...csprites, ...Object.values(draft.stageEdits || {}).flatMap((v) => v?.csprites || [])]) if (cs.image) used.add(cs.image);
+  for (const t of [...triggers, ...Object.values(draft.stageEdits || {}).flatMap((v) => v?.triggers || [])]) { note(t.music); if (t.background?.image) used.add(t.background.image); }
+  const out = [];
+  for (const file of used) {
+    const blob = await assetBlob(file);
+    if (!blob) continue;
+    const data = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.readAsDataURL(blob); });
+    out.push({ file, data });
+  }
+  return out;
+}
+// A map opened from the installed maps brings its files back into the editor.
+async function fetchInstalledAssets(id) {
+  for (const a of draft.assets || []) {
+    if (await assetBlob(a.file)) continue;
+    try {
+      const b64 = await window.__TAURI__.core.invoke('read_map_asset', { id, file: a.file });
+      const bin = atob(b64), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      await putAsset(a.file, new Blob([bytes]));
+    } catch { /* this Recharge build can't read them - the choice stays, the preview won't */ }
+  }
+}
+const assetImages = new Map();
+function assetImage(file) {
+  let img = assetImages.get(file);
+  if (!img) {
+    img = new Image();
+    assetImages.set(file, img);
+    assetBlob(file).then((b) => { if (b) { img.onload = () => { invalidateBase?.(); requestDraw(); }; img.src = URL.createObjectURL(b); } });
+  }
+  return img;
+}
+function triggerLabel(t) {
+  const k = trigKind(t), d = TRIGGER_KINDS[k] || TRIGGER_KINDS.media;
+  if (k === 'media') {
+    const parts = [t.music ? '♪ ' + musicLabel(t.music) : '', t.background ? '🖼 ' + (t.background === 'level' ? 'level background' : assetName(t.background.image)) : ''].filter(Boolean);
+    return parts.join('  ·  ') || 'TRIGGER (does nothing yet)';
+  }
+  const extra = GROUP_KINDS.has(k) ? ' "' + (t.group || '?') + '"' + (k === 'move' ? ` by ${t.dx || 0}, ${t.dy || 0}` : '')
+    : k === 'zoom' ? ' x' + (t.size || 1) : k === 'message' ? ': ' + (t.text || '') : '';
+  return d.label.toUpperCase() + extra + (t.once ? ' (once)' : '');
+}
+function drawTrigger(t) {
+  const a = toScreen(t.x - t.w / 2, t.y + t.h / 2), w = t.w * cam.scale, h = t.h * cam.scale;
+  const col = (TRIGGER_KINDS[trigKind(t)] || TRIGGER_KINDS.media).color;
+  const picked = !CALM && selection?.kind === 'mtrig' && triggers[selection.index] === t;
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.fillStyle = col + (picked ? Math.round(18 + 14 * (0.5 + 0.5 * Math.sin(performance.now() / 260))).toString(16).padStart(2, '0') : '12');
+  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(a.x, a.y, w, h);
+  ctx.strokeRect(a.x, a.y, w, h);
+  if (MARKER_KINDS.has(trigKind(t))) {
+    const c = toScreen(t.x, t.y), m = toScreen(t.x + (t.tx || 0), t.y + (t.ty || 0));
+    ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(m.x, m.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(m.x, m.y, Math.max(4, 24 * cam.scale), 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+  if (cam.scale >= 0.04) drawBadge((TRIGGER_KINDS[trigKind(t)] || TRIGGER_KINDS.media).icon, a.x + 13, a.y + 13, col, cam.scale >= 0.12 ? triggerLabel(t) : '');
+}
+const triggerAt = (wx, wy) => triggers.findLastIndex((t) => Math.abs(wx - t.x) <= t.w / 2 && Math.abs(wy - t.y) <= t.h / 2);
+function triggerJson(t, ox = 0, oy = 0) {
+  const k = trigKind(t), o = { type: 'trigger', kind: k, x: Math.round(t.x - ox), y: Math.round(t.y - oy), w: t.w, h: t.h, ...(t.once ? { once: true } : {}) };
+  if (k === 'media') Object.assign(o, t.music ? { music: t.music } : {}, t.background ? { background: backgroundJson(t.background === 'level' ? null : t.background) } : {});
+  if (GROUP_KINDS.has(k)) o.group = t.group || '';
+  if (k === 'move') Object.assign(o, { dx: t.dx || 0, dy: t.dy || 0, time: t.time ?? 1, ...(t.back ? { back: true } : {}) });
+  if (MARKER_KINDS.has(k)) Object.assign(o, { tx: Math.round(t.x + (t.tx || 0) - ox), ty: Math.round(t.y + (t.ty || 0) - oy) });
+  if (k === 'zoom') o.size = t.size || 1;
+  if (k === 'message') Object.assign(o, { text: t.text || '', seconds: t.seconds ?? 3 });
+  return o;
+}
+
+// ---- groups: ids on placed things and block / spike cells, for triggers to act on ----
+function targetCells(t) {
+  if (t.kind === 'tile') return [t.key];
+  if (t.kind === 'cell' && !t.vine) return [t.k];
+  if (t.kind === 'blocks') return t.cells;
+  if (t.kind === 'region') return regionContent(t);
+  return [];
+}
+function groupOf(t) {
+  if (t.kind === 'base' || t.kind === 'scene') return levelThing(t) ? levelGroups.get(levelKey(t)) || '' : null;
+  if (WORLD_KINDS.has(t.kind)) return listOfKind(t.kind)[t.index]?.group || '';
+  const cells = targetCells(t);
+  return cells.length ? cellGroups.get(cells[0]) || '' : null;
+}
+function setGroup(targets, g) {
+  for (const t of targets) {
+    if (WORLD_KINDS.has(t.kind)) { const it = listOfKind(t.kind)[t.index]; if (it) { if (g) it.group = g; else delete it.group; } continue; }
+    if (t.kind === 'base' || t.kind === 'scene') { if (g) levelGroups.set(levelKey(t), g); else levelGroups.delete(levelKey(t)); continue; }
+    for (const k of targetCells(t)) { if (g) cellGroups.set(k, g); else cellGroups.delete(k); }
+  }
+}
+function groupRow() {
+  const ts = targetsOf(selection).filter((t) => groupOf(t) !== null);
+  if (!ts.length) return '';
+  const gs = [...new Set(ts.map(groupOf))], g = gs.length === 1 ? gs[0] : '';
+  const hidden = g && (draft.hiddenGroups || []).includes(g);
+  return `<div class="mm-config-row"><label>Group<input class="mm-input" type="text" data-grp="id" value="${g.replace(/"/g, '&quot;')}" placeholder="${gs.length > 1 ? 'several - type to set all' : 'none'}"></label></div>`
+    + (g ? `<div class="mm-config-row"><label class="mm-check"><input type="checkbox" data-grp="hidden"${hidden ? ' checked' : ''}> Group "${g}" starts hidden</label></div>` : '');
+}
+// Everything in a group: placed things and cells, as selection targets.
+function groupMembers(g) {
+  const out = [];
+  for (const kind of WORLD_KINDS) listOfKind(kind).forEach((it, index) => { if (it.group === g) out.push({ kind, index }); });
+  for (const [k, v] of levelGroups) if (v === g) out.push(k.startsWith('o:') ? { kind: 'base', id: k.slice(2) } : { kind: 'scene', id: k });
+  const cells = [...cellGroups].filter(([k, v]) => v === g && !k.includes('|')).map(([k]) => k);
+  for (const [k, v] of cellGroups) if (v === g && k.includes('|')) out.push({ kind: 'tile', key: k });
+  return { targets: out, cells };
+}
+
+// ---- transform: position, size, turn, flips and opacity, one model for every placed thing ----
+const TF_KINDS = {
+  object: ['x', 'y', 'rot', 'scale', 'sx', 'flip', 'alpha'],
+  csprite: ['x', 'y', 'rot', 'scale', 'sx', 'flip', 'alpha'],
+  fspike: ['x', 'y', 'rot', 'scale', 'flip'],
+  sign: ['x', 'y', 'rot', 'w', 'alpha'],
+  xspawn: ['x', 'y'],
+  mtrig: ['x', 'y', 'w'],
+};
+const LEVEL_TF = ['x', 'y', 'rot', 'scale', 'sx', 'flip'];
+function levelThing(t) {
+  if (t.kind === 'base') { const o = baseObjects.find((x) => x.id === t.id); return o && !removedObjects.has(o.id) ? o : null; }
+  const p = sceneList?.items.find((x) => x.id === t.id);
+  return p && !removedScene.has(p.id) ? p : null;
+}
+function tfFields(t) {
+  if (t && (t.kind === 'base' || t.kind === 'scene')) return levelThing(t) ? LEVEL_TF : null;
+  const it = t && TF_KINDS[t.kind] && listOfKind(t.kind)?.[t.index];
+  if (!it) return null;
+  if (t.kind === 'object' && catalogItem(it)?.zip) return ['x', 'y', 'alpha'];
+  return TF_KINDS[t.kind];
+}
+function tfGet(t) {
+  if (t.kind === 'base' || t.kind === 'scene') {
+    const it = levelThing(t), tf = levelTf.get(levelKey(t)) || {};
+    return { x: it.x, y: it.y, rot: tf.rot || 0, scale: tf.scale || 1, sx: tf.sx || 1, sy: tf.sy || 1, fx: !!tf.fx, fy: !!tf.fy };
+  }
+  const it = listOfKind(t.kind)[t.index];
+  if (t.kind === 'object') { const c = it.cfg || {}; return { x: it.x, y: it.y, rot: c.rot || 0, scale: c.scale || 1, sx: c.sx || 1, sy: c.sy || 1, fx: !!c.fx, fy: !!c.fy, alpha: c.alpha ?? 1 }; }
+  if (t.kind === 'fspike') return { x: it.x, y: it.y, rot: ((it.q || 0) * 90 + (it.r || 0)) % 360, scale: it.s || 1, fx: !!it.fx, fy: !!it.fy };
+  return { x: it.x, y: it.y, rot: it.r || 0, scale: it.scale || 1, sx: it.sx || 1, sy: it.sy || 1, fx: !!it.fx, fy: !!it.fy, alpha: it.alpha ?? 1, w: it.w, h: it.h };
+}
+const TF_DEFAULT = { rot: 0, scale: 1, sx: 1, sy: 1, alpha: 1, fx: false, fy: false };
+function tfSet(t, f, v) {
+  const it = listOfKind(t.kind)?.[t.index];
+  if (f === 'rot') v = ((Math.round(v * 100) / 100) % 360 + 360) % 360;
+  if (f === 'scale' || f === 'sx' || f === 'sy') v = Math.max(0.05, Math.min(20, v));
+  if (f === 'alpha') v = Math.max(0.05, Math.min(1, v));
+  if (f === 'w' || f === 'h') v = Math.max(8, v);
+  const put = (o, k) => { if (v === TF_DEFAULT[f] || v === false) delete o[k]; else o[k] = v; };
+  if (t.kind === 'base' || t.kind === 'scene') {
+    const it = levelThing(t);
+    if (!it) return;
+    if (f === 'x' || f === 'y') { moveLevelThing(t, f === 'x' ? v - it.x : 0, f === 'y' ? v - it.y : 0); return; }
+    const k = levelKey(t), tf = { ...(levelTf.get(k) || {}) };
+    put(tf, f === 'rot' ? 'rot' : f);
+    if (Object.keys(tf).length) levelTf.set(k, tf); else levelTf.delete(k);
+    applyBaseMoves();
+    return;
+  }
+  if (f === 'x' || f === 'y' || f === 'w' || f === 'h') { it[f] = v; return; }
+  if (t.kind === 'object') { const c = { ...(it.cfg || {}) }; put(c, f); it.cfg = c; return; }
+  if (t.kind === 'fspike') {
+    if (f === 'rot') { it.q = Math.floor(v / 90) % 4; v -= it.q * 90; put(it, 'r'); }
+    else put(it, f === 'scale' ? 's' : f);
+    return;
+  }
+  put(it, f === 'rot' ? 'r' : f);
+}
+function tfTurn(ts, by) {
+  pushUndo();
+  for (const t of ts) if (tfFields(t)?.includes('rot')) tfSet(t, 'rot', tfGet(t).rot + by);
+  saveDraft(); renderConfig(); requestDraw();
+}
+// What = / - and , . act on: the selection, else the thing under the mouse.
+function tfTargets(field) {
+  const sel = targetsOf(selection).filter((t) => tfFields(t)?.includes(field));
+  if (sel.length) return sel;
+  const h = hoverWorld && itemAt(hoverWorld.x, hoverWorld.y);
+  return h && tfFields(h)?.includes(field) ? [h] : [];
+}
+function transformSection() {
+  const ts = targetsOf(selection).filter((t) => tfFields(t));
+  if (!ts.length) return '';
+  const fields = ts.map(tfFields).reduce((a, b) => a.filter((f) => b.includes(f)));
+  const v = tfGet(ts[0]), one = ts.length === 1;
+  const n = (f, label, val, step, min = '') => `<label>${label}<input class="mm-input" type="number" data-tf="${f}" step="${step}"${min ? ` min="${min}"` : ''} value="${Math.round(val * 1000) / 1000}"></label>`;
+  let h = '';
+  if (one && fields.includes('x')) h += `<div class="mm-config-row">${n('x', 'X', v.x, 1)}${n('y', 'Y', v.y, 1)}</div>`;
+  if (fields.includes('rot')) h += `<div class="mm-config-row mm-tf-row">${n('rot', 'Rotation °', v.rot, 15)}<button class="mm-tool mm-icon" data-tfa="rotL" title="Turn 90° left">⟲</button><button class="mm-tool mm-icon" data-tfa="rotR" title="Turn 90° right">⟳</button></div>`;
+  if (fields.includes('scale')) h += `<div class="mm-config-row mm-tf-3">${n('scale', 'Size ×', v.scale, 0.1, 0.05)}${fields.includes('sx') ? n('sx', 'Width ×', v.sx, 0.1, 0.05) + n('sy', 'Height ×', v.sy, 0.1, 0.05) : ''}</div>`;
+  if (fields.includes('w')) h += `<div class="mm-config-row">${n('w', 'Width', v.w, 8, 8)}${n('h', 'Height', v.h, 8, 8)}</div>`;
+  if (fields.includes('flip') || fields.includes('scale') || fields.includes('rot')) h += `<div class="mm-config-row">${fields.includes('flip') ? `<button class="mm-tool${v.fx ? ' active' : ''}" data-tfa="fx" title="Mirror left-right (F)">↔ Flip</button><button class="mm-tool${v.fy ? ' active' : ''}" data-tfa="fy" title="Mirror top-bottom (Shift+F)">↕ Flip</button>` : ''}<button class="mm-tool" data-tfa="reset" title="Normal size, no turn, no flips">Reset</button></div>`;
+  if (fields.includes('alpha')) h += `<div class="mm-config-row"><label>Opacity <output>${Math.round(v.alpha * 100)}%</output><input class="mm-range" type="range" min="0.05" max="1" step="0.05" data-tf="alpha" value="${v.alpha}"></label></div>`;
+  return sec('transform', 'Transform', h);
+}
+function bindTransform(el) {
+  el.querySelectorAll('[data-tf]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => e.stopPropagation());
+    const each = (v) => { for (const t of targetsOf(selection)) if (tfFields(t)?.includes(inp.dataset.tf === 'sy' ? 'sx' : inp.dataset.tf === 'h' ? 'w' : inp.dataset.tf)) tfSet(t, inp.dataset.tf, v); };
+    if (inp.type === 'range') {
+      inp.addEventListener('pointerdown', () => pushUndo());
+      inp.addEventListener('input', () => { inp.previousElementSibling.textContent = Math.round(inp.value * 100) + '%'; each(Number(inp.value)); requestDraw(); });
+      inp.addEventListener('change', () => { saveDraft(); });
+      return;
+    }
+    inp.addEventListener('change', () => {
+      const v = Number(inp.value);
+      if (!Number.isFinite(v)) return;
+      pushUndo(); each(v); saveDraft(); renderConfig(); requestDraw();
+    });
+  });
+  el.querySelectorAll('[data-tfa]').forEach((b) => b.addEventListener('click', () => {
+    const ts = targetsOf(selection).filter((t) => tfFields(t)), a = b.dataset.tfa;
+    if (a === 'rotL' || a === 'rotR') return tfTurn(ts, a === 'rotL' ? 90 : -90);
+    pushUndo();
+    for (const t of ts) {
+      const f = tfFields(t);
+      if (a === 'reset') { for (const k of ['rot', 'scale', 'sx', 'sy', 'fx', 'fy']) if (f.includes(k === 'sy' ? 'sx' : k === 'fx' || k === 'fy' ? 'flip' : k)) tfSet(t, k, TF_DEFAULT[k]); }
+      else if (f.includes('flip')) tfSet(t, a, !tfGet(t)[a]);
+    }
+    saveDraft(); renderConfig(); requestDraw();
+  }));
+}
+
+// ---- the inspector's sections: collapsible, remembered ----
+let secClosed = new Set();
+try { secClosed = new Set(JSON.parse(localStorage.getItem('mapMakerClosedSections') || '[]')); } catch { /* private window */ }
+function sec(id, title, body, extra = '') {
+  if (!body) return '';
+  return `<details class="mm-sec" data-sec="${id}"${secClosed.has(id) ? '' : ' open'}><summary>${title}${extra}</summary><div class="mm-sec-body">${body}</div></details>`;
+}
+function bindSections(el) {
+  el.querySelectorAll('details.mm-sec').forEach((d) => d.addEventListener('toggle', () => {
+    if (d.open) secClosed.delete(d.dataset.sec); else secClosed.add(d.dataset.sec);
+    try { localStorage.setItem('mapMakerClosedSections', JSON.stringify([...secClosed])); } catch { /* private window */ }
+  }));
+}
+
+// ---- your own images, placed like decorations ----
+const plantImages = new Map();
+function csImage(cs) {
+  if (!cs.game) return assetImage(cs.image);
+  let img = plantImages.get(cs.game);
+  if (!img) { const pl = plantOf(cs); img = new Image(); img.onload = () => requestDraw(); if (pl) img.src = '/maps/plants/' + pl.file; plantImages.set(cs.game, img); }
+  return img;
+}
+function customSpriteSize(cs) {
+  const pl = cs.game && plantOf(cs), s = cs.scale || 1;
+  if (pl) return { w: pl.w * s * (cs.sx || 1), h: pl.h * s * (cs.sy || 1) };
+  const img = assetImage(cs.image);
+  return { w: (img.naturalWidth || 64) * s * (cs.sx || 1), h: (img.naturalHeight || 64) * s * (cs.sy || 1) };
+}
+function customSpriteHit(cs, wx, wy) {
+  const b = customSpriteSize(cs);
+  return Math.abs(wx - cs.x) <= b.w / 2 && Math.abs(wy - cs.y) <= b.h / 2;
+}
+function drawCustomSprite(cs) {
+  const img = csImage(cs), c = toScreen(cs.x, cs.y), b = customSpriteSize(cs);
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(-((cs.r || 0) * Math.PI) / 180);
+  ctx.scale(cs.fx ? -1 : 1, cs.fy ? -1 : 1);
+  ctx.globalAlpha *= cs.alpha ?? 1;
+  if (img.complete && img.naturalWidth) ctx.drawImage(img, (-b.w / 2) * cam.scale, (-b.h / 2) * cam.scale, b.w * cam.scale, b.h * cam.scale);
+  else { ctx.strokeStyle = '#8aa0b8'; ctx.setLineDash([4, 3]); ctx.strokeRect((-b.w / 2) * cam.scale, (-b.h / 2) * cam.scale, b.w * cam.scale, b.h * cam.scale); }
+  ctx.restore();
+}
+function customSpriteJson(cs, ox = 0, oy = 0) {
+  if (cs.game) return { type: 'gameSprite', sprite: cs.game, x: Math.round(cs.x - ox), y: Math.round(cs.y - oy), scaleX: (cs.scale || 1) * (cs.sx || 1), scaleY: (cs.scale || 1) * (cs.sy || 1), rotation: cs.r || 0, ...(cs.alpha != null && cs.alpha !== 1 ? { alpha: cs.alpha } : {}), ...(cs.fx ? { flipX: true } : {}), ...(cs.fy ? { flipY: true } : {}) };
+  return { type: 'customSprite', image: cs.image, x: Math.round(cs.x - ox), y: Math.round(cs.y - oy), scale: cs.scale || 1, scaleX: (cs.scale || 1) * (cs.sx || 1), scaleY: (cs.scale || 1) * (cs.sy || 1), rotation: cs.r || 0, ...(cs.alpha != null && cs.alpha !== 1 ? { alpha: cs.alpha } : {}), ...(cs.fx ? { flipX: true } : {}), ...(cs.fy ? { flipY: true } : {}) };
+}
+
 // ---- text: the level's green sign text (the zone 2 statue's), saying anything ----
 const SIGN_PATH = 'zone 2/Area1/Lighting objects/CoolStatue/StatuePrestigeText';
 const SIGN_COLOR = '#7bb652';
@@ -4208,6 +5888,7 @@ function drawSign(sg) {
   ctx.setTransform(1, 0, 0, 1, c.x, c.y);
   ctx.rotate(-((sg.r || 0) * Math.PI) / 180);
   ctx.scale(cam.scale / baked.px, cam.scale / baked.px);
+  ctx.globalAlpha *= sg.alpha ?? 1;
   ctx.drawImage(baked.canvas, baked.x0 * baked.px, -baked.top * baked.px);
   ctx.restore();
   if (selection?.kind === 'sign' && signs[selection.index] === sg) {
@@ -4221,19 +5902,20 @@ function drawSign(sg) {
 const signAt = (wx, wy) => signs.findLastIndex((sg) => Math.abs(wx - sg.x) <= sg.w / 2 && Math.abs(wy - sg.y) <= sg.h / 2);
 function signJson(sg, ox = 0, oy = 0) {
   const col = (sg.c || SIGN_COLOR).match(/\w\w/g).map((h) => Math.round((parseInt(h, 16) / 255) * 1000) / 1000);
-  return { type: 'sign', path: SIGN_PATH, x: Math.round(sg.x - ox), y: Math.round(sg.y - oy), text: sg.t, width: sg.w, height: sg.h, color: col, rotation: sg.r || 0 };
+  return { type: 'sign', path: SIGN_PATH, x: Math.round(sg.x - ox), y: Math.round(sg.y - oy), text: sg.t, width: sg.w, height: sg.h, color: col, rotation: sg.r || 0, ...(sg.alpha != null && sg.alpha !== 1 ? { alpha: sg.alpha } : {}) };
 }
 
 // A free spike for the game: its tile, turned, and its hitbox in its own units.
 function freeSpikeJson(f, ox = 0, oy = 0) {
   const at = { x: Math.round(f.x - ox), y: Math.round(f.y - oy) };
   const turn = (shape, m) => shape.map((poly) => poly.map(([x, y]) => [Math.round((m[0] * x + m[1] * y) * 100) / 100, Math.round((m[2] * x + m[3] * y) * 100) / 100]));
+  const E = freeSpikeExtra(f);
   if (f.c === 'true') {
     const d = trueSpikeDef(), t = spikeTile('spike', f.q), col = COLORS.true.match(/\w\w/g).map((h) => Math.round((parseInt(h, 16) / 255) * 1000) / 1000);
-    return { type: 'freeSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: t.matrix, color: col, shape: turn(d.shape, rotMatrix(f.q)) };
+    return { type: 'freeSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: mul2(E, t.matrix), color: col, shape: turn(turn(d.shape, rotMatrix(f.q)), E) };
   }
   const t = spikeTile(f.c, f.q), d = defByTile(t.layer + '|' + t.tile);
-  return { type: 'freeSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: t.matrix, shape: turn(d?.shape || [[[-12, -16], [12, -16], [0, 14]]], t.matrix) };
+  return { type: 'freeSpike', tilemap: t.layer, tileName: t.tile, ...at, matrix: mul2(E, t.matrix), shape: turn(turn(d?.shape || [[[-12, -16], [12, -16], [0, 14]]], t.matrix), E) };
 }
 
 const spikeTurn = (sp, cx, cy) => sp.q ?? autoSpikeTurn(cx, cy);
@@ -4257,7 +5939,7 @@ function vineAt(wx, wy) {
 const LAYER_DEFS = [['level', 'Level (base map)'], ['blocks', 'Blocks & moss'], ['hazards', 'Spikes & vines'], ['tiles', 'Tiles & arrows'], ['objects', 'Objects'], ['decor', 'Decorations'], ['course', 'Course & spawn']];
 const layerHidden = (id) => !!draft.layers?.[id]?.hidden;
 const layerLocked = (id) => !!draft.layers?.[id]?.locked;
-const TOOL_LAYER = { block: 'blocks', dark: 'blocks', blue: 'blocks', orange: 'blocks', moss: 'blocks', spike: 'hazards', blueSpike: 'hazards', orangeSpike: 'hazards', trueSpike: 'hazards', vine: 'hazards', tile: 'tiles', stamp: 'tiles', arrow: 'tiles', object: 'objects', decor: 'decor', sign: 'decor', start: 'course', end: 'course', spawn: 'course', paste: null };
+const TOOL_LAYER = { gsprite: 'decor', ...Object.fromEntries(Object.keys(BLOCK_SETS).map((k) => [k, 'blocks'])), block: 'blocks', dark: 'blocks', blue: 'blocks', orange: 'blocks', moss: 'blocks', spike: 'hazards', darkSpike: 'hazards', blueSpike: 'hazards', orangeSpike: 'hazards', trueSpike: 'hazards', vine: 'hazards', tile: 'tiles', stamp: 'tiles', arrow: 'tiles', object: 'objects', decor: 'decor', sign: 'decor', csprite: 'decor', mtrigger: 'course', xspawn: 'course', start: 'course', end: 'course', spawn: 'course', paste: null };
 function targetLayer(t) {
   switch (t?.kind) {
     case 'object': return placed[t.index]?.cat === 'decor' ? 'decor' : 'objects';
@@ -4266,6 +5948,8 @@ function targetLayer(t) {
     case 'cell': return t.vine || spikes.has(t.k) ? 'hazards' : 'blocks';
     case 'fspike': return 'hazards';
     case 'sign': return 'decor';
+    case 'csprite': case 'gsprite': return 'decor';
+    case 'mtrig': case 'xspawn': return 'course';
     case 'tile': return 'tiles';
     case 'base': case 'basecells': case 'scene': case 'decotiles': return 'level';
     default: return null;
@@ -4292,20 +5976,25 @@ function renderLayersPanel() {
 const KEY_GUIDE = [
   ['Placing', [
     ['B / S / O / D / C', 'Blocks, hazards, objects, decor, course - again to step (Shift back)'],
-    ['1-9, [ ]', 'Pick / step through the current dropdown'],
+    ['Group (in the dropdown)', 'Give the selection a group id - group triggers show, hide, toggle or move it'],
+    ['1-9, [ ]', 'Pick / step through the current dropdown ([ ] when nothing layered is selected)'],
     ['A', 'Guide arrow (drag a path)'],
     ['R / Shift+R', 'Turn what you place (spikes: fixed direction)'],
     ['F', 'Mirror what you place'],
     ['Alt+click, I', 'Pick up the thing under the cursor'],
   ]],
   ['Selecting', [
-    ['Q', 'Select - click a thing (opens it in its dropdown), drag a region'],
+    ['Q', 'Select tool'],
+    ['Click', 'Select one thing (it opens in its dropdown)'],
+    ['Shift+click', 'Add or remove a thing - any kind, mixed'],
+    ['Drag empty space', 'Box-select everything inside, each outlined (Shift: add to the selection)'],
+    ['Drag the selection', 'Move all of it, with any tool - what it passes over is kept'],
     ['E', 'Erase'],
     ['Delete', 'Delete the selection'],
     ['Esc', 'Deselect / close, then leave fullscreen'],
-    ['Ctrl+C / Ctrl+V, V', 'Copy the selected object or region / paste (an object pastes at the mouse)'],
-    ['] / [', 'Move the selected object or free spike up / down one layer'],
-    ['Shift+] / Shift+[', 'Bring it to the front / send it to the back'],
+    ['Ctrl+C / Ctrl+V, V', 'Copy the selection / paste it at the mouse'],
+    ['] / [', 'Move the selected things up / down one layer (past the level: behind it)'],
+    ['Shift+] / Shift+[', 'Bring them to the front / send them behind everything, the level included'],
     ['Ctrl+S', 'Save to your installed maps'],
     ['Ctrl+D', 'Duplicate the selection'],
     ['Ctrl+Z / Ctrl+Y', 'Undo / redo (Ctrl+Shift+Z too)'],
@@ -4316,7 +6005,7 @@ const KEY_GUIDE = [
     [', / .', 'Turn 15° (Shift: 1°)'],
     ['F / Shift+F', 'Flip left-right / top-bottom'],
     ['= / -', 'Scale up / down'],
-    ['Drag', 'Move objects, gates, blocks (Shift: free)'],
+    ['Drag', 'Move the selection (Shift: free)'],
   ]],
   ['View', [
     ['Wheel', 'Zoom'],
@@ -4340,6 +6029,14 @@ function renderKeysPanel() {
 function duplicateSelection() {
   const sel = selection;
   if (!sel) { flash('Select something to duplicate (Ctrl+D).'); return; }
+  if (sel.kind === 'multi') {
+    const clip = copyMany(sel.items);
+    if (!clip) { flash('Nothing in the selection can be duplicated.', true); return; }
+    pushUndo();
+    pasteMany(clip.many, { cx: clip.anchor.cx + 1, cy: clip.anchor.cy - 1 });
+    saveDraft(); renderConfig(); requestDraw();
+    return;
+  }
   pushUndo();
   if (sel.kind === 'object') {
     const o = placed[sel.index], copy = { ...JSON.parse(JSON.stringify(o)), x: o.x + CELL, y: o.y - CELL };
@@ -4392,7 +6089,7 @@ function replaceSelectionWith(it) {
   } else if (t.kind === 'blocks' && BLOCK_KIND[it.tool]) {
     pushUndo();
     for (const k of t.cells) blocks.set(k, BLOCK_KIND[it.tool]);
-    selection = { ...t, what: BLOCK_NAMES[BLOCK_KIND[it.tool]] };
+    selection = { ...t, what: blockName(BLOCK_KIND[it.tool]) };
   } else if (t.kind === 'cell' && !t.vine && SPIKE_KIND[it.tool] && spikes.has(t.k)) {
     pushUndo();
     spikes.set(t.k, { ...spikes.get(t.k), c: SPIKE_KIND[it.tool] });
@@ -4411,7 +6108,7 @@ function syncChrome() {
   if (snapSel) snapSel.value = String(draft.snap || CELL);
   root.classList.toggle('mm-full', !draft.inline);
   const full = root.querySelector('#mm-full-btn');
-  if (full) { full.textContent = draft.inline ? '⤢' : '⤡'; full.title = draft.inline ? 'Fullscreen editor' : 'Back to the page'; }
+  if (full) { full.innerHTML = icon(draft.inline ? 'expand' : 'shrink'); full.classList.add('mm-icon'); full.title = draft.inline ? 'Fullscreen editor' : 'Back to the page (Esc)'; }
   root.querySelector('#mm-sim-btn')?.classList.toggle('active', !!draft.simulate);
   requestAnimationFrame(() => resize());
 }
@@ -4431,19 +6128,15 @@ function togglePanel(id) {
 const snapV = () => draft.snap || CELL;
 const snapPoint = (p, s = snapV()) => ({ x: Math.round(p.x / s) * s, y: Math.round((p.y - OFFSET_Y) / s) * s + OFFSET_Y });
 function fineRotate(dir, fine) {
-  const t = selection?.kind === 'object' ? selection : hoverWorld && itemAt(hoverWorld.x, hoverWorld.y);
-  const o = t?.kind === 'object' && placed[t.index], item = o && catalogItem(o);
-  if (!o || item?.zip) { flash('Select an object or decoration to turn it finely (, and . - Shift for 1°).'); return; }
-  pushUndo();
-  o.cfg = { ...o.cfg, rot: ((((o.cfg?.rot || 0) + dir * (fine ? 1 : 15)) % 360) + 360) % 360 };
-  saveDraft(); renderConfig(); requestDraw();
+  const ts = tfTargets('rot');
+  if (!ts.length) { flash('Select something to turn it finely (, and . - Shift for 1°).'); return; }
+  tfTurn(ts, dir * (fine ? 1 : 15));
 }
 function scaleSelection(dir) {
-  const t = selection?.kind === 'object' ? selection : hoverWorld && itemAt(hoverWorld.x, hoverWorld.y);
-  const o = t?.kind === 'object' && placed[t.index], item = o && catalogItem(o);
-  if (!o || item?.zip) { flash('Select an object or decoration to scale it (= and -).'); return; }
+  const ts = tfTargets('scale');
+  if (!ts.length) { flash('Select something to size it (= and -).'); return; }
   pushUndo();
-  o.cfg = { ...o.cfg, scale: Math.max(0.1, Math.min(10, Math.round(((o.cfg?.scale || 1) + dir * 0.1) * 10) / 10)) };
+  for (const t of ts) tfSet(t, 'scale', Math.round((tfGet(t).scale + dir * 0.1) * 10) / 10);
   saveDraft(); renderConfig(); requestDraw();
 }
 function flipYSelection() {
@@ -4456,7 +6149,7 @@ function flipYSelection() {
   saveDraft(); renderConfig(); requestDraw();
 }
 function transformRegion(mode) {
-  const sel = selection;
+  const sel = selection?.kind === 'multi' ? selection.items.find((t) => t.kind === 'region') : selection;
   if (!sel || sel.kind !== 'region') return;
   pushUndo();
   const { x0, y0, x1, y1 } = sel, inR = (cx, cy) => cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
@@ -4558,6 +6251,20 @@ function drawTeleportLinks() {
   ctx.restore();
 }
 const isCourseCheckpoint = (item) => item?.name === 'Course checkpoint';
+const isCheckpoint = (item) => item?.name === 'Checkpoint' || isCourseCheckpoint(item);
+const isLongFall = (item) => /^Long fall/.test(item?.name || '');
+// Things that are a trigger box: the box is what matters, so it can be sized.
+const isSizable = (item) => isCheckpoint(item) || isLongFall(item);
+// A checkpoint's trigger: its own size when the map sets one, else the copied checkpoint's.
+function objectBox(o, item = catalogItem(o)) {
+  const t = o.cfg?.trig;
+  if (t && isSizable(item)) return [t.dx - t.w / 2, t.dy - t.h / 2, t.dx + t.w / 2, t.dy + t.h / 2];
+  return item?.box || null;
+}
+function trigOf(o, item) {
+  const b = objectBox(o, item) || [-50, -50, 50, 50];
+  return { w: b[2] - b[0], h: b[3] - b[1], dx: (b[0] + b[2]) / 2, dy: (b[1] + b[3]) / 2 };
+}
 const LINKABLE = (item) => !!(item?.upgradeBox || isCourseCheckpoint(item));
 function newCourse() {
   const c = { id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: null, end: null, reward: { currency: 'Cash', amount: 0 } };
@@ -4609,6 +6316,7 @@ function drawCourses() {
   }
   ctx.restore();
   if (draft.spawn) drawGate(draft.spawn, SPAWN_BOX, COLORS.spawn, 'SPAWN');
+  xspawns.forEach((s, i) => drawGate(s, SPAWN_BOX, COLORS.spawn, 'SPAWN ' + (i + 2)));
 }
 
 function gateAt(cx, cy, kind) {
@@ -4722,6 +6430,34 @@ function applyTool(cx, cy) {
     if (blocks.get(k) === BLOCK_KIND[tool]) return false;
     spikes.delete(k);
     blocks.set(k, BLOCK_KIND[tool]);
+  } else if (tool === 'mtrigger') {
+    if (drag?.trigPlaced) return false;
+    const p = snapPoint(hoverWorld || { x: cellWorld(cx, cy).x + CELL / 2, y: cellWorld(cx, cy).y + CELL / 2 });
+    triggers.push(newTrigger(draft.pick.trigKind || 'media', p.x, p.y));
+    selection = { kind: 'mtrig', index: triggers.length - 1 };
+    if (drag) drag.trigPlaced = true;
+    setTimeout(() => { setTool('select'); renderConfig(); });
+  } else if (tool === 'xspawn') {
+    if (drag?.xspawnPlaced) return false;
+    const w0 = cellWorld(cx, cy);
+    xspawns.push({ x: w0.x + CELL / 2, y: w0.y + CELL / 2 });
+    selection = { kind: 'xspawn', index: xspawns.length - 1 };
+    if (drag) drag.xspawnPlaced = true;
+    setTimeout(() => { setTool('select'); renderConfig(); });
+  } else if (tool === 'gsprite') {
+    if (drag?.cspritePlaced || !draft.pick.gsprite) return false;
+    const p = snapPoint(hoverWorld || { x: cellWorld(cx, cy).x + CELL / 2, y: cellWorld(cx, cy).y + CELL / 2 });
+    csprites.push({ x: p.x, y: p.y, game: draft.pick.gsprite, scale: 1 });
+    selection = { kind: 'csprite', index: csprites.length - 1 };
+    if (drag) drag.cspritePlaced = true;
+    setTimeout(() => renderConfig());
+  } else if (tool === 'csprite') {
+    if (drag?.cspritePlaced || !draft.pick.csprite) return false;
+    const p = snapPoint(hoverWorld || { x: cellWorld(cx, cy).x + CELL / 2, y: cellWorld(cx, cy).y + CELL / 2 });
+    csprites.push({ x: p.x, y: p.y, image: draft.pick.csprite, scale: 1 });
+    selection = { kind: 'csprite', index: csprites.length - 1 };
+    if (drag) drag.cspritePlaced = true;
+    setTimeout(() => renderConfig());
   } else if (tool === 'sign') {
     if (drag?.signPlaced) return false;
     const p = snapPoint(hoverWorld || { x: cellWorld(cx, cy).x + CELL / 2, y: cellWorld(cx, cy).y + CELL / 2 });
@@ -4755,9 +6491,9 @@ function applyTool(cx, cy) {
     placed.push({ cat, i, n: item.name, ...placementFor(item, cx, cy), ...(item.upgradeBox || isTeleporter(item) ? { uid: 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) } : {}), ...(item.name === 'Course checkpoint' && courseById(draft.activeCourse) ? { course: draft.activeCourse } : {}) });
     if (drag) { drag.placedObject = true; if (item.zip) drag.zipPlace = placed.length - 1; }
   } else if (tool === 'stamp') {
-    if (drag?.placedObject || !base?.art?.stamps?.[draft.pick.stamp]) return false;
+    if (drag?.placedObject || !allStamps()[draft.pick.stamp]) return false;
     const w = cellWorld(cx, cy);
-    for (const [tk, t] of stampTiles(base.art.stamps[draft.pick.stamp], w.x + CELL / 2, w.y + CELL / 2, placeRot, placeFlip)) tiles.set(tk, t);
+    for (const [tk, t] of stampTiles(allStamps()[draft.pick.stamp], w.x + CELL / 2, w.y + CELL / 2, placeRot, placeFlip)) tiles.set(tk, t);
     if (drag) drag.placedObject = true;
   } else if (tool === 'paste') {
     if (drag?.placedObject || !brush) return false;
@@ -4773,6 +6509,10 @@ function applyTool(cx, cy) {
       if (fi >= 0) { freeSpikes.splice(fi, 1); return true; }
       const si = signAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
       if (si >= 0) { signs.splice(si, 1); return true; }
+      const ci = csprites.findLastIndex((c) => customSpriteHit(c, hoverWorld?.x ?? px, hoverWorld?.y ?? py));
+      if (ci >= 0) { csprites.splice(ci, 1); return true; }
+      const ti = triggerAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
+      if (ti >= 0) { triggers.splice(ti, 1); return true; }
       const t = tileAt(px, py);
       if (t) { if (t[1].arrow) removeArrow(t[1].arrow); else tiles.delete(t[0]); return true; }
       if (mossCells.delete(mossKeyAt(px, py))) return true;
@@ -4790,7 +6530,7 @@ function applyTool(cx, cy) {
       if (dt) { dt.cells.forEach((k2) => removedDeco.add(dt.layer + '|' + k2)); return true; }
       const sp = baseOn() && sceneSpriteAt(w.x + CELL / 2, w.y + CELL / 2);
       if (!sp) return false;
-      removedScene.add(sp.id);
+      removeScene(sp.id);
       return true;
     }
     if (hit.own) vines.delete(hit.k);
@@ -4811,6 +6551,7 @@ function applyTool(cx, cy) {
 function strokeAt(cx, cy) {
   const before = drag.before;
   if (!applyTool(cx, cy)) return;
+  { const w = cellWorld(cx, cy); addFx(tool === 'erase' ? 'burst' : 'ripple', w.x + CELL / 2, w.y + CELL / 2, tool === 'erase' ? COLORS.end : COLORS[BLOCK_KIND[tool]] || COLORS.start); }
   if (!drag.changed) {
     drag.changed = true;
     undoStack.push(before);
@@ -4886,7 +6627,6 @@ function updateStatus() {
 function syncBaseUi() {
   const on = baseOn();
   const btn = root.querySelector('#mm-base');
-  btn.textContent = on ? 'Base map ✓' : 'Base map';
   btn.classList.toggle('active', on);
   root.querySelector('#mm-jump').hidden = !on;
   root.querySelector('#mm-state').hidden = !on;
@@ -4899,7 +6639,7 @@ async function toggleBase() {
   } else {
     const btn = root.querySelector('#mm-base');
     btn.disabled = true;
-    btn.textContent = 'Loading…';
+    btn.classList.add('mm-busy');
     try {
       await loadBase(true);
     } catch (e) {
@@ -4907,6 +6647,7 @@ async function toggleBase() {
       return;
     } finally {
       btn.disabled = false;
+      btn.classList.remove('mm-busy');
     }
     draft.useBase = true;
     fillJumpList();
@@ -4917,8 +6658,106 @@ async function toggleBase() {
   requestDraw();
 }
 
+// ---- the overgrown stages: edited separately for the Start and Overgrown states ----
+// The cells the overgrowth changes (its sprites, and ground / moss only one state
+// has), plus a cell around them. Edits there belong to the state being viewed;
+// everything else is shared by both.
+let stageMask = null;
+function stageCells() {
+  if (stageMask) return stageMask;
+  stageMask = new Set();
+  if (!base) return stageMask;
+  const addRect = (x0, y0, x1, y1) => {
+    const a = cellOf(x0, y0), b = cellOf(x1, y1);
+    for (let cx = a.cx - 1; cx <= b.cx + 1; cx++) for (let cy = a.cy - 1; cy <= b.cy + 1; cy++) stageMask.add(key(cx, cy));
+  };
+  for (const p of base.scene?.placements?.overgrown || []) {
+    if (!(p.p || '').startsWith('Zone 1/OvergrowthStuff/')) continue;
+    const [, , w, h] = base.scene.sprites[p.s], m = p.m || [1, 0, 0, 1];
+    const r = Math.max(w * Math.hypot(m[0], m[2]), h * Math.hypot(m[1], m[3])) / 2;
+    addRect(p.x - r, p.y - r, p.x + r, p.y + r);
+  }
+  const addRuns = (runs) => { for (let i = 0; i < (runs?.length || 0); i += 3) for (let k = 0; k < runs[i + 2]; k++) { const w = cellWorld(runs[i + 1] + k, runs[i]); addRect(w.x, w.y, w.x, w.y); } };
+  for (const st of ['start', 'overgrown']) for (const kind of ['ground', 'moss', 'blue', 'orange']) for (const runs of base.states?.[st]?.[kind] || []) addRuns(runs);
+  return stageMask;
+}
+const inStage = (x, y) => { const c = cellOf(x, y); return stageCells().has(key(c.cx, c.cy)); };
+// Lifts the edits inside the stages out of the working map (they go with the state being left).
+function takeStageEdits() {
+  const v = { blocks: [], spikes: [], vines: [], tiles: [], moss: [], placed: [], freeSpikes: [], signs: [], triggers: [], csprites: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [] };
+  const cells = (m, out) => { for (const [k, val] of [...m]) if (stageCells().has(k)) { out.push([k, val]); m.delete(k); } };
+  cells(blocks, v.blocks); cells(spikes, v.spikes); cells(vines, v.vines);
+  for (const [k, t] of [...tiles]) { if (t.arrow) continue; const c = tileCenter(t.layer, k); if (inStage(c.x, c.y)) { v.tiles.push([k, t]); tiles.delete(k); } }
+  for (const [k, val] of [...mossCells]) { const c = mossCenter(k); if (inStage(c.x, c.y)) { v.moss.push([k, val]); mossCells.delete(k); } }
+  const split = (arr, out) => arr.filter((it) => (inStage(it.x, it.y) ? (out.push(it), false) : true));
+  placed = split(placed, v.placed); freeSpikes = split(freeSpikes, v.freeSpikes); signs = split(signs, v.signs); triggers = split(triggers, v.triggers); csprites = split(csprites, v.csprites);
+  const ids = (set, pos, out) => { for (const id of [...set]) { const p = pos(id); if (p && inStage(p.x, p.y)) { out.push(id); set.delete(id); } } };
+  const cellPos = (k) => { const [cx, cy] = unkey(k), w = cellWorld(cx, cy); return { x: w.x + CELL / 2, y: w.y + CELL / 2 }; };
+  ids(removed, cellPos, v.removed);
+  ids(removedVines, cellPos, v.removedVines);
+  ids(removedObjects, (id) => baseObjects.find((o) => o.id === id), v.removedObjects);
+  ids(removedScene, (id) => sceneList?.items.find((p) => p.id === id), v.removedScene);
+  ids(removedDeco, (rk) => { const bar = rk.lastIndexOf('|'), [gx, gy] = unkey(rk.slice(bar + 1)), g = layerGrid(rk.slice(0, bar)); return { x: g.ox + (gx + 0.5) * g.size, y: g.oy + (gy + 0.5) * g.size }; }, v.removedDeco);
+  return v;
+}
+function putStageEdits(v) {
+  if (!v) return;
+  for (const [k, val] of v.blocks) blocks.set(k, val);
+  for (const [k, val] of v.spikes) spikes.set(k, val);
+  for (const [k, val] of v.vines) vines.set(k, val);
+  for (const [k, val] of v.tiles) tiles.set(k, val);
+  for (const [k, val] of v.moss) mossCells.set(k, val);
+  placed.push(...v.placed); freeSpikes.push(...v.freeSpikes); signs.push(...v.signs); triggers.push(...v.triggers); csprites.push(...(v.csprites || []));
+  v.removed.forEach((k) => removed.add(k)); v.removedVines.forEach((k) => removedVines.add(k));
+  v.removedObjects.forEach((k) => removedObjects.add(k)); v.removedScene.forEach((k) => removedScene.add(k)); v.removedDeco.forEach((k) => removedDeco.add(k));
+}
+const otherState = (st) => (st === 'overgrown' ? 'start' : 'overgrown');
+function toggleSimulate() {
+  draft.simulate = !draft.simulate;
+  simStart = performance.now();
+  applyBaseMoves();
+  saveDraft(); syncChrome(); invalidateBase();
+}
+let stagePath = null, stagePathOf = null;
+function drawStageMask() {
+  if (cam.scale < 0.05) return;
+  const set = stageCells();
+  if (!set.size) return;
+  if (stagePathOf !== set) {
+    stagePathOf = set;
+    stagePath = new Path2D();
+    for (const k of set) {
+      const [x, y] = unkey(k), w = cellWorld(x, y), x1 = w.x + CELL, y1 = w.y + CELL;
+      if (!set.has(key(x, y + 1))) { stagePath.moveTo(w.x, y1); stagePath.lineTo(x1, y1); }
+      if (!set.has(key(x, y - 1))) { stagePath.moveTo(w.x, w.y); stagePath.lineTo(x1, w.y); }
+      if (!set.has(key(x - 1, y))) { stagePath.moveTo(w.x, w.y); stagePath.lineTo(w.x, y1); }
+      if (!set.has(key(x + 1, y))) { stagePath.moveTo(x1, w.y); stagePath.lineTo(x1, y1); }
+    }
+  }
+  const o = toScreen(0, 0), k = cam.scale;
+  ctx.save();
+  ctx.setTransform(k, 0, 0, -k, o.x, o.y);
+  ctx.strokeStyle = draft.baseState === 'overgrown' ? 'rgba(120, 200, 90, 0.55)' : 'rgba(230, 170, 70, 0.45)';
+  ctx.setLineDash([6 / k, 5 / k]);
+  ctx.lineWidth = 1.5 / k;
+  ctx.stroke(stagePath);
+  ctx.restore();
+}
+
 function setBaseState(state) {
   if (draft.baseState === state) return;
+  if (base) {
+    // The stages' edits swap with the state; the rest of the map stays.
+    const v = takeStageEdits();
+    draft.stageEdits = { ...(draft.stageEdits || {}), [draft.baseState]: v };
+    putStageEdits(draft.stageEdits[state]);
+    delete draft.stageEdits[state];
+    selection = null;
+    undoStack = [];
+    redoStack = [];
+    renderConfig();
+    flash(`Editing the ${state === 'overgrown' ? 'Overgrown' : 'Start'} version of the overgrown stages (dashed) - the rest of the map is shared`);
+  }
   draft.baseState = state;
   applyBaseState();
   saveDraft();
@@ -4944,9 +6783,10 @@ function flash(msg, isError) {
   const el = root.querySelector('#mm-flash');
   el.textContent = msg;
   el.classList.toggle('error', !!isError);
+  el.classList.remove('mm-out');
   el.hidden = false;
   clearTimeout(flash.t);
-  flash.t = setTimeout(() => { el.hidden = true; }, 3500);
+  flash.t = setTimeout(() => { el.classList.add('mm-out'); flash.t = setTimeout(() => { el.hidden = true; }, 200); }, 3500);
 }
 
 // Asks where to save (the app's save dialog); builds without it fall back to a download.
@@ -4956,7 +6796,7 @@ async function exportZip() {
   const invoke = window.__TAURI__?.core?.invoke;
   if (invoke) {
     try {
-      const path = await invoke('export_map_zip', { mapJson: JSON.stringify(map, null, 2), fileName: slug(map.name) + '.zip' });
+      const path = await invoke('export_map_zip', { mapJson: JSON.stringify(map, null, 2), fileName: slug(map.name) + '.zip', assets: await mapAssets() });
       if (path) flash(`Exported to ${path} · ${map.groups[0].objects.length} objects`);
       return;
     } catch (e) {
@@ -4993,7 +6833,7 @@ async function saveMap() {
       id = stem;
       for (let n = 2; taken.has(id); n++) id = stem + '-' + n;
     }
-    await invoke('save_map', { id, mapJson: JSON.stringify(map, null, 2) });
+    await invoke('save_map', { id, mapJson: JSON.stringify(map, null, 2), assets: await mapAssets() });
     draft.savedId = id;
     draft.savedAt = Date.now();
     saveDraft();
@@ -5017,7 +6857,7 @@ async function testInGame() {
   btn.disabled = true;
   btn.textContent = 'Launching…';
   try {
-    await window.__TAURI__.core.invoke('test_launch_map', { mapJson: JSON.stringify(map, null, 2) });
+    await window.__TAURI__.core.invoke('test_launch_map', { mapJson: JSON.stringify(map, null, 2), assets: await mapAssets() });
     flash('Launching IGTAP - Navigator opens the map from the title screen.');
   } catch (e) {
     const msg = String(e);
@@ -5050,6 +6890,9 @@ function clearAll() {
   placed = [];
   freeSpikes = [];
   signs = [];
+  triggers = [];
+  csprites = [];
+  xspawns = [];
   arrows = [];
   removed.clear();
   removedVines.clear();
@@ -5065,10 +6908,7 @@ function clearAll() {
 }
 
 function jumpTo(x, y) {
-  cam.x = x;
-  cam.y = y;
-  cam.scale = Math.max(cam.scale, 0.5);
-  requestDraw();
+  glideCamera({ x, y, scale: Math.max(cam.scale, 0.5), anchor: null });
 }
 
 function resize() {
@@ -5124,7 +6964,9 @@ function bindWindow() {
       return;
     }
     if (drag?.platform) { const r = canvas.getBoundingClientRect(); hoverWorld = toWorld(e.clientX - r.left, e.clientY - r.top); platformPaint(hoverWorld); return; }
-    if (drag && (drag.region || drag.move || drag.zip || drag.gate || drag.group || drag.fspike || drag.sign)) { selectMove(e); return; }
+    if (drag?.resize) { resizeMove(e); return; }
+    if (drag && (drag.region || drag.move || drag.moveSel || drag.zip || drag.gate || drag.group || drag.fspike || drag.sign)) { selectMove(e); return; }
+    if (!drag && tool === 'select' && e.target === canvas) canvas.style.cursor = edgeCursor(edgesAt(worldAt(e)));
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
       if (hover) { hover = null; updateStatus(); requestDraw(); }
@@ -5147,7 +6989,8 @@ function bindWindow() {
   });
   window.addEventListener('mouseup', () => {
     if (!drag) return;
-    if (drag.region && !drag.regionMoved) { selection = null; renderConfig(); requestDraw(); }
+    if (drag.region && !drag.regionMoved && !drag.keep?.length) { selection = null; renderConfig(); requestDraw(); }
+    if ((drag.moveSel || drag.resize) && drag.changed) { saveDraft(); renderConfig(); }
     if (drag.arrow) arrowUp();
     drag = null;
     canvas.style.cursor = '';
@@ -5160,12 +7003,17 @@ function onWheel(e) {
   e.preventDefault();
   const r = canvas.getBoundingClientRect();
   const sx = e.clientX - r.left, sy = e.clientY - r.top;
-  const before = toWorld(sx, sy);
-  cam.scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, cam.scale * Math.exp(-e.deltaY * 0.0015)));
-  const after = toWorld(sx, sy);
-  cam.x += before.x - after.x;
-  cam.y += before.y - after.y;
-  requestDraw();
+  const from = camGoal.active && camGoal.scale != null ? camGoal.scale : cam.scale;
+  const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, from * Math.exp(-e.deltaY * 0.0015)));
+  if (CALM) {
+    const before = toWorld(sx, sy);
+    cam.scale = scale;
+    const after = toWorld(sx, sy);
+    cam.x += before.x - after.x; cam.y += before.y - after.y;
+    requestDraw();
+    return;
+  }
+  glideCamera({ scale, anchor: { sx, sy }, x: null, y: null });
 }
 
 function onKeyDown(e) {
@@ -5197,7 +7045,7 @@ function onKeyDown(e) {
   if (!e.shiftKey && k === 'h') { toggleHitboxes(); return; }
   if (k === '?' || k === '/' || k === 'k') { togglePanel('mm-keys'); return; }
   if (k === 'b' && selection?.kind === 'object' && zipShape(placed[selection.index])) { setPlatformEdit(platformEdit === selection.index ? null : selection.index); return; }
-  if (k === 't') { draft.simulate = !draft.simulate; saveDraft(); syncChrome(); requestDraw(); flash(draft.simulate ? 'Simulating zip movers (T)' : 'Simulation off'); return; }
+  if (k === 't') { toggleSimulate(); flash(draft.simulate ? 'Simulating: zip movers and the level\'s animations (T)' : 'Simulation off'); return; }
   if (k === 'g') { draft.noGrid = !draft.noGrid; saveDraft(); requestDraw(); flash(draft.noGrid ? 'Grid hidden (G)' : 'Grid shown (G)'); return; }
   if (k === 'l') { togglePanel('mm-layers'); return; }
   if (k === 'm') { togglePanel('mm-file'); return; }
@@ -5207,7 +7055,7 @@ function onKeyDown(e) {
   if (k === 'e') { setTool('erase'); return; }
   if (k === 'a') { const i = categoryItems('decor').findIndex((it) => it.tool === 'arrow'); if (i >= 0) { selectItem('decor', i); updatePopover(); } return; }
   if (k === 'q') { setTool('select'); return; }
-  if (e.key === ']' || e.key === '[' || e.key === '}' || e.key === '{') {
+  if ((e.key === ']' || e.key === '[' || e.key === '}' || e.key === '{') && targetsOf(selection).some((t) => STACKABLE.has(t.kind))) {
     const up = e.key === ']' || e.key === '}';
     restack(e.shiftKey ? (up ? 'front' : 'back') : up ? 'up' : 'down');
     return;
@@ -5238,53 +7086,65 @@ export async function mountEditor(container) {
   root = container;
   root.innerHTML = `
     <div class="mm-bar">
-      <div class="mm-cats">
-        ${CATEGORIES.map((c) => `<button class="mm-cat" data-cat="${c.id}" title="${c.label} - ${c.key.toUpperCase()} to pick, again to step through (Shift back), [ ] step, 1-9 pick"><span class="mm-cat-thumb"></span><span class="mm-cat-text"><span class="mm-cat-label">${c.label}</span><span class="mm-cat-item"></span></span><kbd>${c.key.toUpperCase()}</kbd><span class="mm-caret">▾</span></button>`).join('')}
-        <button class="mm-cat" data-tool="select" title="Select: click something to configure or move it, drag a region to copy (Ctrl+C) or delete it (Q)"><span class="mm-cat-text"><span class="mm-cat-label">Select</span></span><kbd>Q</kbd></button>
-        <button class="mm-cat mm-erase" data-tool="erase" title="Erase your edits and base-game tiles and objects (E)"><span class="mm-cat-text"><span class="mm-cat-label">Erase</span></span><kbd>E</kbd></button>
+      <div class="mm-group mm-cats" aria-label="Tools">
+        <button class="mm-cat mm-cat-icon" data-tool="select" title="Select (Q): click a thing, Shift+click to add, drag a box to select everything inside">${icon('cursor')}<span class="mm-cat-label">Select</span></button>
+        <button class="mm-cat mm-cat-icon mm-erase" data-tool="erase" title="Erase (E): your edits and the level's own tiles and objects">${icon('eraser')}<span class="mm-cat-label">Erase</span></button>
+      </div>
+      <div class="mm-group mm-cats" aria-label="Palette">
+        ${CATEGORIES.map((c) => `<button class="mm-cat" data-cat="${c.id}" title="${c.label} (${c.key.toUpperCase()}) - again to step through (Shift back), 1-9 pick"><span class="mm-cat-thumb"></span><span class="mm-cat-text"><span class="mm-cat-label">${c.label}</span><span class="mm-cat-item"></span></span><span class="mm-caret">▾</span></button>`).join('')}
       </div>
       <div class="mm-pop" id="mm-pop" hidden></div>
       <div class="mm-bar-right">
-        <div class="mm-tools" id="mm-state" hidden>
-          <button class="mm-tool" data-state="start" title="Area 1 as it is at the start of the game">Start</button>
-          <button class="mm-tool" data-state="overgrown" title="Area 1 after the breaker is tripped">Overgrown</button>
+        <div class="mm-group" aria-label="Edit">
+          <button class="mm-tool mm-icon" id="mm-undo" title="Undo (Ctrl+Z)">${icon('undo')}</button>
+          <button class="mm-tool mm-icon" id="mm-redo" title="Redo (Ctrl+Y)">${icon('redo')}</button>
+          <select class="mm-input mm-snap" id="mm-snap" title="Snap for placed things - objects, decorations, text, free spikes (Shift: 1 unit). Blocks and grid spikes always fill whole cells"><option value="32">▦ Cell</option><option value="16">▦ ½</option><option value="8">▦ ¼</option><option value="4">▦ ⅛</option><option value="1">▦ Free</option></select>
         </div>
-        <select class="mm-input mm-jump" id="mm-jump" hidden><option value="">Jump to course…</option></select>
-        <button class="mm-tool" id="mm-base" title="Show the real Overworld under your map; the area around your edits is exported with it"></button>
-        <select class="mm-input mm-snap" id="mm-snap" title="Snap for objects and decorations: placing, dragging and arrow keys (Shift+arrow: 1 unit). Blocks and spikes are tiles on the game's grid, so they always fill whole cells"><option value="32">Snap: cell</option><option value="16">Snap: ½</option><option value="8">Snap: ¼</option><option value="4">Snap: ⅛</option><option value="1">Snap: free</option></select>
-        <button class="mm-tool" id="mm-layers-btn" title="Show, hide and lock layers">Layers</button>
-        <button class="mm-tool" id="mm-player-btn" title="Level settings: what the player starts with - dashes, double jumps, abilities, unlocks and cash (P)">Level</button>
-        <span class="mm-sep"></span>
-        <button class="mm-tool" id="mm-undo" title="Undo (Ctrl+Z)">Undo</button>
-        <button class="mm-tool" id="mm-clear" title="Clear the whole draft">Clear</button>
-        <button class="mm-tool" id="mm-sim-btn" title="Play zip movers along their tracks (T)">▶ Simulate</button>
-        <button class="mm-tool" id="mm-full-btn" title="Fullscreen editor, or back to the page (Esc leaves fullscreen)"></button>
-        <button class="mm-tool" id="mm-keys-btn" title="Every keyboard shortcut (K or ?)">?</button>
-        <button class="mm-tool" id="mm-save" title="Save to your installed maps (Ctrl+S)">Save</button>
-        <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, save, test in game, open and export">Map ▾</button>
+        <div class="mm-group" aria-label="View">
+          <button class="mm-tool mm-icon" id="mm-base" title="Base map: show the real Overworld under your map; the area around your edits is exported with it">${icon('basemap')}</button>
+          <div class="mm-tools" id="mm-state" hidden>
+            <button class="mm-tool" data-state="start" title="Area 1 as it is at the start of the game">Start</button>
+            <button class="mm-tool" data-state="overgrown" title="Area 1 after the breaker is tripped">Overgrown</button>
+          </div>
+          <select class="mm-input mm-jump" id="mm-jump" hidden><option value="">Jump to course…</option></select>
+          <button class="mm-tool mm-icon" id="mm-hitbox" title="Hitboxes (H): solid blocks green, deadly shapes red">${icon('hitbox')}</button>
+          <button class="mm-tool mm-icon" id="mm-sim-btn" title="Simulate (T): play zip movers along their tracks">${icon('play')}</button>
+        </div>
+        <div class="mm-group" aria-label="Panels">
+          <button class="mm-tool mm-icon" id="mm-player-btn" title="Level settings (P): what the player starts with, music and background">${icon('sliders')}</button>
+          <button class="mm-tool mm-icon" id="mm-layers-btn" title="Layers (L): show, hide and lock them">${icon('layers')}</button>
+          <button class="mm-tool mm-icon" id="mm-keys-btn" title="Keys (K or ?): every shortcut">${icon('keys')}</button>
+        </div>
+        <div class="mm-group" aria-label="File">
+          <button class="mm-tool mm-icon" id="mm-save" title="Save to your installed maps (Ctrl+S)">${icon('save')}</button>
+          <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, test in game, open and export (M)">Map ▾</button>
+          <button class="mm-tool" id="mm-full-btn"></button>
+        </div>
       </div>
     </div>
     <div class="mm-canvas-wrap">
       <canvas id="mm-canvas"></canvas>
-      <div class="mm-views">
-        <button class="mm-tool mm-view" id="mm-hitbox" title="Show collision: solid blocks green, deadly shapes red (H)">View hitboxes</button>
-      </div>
-      <div class="mm-config" id="mm-config" hidden></div>
-      <div class="mm-config mm-player" id="mm-player" hidden></div>
-      <div class="mm-config mm-player" id="mm-layers" hidden></div>
-      <div class="mm-config mm-player mm-keys" id="mm-keys" hidden></div>
-      <div class="mm-config mm-player mm-file" id="mm-file" hidden>
-        <div class="mm-config-title">Map<span>name, testing and files</span></div>
+      <div class="mm-config mm-inspector" id="mm-config" hidden></div>
+      <div class="mm-config mm-dock" id="mm-player" hidden></div>
+      <div class="mm-config mm-dock" id="mm-layers" hidden></div>
+      <div class="mm-config mm-dock mm-keys" id="mm-keys" hidden></div>
+      <div class="mm-config mm-dock mm-file" id="mm-file" hidden>
+        <div class="mm-config-title">Map<span>details, play and files</span></div>
+        <div class="mm-section">Details</div>
         <div class="mm-config-row"><label>Name<input class="mm-input" id="mm-name" type="text" placeholder="Map name" /></label></div>
         <div class="mm-config-row"><label>Description<input class="mm-input" id="mm-desc" type="text" placeholder="Optional" /></label></div>
+        <div class="mm-section">Play &amp; save</div>
         <div class="mm-config-row"><button class="mm-tool" id="mm-save-panel" title="Save to your installed maps (Ctrl+S)">Save</button><button class="mm-tool mm-primary" id="mm-test" title="Install this map and launch the game straight into it">Test in game</button></div>
         <div class="mm-config-sub" id="mm-save-state"></div>
-        <div class="mm-config-row"><button class="mm-tool" id="mm-load" title="Open one of your installed maps to keep editing it">Load installed…</button></div>
+        <div class="mm-section">Open &amp; share</div>
+        <div class="mm-config-row"><button class="mm-tool" id="mm-load" title="Open one of your installed maps to keep editing it">Load installed…</button><button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json)">Open file…</button></div>
         <div class="mm-load-list" id="mm-load-list" hidden></div>
-        <div class="mm-config-row"><button class="mm-tool" id="mm-open" title="Open a map exported from this editor (.zip or map.json) to keep editing it">Open…</button><button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button><button class="mm-tool" id="mm-export" title="Choose where to save this map as a .zip">Export .zip…</button></div>
+        <div class="mm-config-row"><button class="mm-tool" id="mm-export" title="Choose where to save this map as a .zip">Export .zip…</button><button class="mm-tool" id="mm-copy" title="Copy map.json to the clipboard">Copy JSON</button></div>
         <input type="file" id="mm-open-file" accept=".zip,.json,application/json,application/zip" hidden>
+        <div class="mm-section">Draft</div>
+        <div class="mm-config-row"><button class="mm-tool mm-danger" id="mm-clear" title="Clear everything you placed or erased">Clear draft…</button></div>
       </div>
-      <div class="mm-hint">Left-click paint · Right-drag / Space-drag pan · Wheel zoom · K keys</div>
+      <div class="mm-hint">Right-drag pan · Wheel zoom · K keys</div>
       <div class="mm-flash" id="mm-flash" hidden></div>
     </div>
     <div class="mm-status" id="mm-status"></div>
@@ -5296,7 +7156,7 @@ export async function mountEditor(container) {
   root.querySelector('[data-tool="select"]').addEventListener('click', () => { closePopover(); setTool('select'); });
   root.querySelector('#mm-layers-btn').addEventListener('click', () => togglePanel('mm-layers'));
   root.querySelector('#mm-keys-btn').addEventListener('click', () => togglePanel('mm-keys'));
-  root.querySelector('#mm-sim-btn').addEventListener('click', () => { draft.simulate = !draft.simulate; saveDraft(); syncChrome(); requestDraw(); });
+  root.querySelector('#mm-sim-btn').addEventListener('click', () => toggleSimulate());
   root.querySelector('#mm-full-btn').addEventListener('click', () => { draft.inline = !draft.inline; saveDraft(); syncChrome(); });
   new ResizeObserver(() => { const h = root.querySelector('.mm-bar')?.offsetHeight || 0; root.style.setProperty('--bar-h', h + 'px'); }).observe(root.querySelector('.mm-bar'));
   root.querySelector('#mm-file-btn').addEventListener('click', () => togglePanel('mm-file'));
@@ -5341,6 +7201,7 @@ export async function mountEditor(container) {
   root.querySelector('#mm-hitbox').addEventListener('click', toggleHitboxes);
   root.querySelector('#mm-hitbox').classList.toggle('active', !!draft.hitboxes);
   root.querySelector('#mm-undo').addEventListener('click', undo);
+  root.querySelector('#mm-redo').addEventListener('click', redo);
   root.querySelector('#mm-clear').addEventListener('click', clearAll);
   root.querySelector('#mm-test').addEventListener('click', testInGame);
   root.querySelector('#mm-save').addEventListener('click', saveMap);
