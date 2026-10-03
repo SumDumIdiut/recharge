@@ -148,7 +148,9 @@ jobs:
           gh release upload "$TAG" SOURCE_SHA.txt VERSION.txt --repo "${{ github.repository }}" --clobber
 
           # Filenames are versioned, not clobbered by name, so old ones pile up unless pruned - keep only the newest per type.
-          for pattern in '-setup\.exe$' '\.deb$'; do
+          # The dot is matched as [.] rather than \. : gh's jq takes the pattern as a string, where a
+          # backslash is an invalid escape - that parse error failed the whole publish step.
+          for pattern in '-setup[.]exe$' '[.]deb$'; do
             gh release view "$TAG" --repo "${{ github.repository }}" --json assets \
               --jq "[.assets[] | select(.name | test(\"$pattern\"))] | sort_by(.createdAt) | .[:-1][].name" |
             while IFS= read -r name; do
