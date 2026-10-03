@@ -1,7 +1,7 @@
 mod commands;
 mod vdf;
 
-use commands::{games, hub, launcher, live, loader, maps, mods, play, repos, settings, skins, steam};
+use commands::{backgrounds, games, hub, launcher, live, loader, maps, mods, play, repos, settings, skins, steam};
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
@@ -52,14 +52,21 @@ pub fn run() {
             hub::download_skin_template_cmd,
             hub::submit_skin_cmd,
             hub::submit_map_cmd,
+            hub::submit_installed_map_cmd,
             hub::submit_mod_cmd,
             hub::delete_hub_submission_cmd,
+            hub::fetch_hub_map_json,
             maps::list_maps,
             maps::read_map,
             maps::save_map,
+            maps::map_history,
+            maps::read_map_version,
             maps::export_map_zip,
             maps::read_map_asset,
             maps::uninstall_map,
+            maps::set_map_hub_name,
+            maps::read_map_thumb,
+            maps::write_map_thumb,
             maps::test_launch_map,
             skins::list_installed_skins,
             skins::read_skin_thumbnail,
@@ -73,6 +80,15 @@ pub fn run() {
             play::launch_game,
             play::is_game_running,
             play::restore_vanilla_build,
+            backgrounds::list_background_images,
+            backgrounds::upload_background_image,
+            backgrounds::delete_background_image,
+            backgrounds::read_background_image,
+            backgrounds::get_backgrounds_config,
+            backgrounds::save_playlist,
+            backgrounds::delete_playlist,
+            backgrounds::set_active_playlist,
+            backgrounds::pick_random_background,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

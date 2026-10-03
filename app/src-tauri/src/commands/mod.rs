@@ -1,3 +1,4 @@
+pub mod backgrounds;
 pub mod games;
 pub mod hub;
 pub mod launcher;

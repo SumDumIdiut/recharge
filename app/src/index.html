@@ -43,11 +43,12 @@
     </script>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/components.css" />
-    <link rel="stylesheet" href="/maps/style.css" />
     <link rel="stylesheet" href="/skins/style.css" />
     <link rel="stylesheet" href="/account/style.css" />
     <link rel="stylesheet" href="/settings/style.css" />
+    <link rel="stylesheet" href="/backgrounds/style.css" />
     <link rel="stylesheet" href="/credits/style.css" />
+    <link rel="stylesheet" href="/maps/style.css" />
     <script type="module" src="/app.js" defer></script>
     <style id="recharge-custom-css"></style>
     <script>
@@ -116,24 +117,32 @@
             <div class="home-play-status" id="home-play-status"></div>
             <div class="home-install-sub" id="home-demo-note" style="display:none;">The demo only supports vanilla - mods aren't available on it.</div>
 
-            <button class="home-menu-row" id="home-mods-row" onclick="navigate('mods')">
-              <span>&gt; Mods</span>
-            </button>
-            <button class="home-menu-row" id="home-maps-row" onclick="navigate('maps')">
-              <span>&gt; Maps</span>
-            </button>
-            <button class="home-menu-row" id="home-skins-row" onclick="navigate('skins')">
-              <span>&gt; Skins</span>
-            </button>
-            <button class="home-menu-row" onclick="navigate('settings')">
-              <span>&gt; Settings</span>
-            </button>
-            <button class="home-menu-row" onclick="navigate('credits')">
-              <span>&gt; Credits</span>
-            </button>
+            <div class="home-menu-rows">
+              <button class="home-menu-row" id="home-mods-row" onclick="navigate('mods')">
+                <span>&gt; Mods</span>
+              </button>
+              <button class="home-menu-row" id="home-skins-row" onclick="navigate('skins')">
+                <span>&gt; Skins</span>
+              </button>
+              <button class="home-menu-row" onclick="navigate('backgrounds')">
+                <span>&gt; Backgrounds</span>
+              </button>
+              <button class="home-menu-row" id="home-maps-row" onclick="navigate('maps')">
+                <span>&gt; Maps</span>
+              </button>
+              <button class="home-menu-row" id="home-amplifier-row" onclick="chooseAmplifier()">
+                <span>&gt; Amplifier</span>
+              </button>
+              <button class="home-menu-row" onclick="navigate('settings')">
+                <span>&gt; Settings</span>
+              </button>
+              <button class="home-menu-row" onclick="navigate('credits')">
+                <span>&gt; Credits</span>
+              </button>
+            </div>
           </div>
 
-          <div class="home-panel home-log-panel" style="align-self: flex-start;">
+          <div class="home-panel home-log-panel" style="align-self: stretch;">
             <div class="home-panel-title">What's new</div>
             <div class="home-news" id="home-news"><div class="home-install-sub">Loading…</div></div>
           </div>
@@ -146,6 +155,7 @@
     <div class="view" id="view-skins"></div>
     <div class="view" id="view-games"></div>
     <div class="view" id="view-account"></div>
+    <div class="view" id="view-backgrounds"></div>
     <div class="view" id="view-settings"></div>
     <div class="view" id="view-credits"></div>
 
@@ -175,6 +185,18 @@
         <div class="modal-actions">
           <button class="btn" id="update-later">Later</button>
           <button class="btn btn-primary" id="update-now">Update Now</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="amplifier-overlay" hidden>
+      <div class="modal">
+        <div class="modal-title">Amplifier</div>
+        <div class="modal-body">Which map editor do you want to open?</div>
+        <div class="modal-actions">
+          <button class="btn" id="amplifier-cancel">Cancel</button>
+          <button class="btn" id="amplifier-old">Old Editor</button>
+          <button class="btn btn-primary" id="amplifier-new">New Editor</button>
         </div>
       </div>
     </div>

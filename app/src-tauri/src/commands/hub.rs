@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
@@ -58,14 +58,38 @@ struct ModManifestId {
 }
 
 fn download(url: &str) -> Result<Vec<u8>, String> {
-    ureq::get(url)
-        .call()
-        .map_err(|e| e.to_string())?
-        .body_mut()
-        .with_config()
-        .limit(MAX_PACKAGE_BYTES)
-        .read_to_vec()
-        .map_err(|e| e.to_string())
+    // DNS/nameserver hiccups are transient - retry a couple of times before giving up.
+    let mut last = String::new();
+    for (i, delay) in [0u64, 1000, 2000].iter().enumerate() {
+        if *delay > 0 { std::thread::sleep(std::time::Duration::from_millis(*delay)); }
+        match ureq::get(url).call() {
+            Ok(mut res) => {
+                return match res.body_mut().with_config().limit(MAX_PACKAGE_BYTES).read_to_vec() {
+                    Ok(b) => Ok(b),
+                    Err(e) => Err(e.to_string()),
+                };
+            }
+            Err(e) => { last = e.to_string(); if i == 2 { return Err(last); } }
+        }
+    }
+    Err(last)
+}
+
+fn call_json_retry<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+    let mut last = String::new();
+    for (i, delay) in [0u64, 1000, 2000].iter().enumerate() {
+        if *delay > 0 { std::thread::sleep(std::time::Duration::from_millis(*delay)); }
+        match ureq::get(url).call() {
+            Ok(mut res) => {
+                return match res.body_mut().with_config().limit(1024 * 1024).read_json() {
+                    Ok(j) => Ok(j),
+                    Err(e) => Err(format!("bad response from library: {e}")),
+                };
+            }
+            Err(e) => { last = format!("couldn't reach the library: {e}"); if i == 2 { return Err(last); } }
+        }
+    }
+    Err(last)
 }
 
 static NEXT_TMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -179,14 +203,7 @@ pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String,
     }
     sanitize_id(id)?;
 
-    let meta: HubItem = ureq::get(&format!("{HUB_BASE}/api/{kind}/{id}"))
-        .call()
-        .map_err(|e| format!("couldn't reach the library: {e}"))?
-        .body_mut()
-        .with_config()
-        .limit(1024 * 1024)
-        .read_json()
-        .map_err(|e| format!("bad response from library: {e}"))?;
+    let meta: HubItem = call_json_retry(&format!("{HUB_BASE}/api/{kind}/{id}"))?;
 
     let bytes = download(&format!("{HUB_BASE}/api/{kind}/{id}/file"))?;
 
@@ -215,6 +232,24 @@ pub async fn install_from_hub_cmd(app: AppHandle, kind: String, id: String) -> R
     tauri::async_runtime::spawn_blocking(move || install_from_hub(&app, &kind, &id))
         .await
         .map_err(|e| format!("install task panicked: {e}"))?
+}
+
+#[tauri::command]
+pub async fn fetch_hub_map_json(id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sanitize_id(&id)?;
+        let bytes = download(&format!("{HUB_BASE}/api/maps/{id}/file"))?;
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+            .map_err(|e| format!("not a valid package: {e}"))?;
+        let mut file = archive
+            .by_name("map.json")
+            .map_err(|e| format!("no map.json in that package: {e}"))?;
+        let mut out = String::new();
+        file.read_to_string(&mut out).map_err(|e| e.to_string())?;
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("map fetch task panicked: {e}"))?
 }
 
 #[derive(serde::Deserialize)]
@@ -270,13 +305,27 @@ fn submit_skin_blocking(token: String, folder_path: String, display_name: String
 }
 
 #[tauri::command]
-pub async fn submit_map_cmd(token: String, file_path: String, display_name: String, author: String, description: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || submit_map_blocking(token, file_path, display_name, author, description))
+pub async fn submit_map_cmd(
+    token: String,
+    file_path: String,
+    display_name: String,
+    author: String,
+    description: String,
+    gallery_paths: Option<Vec<String>>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || submit_map_blocking(token, file_path, display_name, author, description, gallery_paths))
         .await
         .map_err(|e| format!("upload task panicked: {e}"))?
 }
 
-fn submit_map_blocking(token: String, file_path: String, display_name: String, author: String, description: String) -> Result<String, String> {
+fn submit_map_blocking(
+    token: String,
+    file_path: String,
+    display_name: String,
+    author: String,
+    description: String,
+    gallery_paths: Option<Vec<String>>,
+) -> Result<String, String> {
     if display_name.trim().is_empty() || author.trim().is_empty() {
         return Err("name and author are required".to_string());
     }
@@ -284,8 +333,22 @@ fn submit_map_blocking(token: String, file_path: String, display_name: String, a
     if !path.is_file() {
         return Err(format!("'{file_path}' not found"));
     }
+    let gallery_paths = gallery_paths.unwrap_or_default();
+    if gallery_paths.len() > MAX_GALLERY_IMAGES {
+        return Err(format!("at most {MAX_GALLERY_IMAGES} screenshots can be uploaded"));
+    }
+    for p in &gallery_paths {
+        let gp = PathBuf::from(p);
+        if !gp.is_file() {
+            return Err(format!("screenshot '{p}' not found"));
+        }
+        let ext = gp.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+        if !matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "webp" | "gif")) {
+            return Err(format!("'{p}' isn't a png, jpg, webp or gif image"));
+        }
+    }
 
-    let form = ureq::unversioned::multipart::Form::new()
+    let mut form = ureq::unversioned::multipart::Form::new()
         .text("kind", "map")
         .text("name", &display_name)
         .text("author", &author)
@@ -293,6 +356,9 @@ fn submit_map_blocking(token: String, file_path: String, display_name: String, a
         .text("modId", "recharge.maps")
         .file("file", &path)
         .map_err(|e| e.to_string())?;
+    for p in &gallery_paths {
+        form = form.file("gallery", p).map_err(|e| e.to_string())?;
+    }
 
     let result: SubmitResult = ureq::post(&format!("{HUB_BASE}/api/submit"))
         .header("Authorization", format!("Bearer {token}"))
@@ -305,6 +371,60 @@ fn submit_map_blocking(token: String, file_path: String, display_name: String, a
         .map_err(|e| format!("bad response from library: {e}"))?;
 
     Ok(result.id)
+}
+
+/// Uploads an installed map as a Hub package: its folder's map.json, files and picture, zipped.
+/// The map then remembers its Hub id and name (hub.json), so it isn't offered for upload again.
+#[tauri::command]
+pub async fn submit_installed_map_cmd(
+    app: AppHandle,
+    token: String,
+    id: String,
+    display_name: String,
+    author: String,
+    description: String,
+    gallery_paths: Option<Vec<String>>,
+) -> Result<String, String> {
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return Err(format!("invalid id: '{id}'"));
+    }
+    let dir = maps_dir(&app).ok_or("game path not set")?.join(&id);
+    tauri::async_runtime::spawn_blocking(move || {
+        if !dir.join("map.json").is_file() {
+            return Err(format!("map '{id}' not found"));
+        }
+        let tmp = std::env::temp_dir().join(format!("recharge-map-upload-{}-{}.zip", std::process::id(), NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed)));
+        std::fs::write(&tmp, zip_map_folder(&dir)?).map_err(|e| e.to_string())?;
+        let result = submit_map_blocking(token, tmp.to_string_lossy().to_string(), display_name.clone(), author, description, gallery_paths);
+        let _ = std::fs::remove_file(&tmp);
+        let hub_id = result?;
+        let _ = std::fs::write(dir.join("hub.json"), serde_json::json!({ "name": display_name, "id": hub_id }).to_string());
+        Ok(hub_id)
+    })
+    .await
+    .map_err(|e| format!("upload task panicked: {e}"))?
+}
+
+// A map's package: map.json, its picture, and its files (assets/), as the Hub installs them.
+fn zip_map_folder(dir: &std::path::Path) -> Result<Vec<u8>, String> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    let mut files = vec![("map.json".to_string(), dir.join("map.json"))];
+    if dir.join("thumb.png").is_file() {
+        files.push(("thumb.png".to_string(), dir.join("thumb.png")));
+    }
+    if let Ok(entries) = std::fs::read_dir(dir.join("assets")) {
+        for e in entries.flatten() {
+            if e.path().is_file() {
+                files.push((format!("assets/{}", e.file_name().to_string_lossy()), e.path()));
+            }
+        }
+    }
+    for (name, path) in files {
+        writer.start_file(name, options).map_err(|e| e.to_string())?;
+        writer.write_all(&std::fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(writer.finish().map_err(|e| e.to_string())?.into_inner())
 }
 
 #[derive(serde::Deserialize)]
