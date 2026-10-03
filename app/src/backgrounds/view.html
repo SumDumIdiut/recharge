@@ -1,0 +1,27 @@
+<main class="page">
+  <div class="page-header">Backgrounds</div>
+
+  <div class="browser-toolbar">
+    <div class="browser-subtabs">
+      <button class="subtab-btn active" data-subtab="browse" onclick="window.__bgSubtab('browse')">Browse</button>
+      <button class="subtab-btn" data-subtab="playlists" onclick="window.__bgSubtab('playlists')">Playlists</button>
+    </div>
+    <button class="btn" id="bg-upload-btn">Upload</button>
+  </div>
+
+  <div id="bg-browse-view">
+    <div class="settings-row bg-selection-bar" id="bg-selection-bar" hidden>
+      <div class="settings-sub" id="bg-selection-count"></div>
+      <input type="text" class="settings-input" id="bg-selection-name" placeholder="Playlist name" style="max-width: 220px;" />
+      <button class="btn btn-primary" id="bg-selection-save">Save playlist</button>
+      <button class="btn" id="bg-selection-cancel">Cancel</button>
+    </div>
+    <div class="browser-grid" id="bg-browse-grid"></div>
+  </div>
+
+  <div id="bg-playlists-view" style="display: none;">
+    <div class="bg-playlist-list" id="bg-playlist-list"></div>
+  </div>
+
+  <div class="settings-error" id="bg-error" hidden></div>
+</main>

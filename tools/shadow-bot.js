@@ -1,6 +1,7 @@
 // Shadow bot for DOTnet: hosts a lobby, waits for you to join, then copies
-// everything you do 1 second later - position, facing and animation, taken
-// from the relay's snapshots of you. Positions are the world-space values
+// everything you do 1 second later - position, facing, animation and your
+// dash/double-jump indicators, taken from the relay's snapshots and your
+// "ind" messages. Positions are the world-space values
 // DOTnet clients send, so it lines up across FloatingOrigin shifts too.
 //
 // Usage:
@@ -29,6 +30,7 @@ let targetId = 0;
 let lastSeenTargetAt = 0;
 const buffer = []; // { at, x, y, facingRight, animState, animSpeed, isPaused }, oldest first
 let current = null; // the state we're showing
+const indBuffer = []; // { at, d, j } - the target's air dashes/jumps left, oldest first
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -40,6 +42,7 @@ function pickTarget(players) {
   if (p && p.id !== targetId) {
     targetId = p.id;
     buffer.length = 0;
+    indBuffer.length = 0;
     console.log(`following ${p.name} ${DELAY_MS / 1000}s behind`);
   }
   return p;
@@ -62,6 +65,8 @@ function connect() {
       if (!p) return;
       lastSeenTargetAt = Date.now();
       buffer.push({ at: Date.now(), x: p.x, y: p.y, facingRight: p.facingRight, animState: p.animState, animSpeed: p.animSpeed, isPaused: p.isPaused });
+    } else if (msg.type === 'game_msg' && msg.from === targetId && msg.payload && msg.payload.k === 'ind') {
+      indBuffer.push({ at: Date.now(), d: msg.payload.d, j: msg.payload.j });
     } else if (msg.type === 'chat') {
       console.log(`[chat] ${msg.from}: ${msg.text}`);
     }
@@ -80,6 +85,13 @@ setInterval(() => {
     console.log('target left - waiting for a player to join');
     targetId = 0;
     buffer.length = 0;
+    indBuffer.length = 0;
+  }
+
+  // Indicator changes replay on the same delay as movement.
+  while (indBuffer.length > 0 && indBuffer[0].at <= Date.now() - DELAY_MS) {
+    const { d, j } = indBuffer.shift();
+    send({ type: 'game_msg', payload: { k: 'ind', d, j } });
   }
 
   // Play back what the target did DELAY_MS ago, interpolating position

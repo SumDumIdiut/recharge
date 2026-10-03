@@ -171,7 +171,9 @@ body {
   box-shadow: 0 0 12px rgba(61, 220, 132, 0.25);
 }
 
-.home-grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: stretch; flex: 1; min-height: 0; }
+/* The three columns share whatever width the window has, so a wide window
+   doesn't leave a strip of background unused down the right-hand side. */
+.home-grid { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; flex: 1; min-height: 0; }
 
 .home-panel-title { font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
 .home-install-list { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; }
@@ -196,55 +198,68 @@ body {
 .settings-install-list .home-install-row { flex-direction: row; align-items: center; justify-content: space-between; }
 .settings-install-list .home-install-row .btn { width: 140px; flex-shrink: 0; text-align: center; }
 
-.home-menu-col { display: flex; flex-direction: column; gap: 16px; max-width: none; flex: 2 1 380px; min-width: 380px; }
+/* Installation takes a modest share of the row - wide enough for the path to
+   read, narrow enough not to compete with the menu. */
+.home-panel { flex: 0.7 1 280px; min-width: 250px; max-width: 340px; }
 
-.home-log-panel { display: flex; flex-direction: column; flex: 1 1 280px; min-width: 280px; min-height: 0; }
+.home-menu-col { display: flex; flex-direction: column; gap: 14px; flex: 1.7 1 420px; min-width: 400px; }
+
+.home-log-panel { display: flex; flex-direction: column; flex: 0.9 1 320px; min-width: 300px; max-width: 460px; min-height: 0; }
 .home-news {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   margin: 10px 0 18px;
   overflow-y: auto;
   padding-right: 4px;
-  max-height: min(1000px, calc(100vh - 300px)); /* roughly 3 cards; more scrolls into view */
+  flex: 1; /* runs to the bottom of the window and scrolls, rather than stopping short */
+  min-height: 0;
 }
-.news-block { background: var(--panel); border: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.news-block { background: var(--panel); border: 1px solid var(--line); padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+/* A tile with one of library's thumbnails lets the app background pass through. */
+.news-block:has(.news-img), .news-block:has(.news-img-crop) { background: transparent; }
 .news-block[onclick] { cursor: pointer; }
 .news-block[onclick]:hover { border-color: var(--line-hi); }
 .news-meta { font-size: 12px; color: var(--text-dim); }
-.news-title { font-size: 20px; line-height: 1.25; word-break: break-word; }
-.news-img { width: 100%; max-height: 120px; object-fit: cover; display: block; border: 1px solid var(--line); }
-.news-img-crop { width: 160px; height: 160px; margin: 0 auto; background-repeat: no-repeat; background-color: var(--bg); border: 1px solid var(--line); display: block; }
-.news-body { font-size: 14px; line-height: 1.5; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.news-title { font-size: 18px; line-height: 1.25; word-break: break-word; }
+.news-img { width: 100%; max-height: 96px; object-fit: cover; display: block; border: 1px solid var(--line); }
+.news-img-crop { width: 124px; height: 124px; margin: 0 auto; background-repeat: no-repeat; background-color: transparent; border: 1px solid var(--line); display: block; }
+.news-body { font-size: 13px; line-height: 1.45; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
-.home-launch-row { display: flex; gap: 16px; }
+.home-launch-row { display: flex; gap: 12px; }
 .home-launch-row .home-tile { flex: 1; }
 .home-tile {
   background: none;
   border: 1px solid var(--line);
   color: var(--green);
   font: inherit;
-  font-size: 21px;
+  font-size: 23px;
   text-transform: uppercase;
-  padding: 26px;
+  padding: 24px 22px;
   text-align: left;
   cursor: pointer;
+  transition: border-color 120ms ease;
 }
 .home-tile:hover:not(:disabled) { border-color: var(--green-dim); }
 .home-tile:disabled { opacity: 0.5; cursor: default; }
 
 .home-play-status { color: var(--text-dim); font-size: 15px; min-height: 20px; }
 
+/* One row per entry: a two-column grid left the odd rows stranded with a hole
+   beside them, and stretched every row across half the window. */
+.home-menu-rows { display: flex; flex-direction: column; gap: 10px; }
+
 .home-menu-row {
   background: none;
   border: 1px solid var(--line);
   color: var(--text);
   font: inherit;
-  font-size: 20px;
+  font-size: 22px;
   text-transform: uppercase;
-  padding: 22px 20px;
+  padding: 20px 22px;
   text-align: left;
   cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 .home-menu-row:hover { border-color: var(--line-hi); background: rgba(249, 255, 228, 0.05); }
 

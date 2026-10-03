@@ -1,5 +1,6 @@
 // "What's new": the newest mods, maps and skins added to the Recharge Library.
 import { escapeHtml } from './ui.js';
+import { mapThumbFor } from './maps/mapthumb.js';
 
 const HUB = 'https://codecade.co.za/recharge';
 const MAX_ENTRIES = 8;
@@ -33,6 +34,7 @@ async function additions() {
           kind: 'library',
           tag: kind.tag,
           tab: kind.tab,
+          id: row.id,
           when: row.createdAt,
           title: row.name,
           by: row.author,
@@ -105,4 +107,11 @@ export async function initHomeNews() {
     .sort((a, b) => new Date(b.when) - new Date(a.when))
     .slice(0, MAX_ENTRIES);
   layoutNews();
+  // Maps get the same extracted fullmap picture as the Maps tab instead (a
+  // Hub gallery image, when there is one, stays the fallback until it arrives).
+  for (const e of entries) {
+    if (e.tag !== 'Map' || !e.id) continue;
+    const img = await mapThumbFor(e.id).catch(() => null);
+    if (img) { e.image = img; layoutNews(); }
+  }
 }

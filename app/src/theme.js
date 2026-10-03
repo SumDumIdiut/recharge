@@ -92,6 +92,15 @@ export function applyBgTexture(dataUrl) {
   document.documentElement.style.setProperty('--bg-image', dataUrl ? `url("${dataUrl}")` : 'none');
 }
 
+// Picks a fresh image from the active background playlist, if any - a no-op when there isn't one.
+export async function applyRandomBackground() {
+  try {
+    const { invoke } = window.__TAURI__.core;
+    const dataUrl = await invoke('pick_random_background');
+    if (dataUrl) applyBgTexture(dataUrl);
+  } catch (e) {}
+}
+
 const CUSTOM_CSS_ELEMENT_ID = 'recharge-custom-css';
 
 export function getCustomCss() {

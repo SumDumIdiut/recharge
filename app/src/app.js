@@ -50,6 +50,40 @@ window.navigate = function navigate(tab) {
 
 window.goHome = () => window.navigate('home');
 
+// Amplifier, the map editor: a chooser between the current (v2) editor and
+// the old one. Either fills the window over whatever page is open.
+let oldAmplifierRoot = null;
+window.chooseAmplifier = () => {
+  document.getElementById('amplifier-overlay').hidden = false;
+};
+window.__amplifierClose = () => {
+  document.getElementById('amplifier-overlay').hidden = true;
+};
+window.__amplifierNew = () => {
+  window.__amplifierClose();
+  import('/maps/v2/index.js').then((m) => m.openAmplifier());
+};
+window.__amplifierOld = () => {
+  window.__amplifierClose();
+  openOldAmplifier();
+};
+window.__amplifierOldClose = () => {
+  if (oldAmplifierRoot) { oldAmplifierRoot.remove(); oldAmplifierRoot = null; }
+};
+async function openOldAmplifier() {
+  if (oldAmplifierRoot && oldAmplifierRoot.isConnected) return;
+  const root = document.createElement('div');
+  root.className = 'map-maker';
+  root.dataset.amplifier = 'old';
+  document.body.appendChild(root);
+  oldAmplifierRoot = root;
+  const m = await import('/maps/editor.js');
+  await m.mountEditor(root);
+}
+document.getElementById('amplifier-cancel').onclick = () => window.__amplifierClose();
+document.getElementById('amplifier-new').onclick = () => window.__amplifierNew();
+document.getElementById('amplifier-old').onclick = () => window.__amplifierOld();
+
 function showToast(html) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');

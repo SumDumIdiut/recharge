@@ -61,7 +61,7 @@ let mounted = false;
 let frameQueued = false;
 
 function emptyDraft() {
-  return { name: '', description: '', pad: 12, useBase: false, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, baseEdits: {}, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
+  return { name: '', description: '', pad: 12, useBase: true, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, baseEdits: {}, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
 }
 
 let blocks = new Map();
@@ -3159,6 +3159,7 @@ async function toggleInstalledList() {
   list.innerHTML = '<div class="mm-config-sub">Loading…</div>';
   let maps = [];
   try { maps = await window.__TAURI__.core.invoke('list_maps'); } catch (e) { list.innerHTML = `<div class="mm-config-sub mm-warn">Couldn't list installed maps: ${e}</div>`; return; }
+  maps = maps.filter((m) => m.id !== 'map-maker-test');
   if (!maps.length) { list.innerHTML = '<div class="mm-config-sub">No maps installed.</div>'; return; }
   list.innerHTML = maps.map((m) => `<button class="mm-tool mm-load-item" data-id="${m.id}" title="${(m.description || '').replace(/"/g, '&quot;')}">${m.name || m.id}<span>${m.id === 'map-maker-test' ? 'last test' : m.id}</span></button>`).join('');
   list.querySelectorAll('[data-id]').forEach((b) => b.addEventListener('click', async () => {
@@ -3175,6 +3176,7 @@ async function toggleInstalledList() {
 async function openMap(map, label, installedId = null) {
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
+  if (st.v === 2) { flash('That\'s a map from the new editor - open it with Amplifier -> New Editor.', true); return; }
   pushUndo();
   Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], triggers: [], csprites: [], xspawns: [], cellGroups: {}, hiddenGroups: [], music: undefined, background: undefined, stageEdits: undefined, courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], movedScene: {}, movedObjects: {}, levelOrder: {}, levelTf: {}, levelGroups: {} }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
@@ -7119,6 +7121,7 @@ export async function mountEditor(container) {
           <button class="mm-tool mm-icon" id="mm-save" title="Save to your installed maps (Ctrl+S)">${icon('save')}</button>
           <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, test in game, open and export (M)">Map ▾</button>
           <button class="mm-tool" id="mm-full-btn"></button>
+          <button class="mm-tool" id="mm-back-btn" title="Back to Recharge">◀ App</button>
         </div>
       </div>
     </div>
@@ -7158,6 +7161,7 @@ export async function mountEditor(container) {
   root.querySelector('#mm-keys-btn').addEventListener('click', () => togglePanel('mm-keys'));
   root.querySelector('#mm-sim-btn').addEventListener('click', () => toggleSimulate());
   root.querySelector('#mm-full-btn').addEventListener('click', () => { draft.inline = !draft.inline; saveDraft(); syncChrome(); });
+  root.querySelector('#mm-back-btn').addEventListener('click', () => window.__amplifierOldClose && window.__amplifierOldClose());
   new ResizeObserver(() => { const h = root.querySelector('.mm-bar')?.offsetHeight || 0; root.style.setProperty('--bar-h', h + 'px'); }).observe(root.querySelector('.mm-bar'));
   root.querySelector('#mm-file-btn').addEventListener('click', () => togglePanel('mm-file'));
   const snapSel = root.querySelector('#mm-snap');
@@ -7175,6 +7179,7 @@ export async function mountEditor(container) {
   root.querySelectorAll('[data-state]').forEach((b) => b.addEventListener('click', () => setBaseState(b.dataset.state)));
 
   loadDraft();
+  if (container.dataset.amplifier) draft.inline = false; // opened from Amplifier: always fill the window
   if (!draft.useBase) loadBase().then(() => { fillJumpList(); requestDraw(); }).catch(() => {});
   if (draft.useBase) {
     try { await loadBase(true); } catch { draft.useBase = false; }

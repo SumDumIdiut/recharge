@@ -7,8 +7,8 @@ namespace Recharge.ModApi
 {
     /// <summary>
     /// Pages 2+ reuse the real StartGame/DeleteSave/Settings row slots for
-    /// mod-contributed rows; page 1 is the untouched vanilla rows. Paging is
-    /// driven by left/right movement input, no visible page controls.
+    /// mod-contributed rows; page 1 is the untouched vanilla rows. A "Page 1/2 >"
+    /// button under the last row switches pages (shown only when there's more than one).
     /// </summary>
     internal static class MenuPager
     {
@@ -26,31 +26,16 @@ namespace Recharge.ModApi
             public float RowSpacing;
             public float PanelTopY;
             public float BottomMargin;
+            public float QuitY;
+            public GameObject PageButton;
             public int CurrentPage;
 
-            private InputAction _moveAction;
-            private bool _consumedLeft;
-            private bool _consumedRight;
-
+            // Escape returns to the vanilla page from a mods page.
             private void Update()
             {
-                if (_moveAction == null) _moveAction = InputSystem.actions?.FindAction("Move");
-                if (_moveAction == null) return;
-
-                float x = _moveAction.ReadValue<Vector2>().x;
-                const float threshold = 0.5f;
-
-                if (x <= -threshold)
-                {
-                    if (!_consumedLeft) { _consumedLeft = true; ShowPage(this, CurrentPage - 1); }
-                }
-                else _consumedLeft = false;
-
-                if (x >= threshold)
-                {
-                    if (!_consumedRight) { _consumedRight = true; ShowPage(this, CurrentPage + 1); }
-                }
-                else _consumedRight = false;
+                if (CurrentPage <= 0) return;
+                var kb = Keyboard.current;
+                if (kb != null && kb.escapeKey.wasPressedThisFrame) ShowPage(this, 0);
             }
         }
 
@@ -94,8 +79,12 @@ namespace Recharge.ModApi
             float panelTopY = 0f, bottomMargin = 0f;
             if (background != null)
             {
-                panelTopY = background.anchoredPosition.y + background.sizeDelta.y / 2f;
-                var panelBottomEdge = background.anchoredPosition.y - background.sizeDelta.y / 2f;
+                // A ContentSizeFitter would force the height back every frame and
+                // clip the extra row, so the vertical fit is handed to us here.
+                var fitter = background.GetComponent<ContentSizeFitter>();
+                if (fitter != null) fitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
+                panelTopY = TopEdge(background);
+                var panelBottomEdge = BottomEdge(background);
                 bottomMargin = originalQuitY - panelBottomEdge + 20f;
             }
 
@@ -116,12 +105,14 @@ namespace Recharge.ModApi
             rt.BottomMargin = bottomMargin;
             rt.CurrentPage = 0;
 
-            float quitY = topY - MaxRowsPerPage * rowSpacing;
+            float quitY = topY - (MaxRowsPerPage + 1) * rowSpacing;
             quit.anchoredPosition = new Vector2(quit.anchoredPosition.x, quitY);
+            rt.QuitY = quitY;
             ResizeBackgroundToFit(background, panelTopY, quitY, bottomMargin);
 
             CreateDividers(dividerTemplate, topY, rowSpacing);
             rt.Slots = CreateSlots(quit, settings);
+            rt.PageButton = CreatePageButton(rt, pagerGo, quit, settings);
 
             ShowPage(rt, 0);
             return pagerGo;
@@ -144,18 +135,23 @@ namespace Recharge.ModApi
             }
         }
 
+        private static float TopEdge(RectTransform rt) => rt.anchoredPosition.y + (1f - rt.pivot.y) * rt.sizeDelta.y;
+        private static float BottomEdge(RectTransform rt) => rt.anchoredPosition.y - rt.pivot.y * rt.sizeDelta.y;
+
+        // Anchors and pivots vary between menus, so set the height and then place
+        // the rect from its own pivot instead of assuming a centered one.
         private static void ResizeBackgroundToFit(RectTransform background, float panelTopY, float quitY, float bottomMargin)
         {
             if (background == null) return;
             float bottomEdge = quitY - bottomMargin;
             background.sizeDelta = new Vector2(background.sizeDelta.x, panelTopY - bottomEdge);
-            background.anchoredPosition = new Vector2(background.anchoredPosition.x, (panelTopY + bottomEdge) / 2f);
+            background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * background.sizeDelta.y);
         }
 
         private static void CreateDividers(Transform dividerTemplate, float topY, float rowSpacing)
         {
             if (dividerTemplate == null) return;
-            for (int i = 0; i < MaxRowsPerPage; i++)
+            for (int i = 0; i < MaxRowsPerPage + 1; i++)
             {
                 var divider = UnityEngine.Object.Instantiate(dividerTemplate.gameObject, dividerTemplate.parent);
                 divider.name = "ModsPagerDivider" + i;
@@ -178,6 +174,26 @@ namespace Recharge.ModApi
             return slots;
         }
 
+        // A row under Quit (a child of the pager, so hiding the pager hides it) that steps to the next page.
+        private static GameObject CreatePageButton(Runtime rt, GameObject pagerGo, RectTransform quit, RectTransform settings)
+        {
+            var pagerRt = (RectTransform)pagerGo.transform;
+            pagerRt.anchorMin = Vector2.zero;
+            pagerRt.anchorMax = Vector2.one;
+            pagerRt.offsetMin = Vector2.zero;
+            pagerRt.offsetMax = Vector2.zero;
+            var go = UnityEngine.Object.Instantiate(quit.gameObject, pagerGo.transform);
+            go.name = "ModsPagerPageButton";
+            var goRt = (RectTransform)go.transform;
+            goRt.anchoredPosition = new Vector2(quit.anchoredPosition.x, rt.QuitY + rt.RowSpacing);
+            MenuUiUtil.CopyButtonTextColor(settings.gameObject, go);
+            var btn = go.GetComponent<Button>();
+            btn.onClick = new Button.ButtonClickedEvent();
+            btn.onClick.AddListener(() => ShowPage(rt, rt.CurrentPage + 1));
+            go.SetActive(false);
+            return go;
+        }
+
         private static void ShowPage(Runtime rt, int page)
         {
             var rows = MenuRowRegistry.All;
@@ -186,6 +202,17 @@ namespace Recharge.ModApi
             if (page < 0) page = totalPages - 1;
             if (page >= totalPages) page = 0;
             rt.CurrentPage = page;
+
+            // The page button, and room for it in the panel, only when there's a page to go to.
+            if (rt.PageButton != null)
+            {
+                bool paged = totalPages > 1;
+                rt.PageButton.SetActive(paged);
+                if (paged) MenuUiUtil.SetButtonLabel(rt.PageButton, "Page " + (page + 1) + "/" + totalPages + "  >");
+                float bottomY = paged ? rt.QuitY : rt.QuitY + rt.RowSpacing;
+                rt.Quit.anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY);
+                ResizeBackgroundToFit(rt.Background, rt.PanelTopY, bottomY, rt.BottomMargin);
+            }
 
             if (page == 0) ShowVanillaPage(rt);
             else ShowModPage(rt, rows, page);
