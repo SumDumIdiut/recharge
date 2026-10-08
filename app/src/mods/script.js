@@ -1,5 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
-import { escapeHtml, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -201,8 +201,14 @@ window.__modOpenUpload = function () {
   openModal('mods-upload-overlay');
 };
 
-window.__modConfirmDeleteFromHub = function (id, name) {
-  if (!confirm(`Remove "${name}" from the Recharge Library? This can't be undone.`)) return;
+window.__modConfirmDeleteFromHub = async function (id, name) {
+  const ok = await confirmDestructive({
+    title: 'Delete upload',
+    body: `"${name}" will be removed from the Recharge Library. Installs already on disk stay, but this cannot be undone.`,
+    confirmLabel: 'Delete',
+    name,
+  });
+  if (!ok) return;
   const { invoke } = window.__TAURI__.core;
   invoke('delete_hub_submission_cmd', { token: getToken(), id })
     .then(async () => {
@@ -372,9 +378,7 @@ const REPO_MODS = {
   // recharge.maps (Navigator) isn't here - built into every install automatically (see loader.rs).
   'recharge.customskins': { repo: 'recharge-skins' },
   'recharge.example': { repo: 'recharge-mods', folder: 'recharge-example' },
-  'recharge.icyphysics': { repo: 'recharge-mods', folder: 'recharge-icy-physics' },
   'recharge.multiplayer': { repo: 'recharge-mods', folder: 'recharge-multiplayer' },
-  'recharge.tas': { repo: 'recharge-mods', folder: 'recharge-tas' },
 };
 
 async function doInstall(ids, btn) {

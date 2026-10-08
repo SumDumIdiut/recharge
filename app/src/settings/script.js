@@ -4,6 +4,7 @@ import {
   getWaveSettings, saveWaveSettings,
 } from '/theme.js';
 import { startWaveform } from '/home.js';
+import { confirmDestructive } from '/ui.js';
 import { renderInstallList } from '/install-list.js';
 
 function renderAppearance() {
@@ -226,7 +227,13 @@ window.__loaderInstall = async function () {
 
 window.__loaderUninstall = async function () {
   const { invoke } = window.__TAURI__.core;
-  if (!confirm('Remove RechargeLoader and all deployed mods, and restore the original game assembly?')) return;
+  const ok = await confirmDestructive({
+    title: 'Uninstall Recharge',
+    body: 'RechargeLoader and every deployed mod will be removed, and the original game assembly restored. Type UNINSTALL to go ahead.',
+    confirmLabel: 'Uninstall',
+    name: 'UNINSTALL',
+  });
+  if (!ok) return;
   const btn = document.getElementById('loader-uninstall-btn');
   btn.disabled = true;
   try {
@@ -283,12 +290,121 @@ async function shownVersion(fallback) {
   return beta?.build != null ? `${base}-beta.${beta.build}` : base;
 }
 
+// Set when the Recharge launcher started us (it then owns package updates and the channel).
+let launcherManaged = false;
+
+async function refreshManaged() {
+  const { invoke } = window.__TAURI__.core;
+  const box = document.getElementById('launcher-managed');
+  const info = await invoke('launcher_info').catch(() => null);
+  launcherManaged = !!info?.managed;
+  box.hidden = !launcherManaged;
+  if (!launcherManaged) return;
+  document.getElementById('launcher-managed-status').textContent =
+    `Installed by the Recharge launcher - build ${info.build || '?'} (${info.channel})`;
+  // The launcher, not the old package check, decides what "up to date" means here.
+  document.getElementById('launcher-status').textContent = info.ready
+    ? `build ${info.build || '?'} - update ready (build ${info.ready}), restart to apply`
+    : `build ${info.build || '?'} (up to date)`;
+  document.getElementById('launcher-restart-btn').hidden = !info.ready;
+  document.getElementById('launcher-update-btn').hidden = true;
+}
+
+window.__launcherCheck = async function () {
+  const { invoke } = window.__TAURI__.core;
+  const note = document.getElementById('launcher-notes');
+  note.hidden = false;
+  note.textContent = 'Checking...';
+  try {
+    const staged = await invoke('launcher_check_now');
+    refreshManaged();
+    note.textContent = staged ? `Build ${staged} is ready.` : "You're up to date.";
+    document.getElementById('launcher-restart-btn').hidden = !staged;
+  } catch (err) {
+    note.textContent = `Couldn't check: ${String(err)}`;
+  }
+};
+
+window.__launcherRestart = () => window.__TAURI__.core.invoke('launcher_restart', { repair: false }).catch((e) => {
+  document.getElementById('launcher-notes').textContent = String(e);
+});
+
+window.__launcherRepair = async function () {
+  // window.confirm is unreliable in the webview: ask with a second click instead.
+  const btn = document.getElementById('launcher-repair-btn');
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = '1';
+    btn.textContent = 'Click again: re-check files and restart';
+    setTimeout(() => { delete btn.dataset.armed; btn.textContent = 'Repair install'; }, 6000);
+    return;
+  }
+  await window.__TAURI__.core.invoke('launcher_restart', { repair: true }).catch((e) => {
+    document.getElementById('launcher-notes').hidden = false;
+    document.getElementById('launcher-notes').textContent = String(e);
+  });
+};
+
+// Offered only to installs the launcher does not manage, and only when the hub has a launcher for this platform.
+async function refreshMigrate() {
+  const { invoke } = window.__TAURI__.core;
+  const box = document.getElementById('migrate-box');
+  if (!box) return;
+  const info = launcherManaged ? null : await invoke('migrate_info').catch(() => null);
+  box.hidden = !info?.available;
+  if (!info?.available) return;
+  document.getElementById('migrate-text').textContent =
+    `Recharge now has its own updater (launcher ${info.launcherVersion}): faster, smaller updates and automatic rollback if something breaks. Your settings, mods and maps stay as they are.`;
+  const row = document.getElementById('migrate-cleanup-row');
+  row.hidden = !info.canCleanup;
+  document.getElementById('migrate-cleanup').checked = false;
+  if (info.hint) {
+    const n = document.getElementById('migrate-text');
+    n.textContent += ' ' + info.hint;
+  }
+}
+
+window.__migrate = async function () {
+  const { invoke } = window.__TAURI__.core;
+  const btn = document.getElementById('migrate-btn');
+  const progress = document.getElementById('launcher-update-progress');
+  const cleanup = !document.getElementById('migrate-cleanup-row').hidden && document.getElementById('migrate-cleanup').checked;
+  btn.disabled = true;
+  progress.hidden = false;
+  progress.textContent = 'Downloading the new Recharge and setting it up - this window will close and reopen.';
+  try {
+    const hint = await invoke('migrate_to_launcher', { cleanup });
+    if (hint) progress.textContent = hint;
+  } catch (err) {
+    btn.disabled = false;
+    progress.textContent = String(err);
+  }
+};
+
 async function refreshLauncherStatus() {
   refreshChannel();
+  await refreshManaged();
+  refreshMigrate();
   const { invoke } = window.__TAURI__.core;
   const status = document.getElementById('launcher-status');
   const notes = document.getElementById('launcher-notes');
   const updateBtn = document.getElementById('launcher-update-btn');
+  if (launcherManaged) {
+    // Only the Navigator redeploy hint of the old check applies under the launcher.
+    try {
+      const info = await invoke('check_launcher_update');
+      if (info.mapsUpdateAvailable) {
+        notes.textContent = `Navigator mod needs redeploying to your game: bundled v${info.bundledMapsVersion}, game has v${info.deployedMapsVersion}.`;
+        notes.hidden = false;
+        updateBtn.textContent = 'Redeploy Navigator';
+        updateBtn.hidden = false;
+        launcherUpdateInfo = info;
+      } else {
+        notes.hidden = true;
+        updateBtn.hidden = true;
+      }
+    } catch (err) { notes.hidden = true; }
+    return;
+  }
   try {
     const info = await invoke('check_launcher_update');
     launcherUpdateInfo = info;
@@ -314,6 +430,7 @@ async function refreshLauncherStatus() {
       updateBtn.hidden = true;
       notes.hidden = true;
     }
+    if (launcherManaged && !info.mapsUpdateAvailable) updateBtn.hidden = true;
     const live = await invoke('live_status').catch(() => null);
     if (live?.active && live.sha) status.append(` \u00b7 code ${live.sha.slice(0, 7)}`);
   } catch (err) {
@@ -347,6 +464,11 @@ window.__setChannel = async function (channel) {
   buttons.forEach((b) => { b.disabled = true; });
   note.textContent = 'Switching...';
   try {
+    if (launcherManaged) {
+      await invoke('launcher_set_channel', { channel });
+      await invoke('launcher_check_now').catch(() => null);
+      await refreshManaged();
+    }
     const result = await invoke('live_set_channel', { channel });
     await refreshChannel();
     if (result === 'applied') note.textContent = `Switched to ${channel}. Reload to start using it.`;
@@ -390,6 +512,7 @@ window.__launcherUpdate = async function () {
 export async function init() {
   const { listen } = window.__TAURI__.event;
   listen('loader-progress', (event) => setProgress(event.payload));
+  listen('launcher-update-ready', () => refreshManaged());
   listen('launcher-update-progress', (event) => {
     const progress = document.getElementById('launcher-update-progress');
     progress.hidden = false;

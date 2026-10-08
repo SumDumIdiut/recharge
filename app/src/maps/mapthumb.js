@@ -15,11 +15,11 @@ async function work(id) {
   }
   if (!json) return null;
   try {
-    const { thumbOf } = await import('./v2/thumb.js');
-    const img = await thumbOf(JSON.parse(json), id);
-    // No-op server-side unless the map is actually installed (see write_map_thumb).
-    if (img) await invoke('write_map_thumb', { id, data: img }).catch(() => {});
-    return img;
+    // The v2 thumb generation was removed. Fall back to null for maps that
+    // don't have a pre-rendered thumb. The server-side read_map_thumb will
+    // return one for installed maps.
+    await invoke('write_map_thumb', { id, data: null }).catch(() => {});
+    return null;
   } catch (e) {
     console.warn('map picture', id, e);
     return null;

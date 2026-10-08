@@ -89,3 +89,10 @@
   color: var(--text-dim);
 }
 .wave-slider-row input[type="range"] { width: 100%; accent-color: var(--green); }
+
+/* Launcher-managed section and migration box */
+.launcher-actions { flex-wrap: wrap; margin-top: 10px; }
+.launcher-actions .btn, #migrate-btn { white-space: nowrap; min-width: 150px; padding: 8px 16px; }
+#launcher-managed-status { margin-bottom: 4px; }
+#migrate-box { margin-top: 14px; padding-top: 4px; }
+#migrate-box .settings-row { margin-top: 10px; }

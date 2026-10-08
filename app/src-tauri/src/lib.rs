@@ -1,10 +1,29 @@
 mod commands;
 mod vdf;
 
-use commands::{backgrounds, games, hub, launcher, live, loader, maps, mods, play, repos, settings, skins, steam};
+use commands::{backgrounds, games, hub, launcher, live, loader, maps, migrate, mods, play, repos, settings, skins, steam, updater};
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
+    // GPU rasterisation for the map editor's canvas. WebKitGTK only composites
+    // through the GPU when it is told to, and it defaults to software on many
+    // setups - the editor redraws every frame while panning, so that is the
+    // difference between smooth and crawling on a big map.
+    //
+    // Both are set only if unset, so a user can override either from the
+    // environment (setting WEBKIT_COMPOSITING_MODE=0 turns this back off).
+    if std::env::var_os("WEBKIT_COMPOSITING_MODE").is_none() {
+        std::env::set_var("WEBKIT_COMPOSITING_MODE", "1");
+    }
+    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
+    }
+    // The canvas is opaque and mostly flat colour; hinting that lets the
+    // compositor skip work it would otherwise do per frame.
+    if std::env::var_os("WEBKIT_DISABLE_ACCELERATED_2D_CANVAS").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_ACCELERATED_2D_CANVAS", "0");
+    }
+
     if std::path::Path::new("/proc/driver/nvidia/version").exists() {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
@@ -23,6 +42,7 @@ pub fn run() {
         .setup(|app| {
             hub::start_beam_server(app.handle().clone());
             live::init(app.handle());
+            updater::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -56,6 +76,7 @@ pub fn run() {
             hub::submit_mod_cmd,
             hub::delete_hub_submission_cmd,
             hub::fetch_hub_map_json,
+            hub::fetch_hub_playlists_cmd,
             maps::list_maps,
             maps::read_map,
             maps::save_map,
@@ -63,6 +84,8 @@ pub fn run() {
             maps::read_map_version,
             maps::export_map_zip,
             maps::read_map_asset,
+            maps::store_map_asset,
+            maps::find_map_asset,
             maps::uninstall_map,
             maps::set_map_hub_name,
             maps::read_map_thumb,
@@ -75,6 +98,12 @@ pub fn run() {
             loader::loader_status,
             loader::install_or_update_loader,
             loader::uninstall_loader,
+            updater::launcher_info,
+            updater::launcher_check_now,
+            updater::launcher_set_channel,
+            updater::launcher_restart,
+            migrate::migrate_info,
+            migrate::migrate_to_launcher,
             launcher::check_launcher_update,
             launcher::install_launcher_update,
             play::launch_game,
@@ -89,6 +118,11 @@ pub fn run() {
             backgrounds::delete_playlist,
             backgrounds::set_active_playlist,
             backgrounds::pick_random_background,
+            backgrounds::pick_background,
+            backgrounds::set_playlist_interval,
+            backgrounds::publish_playlist,
+            backgrounds::unpublish_playlist,
+            backgrounds::download_hub_playlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

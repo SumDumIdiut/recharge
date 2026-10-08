@@ -135,7 +135,7 @@ fn self_update_asset_url(assets: &[GithubAsset]) -> Option<String> {
 // Installed by installer/bootstrap/install.sh under ~/.local (no package
 // manager involved), which leaves a marker file behind.
 #[cfg(not(windows))]
-fn is_user_install() -> bool {
+pub(super) fn is_user_install() -> bool {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return false };
     home.join(".local/share/recharge/.user-install").is_file()
         && std::env::current_exe().map(|exe| exe.starts_with(home.join(".local"))).unwrap_or(false)
@@ -188,6 +188,11 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
         deployed_maps_version: deployed_maps_version.clone(),
     };
 
+    // Under the Recharge launcher it owns package updates; only the Navigator redeploy hint stays.
+    if super::updater::is_managed() {
+        return Ok(no_release_info());
+    }
+
     let beta = settings::update_channel(&app) == "beta";
     let api = if beta { BETA_RELEASE_API } else { STABLE_RELEASE_API };
     // A draft release (briefly, mid-build) 404s same as "doesn't exist yet" - a transient DNS blip gets one retry so it isn't a hard error either.
@@ -236,6 +241,9 @@ fn check_launcher_update_blocking(app: &AppHandle) -> Result<LauncherUpdateInfo,
 
 #[tauri::command]
 pub async fn install_launcher_update(app: AppHandle, url: String) -> Result<(), String> {
+    if super::updater::is_managed() {
+        return Err("Updates are handled by the Recharge launcher".into());
+    }
     tauri::async_runtime::spawn_blocking(move || install_launcher_update_blocking(app, url))
         .await
         .map_err(|e| format!("update install task panicked: {e}"))?

@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const IMAGE_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
+const MAX_PLAYLIST_IMAGES: usize = 50;
+const MAX_IMAGE_BYTES: u64 = 15 * 1024 * 1024;
 
 fn backgrounds_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_local_data_dir().map_err(|e| format!("no app data dir: {e}"))?.join("backgrounds");
@@ -50,6 +52,20 @@ pub fn list_background_images(app: AppHandle) -> Vec<String> {
     rows.into_iter().map(|(_, name)| name).collect()
 }
 
+// A file name that doesn't clash with anything in `dir` (adds -2, -3, ...).
+fn unique_name(dir: &Path, name: &str) -> String {
+    let p = Path::new(name);
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = p.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut candidate = name.to_string();
+    let mut n = 2;
+    while dir.join(&candidate).exists() {
+        candidate = format!("{stem}-{n}.{ext}");
+        n += 1;
+    }
+    candidate
+}
+
 #[tauri::command]
 pub fn upload_background_image(app: AppHandle, path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
@@ -60,14 +76,7 @@ pub fn upload_background_image(app: AppHandle, path: String) -> Result<String, S
         return Err("only png, jpg, webp or gif images can be uploaded".to_string());
     }
     let dir = images_dir(&app)?;
-    let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let ext = src.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-    let mut candidate = src.file_name().ok_or("invalid file name")?.to_string_lossy().into_owned();
-    let mut n = 2;
-    while dir.join(&candidate).exists() {
-        candidate = format!("{stem}-{n}.{ext}");
-        n += 1;
-    }
+    let candidate = unique_name(&dir, &src.file_name().ok_or("invalid file name")?.to_string_lossy());
     std::fs::copy(&src, dir.join(&candidate)).map_err(|e| e.to_string())?;
     Ok(candidate)
 }
@@ -129,6 +138,12 @@ pub struct Playlist {
     pub id: String,
     pub name: String,
     pub images: Vec<String>,
+    // Seconds between background changes; 0 = once per launch.
+    #[serde(default)]
+    pub interval: u64,
+    // Hub submission id while the playlist is public.
+    #[serde(default)]
+    pub public_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -170,13 +185,137 @@ pub fn save_playlist(app: AppHandle, id: Option<String>, name: String, images: V
         return Err("name is required".to_string());
     }
     let mut config = load_config(&app);
-    let playlist = Playlist { id: id.clone().unwrap_or_else(new_id), name, images };
-    match config.playlists.iter_mut().find(|p| p.id == playlist.id) {
-        Some(slot) => *slot = playlist.clone(),
-        None => config.playlists.push(playlist.clone()),
-    }
+    let id = id.unwrap_or_else(new_id);
+    // Editing keeps the playlist's interval and public id.
+    let playlist = match config.playlists.iter_mut().find(|p| p.id == id) {
+        Some(slot) => {
+            slot.name = name;
+            slot.images = images;
+            slot.clone()
+        }
+        None => {
+            let p = Playlist { id, name, images, interval: 0, public_id: None };
+            config.playlists.push(p.clone());
+            p
+        }
+    };
     save_config(&app, &config)?;
     Ok(playlist)
+}
+
+#[tauri::command]
+pub fn set_playlist_interval(app: AppHandle, id: String, interval: u64) -> Result<(), String> {
+    let mut config = load_config(&app);
+    config.playlists.iter_mut().find(|p| p.id == id).ok_or("playlist not found")?.interval = interval;
+    save_config(&app, &config)
+}
+
+fn set_public_id(app: &AppHandle, id: &str, public_id: Option<String>) -> Result<(), String> {
+    let mut config = load_config(app);
+    config.playlists.iter_mut().find(|p| p.id == id).ok_or("playlist not found")?.public_id = public_id;
+    save_config(app, &config)
+}
+
+// Flat zip of the images, original file names.
+fn build_playlist_zip(dir: &Path, names: &[String]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    for name in names {
+        sanitize_segment(name)?;
+        let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
+        writer.start_file(name.as_str(), options).map_err(|e| e.to_string())?;
+        writer.write_all(&bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(writer.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+// Saves the images of a playlist zip into `dir` (flat, no name clashes), returns the new file names.
+fn extract_playlist_zip(bytes: &[u8], dir: &Path) -> Result<Vec<String>, String> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("bad playlist zip: {e}"))?;
+    let mut saved = Vec::new();
+    for i in 0..archive.len() {
+        if saved.len() >= MAX_PLAYLIST_IMAGES {
+            break;
+        }
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if !entry.is_file() {
+            continue;
+        }
+        let Some(base) = entry.name().rsplit(['/', '\\']).next().map(str::to_string) else { continue };
+        if base.starts_with('.') || !is_image(Path::new(&base)) {
+            continue;
+        }
+        let mut data = Vec::new();
+        entry.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
+        if data.len() as u64 > MAX_IMAGE_BYTES {
+            continue;
+        }
+        let name = unique_name(dir, &base);
+        std::fs::write(dir.join(&name), &data).map_err(|e| e.to_string())?;
+        saved.push(name);
+    }
+    Ok(saved)
+}
+
+// Makes the playlist public (or re-uploads it if it already is): new submission first, then the old one goes.
+#[tauri::command]
+pub async fn publish_playlist(app: AppHandle, token: String, id: String, author: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = load_config(&app);
+        let playlist = config.playlists.iter().find(|p| p.id == id).ok_or("playlist not found")?;
+        if playlist.images.is_empty() {
+            return Err("add at least one image before making a playlist public".to_string());
+        }
+        if playlist.images.len() > MAX_PLAYLIST_IMAGES {
+            return Err(format!("public playlists can have at most {MAX_PLAYLIST_IMAGES} images"));
+        }
+        let zip_bytes = build_playlist_zip(&images_dir(&app)?, &playlist.images)?;
+        let new_id = super::hub::hub_submit_playlist(&token, &playlist.name, &author, &zip_bytes)?;
+        set_public_id(&app, &id, Some(new_id.clone()))?;
+        if let Some(old) = &playlist.public_id {
+            let _ = super::hub::hub_delete_submission(&token, old);
+        }
+        Ok(new_id)
+    })
+    .await
+    .map_err(|e| format!("upload task panicked: {e}"))?
+}
+
+// Takes the playlist off the hub and makes it private again.
+#[tauri::command]
+pub async fn unpublish_playlist(app: AppHandle, token: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = load_config(&app);
+        let playlist = config.playlists.iter().find(|p| p.id == id).ok_or("playlist not found")?;
+        if let Some(public_id) = &playlist.public_id {
+            super::hub::hub_delete_submission(&token, public_id)?;
+        }
+        set_public_id(&app, &id, None)
+    })
+    .await
+    .map_err(|e| format!("delete task panicked: {e}"))?
+}
+
+// Community "Add": imports the images and makes a private local playlist.
+#[tauri::command]
+pub async fn download_hub_playlist(app: AppHandle, id: String, name: String, author: String) -> Result<Playlist, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = super::hub::hub_download_playlist_zip(&id)?;
+        let images = extract_playlist_zip(&bytes, &images_dir(&app)?)?;
+        if images.is_empty() {
+            return Err("that playlist has no usable images".to_string());
+        }
+        let mut config = load_config(&app);
+        let label = if author.trim().is_empty() { name } else { format!("{name} (by {author})") };
+        let playlist = Playlist { id: new_id(), name: label, images, interval: 0, public_id: None };
+        config.playlists.push(playlist.clone());
+        save_config(&app, &config)?;
+        Ok(playlist)
+    })
+    .await
+    .map_err(|e| format!("download task panicked: {e}"))?
 }
 
 #[tauri::command]
@@ -205,20 +344,70 @@ fn pseudo_random(max: usize) -> usize {
     (nanos % max as u128) as usize
 }
 
+#[derive(Serialize)]
+pub struct PickedBackground {
+    pub file: String,
+    pub data_url: String,
+}
+
+// Random image of the active playlist, never `exclude` unless it's the only one.
 #[tauri::command]
-pub fn pick_random_background(app: AppHandle) -> Result<Option<String>, String> {
+pub fn pick_background(app: AppHandle, exclude: Option<String>) -> Result<Option<PickedBackground>, String> {
     let config = load_config(&app);
     let Some(active_id) = config.active_playlist else { return Ok(None) };
     let Some(playlist) = config.playlists.iter().find(|p| p.id == active_id) else { return Ok(None) };
 
     let Ok(dir) = images_dir(&app) else { return Ok(None) };
-    let mut candidates = playlist.images.clone();
+    let existing: Vec<String> = playlist.images.iter().filter(|f| dir.join(f).is_file()).cloned().collect();
+    let mut candidates: Vec<String> = existing.iter().filter(|f| Some(*f) != exclude.as_ref()).cloned().collect();
+    if candidates.is_empty() {
+        candidates = existing;
+    }
     while !candidates.is_empty() {
         let idx = pseudo_random(candidates.len());
-        let file_name = candidates.remove(idx);
-        if dir.join(&file_name).is_file() {
-            return read_background_image(app, file_name).map(Some);
+        let file = candidates.remove(idx);
+        if let Ok(data_url) = read_background_image(app.clone(), file.clone()) {
+            return Ok(Some(PickedBackground { file, data_url }));
         }
     }
     Ok(None)
+}
+
+#[tauri::command]
+pub fn pick_random_background(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(pick_background(app, None)?.map(|p| p.data_url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("recharge-bg-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn old_playlists_load_with_defaults() {
+        let cfg: BackgroundsConfig = serde_json::from_str(r#"{"playlists":[{"id":"a","name":"A","images":["x.png"]}],"active_playlist":"a"}"#).unwrap();
+        assert_eq!(cfg.playlists[0].interval, 0);
+        assert!(cfg.playlists[0].public_id.is_none());
+    }
+
+    #[test]
+    fn zip_roundtrip_is_flat_and_avoids_clashes() {
+        let src = tmp("src");
+        let dst = tmp("dst");
+        std::fs::write(src.join("a.png"), b"AAA").unwrap();
+        std::fs::write(src.join("b.jpg"), b"BBB").unwrap();
+        std::fs::write(dst.join("a.png"), b"old").unwrap();
+        let zip_bytes = build_playlist_zip(&src, &["a.png".to_string(), "b.jpg".to_string()]).unwrap();
+        let saved = extract_playlist_zip(&zip_bytes, &dst).unwrap();
+        assert_eq!(saved, vec!["a-2.png".to_string(), "b.jpg".to_string()]);
+        assert_eq!(std::fs::read(dst.join("a.png")).unwrap(), b"old");
+        assert_eq!(std::fs::read(dst.join("a-2.png")).unwrap(), b"AAA");
+        assert!(build_playlist_zip(&src, &["../x.png".to_string()]).is_err());
+    }
 }

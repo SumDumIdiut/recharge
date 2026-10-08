@@ -1,5 +1,5 @@
 import { getToken, getUsername, isAdmin, clearSession, isLoggedIn } from '../auth.js';
-import { escapeHtml, thumb, openModal, closeModal, ICON_TRASH, ICON_EDIT } from '../ui.js';
+import { escapeHtml, thumb, openModal, closeModal, confirmDestructive, ICON_TRASH, ICON_EDIT } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -93,8 +93,14 @@ async function saveEdit() {
   }
 }
 
-window.__acctDelete = function (id, name) {
-  if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
+window.__acctDelete = async function (id, name) {
+  const ok = await confirmDestructive({
+    title: 'Delete upload',
+    body: `"${name}" will be removed from the Recharge Library. Installs already on disk stay, but this cannot be undone.`,
+    confirmLabel: 'Delete',
+    name,
+  });
+  if (!ok) return;
   fetch(`${HUB_BASE}/api/submissions/${id}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${getToken()}` },

@@ -1,5 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
-import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -168,8 +168,14 @@ window.__mapInstall = async function (id, btn) {
   }
 };
 
-window.__mapConfirmUninstall = function (id, name) {
-  if (!confirm(`Remove "${name}"? This can't be undone from here - you'd need to reinstall it.`)) return;
+window.__mapConfirmUninstall = async function (id, name) {
+  const ok = await confirmDestructive({
+    title: 'Delete map',
+    body: `"${name}" will be deleted from your installed maps. This can't be undone from here - you'd need to reinstall it.`,
+    confirmLabel: 'Delete',
+    name,
+  });
+  if (!ok) return;
   const { invoke } = window.__TAURI__.core;
   invoke('uninstall_map', { id })
     .then(refresh)
@@ -221,8 +227,14 @@ async function browseForScreenshots() {
   renderGalleryChoice();
 }
 
-window.__mapConfirmDeleteFromHub = function (id, name) {
-  if (!confirm(`Remove "${name}" from the Recharge Library? This can't be undone.`)) return;
+window.__mapConfirmDeleteFromHub = async function (id, name) {
+  const ok = await confirmDestructive({
+    title: 'Delete upload',
+    body: `"${name}" will be removed from the Recharge Library. Installs already on disk stay, but this cannot be undone.`,
+    confirmLabel: 'Delete',
+    name,
+  });
+  if (!ok) return;
   const { invoke } = window.__TAURI__.core;
   invoke('delete_hub_submission_cmd', { token: getToken(), id })
     .then(async () => {

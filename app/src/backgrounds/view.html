@@ -5,6 +5,7 @@
     <div class="browser-subtabs">
       <button class="subtab-btn active" data-subtab="browse" onclick="window.__bgSubtab('browse')">Browse</button>
       <button class="subtab-btn" data-subtab="playlists" onclick="window.__bgSubtab('playlists')">Playlists</button>
+      <button class="subtab-btn" data-subtab="community" onclick="window.__bgSubtab('community')">Community</button>
     </div>
     <button class="btn" id="bg-upload-btn">Upload</button>
   </div>
@@ -21,6 +22,21 @@
 
   <div id="bg-playlists-view" style="display: none;">
     <div class="bg-playlist-list" id="bg-playlist-list"></div>
+  </div>
+
+  <div id="bg-community-view" style="display: none;">
+    <div class="browser-grid" id="bg-community-grid"></div>
+  </div>
+
+  <div class="bg-preview" id="bg-preview" hidden>
+    <div class="bg-preview-box">
+      <div class="bg-preview-head">
+        <div id="bg-preview-title"></div>
+        <button class="btn btn-primary" id="bg-preview-add">Add to my playlists</button>
+        <button class="btn" id="bg-preview-close">Close</button>
+      </div>
+      <div class="bg-preview-grid" id="bg-preview-grid"></div>
+    </div>
   </div>
 
   <div class="settings-error" id="bg-error" hidden></div>

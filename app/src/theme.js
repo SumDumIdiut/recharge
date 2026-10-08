@@ -92,13 +92,85 @@ export function applyBgTexture(dataUrl) {
   document.documentElement.style.setProperty('--bg-image', dataUrl ? `url("${dataUrl}")` : 'none');
 }
 
-// Picks a fresh image from the active background playlist, if any - a no-op when there isn't one.
-export async function applyRandomBackground() {
+const BG_LAST_KEY = 'rechargeBgLastChange';
+const BG_CUR_KEY = 'rechargeBgCurrent';
+const FADE_MS = 1000;
+
+let bgClock = () => Date.now(); // overridable for tests
+let bgBusy = false;
+
+function bgLoad(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function bgStore(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) {}
+}
+
+// Crossfades a fixed layer (under the UI) in over the old picture, then commits it as the texture.
+function crossfadeTexture(dataUrl) {
+  if (!dataUrl || document.hidden || !document.body) {
+    applyBgTexture(dataUrl);
+    return Promise.resolve();
+  }
+  const layer = document.createElement('div');
+  layer.style.cssText =
+    'position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0;background-size:cover;background-position:center;background-repeat:no-repeat;' +
+    `transition:opacity ${FADE_MS}ms ease;background-image:url("${dataUrl}")`;
+  document.body.appendChild(layer);
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => { layer.style.opacity = '1'; }));
+    setTimeout(() => {
+      try { applyBgTexture(dataUrl); } catch (e) {}
+      layer.remove();
+      resolve();
+    }, FADE_MS + 60);
+  });
+}
+
+// mode 'launch': change if the active playlist is every-launch or due; 'tick': only timed playlists that are due; 'force': always.
+export async function changeBackground(mode = 'launch') {
+  if (bgBusy) return false;
+  bgBusy = true;
   try {
     const { invoke } = window.__TAURI__.core;
-    const dataUrl = await invoke('pick_random_background');
-    if (dataUrl) applyBgTexture(dataUrl);
-  } catch (e) {}
+    const config = await invoke('get_backgrounds_config');
+    const playlist = (config.playlists || []).find((p) => p.id === config.active_playlist);
+    if (!playlist) return false;
+    const interval = playlist.interval || 0;
+    const last = Number(bgLoad(BG_LAST_KEY)) || 0;
+    const due = interval > 0 && bgClock() - last >= interval * 1000;
+    if (mode === 'tick' ? !due : mode === 'launch' && interval > 0 && !due) return false;
+    const picked = await invoke('pick_background', { exclude: bgLoad(BG_CUR_KEY) });
+    if (!picked || !picked.data_url) return false;
+    bgStore(BG_LAST_KEY, String(bgClock()));
+    bgStore(BG_CUR_KEY, picked.file);
+    await crossfadeTexture(picked.data_url);
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    bgBusy = false;
+  }
+}
+
+// Picks a fresh image from the active background playlist, if any - a no-op when there isn't one.
+export function applyRandomBackground() {
+  return changeBackground('launch');
+}
+
+// App-wide: checks now and every `periodMs` whether a timed playlist is due. Safe to call twice.
+let bgTimer = null;
+export function startBackgroundTimer({ periodMs = 15000, now } = {}) {
+  if (now) bgClock = now;
+  if (bgTimer) clearInterval(bgTimer);
+  bgTimer = setInterval(() => changeBackground('tick'), periodMs);
+  return () => { clearInterval(bgTimer); bgTimer = null; };
+}
+
+// Call after the active playlist changed (force) or its interval did (re-check if due).
+export function recheckBackground(force = false) {
+  return changeBackground(force ? 'force' : 'tick');
 }
 
 const CUSTOM_CSS_ELEMENT_ID = 'recharge-custom-css';

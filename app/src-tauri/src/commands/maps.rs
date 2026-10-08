@@ -26,17 +26,28 @@ fn safe_file(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
 }
 
-fn write_assets(map_dir: &Path, assets: &[MapAsset]) -> Result<(), String> {
+/// The editor's own durable copy of every picture/music file it has seen: <app data>/map-assets.
+fn assets_store(app: &AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app.path().app_local_data_dir().ok().map(|d| d.join("map-assets"))
+}
+
+fn write_assets(app: &AppHandle, map_dir: &Path, assets: &[MapAsset]) -> Result<(), String> {
     if assets.is_empty() {
         return Ok(());
     }
+    let store = assets_store(app).filter(|s| std::fs::create_dir_all(s).is_ok());
     let folder = map_dir.join("assets");
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     for a in assets {
         if !safe_file(&a.file) {
             return Err(format!("invalid asset name: '{}'", a.file));
         }
-        std::fs::write(folder.join(&a.file), base64_decode(&a.data)?).map_err(|e| format!("couldn't save {}: {e}", a.file))?;
+        let bytes = base64_decode(&a.data)?;
+        std::fs::write(folder.join(&a.file), &bytes).map_err(|e| format!("couldn't save {}: {e}", a.file))?;
+        if let Some(s) = &store {
+            let _ = std::fs::write(s.join(&a.file), &bytes); // best effort
+        }
     }
     Ok(())
 }
@@ -87,6 +98,41 @@ pub fn read_map_asset(app: AppHandle, id: String, file: String) -> Result<String
     let dir = maps_dir(&app).ok_or("game path not set")?;
     let bytes = std::fs::read(dir.join(&id).join("assets").join(&file)).map_err(|e| format!("couldn't read {file}: {e}"))?;
     Ok(base64_encode(&bytes))
+}
+
+/// Keeps a picked file (base64 or data URL) in the app's own folder, so the editor can get it back.
+#[tauri::command]
+pub fn store_map_asset(app: AppHandle, file: String, data: String) -> Result<(), String> {
+    if !safe_file(&file) {
+        return Err(format!("invalid asset name: '{file}'"));
+    }
+    let dir = assets_store(&app).ok_or("no app data folder")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(&file), base64_decode(&data)?).map_err(|e| format!("couldn't keep {file}: {e}"))
+}
+
+/// An asset file by name, base64: from the app's own copy, else from any installed map's assets.
+#[tauri::command]
+pub fn find_map_asset(app: AppHandle, file: String) -> Result<String, String> {
+    if !safe_file(&file) {
+        return Err("invalid name".into());
+    }
+    if let Some(p) = assets_store(&app).map(|d| d.join(&file)).filter(|p| p.is_file()) {
+        if let Ok(b) = std::fs::read(p) {
+            return Ok(base64_encode(&b));
+        }
+    }
+    if let Some(dir) = maps_dir(&app) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path().join("assets").join(&file);
+            if p.is_file() {
+                if let Ok(b) = std::fs::read(p) {
+                    return Ok(base64_encode(&b));
+                }
+            }
+        }
+    }
+    Err(format!("{file} not found"))
 }
 
 /// A map's picture (thumb.png beside it: the whole map, zoomed out), base64, while it's
@@ -187,7 +233,7 @@ pub fn save_map(app: AppHandle, id: String, map_json: String, assets: Option<Vec
         }
     }
     std::fs::write(current, map_json).map_err(|e| format!("couldn't save map '{id}': {e}"))?;
-    write_assets(&target, assets.as_deref().unwrap_or(&[]))
+    write_assets(&app, &target, assets.as_deref().unwrap_or(&[]))
 }
 
 const HISTORY_SAVES: usize = 20;
@@ -371,7 +417,7 @@ pub fn test_launch_map(app: AppHandle, map_json: String, assets: Option<Vec<MapA
     let target = dir.join(TEST_MAP_ID);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     std::fs::write(target.join("map.json"), map_json).map_err(|e| e.to_string())?;
-    write_assets(&target, assets.as_deref().unwrap_or(&[]))?;
+    write_assets(&app, &target, assets.as_deref().unwrap_or(&[]))?;
     let request = dir.parent().ok_or("bad maps folder")?.join("autoplay.txt");
     std::fs::write(&request, TEST_MAP_ID).map_err(|e| e.to_string())?;
     super::play::launch_game(app, true).map_err(|e| {
