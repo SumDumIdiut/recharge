@@ -28,7 +28,7 @@ jobs:
           if [ "${{ github.ref_name }}" = dev ]; then
             base=$(python3 -c "import json; print(json.load(open('app/src/version.json'))['version'])")
             build=$(python3 -c "import json; print(json.load(open('app/src/beta.json'))['build'])")
-            version="$base-beta.$build"
+            version="$base-beta$build"
             echo "tag=latest-beta" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             echo "latest=false" >> "$GITHUB_OUTPUT"
