@@ -89,7 +89,7 @@ pub fn delete_background_image(app: AppHandle, file_name: String) -> Result<(), 
 
     // Drop it from every playlist that referenced it too, so nothing dangles.
     let mut config = load_config(&app);
-    let mut changed = false;
+    let mut changed = config.image_public.remove(&file_name).is_some();
     for playlist in &mut config.playlists {
         let before = playlist.images.len();
         playlist.images.retain(|i| i != &file_name);
@@ -150,6 +150,9 @@ pub struct Playlist {
 pub struct BackgroundsConfig {
     pub playlists: Vec<Playlist>,
     pub active_playlist: Option<String>,
+    // Image file name -> hub submission id while that image is public.
+    #[serde(default)]
+    pub image_public: std::collections::HashMap<String, String>,
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -298,21 +301,105 @@ pub async fn unpublish_playlist(app: AppHandle, token: String, id: String) -> Re
     .map_err(|e| format!("delete task panicked: {e}"))?
 }
 
+// Image extension from the file's first bytes (hub files are untrusted).
+fn sniff_ext(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0x89, b'P', b'N', b'G']) { Some("png") }
+    else if b.starts_with(&[0xFF, 0xD8, 0xFF]) { Some("jpg") }
+    else if b.starts_with(b"GIF8") { Some("gif") }
+    else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" { Some("webp") }
+    else { None }
+}
+
+// File name for a downloaded hub image: the hub name as a safe stem + the real extension.
+fn background_file_name(name: &str, ext: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .collect::<String>()
+        .trim()
+        .trim_start_matches('.')
+        .chars()
+        .take(60)
+        .collect();
+    let stem = if stem.is_empty() { "background".to_string() } else { stem };
+    format!("{stem}.{ext}")
+}
+
+pub fn install_hub_background(app: &AppHandle, id: &str, name: &str) -> Result<String, String> {
+    let bytes = super::hub::hub_download_background(id)?;
+    let ext = sniff_ext(&bytes).ok_or("that file isn't a png, jpg, webp or gif image")?;
+    let dir = images_dir(app)?;
+    let file = unique_name(&dir, &background_file_name(name, ext));
+    std::fs::write(dir.join(&file), &bytes).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+pub fn install_hub_playlist(app: &AppHandle, id: &str, name: &str, author: &str) -> Result<String, String> {
+    let bytes = super::hub::hub_download_playlist_zip(id)?;
+    let images = extract_playlist_zip(&bytes, &images_dir(app)?)?;
+    if images.is_empty() {
+        return Err("that playlist has no usable images".to_string());
+    }
+    let mut config = load_config(app);
+    let label = if author.trim().is_empty() { name.to_string() } else { format!("{name} (by {author})") };
+    config.playlists.push(Playlist { id: new_id(), name: label.clone(), images, interval: 0, public_id: None });
+    save_config(app, &config)?;
+    Ok(label)
+}
+
+// Community "Add" for one image: saved into the library, returns the file name.
+#[tauri::command]
+pub async fn download_hub_background(app: AppHandle, id: String, name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install_hub_background(&app, &id, &name))
+        .await
+        .map_err(|e| format!("download task panicked: {e}"))?
+}
+
+// Makes one image public (re-uploads when already public: new submission first, then the old one goes).
+#[tauri::command]
+pub async fn publish_background_image(app: AppHandle, token: String, file_name: String, author: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sanitize_segment(&file_name)?;
+        let path = images_dir(&app)?.join(&file_name);
+        let size = std::fs::metadata(&path).map_err(|e| format!("{file_name}: {e}"))?.len();
+        if size > MAX_IMAGE_BYTES {
+            return Err("public images can be at most 15 MB".to_string());
+        }
+        let label = Path::new(&file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| file_name.clone());
+        let new_id = super::hub::hub_submit_background(&token, &label, &author, &path)?;
+        let mut config = load_config(&app);
+        let old = config.image_public.insert(file_name, new_id.clone());
+        save_config(&app, &config)?;
+        if let Some(old) = old {
+            let _ = super::hub::hub_delete_submission(&token, &old);
+        }
+        Ok(new_id)
+    })
+    .await
+    .map_err(|e| format!("upload task panicked: {e}"))?
+}
+
+#[tauri::command]
+pub async fn unpublish_background_image(app: AppHandle, token: String, file_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut config = load_config(&app);
+        if let Some(public_id) = config.image_public.get(&file_name).cloned() {
+            super::hub::hub_delete_submission(&token, &public_id)?;
+            config.image_public.remove(&file_name);
+            save_config(&app, &config)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("delete task panicked: {e}"))?
+}
+
 // Community "Add": imports the images and makes a private local playlist.
 #[tauri::command]
 pub async fn download_hub_playlist(app: AppHandle, id: String, name: String, author: String) -> Result<Playlist, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = super::hub::hub_download_playlist_zip(&id)?;
-        let images = extract_playlist_zip(&bytes, &images_dir(&app)?)?;
-        if images.is_empty() {
-            return Err("that playlist has no usable images".to_string());
-        }
-        let mut config = load_config(&app);
-        let label = if author.trim().is_empty() { name } else { format!("{name} (by {author})") };
-        let playlist = Playlist { id: new_id(), name: label, images, interval: 0, public_id: None };
-        config.playlists.push(playlist.clone());
-        save_config(&app, &config)?;
-        Ok(playlist)
+        install_hub_playlist(&app, &id, &name, &author)?;
+        load_config(&app).playlists.pop().ok_or_else(|| "playlist not saved".to_string())
     })
     .await
     .map_err(|e| format!("download task panicked: {e}"))?
@@ -394,6 +481,24 @@ mod tests {
         let cfg: BackgroundsConfig = serde_json::from_str(r#"{"playlists":[{"id":"a","name":"A","images":["x.png"]}],"active_playlist":"a"}"#).unwrap();
         assert_eq!(cfg.playlists[0].interval, 0);
         assert!(cfg.playlists[0].public_id.is_none());
+    }
+
+    #[test]
+    fn old_config_has_empty_image_public() {
+        let cfg: BackgroundsConfig = serde_json::from_str(r#"{"playlists":[],"active_playlist":null}"#).unwrap();
+        assert!(cfg.image_public.is_empty());
+        let mut cfg = cfg;
+        cfg.image_public.insert("a.png".into(), "id1".into());
+        let back: BackgroundsConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.image_public.get("a.png").map(String::as_str), Some("id1"));
+    }
+
+    #[test]
+    fn sniffs_and_names_hub_images() {
+        assert_eq!(sniff_ext(&[0x89, b'P', b'N', b'G', 1]), Some("png"));
+        assert_eq!(sniff_ext(b"<html>"), None);
+        assert_eq!(background_file_name("../evil/na me", "png"), "___evil_na me.png");
+        assert_eq!(background_file_name("", "jpg"), "background.jpg");
     }
 
     #[test]

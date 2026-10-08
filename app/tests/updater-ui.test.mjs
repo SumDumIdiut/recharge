@@ -27,7 +27,7 @@ function makeDom() {
     createElement: (t) => new El(t),
     getElementById: (id) => byId.get(id) ?? null,
   };
-  for (const id of ['launcher-managed', 'launcher-managed-status', 'launcher-restart-btn', 'launcher-update-btn', 'launcher-notes', 'launcher-repair-btn', 'launcher-status', 'channel-note', 'channel-stable-btn', 'channel-beta-btn']) {
+  for (const id of ['launcher-managed', 'launcher-managed-status', 'launcher-restart-btn', 'launcher-update-btn', 'launcher-notes', 'launcher-repair-btn', 'launcher-status', 'channel-note', 'channel-stable-btn', 'channel-beta-btn', 'uninstall-managed', 'uninstall-manual', 'uninstall-btn', 'uninstall-note', 'uninstall-data', 'uninstall-restore']) {
     const e = new El('div'); e.id = id; byId.set(id, e);
   }
   return { document, byId };
@@ -83,14 +83,16 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 
 // --- settings section ---
 {
-  const t = setup({ managed: true, ready: null, build: '10', channel: 'beta' });
+  const t = setup({ managed: true, ready: null, build: '10', version: '4.0.0-beta1', readyVersion: null, channel: 'beta' });
   const code = src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, '');
   vm.runInContext(code, t.ctx);
   await vm.runInContext('refreshLauncherStatus()', t.ctx);
   assert.equal(t.byId.get('launcher-managed').hidden, false);
-  assert.equal(t.byId.get('launcher-managed-status').textContent, 'Installed by the Recharge launcher - build 10 (beta)');
+  assert.equal(t.byId.get('launcher-managed-status').textContent, 'Installed by the Recharge launcher');
   assert.equal(t.byId.get('launcher-restart-btn').hidden, true);
-  assert.equal(t.byId.get('launcher-status').textContent, 'build 10 (up to date)', 'status reflects the launcher');
+  assert.equal(t.byId.get('launcher-status').title, 'Build 10', 'CI build only in the tooltip');
+  assert.ok(!t.byId.get('launcher-status').textContent.includes('10'));
+  assert.equal(t.byId.get('launcher-status').textContent, 'Recharge 4.0.0-beta1 (Beta) - up to date', 'status reflects the launcher version + launcher channel');
   await t.window.__launcherCheck();
   assert.equal(t.byId.get('launcher-restart-btn').hidden, false, 'check that stages shows restart');
   await t.window.__setChannel('stable');
@@ -105,5 +107,34 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   vm.runInContext(code, u.ctx);
   await vm.runInContext('refreshLauncherStatus()', u.ctx);
   assert.equal(u.byId.get('launcher-managed').hidden, true, 'hidden when not launcher-managed');
+}
+// --- version line variants + uninstall ---
+{
+  const t = setup({ managed: true });
+  vm.runInContext(src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, ''), t.ctx);
+  const line = (i) => vm.runInContext(`managedVersionLine(${JSON.stringify(i)})`, t.ctx);
+  assert.equal(line({ version: '4.0.0-beta1', channel: 'beta', ready: 12, readyVersion: '4.0.0-beta2', build: '11' }).text, 'Recharge 4.0.0-beta1 (Beta) - update ready: 4.0.0-beta2 - restart to apply');
+  assert.equal(line({ version: '4.0.0', channel: 'stable' }).text, 'Recharge 4.0.0 (Stable) - up to date');
+  assert.equal(line({ channel: 'stable', ready: 3 }).text, 'Recharge (Stable) - update ready - restart to apply');
+  assert.match(vm.runInContext("manualUninstallText('Win32')", t.ctx), /Windows Settings/);
+  assert.match(vm.runInContext("manualUninstallText('Linux x86_64')", t.ctx), /apt remove recharge/);
+
+  // uninstall flow: first click arms, second asks (typed confirm), then the command carries both choices
+  const asked = [];
+  vm.runInContext('var confirmDestructive = async (o) => { __asked.push(o); return __answer; }', Object.assign(t.ctx, { __asked: asked, __answer: false }));
+  t.byId.get('uninstall-btn').textContent = 'Uninstall Recharge';
+  t.byId.get('uninstall-data').checked = true;
+  await t.window.__uninstallRecharge();
+  assert.ok(!t.calls.some((c) => c[0] === 'launcher_uninstall') && asked.length === 0, 'first click only arms');
+  await t.window.__uninstallRecharge();
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].body, /settings, mods, skins and map saves will be deleted/);
+  assert.match(asked[0].body, /RechargeLoader stays/);
+  assert.ok(!t.calls.some((c) => c[0] === 'launcher_uninstall'), 'declined: nothing happens');
+  t.ctx.__answer = true;
+  t.byId.get('uninstall-restore').checked = true;
+  await t.window.__uninstallRecharge();
+  await t.window.__uninstallRecharge();
+  assert.deepEqual(t.calls.find((c) => c[0] === 'launcher_uninstall'), ['launcher_uninstall', { deleteData: true, restoreGame: true }]);
 }
 console.log('updater-ui: all checks passed');

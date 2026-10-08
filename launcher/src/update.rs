@@ -163,7 +163,7 @@ fn stage(ctx: &Ctx, m: &Manifest, plat: &Platform, plan: &Plan) -> Result<Snapsh
         }
     }
     download_all(ctx, &plan.fetch, &new)?;
-    let mut snap = Snapshot { version: m.version.clone(), build: m.build, launch: plat.launch.clone(), ..Default::default() };
+    let mut snap = Snapshot { version: m.version.clone(), build: m.build, channel: ctx.channel.clone(), launch: plat.launch.clone(), ..Default::default() };
     for f in &plat.files {
         let local = new.join(manifest::safe_rel(&f.path).unwrap());
         if f.exec {

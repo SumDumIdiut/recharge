@@ -1,7 +1,7 @@
 import { initHomeNews, layoutNews } from '/home-news.js';
 import { getWaveSettings, applyRandomBackground } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
-import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession } from '/auth.js';
+import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession, sessionExpired, clearExpiredNote, EXPIRED_MESSAGE } from '/auth.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 let loginMode = 'login';
@@ -210,6 +210,12 @@ function openLoginModal() {
   setLoginMode('login');
   document.getElementById('login-username').value = '';
   document.getElementById('login-password').value = '';
+  if (sessionExpired()) {
+    const err = document.getElementById('login-error');
+    err.textContent = EXPIRED_MESSAGE;
+    err.hidden = false;
+    clearExpiredNote();
+  }
   document.getElementById('login-overlay').hidden = false;
 }
 

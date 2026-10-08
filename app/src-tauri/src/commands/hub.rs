@@ -215,9 +215,42 @@ pub async fn download_skin_template_cmd(dest_dir: String) -> Result<(), String> 
     .map_err(|e| format!("export task panicked: {e}"))?
 }
 
+#[derive(Deserialize)]
+struct HubBgMeta {
+    name: String,
+    #[serde(default)]
+    author: String,
+}
+
+// Beam of a background image or playlist: the hub kind is singular here ("background"/"playlist");
+// the plural spelling is accepted too.
+fn install_background_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
+    sanitize_id(id)?;
+    let playlist = kind == "playlist" || kind == "playlists";
+    let api = if playlist { "playlists" } else { "backgrounds" };
+    let meta: HubBgMeta = call_json_retry(&format!("{HUB_BASE}/api/{api}/{id}")).map_err(|e| if e.contains("404") { "UNSUPPORTED".to_string() } else { e })?;
+    let name = if playlist {
+        super::backgrounds::install_hub_playlist(app, id, &meta.name, &meta.author)?
+    } else {
+        super::backgrounds::install_hub_background(app, id, &meta.name)?
+    };
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    let _ = app.emit(
+        "hub-beam-installed",
+        serde_json::json!({ "kind": if playlist { "playlist" } else { "background" }, "id": id, "name": name }),
+    );
+    Ok(name)
+}
+
 pub fn install_from_hub(app: &AppHandle, kind: &str, id: &str) -> Result<String, String> {
+    if matches!(kind, "background" | "backgrounds" | "playlist" | "playlists") {
+        return install_background_from_hub(app, kind, id);
+    }
     if kind != "mods" && kind != "maps" && kind != "skins" {
-        return Err("kind must be 'mods', 'maps' or 'skins'".to_string());
+        return Err("kind must be 'mods', 'maps', 'skins', 'background' or 'playlist'".to_string());
     }
     sanitize_id(id)?;
 
@@ -636,6 +669,62 @@ pub fn hub_delete_submission(token: &str, id: &str) -> Result<(), String> {
         Ok(_) | Err(ureq::Error::StatusCode(404)) => Ok(()),
         Err(e) => Err(format!("delete failed: {e}")),
     }
+}
+
+pub fn hub_submit_background(token: &str, name: &str, author: &str, path: &std::path::Path) -> Result<String, String> {
+    let form = ureq::unversioned::multipart::Form::new()
+        .text("kind", "background")
+        .text("name", name)
+        .text("author", author)
+        .file("file", path)
+        .map_err(|e| e.to_string())?;
+    let res: SubmitResult = ureq::post(&format!("{HUB_BASE}/api/submit"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send(form)
+        .map_err(|e| playlist_err("upload", e))?
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_json()
+        .map_err(|e| format!("bad response from library: {e}"))?;
+    Ok(res.id)
+}
+
+pub fn hub_download_background(id: &str) -> Result<Vec<u8>, String> {
+    sanitize_id(id)?;
+    let mut res = ureq::get(&format!("{HUB_BASE}/api/backgrounds/{id}/file")).call().map_err(|e| playlist_err("download", e))?;
+    res.body_mut().with_config().limit(15 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fetch_hub_backgrounds_cmd() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        ureq::get(&format!("{HUB_BASE}/api/backgrounds"))
+            .call()
+            .map_err(|e| playlist_err("loading images", e))?
+            .body_mut()
+            .with_config()
+            .limit(4 * 1024 * 1024)
+            .read_json()
+            .map_err(|e| format!("bad response from library: {e}"))
+    })
+    .await
+    .map_err(|e| format!("task panicked: {e}"))?
+}
+
+// "What's new": the changelog of a channel; "NOT_FOUND" when the hub has none yet.
+#[tauri::command]
+pub async fn fetch_changelog_cmd(channel: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let channel = if channel == "beta" { "beta" } else { "stable" };
+        match ureq::get(&format!("{HUB_BASE}/update/{channel}/changelog.json")).call() {
+            Ok(mut r) => r.body_mut().with_config().limit(2 * 1024 * 1024).read_json().map_err(|e| format!("bad changelog: {e}")),
+            Err(ureq::Error::StatusCode(404)) => Err("NOT_FOUND".to_string()),
+            Err(e) => Err(format!("couldn't load the changelog: {e}")),
+        }
+    })
+    .await
+    .map_err(|e| format!("task panicked: {e}"))?
 }
 
 pub fn hub_download_playlist_zip(id: &str) -> Result<Vec<u8>, String> {

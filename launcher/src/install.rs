@@ -48,12 +48,13 @@ pub fn refresh_shortcut(root: &Path, version: &str) {
         .map(|p| root.join(p))
         .find(|p| p.is_file());
     let mut s = format!(
-        "[Desktop Entry]\nType=Application\nName=Recharge\nComment=Recharge launcher\nExec=\"{}\"\nTerminal=false\nCategories=Game;\n",
+        "[Desktop Entry]\nType=Application\nName=Recharge\nComment=Recharge launcher\nExec=\"{0}\"\nTerminal=false\nCategories=Game;\nActions=Uninstall;\n",
         launcher_path(root).display()
     );
     if let Some(i) = icon {
         s.push_str(&format!("Icon={}\n", i.display()));
     }
+    s.push_str(&format!("\n[Desktop Action Uninstall]\nName=Uninstall Recharge\nExec=\"{}\" --uninstall\n", launcher_path(root).display()));
     let _ = fs::create_dir_all(path.parent().unwrap());
     if fs::read_to_string(&path).map(|old| old != s).unwrap_or(true) {
         if let Err(e) = fs::write(&path, s) {
@@ -65,6 +66,11 @@ pub fn refresh_shortcut(root: &Path, version: &str) {
 #[cfg(windows)]
 fn lnk_path() -> Option<PathBuf> {
     Some(dirs::data_dir()?.join("Microsoft\\Windows\\Start Menu\\Programs\\Recharge.lnk"))
+}
+
+#[cfg(windows)]
+fn uninstall_lnk_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("Microsoft\\Windows\\Start Menu\\Programs\\Uninstall Recharge.lnk"))
 }
 
 #[cfg(windows)]
@@ -102,10 +108,20 @@ pub fn refresh_shortcut(root: &Path, version: &str) {
         if let Some(dir) = lnk.parent() {
             let _ = fs::create_dir_all(dir);
         }
-        if let Err(e) = winnative::create_shortcut(&lnk, &exe, root) {
+        if let Err(e) = winnative::create_shortcut(&lnk, &exe, root, None) {
             log!("native shortcut failed ({e:#x}), falling back to PowerShell");
             let ps = format!(
                 "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}');$s.TargetPath='{}';$s.WorkingDirectory='{}';$s.Save()",
+                lnk.display(), exe.display(), root.display()
+            );
+            let _ = hidden("powershell").args(["-NoProfile", "-Command", &ps]).status();
+        }
+    }
+    if let Some(lnk) = uninstall_lnk_path() {
+        if let Err(e) = winnative::create_shortcut(&lnk, &exe, root, Some("--uninstall")) {
+            log!("native uninstall shortcut failed ({e:#x}), falling back to PowerShell");
+            let ps = format!(
+                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}');$s.TargetPath='{}';$s.Arguments='--uninstall';$s.WorkingDirectory='{}';$s.Save()",
                 lnk.display(), exe.display(), root.display()
             );
             let _ = hidden("powershell").args(["-NoProfile", "-Command", &ps]).status();
@@ -198,7 +214,7 @@ mod winnative {
         add_ref: usize,
         release: unsafe extern "system" fn(*mut c_void) -> u32,
     }
-    /// IShellLinkW: IUnknown + 18 methods; only the three used are typed, the rest are placeholders.
+    /// IShellLinkW: IUnknown + 18 methods; only the used ones are typed, the rest are placeholders.
     #[repr(C)]
     struct ShellLinkVtbl {
         base: Unknown,
@@ -210,7 +226,7 @@ mod winnative {
         _get_working_directory: usize,
         set_working_directory: unsafe extern "system" fn(*mut c_void, *const u16) -> i32,
         _get_arguments: usize,
-        _set_arguments: usize,
+        set_arguments: unsafe extern "system" fn(*mut c_void, *const u16) -> i32,
         _get_hotkey: usize,
         _set_hotkey: usize,
         _get_show_cmd: usize,
@@ -242,7 +258,7 @@ mod winnative {
     const IID_IPERSIST_FILE: GUID = GUID { data1: 0x0000010b, data2: 0, data3: 0, data4: [0xC0, 0, 0, 0, 0, 0, 0, 0x46] };
 
     /// Err carries the failing HRESULT.
-    pub fn create_shortcut(lnk: &Path, target: &Path, workdir: &Path) -> Result<(), u32> {
+    pub fn create_shortcut(lnk: &Path, target: &Path, workdir: &Path, args: Option<&str>) -> Result<(), u32> {
         unsafe {
             let init = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
             let mut link: *mut c_void = null_mut();
@@ -259,6 +275,11 @@ mod winnative {
             let mut hr = (l.set_path)(link, t.as_ptr());
             if hr >= 0 {
                 hr = (l.set_working_directory)(link, w.as_ptr());
+            }
+            if hr >= 0 {
+                if let Some(a) = args {
+                    hr = (l.set_arguments)(link, wide(a).as_ptr());
+                }
             }
             if hr >= 0 {
                 hr = (l.set_icon_location)(link, t.as_ptr(), 0);
@@ -284,18 +305,85 @@ mod winnative {
     }
 }
 
-pub fn uninstall(root: &Path, yes: bool) -> Result<(), String> {
+/// Tauri app data folders (identifier co.za.codecade.recharge): settings, mods, skins, map saves,
+/// backgrounds, WebView storage. Windows: %APPDATA% and %LOCALAPPDATA%; Linux: ~/.local/share,
+/// ~/.config and ~/.cache. Mirrors app_data_dir / app_local_data_dir / app_config_dir / app_cache_dir.
+pub const APP_IDENTIFIER: &str = "co.za.codecade.recharge";
+
+pub fn data_dirs() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = [dirs::data_dir(), dirs::data_local_dir(), dirs::config_dir(), dirs::cache_dir()]
+        .into_iter()
+        .flatten()
+        .map(|b| b.join(APP_IDENTIFIER))
+        .collect();
+    v.dedup();
+    let mut seen = Vec::new();
+    v.retain(|p| {
+        let new = !seen.contains(p);
+        seen.push(p.clone());
+        new
+    });
+    v
+}
+
+fn delete_data() {
+    for d in data_dirs() {
+        if !d.exists() {
+            continue;
+        }
+        match fs::remove_dir_all(&d) {
+            Ok(()) => eprintln!("removed {}", d.display()),
+            Err(e) => eprintln!("could not remove {}: {e}", d.display()),
+        }
+    }
+}
+
+/// y/n question: on the terminal when there is one, else a dialog (zenity / PowerShell message box).
+/// No way to ask means no.
+fn ask(question: &str) -> bool {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        eprint!("{question} [y/N] ");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        return matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
+    }
+    #[cfg(unix)]
+    {
+        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return false;
+        }
+        std::process::Command::new("zenity")
+            .args(["--question", "--title=Recharge", &format!("--text={question}")])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        let ps = format!(
+            "Add-Type -AssemblyName PresentationFramework;if([System.Windows.MessageBox]::Show('{}','Recharge','YesNo','Question') -eq 'Yes'){{exit 0}}else{{exit 1}}",
+            question.replace('\'', "")
+        );
+        hidden("powershell").args(["-NoProfile", "-Command", &ps]).status().map(|s| s.success()).unwrap_or(false)
+    }
+}
+
+pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String> {
     // Never rm -rf an arbitrary directory because of a bad --root.
     if !launcher_path(root).exists() && !root.join("state.json").exists() {
         return Err(format!("{} does not look like a Recharge install, refusing", root.display()));
     }
     if !yes {
-        eprint!("Remove Recharge from {} ? [y/N] ", root.display());
-        let mut line = String::new();
-        let _ = std::io::stdin().read_line(&mut line);
-        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
+        if !ask(&format!("Remove Recharge from {} ?", root.display())) {
             return Err("cancelled".into());
         }
+        if !delete {
+            delete = ask("Also delete your Recharge settings, mods, skins and map saves?");
+        }
+    }
+    if delete {
+        delete_data();
     }
     #[cfg(unix)]
     if let Some(p) = desktop_file() {
@@ -303,7 +391,7 @@ pub fn uninstall(root: &Path, yes: bool) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        if let Some(p) = lnk_path() {
+        for p in [lnk_path(), uninstall_lnk_path()].into_iter().flatten() {
             let _ = fs::remove_file(p);
         }
         if !winnative::delete_uninstall_entry() {

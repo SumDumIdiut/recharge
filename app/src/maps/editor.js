@@ -5178,6 +5178,7 @@ function drawBaseTiles(W, H, useArt, part = null) {
     const at = z + '|' + Math.floor(cam.x / (T * 4)) + '|' + Math.floor(cam.y / (T * 4));
     if (at !== prefetchAt) { prefetchAt = at; planPrefetch(W, H, false); }
   }
+  if (dbg.on) Object.assign(dbg.cur, { shown, inView, missing, z });
   if (missing && !workers) requestDraw();
   scheduleAhead();
 }
@@ -5406,15 +5407,23 @@ const cellCache = { chunks: new Map(), pool: [], refs: null, sig: '', cold: true
 const cellCacheOff = () => { try { return localStorage.mapMakerNoCellCache === '1'; } catch { return false; } };
 const ccSpan = (z) => CC_PX / Math.pow(2, z);
 const ccKey = (z, tx, ty) => z + '|' + tx + '|' + ty;
-function ccDropAll() {
-  for (const c of cellCache.chunks.values()) cellCache.pool.push(c.cv);
-  cellCache.chunks.clear();
-  cellCache.cold = true;
+// Stale chunks stay on screen until their replacement is built, so a change never opens a hole.
+// hard: the collections themselves were replaced (another map, a rebuilt state) - the old
+// picture would be wrong, not just old, so it goes and the rebuild gets the bigger budget.
+function ccDropAll(hard) {
+  if (dbg.on) { dbg.cur.drops = (dbg.cur.drops || 0) + 1; dbgLog('ccDropAll ' + (hard ? 'hard' : 'soft')); }
+  if (hard) {
+    for (const c of cellCache.chunks.values()) cellCache.pool.push(c.cv);
+    cellCache.chunks.clear();
+    cellCache.cold = true;
+    return;
+  }
+  for (const c of cellCache.chunks.values()) c.stale = true;
 }
 function ccDropRects(rects) {
-  for (const [k, c] of cellCache.chunks) {
+  for (const c of cellCache.chunks.values()) {
     const span = ccSpan(c.z), x0 = c.tx * span, y0 = c.ty * span;
-    if (rects.some((r) => r[0] < x0 + span && r[2] > x0 && r[1] < y0 + span && r[3] > y0)) { cellCache.chunks.delete(k); cellCache.pool.push(c.cv); }
+    if (rects.some((r) => r[0] < x0 + span && r[2] > x0 && r[1] < y0 + span && r[3] > y0)) c.stale = true;
   }
 }
 // Compare what the cached pictures were drawn from with what's there now; drop what's stale.
@@ -5422,7 +5431,8 @@ function ccSync() {
   const cc = cellCache;
   const refs = [tiles, blocks, spikes, vines, mossCells, removed, atlasImg, base, groundSet, mossSet, blueSet, orangeSet, baseHaz];
   const sig = [layerHidden('tiles'), layerHidden('blocks'), layerHidden('hazards'), artReady(), baseOn(), baseVersion, draft.baseState].join('|');
-  const same = cc.refs && cc.sig === sig && refs.every((r, i) => r === cc.refs[i]);
+  const sameRefs = !!cc.refs && refs.every((r, i) => r === cc.refs[i]);
+  const same = sameRefs && cc.sig === sig;
   cc.refs = refs;
   cc.sig = sig;
   const all = !same;
@@ -5439,11 +5449,12 @@ function ccSync() {
   const tileRect = (k) => { const l = k.slice(0, k.lastIndexOf('|')), c = tileCenter(l, k), h = layerGrid(l).size / 2 + 128; return [c.x - h, c.y - h, c.x + h, c.y + h]; };
   // Past one cell of reach: a block changes the seating of spikes two cells away, and a vine is up to six cells wide.
   const lost = [take(tiles, tileRect), take(blocks, cellRectOf(3 * CELL)), take(spikes, cellRectOf(3 * CELL)), take(vines, cellRectOf(6 * CELL)), take(mossCells, mossRect), take(removed, cellRectOf(6 * CELL))];
-  if (all || lost.includes(true) || rects.length > 2000) ccDropAll();
+  if (all || lost.includes(true) || rects.length > 2000) ccDropAll(!sameRefs);
   else if (rects.length) ccDropRects(rects);
 }
 function ccRender(z, tx, ty, useArt, pad) {
   const cc = cellCache, span = ccSpan(z), s = Math.pow(2, z);
+  const old = cc.chunks.get(ccKey(z, tx, ty));
   const cv = cc.pool.pop() || makeCanvas();
   if (cv.width !== CC_PX) cv.width = cv.height = CC_PX;
   const g = cv.getContext('2d');
@@ -5455,8 +5466,10 @@ function ccRender(z, tx, ty, useArt, pad) {
   ctx = g;
   cam = { x: (tx + 0.5) * span, y: (ty + 0.5) * span, scale: s };
   try { drawCellLayers(useArt, pad, 4 * CELL); } finally { [canvas, ctx, cam] = saved; }
-  const c = { z, tx, ty, cv };
+  const c = { z, tx, ty, cv, stale: false };
+  if (old) cc.chunks.delete(ccKey(z, tx, ty));
   cc.chunks.set(ccKey(z, tx, ty), c);
+  if (old && cc.pool.length < 8) cc.pool.push(old.cv);
   return c;
 }
 // Something to show in place of a chunk that isn't built: the same area from a coarser level, or four finer chunks.
@@ -5498,7 +5511,7 @@ function drawCellView(useArt, pad) {
   const view = [];
   for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) view.push({ tx, ty, d: Math.hypot((tx + 0.5) * span - cam.x, (ty + 0.5) * span - cam.y) });
   view.sort((p, q) => p.d - q.d);
-  const missing = view.filter((v) => !cc.chunks.has(ccKey(z, v.tx, v.ty)));
+  const missing = view.filter((v) => { const c = cc.chunks.get(ccKey(z, v.tx, v.ty)); return !c || c.stale; });
   const t0 = performance.now(), budget = cc.cold ? 40 : 10;
   let built = 0;
   while (built < missing.length && (!built || performance.now() - t0 < budget)) {
@@ -5506,6 +5519,7 @@ function drawCellView(useArt, pad) {
     ccRender(z, v.tx, v.ty, useArt, pad);
   }
   cc.cold = false;
+  if (dbg.on) Object.assign(dbg.cur, { built, ccMissing: missing.length });
   if (built < missing.length) requestDraw();
   for (const v of view) {
     const p = toScreen(v.tx * span, (v.ty + 1) * span), q = toScreen((v.tx + 1) * span, v.ty * span);
@@ -5513,14 +5527,42 @@ function drawCellView(useArt, pad) {
     if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
     const k = ccKey(z, v.tx, v.ty), c = cc.chunks.get(k);
     if (c) { cc.chunks.delete(k); cc.chunks.set(k, c); ctx.drawImage(c.cv, x0, y0, x1 - x0, y1 - y0); }
-    else ccSubstitute(z, v.tx, v.ty, x0, y0, x1, y1);
+    else if (ccSubstitute(z, v.tx, v.ty, x0, y0, x1, y1)) dbg.cur.stand = (dbg.cur.stand || 0) + 1;
+    else dbg.cur.none = (dbg.cur.none || 0) + 1;
   }
   // Oldest first out, but never what's in view.
   const cap = Math.max(CC_MAX, view.length + 24);
   for (const [k, c] of cc.chunks) { if (cc.chunks.size <= cap) break; cc.chunks.delete(k); if (cc.pool.length < 8) cc.pool.push(c.cv); }
 }
 
+// localStorage.mapMakerDebug = '1': a counter strip over the canvas and a log ring (click the strip to copy it).
+const dbg = { on: false, n: 0, ring: [], el: null, cur: {} };
+try { dbg.on = localStorage.mapMakerDebug === '1'; } catch { /* off */ }
+function dbgLog(msg) { if (!dbg.on) return; dbg.ring.push(((performance.now() / 1000).toFixed(3)) + ' f' + dbg.n + ' ' + msg); if (dbg.ring.length > 400) dbg.ring.shift(); }
+function dbgFrame(ms, err) {
+  if (!dbg.on || IN_WORKER) return;
+  dbg.n++;
+  const c = dbg.cur;
+  const line = `f${dbg.n} ${ms.toFixed(1)}ms ${canvas.width}x${canvas.height} tiles ${c.shown ?? '-'}/${c.inView ?? '-'} miss ${c.missing ? 'Y' : 'n'} z${c.z ?? '-'} | chunks built ${c.built ?? '-'} miss ${c.ccMissing ?? '-'} none ${c.none ?? 0} stand ${c.stand ?? 0} | bv${baseVersion} sv${stateVersion} drops ${c.drops || 0}${err ? ' ERR ' + err : ''}`;
+  if (err || ms > 40 || c.none || c.drops) dbgLog(line);
+  if (!dbg.el) {
+    dbg.el = document.createElement('pre');
+    dbg.el.style.cssText = 'position:absolute;left:4px;bottom:4px;z-index:50;margin:0;padding:3px 6px;font:11px monospace;color:#9f9;background:rgba(0,0,0,.7);cursor:copy;white-space:pre-wrap;max-width:95%';
+    dbg.el.title = 'Click to copy the debug log';
+    dbg.el.addEventListener('click', () => { const t = dbg.ring.join('\n'); navigator.clipboard?.writeText(t).catch(() => {}); console.log(t); });
+    canvas.parentElement.appendChild(dbg.el);
+  }
+  if (dbg.n % 6 === 0 || err) dbg.el.textContent = line + '\nlog ' + dbg.ring.length + ' lines (click to copy)';
+  dbg.cur = {};
+}
+
 function draw() {
+  const t0 = dbg.on ? performance.now() : 0;
+  let err = null;
+  try { drawFrame(); } catch (e) { err = String(e && e.message || e); dbgLog('draw threw: ' + (e && e.stack || e)); if (!dbg.on) throw e; }
+  if (dbg.on) dbgFrame(performance.now() - t0, err);
+}
+function drawFrame() {
   if (!ctx) return;
   if (loading?.render && !baseOn()) hideLoading();
   const W = canvas.width, H = canvas.height;
@@ -7384,8 +7426,13 @@ function jumpTo(x, y) {
 function resize() {
   const r = canvas.parentElement.getBoundingClientRect();
   if (!r.width || !r.height) return;
-  canvas.width = Math.round(r.width);
-  canvas.height = Math.round(r.height);
+  const w = Math.round(r.width), h = Math.round(r.height);
+  if (canvas.width === w && canvas.height === h) return;
+  dbgLog('canvas resize ' + canvas.width + 'x' + canvas.height + ' -> ' + w + 'x' + h);
+  canvas.width = w;
+  canvas.height = h;
+  // Resizing blanks the canvas; paint again before the browser does.
+  if (ctx && !IN_WORKER) { try { draw(); drawFx(); } catch { /* next frame */ } }
   requestDraw();
 }
 
@@ -7634,10 +7681,10 @@ export async function mountEditor(container) {
   canvas = root.querySelector('#mm-canvas');
   // alpha: false - the canvas is opaque (it paints COLORS.bg over everything),
   // so skipping the alpha channel lets the compositor skip a blend per frame.
-  // desynchronized - lets the canvas be presented without waiting on the main
-  // thread's paint to reach the compositor, which is the latency win for a view
-  // that's redrawn on every pan.
-  ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+  // Not desynchronized: draw() paints the background first and the level over it, and a
+  // desynchronized canvas may be presented between those steps - a frame that is only the
+  // background, which looks like the whole map blinking off while panning.
+  ctx = canvas.getContext('2d', { alpha: false });
   root.querySelector('[data-tool="erase"]').addEventListener('click', () => { closePopover(); setTool('erase'); });
   root.querySelector('[data-tool="select"]').addEventListener('click', () => { closePopover(); setTool('select'); });
   root.querySelector('#mm-layers-btn').addEventListener('click', () => togglePanel('mm-layers'));

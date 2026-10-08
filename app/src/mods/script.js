@@ -1,4 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { requireLogin } from '../login-prompt.js';
 import { escapeHtml, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
@@ -157,7 +158,7 @@ function render() {
   document.querySelectorAll('#view-mods .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('mods-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('mods-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
-  document.getElementById('mods-upload-btn').style.display = isLoggedIn() ? '' : 'none';
+  document.getElementById('mods-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
   renderInstalled();
   renderBrowse();
 }
@@ -187,11 +188,7 @@ window.__modExportExample = async function () {
 };
 
 window.__modOpenUpload = function () {
-  if (!isLoggedIn()) {
-    alert('Log in first to upload a mod.');
-    window.navigate('account');
-    return;
-  }
+  if (!requireLogin('a mod')) return;
   chosenUploadPath = null;
   chosenGalleryPaths = [];
   document.getElementById('mods-upload-path').textContent = 'No folder chosen';

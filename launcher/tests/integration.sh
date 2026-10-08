@@ -22,9 +22,42 @@ unserve() { kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
 trap 'unserve; rm -rf "$W"' EXIT
 gen() { python3 -I "$HERE/gen_site.py" "$SITE" "$@"; }
 
+echo "== old installs are found (--scan-old) and removed by a first run"
+L0="$HOME/.local"; DATA_OLD="$XDG_DATA_HOME/co.za.codecade.recharge"
+mkdir -p "$L0/share/recharge" "$L0/bin" "$L0/lib/Recharge/loader" "$L0/share/applications" "$L0/share/icons/hicolor/128x128/apps" \
+         "$HOME/Applications" "$XDG_DATA_HOME/applications" "$DATA_OLD" "$XDG_CONFIG_HOME/co.za.codecade.recharge" "$W/other" "$W/fakebin"
+: > "$L0/share/recharge/.user-install"; echo bin > "$L0/bin/recharge"; echo x > "$L0/lib/Recharge/loader/l.dll"
+printf '[Desktop Entry]\nName=Recharge\nExec=%s/bin/recharge\n' "$L0" > "$L0/share/applications/Recharge.desktop"
+echo png > "$L0/share/icons/hicolor/128x128/apps/recharge.png"
+echo AI > "$HOME/Applications/Recharge_1.4.3_amd64.AppImage"; echo AI > "$HOME/Applications/Unrelated.AppImage"
+printf '[Desktop Entry]\nName=Recharge\nExec="%s/Applications/Recharge_1.4.3_amd64.AppImage" %%U\n' "$HOME" > "$XDG_DATA_HOME/applications/appimagekit_ab-Recharge.desktop"
+printf '[Desktop Entry]\nName=Recharge\nExec=/nonexistent/recharge\n' > "$XDG_DATA_HOME/applications/recharge-dead.desktop"
+printf '[Desktop Entry]\nName=Recharge notes\nExec=/usr/bin/gedit\n' > "$XDG_DATA_HOME/applications/recharge-notes.desktop"
+echo '{}' > "$W/other/state.json"; : > "$W/other/recharge-launcher"
+printf '[Desktop Entry]\nName=Recharge\nExec="%s/other/recharge-launcher"\n' "$W" > "$XDG_DATA_HOME/applications/recharge-other.desktop"
+echo '{"settings":1}' > "$DATA_OLD/settings.json"; echo mod > "$XDG_CONFIG_HOME/co.za.codecade.recharge/mod.txt"
+printf '#!/bin/sh\necho "install ok installed"\n' > "$W/fakebin/dpkg-query"
+printf '#!/bin/sh\necho "$@" >> "%s/pkexec.log"\n' "$W" > "$W/fakebin/pkexec"; chmod +x "$W/fakebin/"*
+OLDPATH="$PATH"; export PATH="$W/fakebin:$PATH"
+out=$("$BIN" --scan-old); rc=$?
+check "--scan-old exits 0" "[ $rc -eq 0 ]"
+for pat in '.local/bin/recharge' 'Recharge.desktop' 'recharge.png' 'lib/Recharge' '.user-install' 'Recharge_1.4.3_amd64.AppImage' 'appimagekit_ab-Recharge.desktop' 'recharge-dead.desktop' 'other' 'apt-get remove -y recharge'; do
+  check "--scan-old lists $pat" "echo '$out' | grep -q -- '$pat'"
+done
+check "--scan-old leaves unrelated entries alone" "! echo '$out' | grep -q 'Unrelated\|recharge-notes'"
+check "--scan-old removed nothing" "[ -f $L0/bin/recharge ] && [ -f $HOME/Applications/Recharge_1.4.3_amd64.AppImage ] && [ ! -e $ROOT ] && [ ! -e $W/pkexec.log ]"
+
 echo "== fresh install (v1)"
 gen 1 ok; serve; mark
 "$BIN" --no-ui; rc=$?
+export PATH="$OLDPATH"
+check "old user install gone" "[ ! -e $L0/bin/recharge ] && [ ! -e $L0/lib/Recharge ] && [ ! -e $L0/share/applications/Recharge.desktop ] && [ ! -e $L0/share/recharge/.user-install ] && [ ! -e $L0/share/icons/hicolor/128x128/apps/recharge.png ]"
+check "old AppImage + its desktop entry gone, unrelated AppImage kept" "[ ! -e $HOME/Applications/Recharge_1.4.3_amd64.AppImage ] && [ ! -e $XDG_DATA_HOME/applications/appimagekit_ab-Recharge.desktop ] && [ -f $HOME/Applications/Unrelated.AppImage ]"
+check "dead desktop entry gone, unrelated one kept" "[ ! -e $XDG_DATA_HOME/applications/recharge-dead.desktop ] && [ -f $XDG_DATA_HOME/applications/recharge-notes.desktop ]"
+check "other launcher root + entry gone" "[ ! -e $W/other ] && [ ! -e $XDG_DATA_HOME/applications/recharge-other.desktop ]"
+check "package removal went through pkexec" "grep -q 'apt-get remove -y recharge' $W/pkexec.log"
+check "user data kept" "[ -f $DATA_OLD/settings.json ] && [ -f $XDG_CONFIG_HOME/co.za.codecade.recharge/mod.txt ]"
+check "removals logged" "grep -q 'removing file .*Recharge_1.4.3_amd64.AppImage' $ROOT/launcher.log"
 check "exit 0" "[ $rc -eq 0 ]"
 check "launcher copied to root" "[ -x $ROOT/recharge-launcher ]"
 check "desktop entry written" "grep -q 'Exec=.*recharge-launcher' $XDG_DATA_HOME/applications/recharge.desktop"
@@ -119,11 +152,19 @@ check "--wait-pid waited for exit, swapped to 9 and launched it" "[ $rc -eq 0 ] 
 out=$($L --stage --no-ui)
 check "--stage now says up to date" "[ \"$out\" = 'up to date' ]"
 
+echo "== state records channel"
+check "state records channel and version" "grep -q '\"channel\": \"beta\"' $ROOT/state.json && grep -q '\"version\"' $ROOT/state.json"
+
 echo "== uninstall"
+check "desktop entry has an Uninstall action" "grep -q 'Actions=Uninstall' $XDG_DATA_HOME/applications/recharge.desktop && grep -q -- '--uninstall' $XDG_DATA_HOME/applications/recharge.desktop"
 echo n | $L --uninstall >/dev/null 2>&1
 check "declined: still installed" "[ -d $ROOT ]"
 $L --uninstall --yes >/dev/null 2>&1; rc=$?
 check "root and desktop entry removed" "[ $rc -eq 0 ] && [ ! -e $ROOT ] && [ ! -e $XDG_DATA_HOME/applications/recharge.desktop ]"
+check "plain uninstall keeps user data" "[ -f $DATA_OLD/settings.json ] && [ -f $XDG_CONFIG_HOME/co.za.codecade.recharge/mod.txt ]"
+mkdir -p "$ROOT"; echo '{}' > "$ROOT/state.json"
+"$BIN" --uninstall --yes --delete-data >/dev/null 2>&1; rc=$?
+check "--uninstall --delete-data also removes app data" "[ ! -e $ROOT ] && [ ! -e $DATA_OLD ] && [ ! -e $XDG_CONFIG_HOME/co.za.codecade.recharge ]"
 
 echo; echo "passed $pass, failed $failn"
 [ $failn -eq 0 ]

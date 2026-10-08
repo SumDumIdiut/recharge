@@ -1,11 +1,11 @@
-// "What's new": the newest mods, maps and skins added to the Recharge Library.
+// "What's new": the newest Library additions plus Recharge releases.
 import { escapeHtml } from './ui.js';
 import { mapThumbFor } from './maps/mapthumb.js';
 
 const HUB = 'https://codecade.co.za/recharge';
-const MAX_ENTRIES = 8;
+const MAX_ENTRIES = 10;
 
-function ago(iso) {
+export function ago(iso) {
   const secs = (Date.now() - new Date(iso).getTime()) / 1000;
   if (!(secs >= 0)) return '';
   if (secs < 3600) return `${Math.max(1, Math.round(secs / 60))}m ago`;
@@ -24,6 +24,8 @@ const LIBRARY = [
   { path: 'mods', tag: 'Mod', tab: 'mods' },
   { path: 'maps', tag: 'Map', tab: 'maps' },
   { path: 'skins', tag: 'Skin', tab: 'skins' },
+  { path: 'backgrounds', tag: 'Background', tab: 'backgrounds' },
+  { path: 'playlists', tag: 'Playlist', tab: 'backgrounds' },
 ];
 
 async function additions() {
@@ -49,6 +51,43 @@ async function additions() {
   return lists.flat();
 }
 
+// The user's release channel: the launcher's when managed, else the live-code one.
+async function userChannel() {
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (!invoke) return 'stable';
+  const info = await invoke('launcher_info').catch(() => null);
+  if (info?.managed && info.channel) return info.channel;
+  return invoke('live_get_channel').then((c) => c.channel).catch(() => 'stable');
+}
+
+// changelog.json -> feed entries ("Recharge 4.0.0" with its change list).
+export function releaseEntries(data) {
+  const list = Array.isArray(data?.entries) ? data.entries : [];
+  return list.map((e) => ({
+    kind: 'release',
+    tag: 'Recharge',
+    tab: null,
+    when: e.date,
+    title: `Recharge ${e.version ?? '?'}`,
+    changes: Array.isArray(e.changes) ? e.changes.map(String) : [],
+  }));
+}
+
+async function releases() {
+  try {
+    return releaseEntries(await json(`${HUB}/update/${await userChannel()}/changelog.json`));
+  } catch {
+    return [];
+  }
+}
+
+export function mergeEntries(lists, max = MAX_ENTRIES) {
+  return lists.flat()
+    .filter((e) => e.when && !isNaN(new Date(e.when)))
+    .sort((a, b) => new Date(b.when) - new Date(a.when))
+    .slice(0, max);
+}
+
 // A skin's own image is the Unity animator sheet, not a curated thumbnail:
 // always 6 rows in this fixed order (Idle, run, Fall, Jump, wallPose, Dash -
 // see TemplateGrid.cs in recharge-skins), so row 0 is always Idle regardless
@@ -67,11 +106,11 @@ function applySkinThumb(el, src) {
   probe.src = src;
 }
 
-function render(entries) {
+export function renderNews(entries) {
   const el = document.getElementById('home-news');
   if (!el) return;
   if (!entries.length) {
-    el.innerHTML = '<div class="home-install-sub">Nothing new in the library yet, or you are offline.</div>';
+    el.innerHTML = '<div class="home-install-sub">Nothing new yet, or you are offline.</div>';
     return;
   }
   el.innerHTML = entries
@@ -88,6 +127,7 @@ function render(entries) {
         <div class="news-meta"><span class="tag tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
         <div class="news-title">${escapeHtml(e.title)}</div>
         ${img}
+        ${e.changes?.length ? `<ul class="news-changes">${e.changes.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>` : ''}
         ${e.body ? `<div class="news-body">${escapeHtml(e.body)}</div>` : ''}
       </div>`;
     })
@@ -98,14 +138,11 @@ function render(entries) {
 let entries = [];
 
 export function layoutNews() {
-  render(entries);
+  renderNews(entries);
 }
 
 export async function initHomeNews() {
-  entries = (await additions())
-    .filter((e) => e.when)
-    .sort((a, b) => new Date(b.when) - new Date(a.when))
-    .slice(0, MAX_ENTRIES);
+  entries = mergeEntries(await Promise.all([additions(), releases()]));
   layoutNews();
   // Maps get the same extracted fullmap picture as the Maps tab instead (a
   // Hub gallery image, when there is one, stays the fallback until it arrives).

@@ -1,4 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { requireLogin } from '../login-prompt.js';
 import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
@@ -159,7 +160,7 @@ function render() {
   document.querySelectorAll('#view-skins .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('skins-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('skins-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
-  document.getElementById('skins-upload-btn').style.display = isLoggedIn() ? '' : 'none';
+  document.getElementById('skins-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
   renderInstalled();
   renderBrowse();
   // Keep an open detail page in step with installs/deletes, or leave it if its skin is gone.
@@ -284,11 +285,7 @@ window.__skinExportTemplate = async function () {
 };
 
 window.__skinOpenUpload = function () {
-  if (!isLoggedIn()) {
-    alert('Log in first to upload a skin.');
-    window.navigate('account');
-    return;
-  }
+  if (!requireLogin('a skin')) return;
   chosenUploadPath = null;
   document.getElementById('skins-upload-path').textContent = 'No folder chosen';
   document.getElementById('skins-upload-name').value = '';

@@ -219,7 +219,8 @@ jobs:
           set -euo pipefail
           [ -n "$UPDATE_KEY" ] || { echo "repo secret UPDATE_KEY is not set" >&2; exit 1; }
           # Changelog: commit subjects since the commit this channel last published (read from the
-          # live manifest), else the last 15 commits; noise (merges, bumps, promotions) is dropped.
+          # live manifest), else the last 15 commits; noise (merges, bumps, promotions) is dropped
+          # and identical lines are listed once (first occurrence kept).
           prev=$(curl -fsS --max-time 20 "$BASE/update/$CHANNEL/manifest.json" 2>/dev/null \
             | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
           if [ -n "$prev" ] && git cat-file -e "$prev^{commit}" 2>/dev/null && [ "$prev" != "$GITHUB_SHA" ]; then
@@ -230,6 +231,7 @@ jobs:
           # shellcheck disable=SC2086
           git log --format=%s $range \
             | grep -Ev '^(Merge |Version bump for the promotion|Promote dev to stable|Beta build [0-9]+)' \
+            | awk '!seen[$0]++' \
             | head -n 100 > changes.txt || true
           echo "changelog ($range):"; cat changes.txt
           extra=()
