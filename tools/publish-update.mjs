@@ -6,7 +6,8 @@
 //     --platform windows-x64=<dir> --platform linux-x64=<dir> \
 //     [--launch-windows recharge.exe] [--launch-linux recharge] \
 //     [--components-map '{"extras":"content"}'] [--base https://codecade.co.za/recharge] \
-//     [--key-env UPDATE_KEY] [--dry-run]
+//     [--key-env UPDATE_KEY] [--dry-run] \
+//     [--commit <git sha>] [--changes-file <file, one change per line>] [--changes "<text, lines split on \n>"]
 //   node tools/publish-update.mjs --launcher windows-x64=<file> --launcher linux-x64=<file> \
 //     --launcher-version 1.0.0 [--base ...] [--key-env ...] [--dry-run]
 //   (launcher and build options may be combined in one call)
@@ -17,6 +18,11 @@
 // path-prefix -> component overrides (longest prefix wins). The launch file and (for
 // non-windows platforms) files with an exec bit get "exec": true. The server is asked which
 // hashes it lacks, only those are uploaded (streamed), then the manifest is PUT.
+//
+// --commit / --changes-file / --changes: release notes. The commit goes into the manifest ("commit");
+// the change lines are sent as "changes" in the manifest PUT body and the hub stores them in
+// /update/<channel>/changelog.json (they are not kept in the manifest itself). Both options may be
+// combined; blank lines are dropped.
 //
 // The key is read from the env var named by --key-env (default UPDATE_KEY); it must equal the
 // UPDATE_KEY configured on the hub. Not needed for --dry-run.
@@ -130,6 +136,15 @@ async function uploadMissing(entries) { // entries: Map sha -> {file,size,label}
   }
 }
 
+let changes = [];
+if (opt.changesFile) {
+  if (!fs.statSync(opt.changesFile, { throwIfNoEntry: false })?.isFile()) die(`not a file: ${opt.changesFile}`);
+  changes.push(...fs.readFileSync(opt.changesFile, 'utf8').split(/\r?\n/));
+}
+if (opt.changes) changes.push(...opt.changes.split(/\r?\n/));
+changes = changes.map((l) => l.trim()).filter(Boolean);
+if (opt.commit !== undefined && !/^[0-9a-fA-F]{7,40}$/.test(opt.commit)) die('--commit must be 7-40 hex chars');
+
 const store = new Map();
 let manifest = null;
 const launchers = {};
@@ -138,6 +153,8 @@ if (doBuild) {
   for (const k of ['channel', 'version', 'build', 'apiLevel']) if (opt[k] === undefined) die(`--${k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())} required`);
   if (!['stable', 'beta'].includes(opt.channel)) die('--channel must be stable or beta');
   manifest = { format: 1, channel: opt.channel, version: opt.version, build: Number(opt.build), apiLevel: Number(opt.apiLevel), published: new Date().toISOString(), platforms: {} };
+  if (opt.commit) manifest.commit = opt.commit;
+  if (changes.length) manifest.changes = changes;
   for (const spec of opt.platform) {
     const [name, dir] = splitKV(spec);
     if (!KNOWN.includes(name)) die(`unknown platform ${name}`);

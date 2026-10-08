@@ -60,7 +60,7 @@ jobs:
           if [ "${{ github.ref_name }}" = dev ]; then
             channel=beta
             build=$(python3 -c "import json; print(json.load(open('app/src/beta.json'))['build'])")
-            version="$base-beta.$build"
+            version="$base-beta$build"
           elif [ "${{ github.ref_name }}" = master ]; then
             channel=stable
             version="$base"
@@ -188,6 +188,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: the changelog is the commit subjects since the last publish
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -216,6 +218,20 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$UPDATE_KEY" ] || { echo "repo secret UPDATE_KEY is not set" >&2; exit 1; }
+          # Changelog: commit subjects since the commit this channel last published (read from the
+          # live manifest), else the last 15 commits; noise (merges, bumps, promotions) is dropped.
+          prev=$(curl -fsS --max-time 20 "$BASE/update/$CHANNEL/manifest.json" 2>/dev/null \
+            | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
+          if [ -n "$prev" ] && git cat-file -e "$prev^{commit}" 2>/dev/null && [ "$prev" != "$GITHUB_SHA" ]; then
+            range="$prev..$GITHUB_SHA"
+          else
+            range="-n 15 $GITHUB_SHA"
+          fi
+          # shellcheck disable=SC2086
+          git log --format=%s $range \
+            | grep -Ev '^(Merge |Version bump for the promotion|Promote dev to stable|Beta build [0-9]+)' \
+            | head -n 100 > changes.txt || true
+          echo "changelog ($range):"; cat changes.txt
           extra=()
           if [ "$PUBLISH_LAUNCHER" = true ]; then
             chmod +x art/launcher/recharge
@@ -224,5 +240,6 @@ jobs:
           # --build is the run number of this workflow: global and unique across both channels.
           node tools/publish-update.mjs --base "$BASE" --channel "$CHANNEL" --version "$VERSION" \
             --build "${{ github.run_number }}" --api-level "$API_LEVEL" \
+            --commit "$GITHUB_SHA" --changes-file changes.txt \
             --platform windows-x64=dist/windows-x64 --platform linux-x64=dist/linux-x64 \
             "${extra[@]}"
