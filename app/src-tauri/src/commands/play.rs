@@ -165,6 +165,21 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+// Does this assembly carry the loader bootstrap the Recharge patch adds? Steam's own
+// never does - it is the one reliable way to tell our patched build from the game's.
+//
+// Without this, a manual `build-loader.ps1` run writes Assembly-CSharp.dll directly and
+// leaves the old stamp behind, so the next launch reads that as a game update: it copies
+// our patched dll over ORIGINAL and deletes Assembly-CSharp.RECHARGE.dll. That destroys
+// the only vanilla copy of the assembly, and there is no way back except Steam.
+fn is_patched_build(path: &Path) -> bool {
+    const MARKER: &[u8] = b"RechargeLoaderBootstrap";
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    bytes.windows(MARKER.len()).any(|w| w == MARKER)
+}
+
 fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
     let Some(managed) = steam::managed_dir(game_dir) else {
         return if modded {
@@ -188,12 +203,26 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
             }
         };
 
-    if deployed.is_file() && (original.is_file() || recharge.is_file()) && !matches_our_stamp {
+    // Our own patched build sitting there under a stale stamp is not a game update -
+    // re-stamp it instead of overwriting ORIGINAL with a modded assembly.
+    let deployed_is_ours = deployed.is_file() && is_patched_build(&deployed);
+    if deployed_is_ours && !matches_our_stamp {
+        if let Some(stamp) = fnv1a_file(&deployed) {
+            let _ = std::fs::write(&stamp_path, stamp);
+        }
+    } else if deployed.is_file() && (original.is_file() || recharge.is_file()) && !matches_our_stamp {
         // Steam replaced the assembly - keep its file as the new original and drop the now-stale modded build.
         std::fs::copy(&deployed, &original)
             .map_err(|e| format!("Couldn't keep the game's updated assembly: {e}"))?;
         let _ = std::fs::remove_file(&recharge);
         let _ = std::fs::remove_file(&stamp_path);
+    }
+
+    // Never hand a patched assembly back as the "vanilla" build.
+    if !modded && original.is_file() && is_patched_build(&original) {
+        return Err("The saved vanilla Assembly-CSharp.dll is missing or is itself a modded build. \
+                    Verify the game's files in Steam, then reinstall Recharge (Settings > Install/Update)."
+            .into());
     }
 
     let source = if modded { &recharge } else { &original };

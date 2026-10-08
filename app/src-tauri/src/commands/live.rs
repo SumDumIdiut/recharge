@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub const LIVE_PORT: u16 = 39285;
 /// Bump together with app/live.json's "apiLevel" when a change adds or alters
 /// a Rust command, so older binaries stop applying bundles that need it.
-const API_LEVEL: u64 = 9;
+const API_LEVEL: u64 = 10;
 const REPO: &str = "SumDumIdiut/recharge";
 const MAX_BUNDLE_BYTES: u64 = 200 * 1024 * 1024;
 const CHECK_EVERY: Duration = Duration::from_secs(20 * 60);
@@ -51,8 +51,16 @@ fn live_root(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_local_data_dir().ok().map(|d| d.join("live"))
 }
 
+/// Installs managed by the Recharge launcher carry src/, loader/ and live.json next to the
+/// binary (see tools/build-update-dir.sh): that folder is the bundle and the launcher keeps it
+/// current, so the GitHub live updater stays out of it. None for every other install.
+fn packaged_dir() -> Option<PathBuf> {
+    let dir = super::updater::packaged_root()?;
+    dir.join("src").join("index.html").is_file().then_some(dir)
+}
+
 fn current_dir(app: &AppHandle) -> Option<PathBuf> {
-    live_root(app).map(|r| r.join("current"))
+    packaged_dir().or_else(|| live_root(app).map(|r| r.join("current")))
 }
 
 fn log(app: &AppHandle, msg: &str) {
@@ -106,6 +114,10 @@ pub fn init(app: &AppHandle) {
     }
     if bundle_usable(app) {
         start_server(app);
+    }
+    if packaged_dir().is_some() {
+        log(app, "launcher-managed install: screens come from the install folder, GitHub live updates are off");
+        return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
@@ -412,6 +424,9 @@ fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> 
 }
 
 fn check_and_apply(app: &AppHandle) -> Result<Outcome, String> {
+    if packaged_dir().is_some() {
+        return Ok(Outcome::UpToDate); // the launcher delivers screens
+    }
     let state = app.state::<LiveState>();
     let _one_at_a_time = state.busy.lock().unwrap();
     let root = live_root(app).ok_or("no data folder")?;
@@ -442,7 +457,7 @@ fn check_and_apply(app: &AppHandle) -> Result<Outcome, String> {
 
     // The loader script looks for its decompiler next to itself, and that
     // isn't in the repo - reuse the copy that shipped with the package.
-    if let Ok(packaged) = app.path().resolve("loader/tools", tauri::path::BaseDirectory::Resource) {
+    if let Ok(packaged) = super::updater::resource_path(app, "loader/tools") {
         let packaged = PathBuf::from(packaged.to_string_lossy().trim_start_matches(r"\\?\"));
         if packaged.is_dir() {
             copy_dir(&packaged, &next.join("loader").join("tools")).map_err(|e| e.to_string())?;

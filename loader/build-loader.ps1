@@ -270,6 +270,18 @@ $refXml
     Set-Status "5/$($totalPhases): Deploying the patched game assembly..."
     Copy-Item $built $deployed -Force
     Copy-Item $built $rechargeCache -Force
+    # This script writes the dll straight into Managed, bypassing the app's deploy_build.
+    # Without refreshing the stamp the next launch sees a stale one, reads it as a game
+    # update, and overwrites ORIGINAL with our patched build - losing the only vanilla copy.
+    # FNV-1a over the deployed bytes - the same hash the app's deploy_build compares.
+    # BigInteger, because the multiply overflows 64 bits on every single byte.
+    $mask = [System.Numerics.BigInteger]::Pow(2, 64) - 1
+    $h = [System.Numerics.BigInteger]0xcbf29ce484222325
+    foreach ($b in [System.IO.File]::ReadAllBytes($deployed)) {
+        $h = ($h -bxor [System.Numerics.BigInteger]$b) * 0x100000001b3
+        $h = $h -band $mask
+    }
+    Set-Content -Path (Join-Path $managed 'Assembly-CSharp.deployed.stamp') -Value ('{0:x16}' -f [uint64]$h) -NoNewline -Force
 
     $modIndex = 0
     foreach ($proj in $modProjects) {

@@ -325,8 +325,7 @@ fn ensure_electron(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
 }
 
 fn runner_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .resolve("electron", tauri::path::BaseDirectory::Resource)
+    super::updater::resource_path(app, "electron")
         .map(|p| plain(&p))
         .map_err(|e| format!("game runner not found: {e}"))
 }

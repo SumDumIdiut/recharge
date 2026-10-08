@@ -1,4 +1,4 @@
-import { escapeHtml } from '../ui.js';
+import { escapeHtml, confirmDestructive } from '../ui.js';
 
 let games = [];
 let loadError = null;
@@ -103,7 +103,13 @@ window.__gamePlay = async (id) => {
 };
 
 window.__gameRemove = async (id, name) => {
-  if (!confirm(`Remove "${name}" from this computer? You can download it again later.`)) return;
+  const ok = await confirmDestructive({
+    title: 'Remove install',
+    body: `"${name}" and everything installed with it will be deleted from this computer. You can download it again later.`,
+    confirmLabel: 'Remove',
+    name,
+  });
+  if (!ok) return;
   const { invoke } = window.__TAURI__.core;
   try {
     await invoke('uninstall_library_game', { id });

@@ -1,3 +1,6 @@
+import { isV2, toV1State } from './fromv2.js';
+import { TileIndex, TrackedMap, TrackedSet, TrackedTiles } from './tileindex.js';
+
 const DRAFT_KEY = 'rechargeMapMakerDraft';
 const START_BOX = { dx: 0, dy: 0, w: 60, h: 250 };
 const END_BOX = { dx: 0, dy: -26, w: 240, h: 13 };
@@ -5,9 +8,11 @@ const START_LIFT = 125;
 const SPAWN_BOX = { dx: 0, dy: 0, w: 32, h: 64 };
 const SPAWN_LIFT = 40;
 // A course's screen (the board showing its reward, best time and clones),
-// placed by the centre of its texts: the game's board is 350 x 150 scaled
-// 1.1 x 1.15, sitting just below them.
-const SCREEN_BOX = { dx: 3, dy: 3, w: 385, h: 172 };
+// placed by the centre of its texts; the game's board image (350 x 150 scaled
+// 1.1 x 1.15) is centred 3.5 above that point (level course 1: texts at
+// 2189.6,-1.6, board at 2189.6,1.9). The mod centres the board image on the
+// same spot (MapCourses.PlaceScreen).
+const SCREEN_BOX = { dx: 0, dy: 3.5, w: 385, h: 172.5 };
 const END_LIFT = 32;
 const CELL = 32;
 const OFFSET_Y = 9;
@@ -46,6 +51,7 @@ let mossSet = null;
 let blueSet = null;
 let orangeSet = null;
 let baseHaz = null;
+let baseVineKeys = [];
 
 let canvas, ctx, root;
 let cam = { x: 0, y: 0, scale: 0.75 };
@@ -55,7 +61,7 @@ let drag = null;
 let spaceDown = false;
 let undoStack = [];
 let redoStack = [];
-const DEFAULT_PLAYER = { dashes: 1, airJumps: 1, wallJump: true, blockSwap: false, omniDash: false, zipMovers: true, refreshers: true, teleporters: true, cash: 0 };
+const DEFAULT_PLAYER = { dashes: 1, airJumps: 1, wallJump: true, blockSwap: false, omniDash: false, zipMovers: true, refreshers: true, teleporters: true, light: false, cash: 0 };
 let draft = emptyDraft();
 let mounted = false;
 let frameQueued = false;
@@ -64,10 +70,14 @@ function emptyDraft() {
   return { name: '', description: '', pad: 12, useBase: true, baseState: 'start', blocks: {}, spikes: {}, vines: {}, tiles: {}, arrows: [], placed: [], removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], vineSprite: 'smallArc', start: null, end: null, spawn: null, courses: [], activeCourse: null, baseEdits: {}, cat: 'blocks', pick: {}, player: { ...DEFAULT_PLAYER }, ownProgress: false };
 }
 
-let blocks = new Map();
-let spikes = new Map();
-let vines = new Map();
-let tiles = new Map();
+let blocks = new TrackedMap();
+let spikes = new TrackedMap();
+let vines = new TrackedMap();
+// TrackedTiles counts its own changes, so the index below always knows when to
+// rebuild without any call site having to say so.
+let tiles = new TrackedTiles();
+// Which tiles are near the view, so drawing doesn't walk the whole map.
+const tileIndex = new TileIndex((layer) => layerGrid(layer));
 let placed = [];
 // Spikes placed off the grid (a finer snap than a cell): { x, y, c, q }.
 let freeSpikes = [];
@@ -80,11 +90,11 @@ let csprites = [];
 // Extra spawns: the game cycles through them (and the main spawn) with Q / E.
 let xspawns = [];
 let arrows = [];
-let removed = new Set();
-let removedVines = new Set();
-let removedObjects = new Set();
-let removedScene = new Set();
-let removedDeco = new Set();
+let removed = new TrackedSet();
+let removedVines = new TrackedSet();
+let removedObjects = new TrackedSet();
+let removedScene = new TrackedSet();
+let removedDeco = new TrackedSet();
 // The level's own sprites and objects moved in the editor: id -> [dx, dy].
 let movedScene = new Map(), movedObjects = new Map();
 // The level's own things' draw order, turn / size / flips and groups, by level id ('o:' + id for level objects).
@@ -105,18 +115,20 @@ function cellWorld(cx, cy) {
 }
 const baseOn = () => draft.useBase && base !== null;
 
-function loadDraft() {
+// The Maps and lists are built from `draft` (the module variable), so opening a
+// map doesn't have to save it and read it back.
+function loadDraftFrom(stored) {
   try {
-    const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-    if (saved) draft = Object.assign(emptyDraft(), saved);
+    if (stored) draft = Object.assign(emptyDraft(), stored);
   } catch {}
   draft.player = { ...DEFAULT_PLAYER, ...(draft.player || {}) };
   migrateGates();
-  blocks = new Map(Array.isArray(draft.blocks) ? draft.blocks.map((k) => [k, 'ground']) : Object.entries(draft.blocks));
-  spikes = new Map(Object.entries(draft.spikes).map(([k, v]) => [k, typeof v === 'number' ? { q: v, c: 'spike' } : v]));
-  vines = new Map(Object.entries(draft.vines));
-  tiles = new Map(Object.entries(draft.tiles || {}));
-  mossCells = new Map(Object.entries(draft.moss || {}));
+  blocks = new TrackedMap(Array.isArray(draft.blocks) ? draft.blocks.map((k) => [k, 'ground']) : Object.entries(draft.blocks));
+  spikes = new TrackedMap(Object.entries(draft.spikes).map(([k, v]) => [k, typeof v === 'number' ? { q: v, c: 'spike' } : v]));
+  vines = new TrackedMap(Object.entries(draft.vines));
+  tiles = new TrackedTiles(Object.entries(draft.tiles || {}));
+  tooBigAt = Infinity; // a newly opened map gets a fresh try at the autosave
+  mossCells = new TrackedMap(Object.entries(draft.moss || {}));
   cellGroups = new Map(Object.entries(draft.cellGroups || {}));
   placed = [...(draft.placed || [])];
   freeSpikes = [...(draft.freeSpikes || [])];
@@ -126,19 +138,28 @@ function loadDraft() {
   xspawns = [...(draft.xspawns || [])];
   arrows = (draft.arrows || []).map((a) => ({ ...a, cells: a.cells.map((c) => [...c]) }));
   for (const [k, v] of spikes) if (v.c === 'vine') { spikes.delete(k); vines.set(k, { s: 'smallArc', q: v.q }); }
-  removedVines = new Set(draft.removedVines);
-  removedObjects = new Set(draft.removedObjects);
-  removedScene = new Set(draft.removedScene || []);
-  removedDeco = new Set(draft.removedDeco || []);
+  removedVines = new TrackedSet(draft.removedVines);
+  removedObjects = new TrackedSet(draft.removedObjects);
+  removedScene = new TrackedSet(draft.removedScene || []);
+  removedDeco = new TrackedSet(draft.removedDeco || []);
   movedScene = new Map(Object.entries(draft.movedScene || {}));
   movedObjects = new Map(Object.entries(draft.movedObjects || {}));
   levelOrder = new Map(Object.entries(draft.levelOrder || {}));
   levelTf = new Map(Object.entries(draft.levelTf || {}));
   levelGroups = new Map(Object.entries(draft.levelGroups || {}));
-  removed = new Set(draft.removed);
+  removed = new TrackedSet(draft.removed);
 }
 
-function saveDraft() {
+// Builds the Maps from a blank draft. The saved one is deliberately not read
+// back: opening the editor starts a new map, and leaving it saves.
+function loadDraft() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch {}
+  loadDraftFrom(stored);
+}
+
+// The draft's fields from the live collections (what gets stored and exported).
+function syncDraft() {
   draft.blocks = Object.fromEntries(blocks);
   draft.spikes = Object.fromEntries(spikes);
   draft.vines = Object.fromEntries(vines);
@@ -156,77 +177,137 @@ function saveDraft() {
   draft.removedObjects = [...removedObjects];
   draft.removedScene = [...removedScene];
   draft.removedDeco = [...removedDeco];
-  for (const [k, d] of [...movedScene]) if (!d[0] && !d[1]) movedScene.delete(k);
-  for (const [k, d] of [...movedObjects]) if (!d[0] && !d[1]) movedObjects.delete(k);
   draft.movedScene = Object.fromEntries(movedScene);
   draft.movedObjects = Object.fromEntries(movedObjects);
   draft.levelOrder = Object.fromEntries(levelOrder);
   draft.levelTf = Object.fromEntries(levelTf);
   draft.levelGroups = Object.fromEntries(levelGroups);
+  draft.removed = [...removed];
+}
+
+// Cheap per edit; the draft itself is written out once edits pause (or on leaving).
+let persistTimer = 0;
+function saveDraft() {
+  for (const [k, d] of [...movedScene]) if (!d[0] && !d[1]) movedScene.delete(k);
+  for (const [k, d] of [...movedObjects]) if (!d[0] && !d[1]) movedObjects.delete(k);
   syncRemovedPaths();
   applyBaseMoves();
   redrawChangedLevel();
-  draft.removed = [...removed];
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch {}
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(persistDraft, 1500);
   updateStatus();
 }
+function flushDraft() {
+  clearTimeout(persistTimer);
+  persistDraft();
+}
 
+// The autosave. A map too big for localStorage's quota just doesn't get
+// autosaved - it's still open and still saves to a file, so this stays quiet
+// rather than breaking the editor.
+//
+// A big map's draft is tens of MB, and saveDraft runs on every edit, so once
+// one is known not to fit, building that string again for each keystroke is
+// wasted work. Remember the tile count that wouldn't fit and skip until the map
+// is small enough to be worth another try.
+let tooBigAt = Infinity;
+function persistDraft() {
+  persistTimer = 0;
+  if (tiles.size >= tooBigAt) return;
+  syncDraft();
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); }
+  catch { tooBigAt = tiles.size; }
+}
+
+// The tracked collections are frozen copies shared between steps (see tileindex.js); the
+// rest is small and mutated in place, so it's kept as a string.
 function snapshot() {
-  return JSON.stringify({ blocks: [...blocks], spikes: [...spikes], vines: [...vines], tiles: [...tiles], moss: [...mossCells], placed, freeSpikes, signs, triggers, csprites, xspawns, cellGroups: [...cellGroups], hiddenGroups: draft.hiddenGroups || [], arrows, removed: [...removed], removedVines: [...removedVines], removedObjects: [...removedObjects], removedScene: [...removedScene], removedDeco: [...removedDeco], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], levelGroups: [...levelGroups], courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+  const o = { blocks: blocks.freeze(), spikes: spikes.freeze(), vines: vines.freeze(), tiles: tiles.freeze(), moss: mossCells.freeze(), removed: removed.freeze(), removedVines: removedVines.freeze(), removedObjects: removedObjects.freeze(), removedScene: removedScene.freeze(), removedDeco: removedDeco.freeze() };
+  const copied = blocks.copied + spikes.copied + vines.copied + tiles.copied + mossCells.copied + removed.copied + removedVines.copied + removedObjects.copied + removedScene.copied + removedDeco.copied;
+  o.cellGroups = new Map(cellGroups); o.movedScene = new Map(movedScene); o.movedObjects = new Map(movedObjects);
+  o.levelOrder = new Map(levelOrder); o.levelTf = new Map(levelTf); o.levelGroups = new Map(levelGroups);
+  o.rest = JSON.stringify({ placed, freeSpikes, signs, triggers, csprites, xspawns, hiddenGroups: draft.hiddenGroups || [], arrows, courses: courses(), baseEdits: draft.baseEdits || {}, spawn: draft.spawn });
+  o.bytes = o.rest.length + 60 * (copied + cellGroups.size + movedScene.size + movedObjects.size + levelOrder.size + levelTf.size + levelGroups.size);
+  return o;
+}
+// A big map's snapshot is tens of MB (one of b-sides' is ~27), so the stack is
+// capped by total size as well as by count - 200 of those would be gigabytes.
+// The budget scales with the memory the browser reports, which not every engine
+// does (WebKitGTK doesn't), so this settles on 512MB without it.
+const UNDO_MAX_BYTES = (() => {
+  const mb = Math.max(256, Math.min(1024, Math.round(((typeof navigator !== 'undefined' && navigator.deviceMemory) || 4) * 128)));
+  return mb * 1024 * 1024;
+})();
+function trimUndo() {
+  if (undoStack.length > 200) undoStack.shift();
+  let bytes = 0;
+  for (let i = undoStack.length - 1; i >= 0 && bytes <= UNDO_MAX_BYTES; i--) bytes += undoStack[i].bytes;
+  while (bytes > UNDO_MAX_BYTES && undoStack.length > 1) bytes -= undoStack.shift().bytes;
 }
 function pushUndo() {
   redoStack = [];
   undoStack.push(snapshot());
-  if (undoStack.length > 200) undoStack.shift();
+  trimUndo();
 }
 function undo() {
   const s = undoStack.pop();
   if (!s) return;
   redoStack.push(snapshot());
+  trimUndo();
   restoreSnapshot(s);
 }
 function redo() {
   const s = redoStack.pop();
   if (!s) return;
   undoStack.push(snapshot());
+  trimUndo();
   restoreSnapshot(s);
 }
 function restoreSnapshot(s) {
-  applyState(JSON.parse(s));
+  applyState(s);
   saveDraft();
   requestDraw();
 }
 // A snapshot's state put back, without saving (a drag rebuilds from its start on every move).
+// Keeps `cur` when it can roll back to the frozen copy; otherwise builds one from it.
+function adopt(cur, frozen, Ctor) {
+  if (cur.rollback(frozen)) return cur;
+  const n = new Ctor(frozen);
+  n.frozen = frozen; n.frozenRev = n.rev; n.journal = [];
+  return n;
+}
 function applyState(o) {
-  blocks = new Map(o.blocks);
-  spikes = new Map(o.spikes);
-  vines = new Map(o.vines);
-  tiles = new Map(o.tiles || []);
-  mossCells = new Map(o.moss || []);
-  cellGroups = new Map(o.cellGroups || []);
-  placed = o.placed || [];
-  freeSpikes = o.freeSpikes || [];
-  signs = o.signs || [];
-  triggers = o.triggers || [];
-  csprites = o.csprites || [];
-  xspawns = o.xspawns || [];
-  draft.hiddenGroups = o.hiddenGroups || [];
-  arrows = o.arrows || [];
-  removedVines = new Set(o.removedVines);
-  removedObjects = new Set(o.removedObjects);
-  removedScene = new Set(o.removedScene || []);
-  removedDeco = new Set(o.removedDeco || []);
-  movedScene = new Map(o.movedScene || []);
-  movedObjects = new Map(o.movedObjects || []);
-  levelOrder = new Map(o.levelOrder || []);
-  levelTf = new Map(o.levelTf || []);
-  levelGroups = new Map(o.levelGroups || []);
+  blocks = adopt(blocks, o.blocks, TrackedMap);
+  spikes = adopt(spikes, o.spikes, TrackedMap);
+  vines = adopt(vines, o.vines, TrackedMap);
+  tiles = adopt(tiles, o.tiles, TrackedTiles);
+  tooBigAt = Infinity;
+  mossCells = adopt(mossCells, o.moss, TrackedMap);
+  cellGroups = new Map(o.cellGroups);
+  const r = JSON.parse(o.rest);
+  placed = r.placed || [];
+  freeSpikes = r.freeSpikes || [];
+  signs = r.signs || [];
+  triggers = r.triggers || [];
+  csprites = r.csprites || [];
+  xspawns = r.xspawns || [];
+  draft.hiddenGroups = r.hiddenGroups || [];
+  arrows = r.arrows || [];
+  removedVines = adopt(removedVines, o.removedVines, TrackedSet);
+  removedObjects = adopt(removedObjects, o.removedObjects, TrackedSet);
+  removedScene = adopt(removedScene, o.removedScene, TrackedSet);
+  removedDeco = adopt(removedDeco, o.removedDeco, TrackedSet);
+  movedScene = new Map(o.movedScene);
+  movedObjects = new Map(o.movedObjects);
+  levelOrder = new Map(o.levelOrder);
+  levelTf = new Map(o.levelTf);
+  levelGroups = new Map(o.levelGroups);
   applyBaseMoves();
-  removed = new Set(o.removed);
-  draft.courses = o.courses || [];
-  draft.baseEdits = o.baseEdits || {};
-  if (o.start || o.end) { draft.start = o.start; draft.end = o.end; migrateGates(); }
-  draft.spawn = o.spawn;
+  removed = adopt(removed, o.removed, TrackedSet);
+  draft.courses = r.courses || [];
+  draft.baseEdits = r.baseEdits || {};
+  if (r.start || r.end) { draft.start = r.start; draft.end = r.end; migrateGates(); }
+  draft.spawn = r.spawn;
 }
 
 let basePromise = null;
@@ -255,6 +336,7 @@ async function fetchBase() {
     text = await new Blob(chunks).text();
   } else text = await res.text();
   base = JSON.parse(text);
+  gridCache = null;
   try { plantList = await (await fetch('/maps/plants/plants.json')).json(); } catch { plantList = []; }
   await preloadImages();
   applyBaseState();
@@ -328,6 +410,7 @@ function applyBaseState() {
   syncRemovedPaths();
   applyBaseMoves();
   baseHaz = new Map();
+  baseVineKeys = [];
   for (const b of [base.always, st]) {
     const h = b.hazards;
     for (let i = 0; i < h.length; i += 5) {
@@ -335,6 +418,7 @@ function applyBaseState() {
       baseHaz.set(key(h[i], h[i + 1]), { d: h[i + 2], m: h[i + 3], q: h[i + 4], kind: def.kind, c: layerColor(def.layer) });
     }
   }
+  for (const [k, h] of baseHaz) if (h.kind === 'vine') baseVineKeys.push(k);
 }
 
 const layerColor = (layer) => (/^blue/.test(layer) ? 'blue' : /^orange/.test(layer) ? 'orange' : 'spike');
@@ -453,8 +537,21 @@ function catalogItem(o) {
   return list[i];
 }
 
+// A layer's grid. Some layers are only in art.levelTiles, not art.layers, and
+// their origin is not the default one - so both are looked in, levelTiles first
+// (that's where the level's own tiling lives).
+//
+// Cached: this is called for every tile on every frame, and the scan is 42
+// entries. The level data is loaded once and never changes, so the answer for
+// a given name can't change.
+let gridCache = null;
 function layerGrid(name) {
-  const l = base?.art?.layers.find((x) => x.name === name);
+  if (!gridCache) {
+    gridCache = new Map();
+    for (const l of base?.art?.levelTiles || []) gridCache.set(l.name, l);
+    for (const l of base?.art?.layers || []) if (!gridCache.has(l.name)) gridCache.set(l.name, l);
+  }
+  const l = gridCache.get(name);
   return l ? { size: l.size, ox: l.ox, oy: l.oy, order: l.order ?? 0 } : { size: CELL, ox: 0, oy: OFFSET_Y - CELL, order: 0 };
 }
 function tileKeyAt(layer, wx, wy) {
@@ -494,7 +591,7 @@ function colouredTile(kind, cx, cy) {
   return plateTile(kind === 'blue' ? 'blueBlocks' : 'orangeBlocks', kind + '_ground_tileset_', PANEL_SET, has, cx, cy);
 }
 
-let mossCells = new Map();
+let mossCells = new TrackedMap();
 // Group ids of your block and spike cells (placed things carry their own .group).
 let cellGroups = new Map();
 let baseMossGrid = null;
@@ -633,6 +730,7 @@ function gateItems() {
     { tool: 'xspawn', label: 'Extra spawn (Q / E in game)', group: 'Player', thumb: { icon: 'pin', color: COLORS.spawn } },
     { tool: 'start', label: 'Start gate', group: 'Course', thumb: { icon: 'flag', color: COLORS.start } },
     { tool: 'end', label: 'End gate', group: 'Course', thumb: { icon: 'finish', color: COLORS.end } },
+    { tool: 'reset', label: 'Timer reset', group: 'Course', thumb: { icon: 'timer', color: COLORS.reset } },
     ...(ccp >= 0 ? [{ tool: 'object', i: ccp, label: 'Course checkpoint', group: 'Course', thumb: { scene: base?.catalog ? mainSprite(base.catalog.objects[ccp]) : null, icon: 'checkpoint', color: COLORS.courseCheckpoint } }] : []),
     ...(lfs >= 0 ? [{ tool: 'object', i: lfs, label: 'Long fall start', group: 'Long fall', thumb: { icon: 'fall', color: COLORS.fall } }] : []),
     ...(lfe >= 0 ? [{ tool: 'object', i: lfe, label: 'Long fall end', group: 'Long fall', thumb: { icon: 'fall', color: COLORS.fall } }] : []),
@@ -643,6 +741,8 @@ function mainSprite(o) {
   let best = null, area = -1;
   for (const p of o.parts) {
     if (HIDDEN_PART(p)) continue;
+    // Skip text parts (like StatuePrestigeText) which are huge but not representative
+    if (p.n && /Text|Prestige|Text/i.test(p.n)) continue;
     const [, , w, h] = base.scene.sprites[p.s];
     if (w * h > area) { area = w * h; best = p.frames ? p.frames[Math.floor(p.frames.length / 2)] : p.s; }
   }
@@ -866,7 +966,9 @@ const mul2 = (a, b) => [a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[
 const rot2 = (rad) => [Math.cos(rad), -Math.sin(rad), Math.sin(rad), Math.cos(rad)];
 
 function drawPlacedTile(t, k, alpha = 1) {
-  const sprite = base?.art?.tiles[t.tile];
+  // `sprite` is an explicit atlas index, for a tile the level has several
+  // sprites of under one name (the moss autotile). Otherwise look the name up.
+  const sprite = t.sprite ?? base?.art?.tiles[t.tile];
   if (sprite === undefined || !artReady()) return;
   const w = tileCenter(t.layer, k), c = toScreen(w.x, w.y);
   ctx.save();
@@ -874,8 +976,22 @@ function drawPlacedTile(t, k, alpha = 1) {
   blitSprite(ctx, sprite, tileMatrix(t), cam.scale, c.x, c.y);
   ctx.restore();
 }
-function drawPlacedTiles(front) {
-  tiles.forEach((t, k) => { if ((layerGrid(t.layer).order >= 5) === front) drawPlacedTile(t, k); });
+// Only what's on screen: a map can hold hundreds of thousands of tiles (a v2 one
+// converted here does), and drawing all of them every frame would crawl.
+// toWorld has y growing downwards, so the two corners are sorted before comparing.
+// Layers go back to front by their order; `front` (order >= 5) is drawn over blocks and hazards.
+function drawPlacedTiles(front, margin = CELL) {
+  const a = toWorld(0, 0), b = toWorld(canvas.width, canvas.height);
+  const x0 = Math.min(a.x, b.x) - margin, x1 = Math.max(a.x, b.x) + margin;
+  const y0 = Math.min(a.y, b.y) - margin, y1 = Math.max(a.y, b.y) + margin;
+  const sprites = base?.art?.tiles, sc = cam.scale, hw = canvas.width / 2, hh = canvas.height / 2;
+  if (!sprites) return;
+  tileIndex.forEachInRect(tiles, x0, y0, x1, y1, (t, k, gx, gy, g) => {
+    const sprite = t.sprite ?? sprites[t.tile];
+    if (sprite === undefined) return;
+    blitSprite(ctx, sprite, tileMatrix(t), sc, (g.ox + (gx + 0.5) * g.size - cam.x) * sc + hw, hh - (g.oy + (gy + 0.5) * g.size - cam.y) * sc);
+  }, (names) => [...names].filter((n) => (layerGrid(n).order >= 5) === front).sort((p, q) => layerGrid(p).order - layerGrid(q).order));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 function zipConfig(o, item = catalogItem(o)) {
@@ -973,7 +1089,7 @@ function platformPaint(wp) {
     const kept = attachedCells(sh, cells);
     for (const c of [...cells]) if (!kept.has(c)) cells.delete(c);
   }
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; trimUndo(); }
   o.cfg = { ...o.cfg, zip: { ...(o.cfg?.zip || {}), grid: sh.grid, cells: [...cells] } };
   saveDraft();
   renderConfig();
@@ -1014,12 +1130,23 @@ function snapZipEnd(dx, dy) {
   return [ux * steps * CELL, uy * steps * CELL];
 }const ZIP_MOVING = /^(ZipMoverMovingPart|ZipMoverMechanism|ZipMoverGear)/;
 
+// The game drops a worldScale decoration's own rotation and flip (it sets the clone's world rotation and scale outright), so draw it that way.
+function gameParts(item) {
+  if (item.gameParts) return item.gameParts;
+  const ws = item.worldScale, root = item.path.split('/').pop();
+  const rp = item.parts.find((p) => p.n === root) || (item.parts.length === 1 ? item.parts[0] : null);
+  const R = rp ? rp.m : [ws, 0, 0, ws], det = R[0] * R[3] - R[1] * R[2];
+  const Ri = Math.abs(det) < 1e-9 ? [1, 0, 0, 1] : [R[3] / det, -R[1] / det, -R[2] / det, R[0] / det];
+  const M = mul2([ws, 0, 0, ws], Ri);
+  return (item.gameParts = item.parts.map((p) => ({ ...p, x: M[0] * p.x + M[1] * p.y, y: M[2] * p.x + M[3] * p.y, m: mul2(M, p.m) })));
+}
+
 function objectParts(o, item = catalogItem(o)) {
   if (!item) return [];
   const cfg = o.cfg || {};
   const T = mul2(rot2(((cfg.rot || 0) * Math.PI) / 180), [(cfg.scale || 1) * (cfg.sx || 1) * (cfg.fx ? -1 : 1), 0, 0, (cfg.scale || 1) * (cfg.sy || 1) * (cfg.fy ? -1 : 1)]);
   const zip = zipConfig(o, item);
-  let parts = item.parts;
+  let parts = item.worldScale ? gameParts(item) : item.parts;
   if (zip) {
     const [ex, ey] = zip.end, len = Math.hypot(ex, ey) || 1, dx = ex / len, dy = ey / len;
     const a0 = Math.atan2(item.zip.end[1], item.zip.end[0]), turn = rot2(Math.atan2(ey, ex) - a0);
@@ -1132,6 +1259,7 @@ function placementFor(item, cx, cy) {
   const up = [r[1], r[3]], lift = SPRING_FOOT * Math.abs(item.parts[0]?.m?.[3] || 1) - CELL / 2;
   return { x: Math.round(at.x + up[0] * lift), y: Math.round(at.y + up[1] * lift), cfg: { rot: q * 90, fx: placeFlip || undefined } };
 }
+
 const ARROW_LAYER = 'environmentalObjects_front';
 const LT = (n) => 'line_tileset_' + n;
 const ARROW_CORNER = { '1,0|0,-1': 16, '-1,0|0,-1': 19, '-1,0|0,1': 58, '1,0|0,1': 55 };
@@ -1171,9 +1299,13 @@ function arrowTiles(a) {
   return out;
 }
 
+// The keys of the arrow tiles in `arrowSeen` (the tiles instance they were put in).
+let arrowTileKeys = new Set(), arrowSeen = null;
 function rebuildArrowTiles() {
-  for (const [k, t] of tiles) if (t.arrow) tiles.delete(k);
-  for (const a of arrows) for (const [k, t] of arrowTiles(a)) tiles.set(k, t);
+  if (arrowSeen !== tiles) { arrowSeen = tiles; arrowTileKeys = new Set(); for (const [k, t] of tiles) if (t.arrow) arrowTileKeys.add(k); }
+  for (const k of arrowTileKeys) if (tiles.get(k)?.arrow) tiles.delete(k);
+  arrowTileKeys.clear();
+  for (const a of arrows) for (const [k, t] of arrowTiles(a)) { tiles.set(k, t); arrowTileKeys.add(k); }
 }
 
 function removeArrow(id) {
@@ -1203,7 +1335,7 @@ function arrowMove(cx, cy) {
     changed = true;
   }
   if (!changed) return;
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; trimUndo(); }
   rebuildArrowTiles();
   saveDraft();
 }
@@ -1341,20 +1473,45 @@ function objectHit(o, wx, wy) {
   const item = catalogItem(o);
   if (!item) return false;
   const box = objectBox(o, item);
-  if (box && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3]) return true;
-  return objectParts(o, item).some((p) => {
-    const [, , w, h] = base.scene.sprites[p.s];
-    const r = (Math.max(w, h) / 2) * Math.max(Math.abs(p.m[0]) + Math.abs(p.m[1]), Math.abs(p.m[2]) + Math.abs(p.m[3]));
-    return Math.abs(wx - (o.x + p.x)) <= r && Math.abs(wy - (o.y + p.y)) <= r;
-  }) || Math.hypot(wx - o.x, wy - o.y) < CELL;
+  if (box && (isSizable(item) || !item.parts.length) && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3]) return true;
+  let shown = false;
+  for (const p of objectParts(o, item)) {
+    if (HIDDEN_PART(p)) continue;
+    shown = true;
+    const [, , w, h, pvx, pvy] = base.scene.sprites[p.s], W = p.dm ? p.sz[0] : w, H = p.dm ? p.sz[1] : h;
+    const det = p.m[0] * p.m[3] - p.m[1] * p.m[2];
+    if (Math.abs(det) < 1e-9) continue;
+    const dx = wx - o.x - p.x, dy = wy - o.y - p.y;
+    const lx = (p.m[3] * dx - p.m[1] * dy) / det, ly = (-p.m[2] * dx + p.m[0] * dy) / det;
+    if (lx >= -pvx * W && lx <= (1 - pvx) * W && ly >= -pvy * H && ly <= (1 - pvy) * H) return true;
+  }
+  if (!shown && box && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3]) return true;
+  return !shown && Math.hypot(wx - o.x, wy - o.y) < CELL / 2;
 }
 function tileAt(wx, wy) {
-  let best = null;
-  tiles.forEach((t, k) => {
-    if (tileKeyAt(t.layer, wx, wy) !== k) return;
-    if (!best || layerGrid(t.layer).order >= layerGrid(best[1].layer).order) best = [k, t];
-  });
+  let best = null, bo = 0;
+  for (const layer of tiles.layers.keys()) {
+    const k = tileKeyAt(layer, wx, wy), t = tiles.get(k);
+    if (!t) continue;
+    const o = layerGrid(layer).order;
+    if (!best || o >= bo) { best = [k, t]; bo = o; }
+  }
   return best;
+}
+// The tiles whose centre's cell is inside the cell rect, as [key, tile, centre, cell].
+function tilesInCells(x0, y0, x1, y1) {
+  const a = cellWorld(x0, y0), b = cellWorld(x1 + 1, y1 + 1), out = [];
+  tileIndex.forEachInRect(tiles, a.x - 1, a.y - 1, b.x + 1, b.y + 1, (t, k) => {
+    const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
+    if (cc.cx >= x0 && cc.cx <= x1 && cc.cy >= y0 && cc.cy <= y1) out.push([k, t, c, cc]);
+  });
+  return out;
+}
+// The [key, value] of a cell map's cells inside the cell rect.
+function cellsIn(m, x0, y0, x1, y1) {
+  const out = [];
+  m.forEachIn(x0, y0, x1, y1, (k, v) => out.push([k, v]));
+  return out;
 }
 
 let spikePlaceTurn = null;
@@ -1635,7 +1792,7 @@ function resizeMove(e) {
   const sig = [b.x0, b.y0, b.x1, b.y1].join(',');
   if (sig === drag.sig) return;
   drag.sig = sig;
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; trimUndo(); }
   const w2 = b.x1 - b.x0, h2 = b.y1 - b.y0, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
   if (selection.kind === 'mtrig') Object.assign(triggers[selection.index], { x: cx, y: cy, w: w2, h: h2 });
   else { const o = placed[selection.index]; o.cfg = { ...o.cfg, trig: { w: w2, h: h2, dx: cx - o.x, dy: cy - o.y } }; }
@@ -1656,6 +1813,8 @@ function selectDown(e) {
     return;
   }
   const hit = itemAt(w.x, w.y);
+  const pend = { pan: false, pending: hit, shift: e.shiftKey, sx: e.clientX, sy: e.clientY, start: w };
+  if (hit && e.shiftKey && hit.kind !== 'tile' && hit.kind !== 'cell') { drag = pend; return; }
   if (hit && e.shiftKey) {
     toggleInSelection(hit);
     drag = null;
@@ -1668,11 +1827,9 @@ function selectDown(e) {
     requestDraw();
     return;
   }
-  if (hit) {
-    selection = hit;
-    showInDropdown(hit);
-    if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
-    drag = { pan: false, moveSel: true, selOrig: JSON.stringify(hit), move: false, gate: hit.kind === 'gate' ? hit : null, group: hit.kind === 'blocks' || hit.kind === 'moss' ? { at: hit.kind === 'moss' ? mossKeyAt(w.x, w.y) : key(cellOf(w.x, w.y).cx, cellOf(w.x, w.y).cy) } : null, fspike: hit.kind === 'fspike', sign: hit.kind === 'sign', start: w, orig: hit.kind === 'object' ? { x: placed[hit.index].x, y: placed[hit.index].y } : hit.kind === 'fspike' ? { x: freeSpikes[hit.index].x, y: freeSpikes[hit.index].y } : hit.kind === 'sign' ? { x: signs[hit.index].x, y: signs[hit.index].y } : hit.kind === 'gate' && hit.which === 'screen' ? { ...markerPos(hit) } : null, before: snapshot(), changed: false };
+  if (hit && hit.kind !== 'tile' && hit.kind !== 'cell') {
+    drag = pend;
+    return;
   } else {
     const c = cellOf(w.x, w.y);
     const keep = e.shiftKey ? targetsOf(selection) : [];
@@ -1683,8 +1840,27 @@ function selectDown(e) {
   requestDraw();
 }
 
+// A press on something unselected is a click (select it) until it moves, then a box from where it started.
+function pendingUp() {
+  const { pending: hit, shift } = drag;
+  if (shift) toggleInSelection(hit);
+  else {
+    selection = hit;
+    showInDropdown(hit);
+    if (hit.kind === 'gate' && hit.course) draft.activeCourse = hit.course;
+  }
+  renderConfig();
+  requestDraw();
+}
+
 function selectMove(e) {
   const w = worldAt(e);
+  if (drag.pending) {
+    if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+    const keep = drag.shift ? targetsOf(selection) : [];
+    if (!drag.shift) selection = null;
+    drag = { pan: false, region: cellOf(drag.start.x, drag.start.y), keep };
+  }
   if (drag.moveSel) {
     // Rebuilt from the drag's start every time, so whatever the moving things
     // pass over is only covered, never lost.
@@ -1693,8 +1869,8 @@ function selectMove(e) {
     const sig = [Math.round(dx / snap), Math.round(dy / snap), cx, cy].join(',');
     if (sig === (drag.sig ?? '0,0,0,0')) return;
     drag.sig = sig;
-    if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
-    applyState(JSON.parse(drag.before));
+    if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; trimUndo(); }
+    applyState(drag.before);
     selection = JSON.parse(drag.selOrig);
     moveTargets(targetsOf(selection), dx, dy, cx, cy, fine);
     requestDraw();
@@ -1728,9 +1904,15 @@ function selectMove(e) {
     const at = { x: Math.round((drag.orig.x + w.x - drag.start.x) / snap) * snap, y: Math.round((drag.orig.y + w.y - drag.start.y) / snap) * snap };
     if (course && (course.screen?.x !== at.x || course.screen?.y !== at.y)) changed(() => { course.screen = at; });
   } else if (drag.gate) {
-    const c = cellOf(w.x, w.y), which = drag.gate.which, g = gateAt(c.cx, c.cy, which);
-    const cur = which === 'spawn' ? draft.spawn : courseById(drag.gate.course)?.[which];
-    if (cur && (cur.x !== g.x || cur.y !== g.y)) changed(() => { if (which === 'spawn') draft.spawn = g; else courseById(drag.gate.course)[which] = g; });
+    const c = cellOf(w.x, w.y), t = drag.gate, g = gateAt(c.cx, c.cy, t.which);
+    const course = courseById(t.course);
+    const cur = t.which === 'spawn' ? draft.spawn : t.which === 'reset' ? course?.resets?.[t.index] : course?.[t.which];
+    const put = () => {
+      if (t.which === 'spawn') draft.spawn = g;
+      else if (t.which === 'reset') { if (course) course.resets[t.index] = g; }
+      else if (course) course[t.which] = g;
+    };
+    if (cur && (cur.x !== g.x || cur.y !== g.y)) changed(put);
   } else if (drag.move) {
     const o = placed[selection.index];
     let mx = w.x - drag.start.x, my = w.y - drag.start.y;
@@ -1755,19 +1937,21 @@ function zipPlaceMove(e) {
 }
 
 function changed(fn) {
-  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; if (undoStack.length > 200) undoStack.shift(); }
+  if (!drag.changed) { drag.changed = true; undoStack.push(drag.before); redoStack = []; trimUndo(); }
   fn();
   saveDraft();
   renderConfig();
 }
 
 function placementCfg(item) {
-  if (!item || (!placeRot && !placeFlip)) return {};
+  if (!item) return {};
+  const rot = placeRot;
+  if (!rot && !placeFlip) return {};
   if (item.zip) {
-    const [ex, ey] = item.zip.end, r = rotMatrix(placeRot);
+    const [ex, ey] = item.zip.end, r = rotMatrix(rot);
     return { cfg: { zip: { end: [r[0] * ex + r[1] * ey, r[2] * ex + r[3] * ey] } } };
   }
-  return { cfg: { rot: placeRot * 90, fx: placeFlip || undefined } };
+  return { cfg: { rot: rot * 90, fx: placeFlip || undefined } };
 }
 
 const PLACING = ['object', 'decor', 'stamp', 'vine'];
@@ -1869,15 +2053,13 @@ function shiftTarget(sel, dx, dy, fine) {
   } else {
     const inR = (cx, cy) => cx >= sel.x0 && cx <= sel.x1 && cy >= sel.y0 && cy <= sel.y1;
     for (const m of [blocks, spikes, vines]) {
-      const moving = [...m].filter(([k]) => inR(...unkey(k)));
+      const moving = cellsIn(m, sel.x0, sel.y0, sel.x1, sel.y1);
       for (const [k] of moving) m.delete(k);
       for (const [k, v] of moving) m.set(shiftKey(k), v);
     }
     if (!sel.cellsOnly) for (const o of placed) { const c = cellOf(o.x, o.y); if (inR(c.cx, c.cy)) { o.x += dx * CELL; o.y += dy * CELL; } }
     const ids = new Set(), movingTiles = [];
-    for (const [k, t] of tiles) {
-      const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
-      if (!inR(cc.cx, cc.cy)) continue;
+    for (const [k, t, c] of tilesInCells(sel.x0, sel.y0, sel.x1, sel.y1)) {
       if (t.arrow) ids.add(t.arrow);
       else if (layerGrid(t.layer).size === CELL) movingTiles.push([k, t, c]);
     }
@@ -1888,7 +2070,10 @@ function shiftTarget(sel, dx, dy, fine) {
     const shiftG = (m) => { if (!m) return m; const c = cellOf(m.x, m.y); return inR(c.cx, c.cy) ? { ...m, x: m.x + dx * CELL, y: m.y + dy * CELL } : m; };
     if (!sel.cellsOnly) {
       draft.spawn = shiftG(draft.spawn);
-      for (const c of courses()) { c.start = shiftG(c.start); c.end = shiftG(c.end); }
+      for (const c of courses()) {
+        c.start = shiftG(c.start); c.end = shiftG(c.end);
+        if (c.resets) c.resets = c.resets.map(shiftG);
+      }
     }
     Object.assign(sel, { x0: sel.x0 + dx, x1: sel.x1 + dx, y0: sel.y0 + dy, y1: sel.y1 + dy });
   }
@@ -1963,7 +2148,7 @@ function marqueeTargets(r) {
   for (const e of stack()) if (inside(e.it) && layerOpen(targetLayer({ kind: e.kind, index: e.index }))) out.push({ kind: e.kind, index: e.index });
   if (layerOpen('course')) triggers.forEach((t, i) => { if (inside(t)) out.push({ kind: 'mtrig', index: i }); });
   if (layerOpen('course')) xspawns.forEach((t, i) => { if (inside(t)) out.push({ kind: 'xspawn', index: i }); });
-  if (layerOpen('tiles')) tiles.forEach((t, k) => { if (!t.arrow && inside(tileCenter(t.layer, k))) out.push({ kind: 'tile', key: k }); });
+  if (layerOpen('tiles')) tileIndex.forEachInRect(tiles, a.x - 1, a.y - 1, b.x + 1, b.y + 1, (t, k) => { if (!t.arrow && inside(tileCenter(t.layer, k))) out.push({ kind: 'tile', key: k }); });
   if (baseOn() && layerOpen('level')) {
     for (const o of baseObjects) if (!removedObjects.has(o.id) && inside(o)) out.push({ kind: 'base', id: o.id });
     for (const p of sceneList?.items || []) if (p.id && !p.group && p.a !== 0 && !removedScene.has(p.id) && p.reach < 400 && inside(p)) out.push({ kind: 'scene', id: p.id });
@@ -1974,6 +2159,7 @@ function marqueeTargets(r) {
       const p = which === 'screen' ? courseScreen(c) : c[which];
       if (inside(p)) out.push({ kind: 'gate', which, course: c.id });
     }
+    for (const c of courses()) (c.resets || []).forEach((p, index) => { if (inside(p)) out.push({ kind: 'gate', which: 'reset', course: c.id, index }); });
   }
   out.push({ kind: 'region', ...r, cellsOnly: true });
   return out;
@@ -2030,7 +2216,7 @@ function deleteOne() {
     const inRegion = (cx, cy) => cx >= selection.x0 && cx <= selection.x1 && cy >= selection.y0 && cy <= selection.y1;
     if (!selection.cellsOnly) placed = placed.filter((o) => { const c = cellOf(o.x, o.y); return !inRegion(c.cx, c.cy); });
     const cut = new Set();
-    for (const [k, t] of [...tiles]) { const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y); if (inRegion(cc.cx, cc.cy)) { tiles.delete(k); if (t.arrow) cut.add(t.arrow); } }
+    for (const [k, t] of tilesInCells(selection.x0, selection.y0, selection.x1, selection.y1)) { tiles.delete(k); if (t.arrow) cut.add(t.arrow); }
     if (cut.size) { arrows = arrows.filter((ar) => !cut.has(ar.id)); rebuildArrowTiles(); }
     for (let cy = selection.y0; cy <= selection.y1; cy++) for (let cx = selection.x0; cx <= selection.x1; cx++) {
       const k = key(cx, cy);
@@ -2291,10 +2477,10 @@ function copySelection() {
   const inRegion = (cx, cy) => cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
   const b = { w: x1 - x0 + 1, h: y1 - y0 + 1, tiles: [], blocks: [], spikes: [], vines: [], objects: [] };
   for (const t of baseTilesIn(x0, y0, x1, y1)) b.tiles.push({ layer: t.layer, dx: t.x - origin.x, dy: t.y - origin.y, tile: t.tile, m: t.m });
-  tiles.forEach((t, k) => { const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y); if (inRegion(cc.cx, cc.cy)) b.tiles.push({ ...t, dx: c.x - origin.x, dy: c.y - origin.y }); });
-  blocks.forEach((kind, k) => { const [cx, cy] = unkey(k); if (inRegion(cx, cy)) b.blocks.push([cx - x0, cy - y0, kind]); });
-  spikes.forEach((sp, k) => { const [cx, cy] = unkey(k); if (inRegion(cx, cy)) b.spikes.push([cx - x0, cy - y0, sp]); });
-  vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (inRegion(cx, cy)) b.vines.push([cx - x0, cy - y0, v]); });
+  for (const [, t, c] of tilesInCells(x0, y0, x1, y1)) b.tiles.push({ ...t, dx: c.x - origin.x, dy: c.y - origin.y });
+  blocks.forEachIn(x0, y0, x1, y1, (k, kind, cx, cy) => b.blocks.push([cx - x0, cy - y0, kind]));
+  spikes.forEachIn(x0, y0, x1, y1, (k, sp, cx, cy) => b.spikes.push([cx - x0, cy - y0, sp]));
+  vines.forEachIn(x0, y0, x1, y1, (k, v, cx, cy) => b.vines.push([cx - x0, cy - y0, v]));
   for (const o of placed) { const c = cellOf(o.x, o.y); if (inRegion(c.cx, c.cy)) b.objects.push({ ...o, dx: o.x - origin.x, dy: o.y - origin.y }); }
   brush = b;
   closePopover();
@@ -2514,6 +2700,7 @@ function upgradeConfigHtml(o, num) {
 const LEVEL_TOGGLES = [
   ['wallJump', 'Wall jump'], ['blockSwap', 'Block swap dash'], ['omniDash', 'Omni dash'],
   ['zipMovers', 'Zip movers work'], ['refreshers', 'Refreshers work'], ['teleporters', 'Teleporters work'],
+  ['light', 'Personal light'],
 ];
 const LOCAL_UPGRADE_ENUM = ['Global', 'Movement', 'Clones', 'Base reward', 'Fast clone chance', 'Big clone chance', 'Boost all previous courses', 'Clone reward multiplier', 'Clones', 'Green clone reward', 'Emergency lights', 'Clone dust generation', 'More watts', 'Red clone reward'];
 const MOVEMENT_ENUM = ['Dash', 'Wall jump', 'Double jump', 'Swap blocks once', 'Block swap', 'End of demo', 'Omni dash'];
@@ -2766,6 +2953,7 @@ function renderConfig() {
     if (!cs) { selection = null; el.hidden = true; return; }
     html += cs.game ? `<div class="mm-config-title">Plant<span>${cs.game}</span></div>` : `<div class="mm-config-title">Image<span>${assetName(cs.image)}</span></div>`;
     html += actionBar() + transformSection();
+    if (!cs.game) html += `<div class="mm-config-row"><button class="mm-tool" data-repick>Pick picture again…</button></div>`;
     if (!cs.game) html += `<div class="mm-config-row"><label>Image<select class="mm-input" data-cs="image">${backgroundOptions(cs.image).replace(/<option value="level"[^>]*>[^<]*<\/option>/, '')}</select></label></div>`;
     html += sec('group', 'Group & layer', groupRow() + depthRow() + stackButtons());
   } else if (selection.kind === 'mtrig') {
@@ -2838,6 +3026,10 @@ function renderConfig() {
   bindTransform(el);
   bindDepth(el);
   bindSections(el);
+  el.querySelector('[data-repick]')?.addEventListener('click', async () => {
+    const cs = csprites[selection?.index];
+    if (cs?.image) repickImage(cs.image);
+  });
   el.querySelectorAll('[data-cs]').forEach((inp) => {
     inp.addEventListener('keydown', (e) => e.stopPropagation());
     inp.addEventListener('change', async () => {
@@ -3122,6 +3314,7 @@ function drawSelection() {
 
 function editorState() {
   saveDraft();
+  syncDraft();
   const { name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, triggers: tg, csprites: cs2, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, movedScene: ms, movedObjects: mob, levelOrder: lo, levelTf: ltf, levelGroups: lg, courses: cs, baseEdits: be, spawn, player, ownProgress, music, background, assets, stageEdits, cellGroups: cg, hiddenGroups, xspawns: xs } = draft;
   return { version: 1, name, description, useBase, baseState, blocks: b, spikes: sp, vines: v, tiles: t, moss: mo, arrows: ar, placed: pl, freeSpikes: fs, signs: sg, triggers: tg, csprites: cs2, removed: r, removedVines: rv, removedObjects: ro, removedScene: rs, removedDeco: rd, movedScene: ms, movedObjects: mob, levelOrder: lo, levelTf: ltf, levelGroups: lg, courses: cs, baseEdits: be, spawn, player, ownProgress, music, background, assets, stageEdits, cellGroups: cg, hiddenGroups, xspawns: xs };
 }
@@ -3174,14 +3367,40 @@ async function toggleInstalledList() {
 }
 
 async function openMap(map, label, installedId = null) {
+  // A map from the v2 editor opens here too: its file is already the format the
+  // game reads, but its tiles live in `tileLayers` (which v1 has no field for) and
+  // its editor state is v2's own, so both are converted - see fromv2.js. Converting
+  // the tiles needs the level data (each layer has its own grid), so it's loaded
+  // first. Whatever v1 has no field for is left out (see the note in fromv2.js).
+  if (isV2(map)) {
+    try {
+      if (!base) await loadBase(true);
+    } catch (err) {
+      flash('Couldn\'t load the level data to convert that map: ' + err, true);
+      return;
+    }
+    try {
+      // layerGrid, plus the matrices - the tiles' runs index those.
+      const gridOf = (name) => ({ ...layerGrid(name), mats: base?.mats });
+      // Thorn vines are pictures of their own, not atlas sprites.
+      const vineSprites = base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite);
+      map = { ...map, editor: toV1State(map, gridOf, vineSprites) };
+    } catch (err) {
+      flash('Couldn\'t convert that v2 map: ' + err, true);
+      return;
+    }
+    flash('Converted a v2 map to v1\'s format. Anything v1 has no field for is left out, so save a copy if you want the original.');
+  }
   const st = map.editor;
   if (!st) { flash('That map wasn\'t made in this editor (no editor data in it).', true); return; }
-  if (st.v === 2) { flash('That\'s a map from the new editor - open it with Amplifier -> New Editor.', true); return; }
   pushUndo();
   Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], triggers: [], csprites: [], xspawns: [], cellGroups: {}, hiddenGroups: [], music: undefined, background: undefined, stageEdits: undefined, courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], movedScene: {}, movedObjects: {}, levelOrder: {}, levelTf: {}, levelGroups: {} }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-  loadDraft();
+  // Built from the draft in memory, not saved-then-read-back: a big map (a v2 one
+  // converted here can be tens of MB) doesn't fit localStorage, and saving it
+  // first would only throw and leave the old draft behind.
+  loadDraftFrom(null);
+  flushDraft();
   applyBaseState();
   selection = null;
   saveDraft();
@@ -3352,24 +3571,38 @@ function cloneConfig(o, item) {
   return out;
 }
 
+let tileBox = null, cellBox = null;
 function exportArea() {
-  const xs = [], ys = [];
-  const addKey = (k) => { const [x, y] = unkey(k); xs.push(x); ys.push(y); };
-  blocks.forEach((_, k) => addKey(k));
-  spikes.forEach((_, k) => addKey(k));
-  vines.forEach((_, k) => addKey(k));
-  tiles.forEach((t, k) => { const c = tileCenter(t.layer, k); const cc = cellOf(c.x, c.y); xs.push(cc.cx); ys.push(cc.cy); });
-  for (const o of placed) { const cc = cellOf(o.x, o.y); xs.push(cc.cx); ys.push(cc.cy); }
-  mossCells.forEach((_, k) => { const c = mossCenter(k), cc = cellOf(c.x, c.y); xs.push(cc.cx); ys.push(cc.cy); });
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = (x, y) => { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; };
+  const addKey = (k) => { const c = k.indexOf(','); add(+k.slice(0, c), +k.slice(c + 1)); };
+  // The cell collections are most of a big map; their box is kept until one changes.
+  const cb = cellBox;
+  if (!cb || cb.blocks !== blocks || cb.br !== blocks.rev || cb.spikes !== spikes || cb.sr !== spikes.rev || cb.vines !== vines || cb.vr !== vines.rev || cb.moss !== mossCells || cb.mr !== mossCells.rev) {
+    blocks.forEach((_, k) => addKey(k));
+    spikes.forEach((_, k) => addKey(k));
+    vines.forEach((_, k) => addKey(k));
+    mossCells.forEach((_, k) => { const c = mossCenter(k), cc = cellOf(c.x, c.y); add(cc.cx, cc.cy); });
+    cellBox = { blocks, br: blocks.rev, spikes, sr: spikes.rev, vines, vr: vines.rev, moss: mossCells, mr: mossCells.rev, box: [x0, y0, x1, y1] };
+  } else { x0 = cb.box[0]; y0 = cb.box[1]; x1 = cb.box[2]; y1 = cb.box[3]; }
+  // The tiles are most of a big map and rarely change, so their box is kept until they do.
+  if (tileBox?.of !== tiles || tileBox.rev !== tiles.rev) {
+    const keep = [x0, y0, x1, y1];
+    x0 = y0 = Infinity; x1 = y1 = -Infinity;
+    tiles.forEach((t, k) => { const c = tileCenter(t.layer, k); const cc = cellOf(c.x, c.y); add(cc.cx, cc.cy); });
+    tileBox = { of: tiles, rev: tiles.rev, box: [x0, y0, x1, y1] };
+    [x0, y0, x1, y1] = keep;
+  }
+  if (tileBox.box[0] !== Infinity) { add(tileBox.box[0], tileBox.box[1]); add(tileBox.box[2], tileBox.box[3]); }
+  for (const o of placed) { const cc = cellOf(o.x, o.y); add(cc.cx, cc.cy); }
   if (baseOn()) removedVines.forEach(addKey);
   if (baseOn()) removed.forEach(addKey);
   for (const g of [draft.spawn, ...courses().flatMap((c) => [c.start, c.end])]) {
     if (!g) continue;
     const c = cellOf(g.x, g.y);
-    xs.push(c.cx); ys.push(c.cy);
+    add(c.cx, c.cy);
   }
-  if (!xs.length) return null;
-  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+  return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
 
 function effectiveGates(area = exportArea()) {
@@ -3401,7 +3634,7 @@ function buildOverlay() {
     takeStageEdits();
     putStageEdits(kept);
     const theirs = buildOverlayCore().groups[0].objects;
-    applyState(JSON.parse(snap));
+    applyState(snap);
     saveDraft();
     for (const o of theirs) { const t = tag(o, other); if (t) objs.push(t); }
   }
@@ -4793,7 +5026,8 @@ function renderRegion(cv, x, y, scale, part = null) {
   const saved = [canvas, ctx, cam, renderPart];
   renderPart = part;
   canvas = cv;
-  ctx = cv.getContext('2d');
+  // Baked tiles are composited over the opaque canvas, so no alpha here either.
+  ctx = cv.getContext('2d', { alpha: false });
   cam = { x, y, scale };
   staticRender = true;
   try {
@@ -4983,16 +5217,26 @@ function planPrefetch(W, H, full) {
 }
 function pumpPrefetch(workers) {
   if (!prefetch) return false;
-  prefetch.queue = prefetch.queue.filter(([z, tx, ty]) => !tileCache.has(tileKey(z, tx, ty)));
-  const deadline = performance.now() + (loading ? 40 : 3);
-  for (const [z, tx, ty] of prefetch.queue) {
+  // Walked in place rather than rebuilt. This runs every frame, and the queue
+  // holds every tile of the view plus a margin (and, when loading, the whole
+  // level) - rebuilding it meant a string key per entry, per frame, which is
+  // what made panning stutter.
+  const q = prefetch.queue, deadline = performance.now() + (loading ? 40 : 3);
+  let kept = 0, sent = 0;
+  for (let n = 0; n < q.length; n++) {
+    const [z, tx, ty] = q[n];
     const key = tileKey(z, tx, ty);
-    if (workers) { requestTile(key, z, tx, ty); continue; }
-    if (performance.now() > deadline) break;
+    if (tileCache.has(key)) continue; // already drawn - drop it
+    q[kept++] = q[n];
+    if (sent >= 64) continue; // the rest wait for the next frame
+    if (workers) { requestTile(key, z, tx, ty); sent++; continue; }
+    if (performance.now() > deadline) { for (let m = n; m < q.length; m++) q[kept++] = q[m]; break; }
     const job = tileJob(key, z);
     while (performance.now() < deadline) if (stepTileJob(job, z, tx, ty)) { storeTile(key, job.cv); tileJobs.delete(key); break; }
+    sent++;
   }
-  const left = prefetch.queue.length;
+  q.length = kept;
+  const left = q.length;
   if (loading?.render) setLoading(0.7 + 0.3 * (1 - left / Math.max(1, prefetch.total)), `Rendering the level ${prefetch.total - left} / ${prefetch.total}`);
   if (!left) { prefetch = null; return false; }
   if (!workers) requestDraw();
@@ -5005,7 +5249,12 @@ function startTileWorkers() {
   let off = false;
   try { off = !!localStorage.getItem('mapMakerNoWorkers'); } catch {}
   if (off || pool.workers.length || pool.failed || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return;
-  const count = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
+  // One worker per physical core, bar one. Baking parallelises cleanly, but each
+  // worker parses its own 9.5MB basemap.json and holds the atlas, and hardwareConcurrency
+  // counts hyperthreads - so one worker per reported thread starves the main
+  // thread instead of using idle CPU, which showed up as lag and unresponsive
+  // clicks. Four is what this held up with.
+  const count = Math.max(1, Math.min(4, Math.ceil((navigator.hardwareConcurrency || 4) / 2) - 1));
   for (let n = 0; n < count; n++) {
     let worker;
     try { worker = new Worker(new URL('./tile-worker.js', import.meta.url), { type: 'module' }); } catch { pool.failed = true; return; }
@@ -5072,6 +5321,7 @@ export async function workerInit(state) {
     return img;
   };
   base = await (await fetch('/maps/basemap.json')).json();
+  gridCache = null;
   pieceStamps = null;
   const vines = [...new Set(base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite))];
   [atlasImg, sceneImg] = await Promise.all([bitmap('/maps/' + base.art.atlas), bitmap('/maps/' + base.scene.atlas)]);
@@ -5109,6 +5359,165 @@ export function workerSetState(state) {
 
 export function workerRenderTile(z, tx, ty, part = null) {
   return renderTile(z, tx, ty, part).transferToImageBitmap();
+}
+
+// Your tiles, blocks, spikes, vines and moss over the current view (the globals' canvas and cam),
+// back to front. Keyed by cell, so only the cells in the view's range are visited; a map can hold
+// hundreds of thousands. `tileMargin` is how far past the view a tile's centre may be and still draw.
+function drawCellLayers(useArt, pad, tileMargin = CELL) {
+  const W = canvas.width, H = canvas.height;
+  const tl = cellOf(toWorld(0, 0).x, toWorld(0, 0).y), br = cellOf(toWorld(W, H).x, toWorld(W, H).y);
+  const minCx = tl.cx - 1, maxCx = br.cx + 1, minCy = br.cy - 1, maxCy = tl.cy + 1;
+  if (useArt && !layerHidden('tiles')) drawPlacedTiles(false, tileMargin);
+  if (!layerHidden('blocks')) blocks.forEachIn(minCx, minCy, maxCx, maxCy, (k, kind, cx, cy) => {
+    if (useArt) {
+      const art = blockArt(kind, cx, cy);
+      if (art && drawGroundArt(cx, cy, art)) return;
+    }
+    const r = cellRect(cx, cy);
+    ctx.fillStyle = COLORS[kind] || BLOCK_SETS[kind]?.color || COLORS.ground;
+    ctx.fillRect(r.x, r.y, r.w + pad, r.h + pad);
+  });
+  if (!layerHidden('hazards')) {
+    spikes.forEachIn(minCx, minCy, maxCx, maxCy, (k, sp, cx, cy) => {
+      const q = spikeTurn(sp, cx, cy);
+      if (sp.c === 'true') return drawTrueSpike(cx, cy, q);
+      if (useArt && base) { const t = spikeTile(sp.c, q); if (drawTileArt(cx, cy, t.tile, t.matrix)) return; }
+      drawSpike(cx, cy, q, COLORS[sp.c]);
+    });
+    vines.forEachIn(minCx - 6, minCy - 6, maxCx + 6, maxCy + 6, (k, v, cx, cy) => drawVine(cx, cy, v.s, rotMatrix(v.q)));
+  }
+  // Moss is keyed by the moss layer's own grid (64px cells), not 32px ones.
+  if (!layerHidden('blocks') && mossCells.size) {
+    const mg = layerGrid('moss');
+    const gx0 = Math.floor((minCx * CELL - mg.ox) / mg.size) - 1, gx1 = Math.ceil(((maxCx + 1) * CELL - mg.ox) / mg.size) + 1;
+    const gy0 = Math.floor((minCy * CELL + OFFSET_Y - mg.oy) / mg.size) - 1, gy1 = Math.ceil(((maxCy + 1) * CELL + OFFSET_Y - mg.oy) / mg.size) + 1;
+    mossCells.forEachIn(gx0, gy0, gx1, gy1, (k) => {
+      if (!useArt || !drawMoss(k)) { const c = mossCenter(k), a = toScreen(c.x - mg.size / 2, c.y + mg.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, mg.size * cam.scale, mg.size * cam.scale); }
+    });
+  }
+  if (useArt && !layerHidden('tiles')) drawPlacedTiles(true, tileMargin);
+}
+
+// ---- the picture cache: the sequence above, drawn once into 512px chunks at power-of-two zooms ----
+// Panning then only blits chunks; a chunk is redrawn when something under it changes.
+const CC_PX = 512, CC_MAX = 96, CC_LOW = -6, CC_HIGH = 2;
+const cellCache = { chunks: new Map(), pool: [], refs: null, sig: '', cold: true };
+const cellCacheOff = () => { try { return localStorage.mapMakerNoCellCache === '1'; } catch { return false; } };
+const ccSpan = (z) => CC_PX / Math.pow(2, z);
+const ccKey = (z, tx, ty) => z + '|' + tx + '|' + ty;
+function ccDropAll() {
+  for (const c of cellCache.chunks.values()) cellCache.pool.push(c.cv);
+  cellCache.chunks.clear();
+  cellCache.cold = true;
+}
+function ccDropRects(rects) {
+  for (const [k, c] of cellCache.chunks) {
+    const span = ccSpan(c.z), x0 = c.tx * span, y0 = c.ty * span;
+    if (rects.some((r) => r[0] < x0 + span && r[2] > x0 && r[1] < y0 + span && r[3] > y0)) { cellCache.chunks.delete(k); cellCache.pool.push(c.cv); }
+  }
+}
+// Compare what the cached pictures were drawn from with what's there now; drop what's stale.
+function ccSync() {
+  const cc = cellCache;
+  const refs = [tiles, blocks, spikes, vines, mossCells, removed, atlasImg, base, groundSet, mossSet, blueSet, orangeSet, baseHaz];
+  const sig = [layerHidden('tiles'), layerHidden('blocks'), layerHidden('hazards'), artReady(), baseOn(), baseVersion, draft.baseState].join('|');
+  const same = cc.refs && cc.sig === sig && refs.every((r, i) => r === cc.refs[i]);
+  cc.refs = refs;
+  cc.sig = sig;
+  const all = !same;
+  // Taken even when everything goes, so the notes don't pile up.
+  const rects = [];
+  const take = (coll, toRect) => {
+    const d = coll.takeDirty();
+    if (d === null) return true;
+    for (const k of d) rects.push(toRect(k));
+    return false;
+  };
+  const cellRectOf = (m) => (k) => { const c = k.indexOf(','), w = cellWorld(+k.slice(0, c), +k.slice(c + 1)); return [w.x - m, w.y - m, w.x + CELL + m, w.y + CELL + m]; };
+  const mossRect = (k) => { const c = mossCenter(k), h = layerGrid('moss').size / 2 + 128; return [c.x - h, c.y - h, c.x + h, c.y + h]; };
+  const tileRect = (k) => { const l = k.slice(0, k.lastIndexOf('|')), c = tileCenter(l, k), h = layerGrid(l).size / 2 + 128; return [c.x - h, c.y - h, c.x + h, c.y + h]; };
+  // Past one cell of reach: a block changes the seating of spikes two cells away, and a vine is up to six cells wide.
+  const lost = [take(tiles, tileRect), take(blocks, cellRectOf(3 * CELL)), take(spikes, cellRectOf(3 * CELL)), take(vines, cellRectOf(6 * CELL)), take(mossCells, mossRect), take(removed, cellRectOf(6 * CELL))];
+  if (all || lost.includes(true) || rects.length > 2000) ccDropAll();
+  else if (rects.length) ccDropRects(rects);
+}
+function ccRender(z, tx, ty, useArt, pad) {
+  const cc = cellCache, span = ccSpan(z), s = Math.pow(2, z);
+  const cv = cc.pool.pop() || makeCanvas();
+  if (cv.width !== CC_PX) cv.width = cv.height = CC_PX;
+  const g = cv.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1;
+  g.clearRect(0, 0, CC_PX, CC_PX);
+  const saved = [canvas, ctx, cam];
+  canvas = cv;
+  ctx = g;
+  cam = { x: (tx + 0.5) * span, y: (ty + 0.5) * span, scale: s };
+  try { drawCellLayers(useArt, pad, 4 * CELL); } finally { [canvas, ctx, cam] = saved; }
+  const c = { z, tx, ty, cv };
+  cc.chunks.set(ccKey(z, tx, ty), c);
+  return c;
+}
+// Something to show in place of a chunk that isn't built: the same area from a coarser level, or four finer chunks.
+function ccSubstitute(z, tx, ty, x0, y0, x1, y1) {
+  const get = (zz, a, b) => { const c = cellCache.chunks.get(ccKey(zz, a, b)); if (c) { cellCache.chunks.delete(ccKey(zz, a, b)); cellCache.chunks.set(ccKey(zz, a, b), c); } return c; };
+  for (let zz = z - 1; zz >= CC_LOW; zz--) {
+    const f = Math.pow(2, z - zz), px = Math.floor(tx / f), py = Math.floor(ty / f), c = get(zz, px, py);
+    if (!c) continue;
+    const sz = CC_PX / f, i = tx - px * f, j = ty - py * f;
+    ctx.drawImage(c.cv, i * sz, (f - 1 - j) * sz, sz, sz, x0, y0, x1 - x0, y1 - y0);
+    return true;
+  }
+  if (z < CC_HIGH) {
+    let any = false;
+    const mx = Math.round((x0 + x1) / 2), my = Math.round((y0 + y1) / 2);
+    for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) {
+      const c = get(z + 1, tx * 2 + a, ty * 2 + b);
+      if (!c) continue;
+      const dx0 = a ? mx : x0, dx1 = a ? x1 : mx, dy0 = b ? y0 : my, dy1 = b ? my : y1;
+      ctx.drawImage(c.cv, dx0, dy0, dx1 - dx0, dy1 - dy0);
+      any = true;
+    }
+    return any;
+  }
+  return false;
+}
+function drawCellView(useArt, pad) {
+  const cc = cellCache;
+  if (cellCacheOff() || cam.scale > Math.pow(2, CC_HIGH)) {
+    ccSync();
+    return drawCellLayers(useArt, pad);
+  }
+  ccSync();
+  const W = canvas.width, H = canvas.height;
+  const z = Math.max(CC_LOW, Math.min(CC_HIGH, Math.ceil(Math.log2(cam.scale)))), span = ccSpan(z);
+  const a = toWorld(0, 0), b = toWorld(W, H);
+  const tx0 = Math.floor(Math.min(a.x, b.x) / span), tx1 = Math.floor(Math.max(a.x, b.x) / span);
+  const ty0 = Math.floor(Math.min(a.y, b.y) / span), ty1 = Math.floor(Math.max(a.y, b.y) / span);
+  const view = [];
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) view.push({ tx, ty, d: Math.hypot((tx + 0.5) * span - cam.x, (ty + 0.5) * span - cam.y) });
+  view.sort((p, q) => p.d - q.d);
+  const missing = view.filter((v) => !cc.chunks.has(ccKey(z, v.tx, v.ty)));
+  const t0 = performance.now(), budget = cc.cold ? 40 : 10;
+  let built = 0;
+  while (built < missing.length && (!built || performance.now() - t0 < budget)) {
+    const v = missing[built++];
+    ccRender(z, v.tx, v.ty, useArt, pad);
+  }
+  cc.cold = false;
+  if (built < missing.length) requestDraw();
+  for (const v of view) {
+    const p = toScreen(v.tx * span, (v.ty + 1) * span), q = toScreen((v.tx + 1) * span, v.ty * span);
+    const x0 = Math.round(p.x), y0 = Math.round(p.y), x1 = Math.round(q.x), y1 = Math.round(q.y);
+    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
+    const k = ccKey(z, v.tx, v.ty), c = cc.chunks.get(k);
+    if (c) { cc.chunks.delete(k); cc.chunks.set(k, c); ctx.drawImage(c.cv, x0, y0, x1 - x0, y1 - y0); }
+    else ccSubstitute(z, v.tx, v.ty, x0, y0, x1, y1);
+  }
+  // Oldest first out, but never what's in view.
+  const cap = Math.max(CC_MAX, view.length + 24);
+  for (const [k, c] of cc.chunks) { if (cc.chunks.size <= cap) break; cc.chunks.delete(k); if (cc.pool.length < 8) cc.pool.push(c.cv); }
 }
 
 function draw() {
@@ -5182,29 +5591,7 @@ function draw() {
     ctx.stroke();
   }
 
-  if (useArt && !layerHidden('tiles')) drawPlacedTiles(false);
-  if (!layerHidden('blocks')) blocks.forEach((kind, k) => {
-    const [cx, cy] = unkey(k);
-    if (useArt) {
-      const art = blockArt(kind, cx, cy);
-      if (art && drawGroundArt(cx, cy, art)) return;
-    }
-    const r = cellRect(cx, cy);
-    ctx.fillStyle = COLORS[kind] || BLOCK_SETS[kind]?.color || COLORS.ground;
-    ctx.fillRect(r.x, r.y, r.w + pad, r.h + pad);
-  });
-  if (!layerHidden('hazards')) spikes.forEach((sp, k) => {
-    const [cx, cy] = unkey(k);
-    const q = spikeTurn(sp, cx, cy);
-    if (sp.c === 'true') return drawTrueSpike(cx, cy, q);
-    if (useArt && base) { const t = spikeTile(sp.c, q); if (drawTileArt(cx, cy, t.tile, t.matrix)) return; }
-    drawSpike(cx, cy, q, COLORS[sp.c]);
-  });
-
-  const near = (cx, cy) => cx >= minCx - 6 && cx <= maxCx + 6 && cy >= minCy - 6 && cy <= maxCy + 6;
-  if (!layerHidden('hazards')) vines.forEach((v, k) => { const [cx, cy] = unkey(k); if (near(cx, cy)) drawVine(cx, cy, v.s, rotMatrix(v.q)); });
-  if (!layerHidden('blocks')) mossCells.forEach((_, k) => { if (!useArt || !drawMoss(k)) { const c = mossCenter(k), g = layerGrid('moss'), a = toScreen(c.x - g.size / 2, c.y + g.size / 2); ctx.fillStyle = COLORS.moss; ctx.fillRect(a.x, a.y, g.size * cam.scale, g.size * cam.scale); } });
-  if (useArt && !layerHidden('tiles')) drawPlacedTiles(true);
+  drawCellView(useArt, pad);
   // Course screens show in front of the walls, as in the game; placed objects still go over them.
   if (!layerHidden('course')) for (const c of courses()) drawCourseScreen(c, courseColor(c.id), courseNumber(c.id));
   // Things behind the level are drawn with it (above); without the level, before your blocks.
@@ -5254,7 +5641,7 @@ function draw() {
       if (c.end) drawGate(c.end, c.end.box || END_BOX, COLORS.end, 'END');
       ctx.globalAlpha = 1;
       ctx.globalAlpha = 0.55;
-      if (cam.scale >= 0.15) for (const r of c.resets || []) if (r.box) drawGate(r, r.box, COLORS.reset, 'TIMER RESET');
+      if (cam.scale >= 0.15) for (const r of c.resets || []) drawGate(r, r.box || RESET_BOX, COLORS.reset, 'TIMER RESET');
     }
     ctx.globalAlpha = 1;
   }
@@ -5294,6 +5681,7 @@ function draw() {
     }
     else if (tool === 'start') drawGate(gateAt(cx, cy, 'start'), START_BOX, COLORS.start, 'START');
     else if (tool === 'end') drawGate(gateAt(cx, cy, 'end'), END_BOX, COLORS.end, 'END');
+    else if (tool === 'reset') drawGate(gateAt(cx, cy, 'reset'), END_BOX, COLORS.reset, 'TIMER RESET');
     else if (tool === 'spawn') drawGate(gateAt(cx, cy, 'spawn'), SPAWN_BOX, COLORS.spawn, 'SPAWN');
     else { ctx.strokeStyle = COLORS.end; ctx.lineWidth = 2; const r = cellRect(cx, cy); ctx.strokeRect(r.x, r.y, r.w, r.h); }
     ctx.globalAlpha = 1;
@@ -5515,9 +5903,25 @@ function assetDb() {
   });
   return assetDbPromise;
 }
+const assetMiss = new Set(); // files nobody has (this session): not asked for again until they're stored
+const tauriInvoke = () => window.__TAURI__?.core?.invoke;
+const b64Blob = (b64) => { const bin = atob(b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return new Blob([bytes]); };
+const blobData = (blob) => new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => ok(null); r.readAsDataURL(blob); });
+// IndexedDB first; if it has lost the file, the app's own copy (or any installed map's) brings it back.
 async function assetBlob(file) {
   const db = await assetDb();
-  return new Promise((ok) => { const r = db.transaction('files').objectStore('files').get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); });
+  const got = await new Promise((ok) => { const r = db.transaction('files').objectStore('files').get(file); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); });
+  if (got || assetMiss.has(file) || !tauriInvoke()) return got;
+  try {
+    const blob = b64Blob(await tauriInvoke()('find_map_asset', { file }));
+    await putAsset(file, blob);
+    return blob;
+  } catch { assetMiss.add(file); return null; }
+}
+// A copy on disk, outside the browser's storage (best effort).
+async function keepAsset(file, blob) {
+  assetMiss.delete(file);
+  try { const data = await blobData(blob); if (data && tauriInvoke()) await tauriInvoke()('store_map_asset', { file, data }); } catch { /* older build: IndexedDB only */ }
 }
 async function putAsset(file, blob) {
   const db = await assetDb();
@@ -5529,6 +5933,7 @@ async function addAsset(kind, fileObj) {
   const ext = (fileObj.name.match(/\.[a-z0-9]+$/i)?.[0] || '').toLowerCase();
   const file = kind + '-' + Date.now().toString(36) + ext;
   await putAsset(file, fileObj);
+  await keepAsset(file, fileObj);
   draft.assets = [...(draft.assets || []), { file, name: fileObj.name, kind }];
   saveDraft();
   return file;
@@ -5579,23 +5984,29 @@ async function mapAssets() {
   for (const cs of [...csprites, ...Object.values(draft.stageEdits || {}).flatMap((v) => v?.csprites || [])]) if (cs.image) used.add(cs.image);
   for (const t of [...triggers, ...Object.values(draft.stageEdits || {}).flatMap((v) => v?.triggers || [])]) { note(t.music); if (t.background?.image) used.add(t.background.image); }
   const out = [];
+  out.missing = [];
   for (const file of used) {
     const blob = await assetBlob(file);
-    if (!blob) continue;
-    const data = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.readAsDataURL(blob); });
-    out.push({ file, data });
+    if (!blob) { out.missing.push(file); continue; }
+    out.push({ file, data: await blobData(blob) });
   }
   return out;
+}
+// "3 pictures are missing: a.jpg, b.jpg - pick them again" (empty when none are).
+function missingNote(assets) {
+  const m = assets?.missing || [];
+  if (!m.length) return '';
+  const kind = (f) => (draft.assets || []).find((a) => a.file === f)?.kind;
+  const pics = m.filter((f) => (kind(f) || 'image') === 'image').length, noun = pics === m.length ? (m.length === 1 ? 'picture is' : 'pictures are') : (m.length === 1 ? 'file is' : 'files are');
+  return `${m.length} ${noun} missing: ${m.map(assetName).join(', ')} - pick ${m.length === 1 ? 'it' : 'them'} again`;
 }
 // A map opened from the installed maps brings its files back into the editor.
 async function fetchInstalledAssets(id) {
   for (const a of draft.assets || []) {
     if (await assetBlob(a.file)) continue;
     try {
-      const b64 = await window.__TAURI__.core.invoke('read_map_asset', { id, file: a.file });
-      const bin = atob(b64), bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      await putAsset(a.file, new Blob([bytes]));
+      await putAsset(a.file, b64Blob(await window.__TAURI__.core.invoke('read_map_asset', { id, file: a.file })));
+      assetMiss.delete(a.file);
     } catch { /* this Recharge build can't read them - the choice stays, the preview won't */ }
   }
 }
@@ -5605,7 +6016,7 @@ function assetImage(file) {
   if (!img) {
     img = new Image();
     assetImages.set(file, img);
-    assetBlob(file).then((b) => { if (b) { img.onload = () => { invalidateBase?.(); requestDraw(); }; img.src = URL.createObjectURL(b); } });
+    assetBlob(file).then((b) => { if (!b) { img.missing = true; requestDraw(); } else { img.onload = () => { invalidateBase?.(); requestDraw(); }; img.src = URL.createObjectURL(b); } });
   }
   return img;
 }
@@ -5831,6 +6242,7 @@ function customSpriteSize(cs) {
   const pl = cs.game && plantOf(cs), s = cs.scale || 1;
   if (pl) return { w: pl.w * s * (cs.sx || 1), h: pl.h * s * (cs.sy || 1) };
   const img = assetImage(cs.image);
+  if (img.missing) return { w: Math.max(64, 256 * s * (cs.sx || 1)), h: Math.max(64, 256 * s * (cs.sy || 1)) }; // unknown size: a box you can still hit
   return { w: (img.naturalWidth || 64) * s * (cs.sx || 1), h: (img.naturalHeight || 64) * s * (cs.sy || 1) };
 }
 function customSpriteHit(cs, wx, wy) {
@@ -5845,8 +6257,27 @@ function drawCustomSprite(cs) {
   ctx.scale(cs.fx ? -1 : 1, cs.fy ? -1 : 1);
   ctx.globalAlpha *= cs.alpha ?? 1;
   if (img.complete && img.naturalWidth) ctx.drawImage(img, (-b.w / 2) * cam.scale, (-b.h / 2) * cam.scale, b.w * cam.scale, b.h * cam.scale);
-  else { ctx.strokeStyle = '#8aa0b8'; ctx.setLineDash([4, 3]); ctx.strokeRect((-b.w / 2) * cam.scale, (-b.h / 2) * cam.scale, b.w * cam.scale, b.h * cam.scale); }
+  else if (img.missing) {
+    const w = b.w * cam.scale, h = b.h * cam.scale;
+    ctx.fillStyle = 'rgba(200,60,60,0.12)'; ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.strokeStyle = '#d05050'; ctx.lineWidth = 2; ctx.strokeRect(-w / 2, -h / 2, w, h);
+    ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2); ctx.lineTo(w / 2, h / 2); ctx.moveTo(w / 2, -h / 2); ctx.lineTo(-w / 2, h / 2); ctx.stroke();
+    ctx.fillStyle = '#e8a0a0'; ctx.font = `${Math.max(10, 14 * cam.scale)}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(assetName(cs.image) + ' (missing)', 0, 0, Math.max(w, 40));
+  } else { ctx.strokeStyle = '#8aa0b8'; ctx.setLineDash([4, 3]); ctx.strokeRect((-b.w / 2) * cam.scale, (-b.h / 2) * cam.scale, b.w * cam.scale, b.h * cam.scale); }
   ctx.restore();
+}
+// Replaces a picture's bytes under the SAME file name: every object using it keeps its place and size.
+async function repickImage(file) {
+  const f = await pickFile('image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp');
+  if (!f) return;
+  await putAsset(file, f);
+  await keepAsset(file, f);
+  const a = (draft.assets || []).find((x) => x.file === file);
+  if (a) a.name = f.name; else draft.assets = [...(draft.assets || []), { file, name: f.name, kind: 'image' }];
+  assetImages.delete(file);
+  saveDraft(); invalidateBase?.(); renderConfig(); requestDraw();
+  flash('Picture replaced: ' + f.name);
 }
 function customSpriteJson(cs, ox = 0, oy = 0) {
   if (cs.game) return { type: 'gameSprite', sprite: cs.game, x: Math.round(cs.x - ox), y: Math.round(cs.y - oy), scaleX: (cs.scale || 1) * (cs.sx || 1), scaleY: (cs.scale || 1) * (cs.sy || 1), rotation: cs.r || 0, ...(cs.alpha != null && cs.alpha !== 1 ? { alpha: cs.alpha } : {}), ...(cs.fx ? { flipX: true } : {}), ...(cs.fy ? { flipY: true } : {}) };
@@ -5933,8 +6364,11 @@ function vineAt(wx, wy) {
     const d = Math.hypot(dx, dy);
     if (Math.abs(dx) <= r && Math.abs(dy) <= r && (!best || d < best.d)) best = { k, own, d };
   };
-  vines.forEach((v, k) => consider(k, v.s, true));
-  if (baseOn()) baseHaz.forEach((h, k) => { if (h.kind === 'vine' && !removedVines.has(k) && !vines.has(k)) consider(k, base.defs[h.d].sprite, false); });
+  let rmax = 80;
+  for (const n in vineImages) { const i = vineImages[n]; rmax = Math.max(rmax, (i.naturalWidth || 0) / 2, (i.naturalHeight || 0) / 2); }
+  const c = cellOf(wx, wy), n = Math.ceil(rmax / CELL) + 1;
+  vines.forEachIn(c.cx - n, c.cy - n, c.cx + n, c.cy + n, (k, v) => consider(k, v.s, true));
+  if (baseOn()) for (const k of baseVineKeys) { const h = baseHaz.get(k); if (!removedVines.has(k) && !vines.has(k)) consider(k, base.defs[h.d].sprite, false); }
   return best;
 }
 
@@ -5993,7 +6427,8 @@ const KEY_GUIDE = [
     ['Drag the selection', 'Move all of it, with any tool - what it passes over is kept'],
     ['E', 'Erase'],
     ['Delete', 'Delete the selection'],
-    ['Esc', 'Deselect / close, then leave fullscreen'],
+    ['Esc', 'Deselect, or close what is open'],
+    ['Shift+Esc', 'Back to the main menu (saves first)'],
     ['Ctrl+C / Ctrl+V, V', 'Copy the selection / paste it at the mouse'],
     ['] / [', 'Move the selected things up / down one layer (past the level: behind it)'],
     ['Shift+] / Shift+[', 'Bring them to the front / send them behind everything, the level included'],
@@ -6104,13 +6539,19 @@ function replaceSelectionWith(it) {
   return true;
 }
 
+// Leaving the editor for the main menu. The draft is saved here, so walking out
+// never loses work - and nothing is restored when the editor is next opened.
+function leaveEditor() {
+  saveDraft();
+  flushDraft();
+  if (window.__amplifierOldClose) window.__amplifierOldClose();
+}
+
 function syncChrome() {
   if (!root) return;
   const snapSel = root.querySelector('#mm-snap');
   if (snapSel) snapSel.value = String(draft.snap || CELL);
   root.classList.toggle('mm-full', !draft.inline);
-  const full = root.querySelector('#mm-full-btn');
-  if (full) { full.innerHTML = icon(draft.inline ? 'expand' : 'shrink'); full.classList.add('mm-icon'); full.title = draft.inline ? 'Fullscreen editor' : 'Back to the page (Esc)'; }
   root.querySelector('#mm-sim-btn')?.classList.toggle('active', !!draft.simulate);
   requestAnimationFrame(() => resize());
 }
@@ -6160,7 +6601,7 @@ function transformRegion(mode) {
   const M = mode === 'x' ? [-1, 0, 0, 1] : mode === 'y' ? [1, 0, 0, -1] : [0, -1, 1, 0];
   const mapQ = (q) => (q == null ? q : mode === 'x' ? [0, 3, 2, 1][q] : mode === 'y' ? [2, 1, 0, 3][q] : (q + 1) % 4);
   for (const m of [blocks, spikes, vines]) {
-    const moving = [...m].filter(([k]) => inR(...unkey(k)));
+    const moving = cellsIn(m, x0, y0, x1, y1);
     for (const [k] of moving) m.delete(k);
     for (const [k, v] of moving) {
       const [x, y] = mapCell(...unkey(k));
@@ -6168,10 +6609,7 @@ function transformRegion(mode) {
     }
   }
   const movingT = [];
-  for (const [k, t] of tiles) {
-    const c = tileCenter(t.layer, k), cc = cellOf(c.x, c.y);
-    if (inR(cc.cx, cc.cy) && !t.arrow && layerGrid(t.layer).size === CELL) movingT.push([k, t, cc]);
-  }
+  for (const [k, t, , cc] of tilesInCells(x0, y0, x1, y1)) if (!t.arrow && layerGrid(t.layer).size === CELL) movingT.push([k, t, cc]);
   for (const [k] of movingT) tiles.delete(k);
   for (const [, t, cc] of movingT) {
     const [x, y] = mapCell(cc.cx, cc.cy), w = cellWorld(x, y);
@@ -6286,12 +6724,17 @@ function pruneCourses() {
 function courseJson(c, ox = 0, oy = 0) {
   const r = Math.round;
   const screen = courseScreen(c);
-  return { id: c.id, startX: r(c.start.x - ox), startY: r(c.start.y - oy), endX: r(c.end.x - ox), endY: r(c.end.y - oy), screenX: r(screen.x - ox), screenY: r(screen.y - oy), reward: c.reward || { currency: 'Cash', amount: 0 } };
+  const out = { id: c.id, startX: r(c.start.x - ox), startY: r(c.start.y - oy), endX: r(c.end.x - ox), endY: r(c.end.y - oy), screenX: r(screen.x - ox), screenY: r(screen.y - oy), reward: c.reward || { currency: 'Cash', amount: 0 } };
+  // Timer resets: a run ends here without finishing the course, so no reward.
+  const resets = (c.resets || []).filter((g) => g && Number.isFinite(g.x) && Number.isFinite(g.y));
+  if (resets.length) out.resets = resets.map((g) => ({ x: r(g.x - ox), y: r(g.y - oy), w: g.w ?? 20, h: g.h ?? 400, dx: g.dx ?? 0, dy: g.dy ?? 150 }));
+  return out;
 }
 function clearMarker(m) {
   if (m.which === 'spawn') { draft.spawn = null; return; }
   if (m.which === 'screen') { const c = courseById(m.course); if (c) delete c.screen; return; }
   const c = courseById(m.course);
+  if (m.which === 'reset') { if (c?.resets) c.resets.splice(m.index, 1); pruneCourses(); return; }
   if (c) c[m.which] = null;
   pruneCourses();
 }
@@ -6324,6 +6767,9 @@ function drawCourses() {
 function gateAt(cx, cy, kind) {
   if (kind === 'spawn') for (let n = 0; n < 200 && isSolid(cx, cy); n++) cy++;
   const w = cellWorld(cx, cy);
+  // A reset is a full-height trigger like the level's own course resets, so a run
+  // ends whichever way the player passes through it.
+  if (kind === 'reset') return { x: w.x + CELL / 2, y: w.y + END_LIFT, w: 20, h: 400, dx: 0, dy: 150 };
   return { x: w.x + CELL / 2, y: w.y + { start: START_LIFT, end: END_LIFT, spawn: SPAWN_LIFT }[kind] };
 }
 
@@ -6342,9 +6788,12 @@ function courseScreen(c) {
 function markerPos(t) {
   if (t.which === 'spawn') return draft.spawn;
   const c = courseById(t.course);
+  if (t.which === 'reset') return c?.resets?.[t.index];
   return t.which === 'screen' ? courseScreen(c) : c?.[t.which];
 }
-const MARKER_BOX = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX, get screen() { return screenBox(); } };
+// A reset's trigger is a tall box centred above the gate, like the level's own.
+const RESET_BOX = { dx: 0, dy: 150, w: 20, h: 400 };
+const MARKER_BOX = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX, reset: RESET_BOX, get screen() { return screenBox(); } };
 const screenBox = () => SCREEN_BOX;
 
 // The game's own board image (the course Canvas's "Screen" Image, Screen_0),
@@ -6416,6 +6865,8 @@ function markerAt(wx, wy) {
   for (const c of courses()) {
     if (hit(c.start, START_BOX)) return { which: 'start', course: c.id };
     if (hit(c.end, END_BOX)) return { which: 'end', course: c.id };
+    const resets = c.resets || [];
+    for (let i = resets.length - 1; i >= 0; i--) if (hit(resets[i], resets[i].box || RESET_BOX)) return { which: 'reset', course: c.id, index: i };
   }
   for (const c of courses()) if (hit(courseScreen(c), screenBox())) return { which: 'screen', course: c.id };
   return null;
@@ -6546,6 +6997,15 @@ function applyTool(cx, cy) {
     c[tool] = gateAt(cx, cy, tool);
     draft.activeCourse = c.id;
     if (drag) drag.placedObject = true;
+  } else if (tool === 'reset') {
+    // A reset ends the run without finishing the course, so no reward. Several
+    // per course, on a list rather than a single gate.
+    if (drag?.placedObject) return false;
+    let c = courseById(draft.activeCourse);
+    if (!c) c = courses().find((x) => x.start && !x.end) || newCourse();
+    (c.resets ||= []).push(gateAt(cx, cy, 'reset'));
+    draft.activeCourse = c.id;
+    if (drag) drag.placedObject = true;
   }
   return true;
 }
@@ -6600,6 +7060,9 @@ function updateStatus() {
   const el = root?.querySelector('#mm-status');
   if (!el) return;
   const parts = [`${blocks.size} blocks`, `${spikes.size} spikes`, `${vines.size} vines`];
+  // TEMPORARY: what the editor found under the cursor on the last click. Reads it
+  // back with window.__dbg = parts[0] after updateStatus().
+  if (window.__dbg) parts.push('DBG ' + window.__dbg);
   if (tiles.size) parts.push(`${tiles.size} tiles`);
   if (mossCells.size) parts.push(`${mossCells.size} moss`);
   if (PLACING.includes(tool) && (placeRot || placeFlip)) parts.push(`placing at ${placeRot * 90}°${placeFlip ? ' mirrored' : ''}`);
@@ -6798,8 +7261,9 @@ async function exportZip() {
   const invoke = window.__TAURI__?.core?.invoke;
   if (invoke) {
     try {
-      const path = await invoke('export_map_zip', { mapJson: JSON.stringify(map, null, 2), fileName: slug(map.name) + '.zip', assets: await mapAssets() });
-      if (path) flash(`Exported to ${path} · ${map.groups[0].objects.length} objects`);
+      const assets = await mapAssets();
+      const path = await invoke('export_map_zip', { mapJson: JSON.stringify(map, null, 2), fileName: slug(map.name) + '.zip', assets });
+      if (path) flash(`Exported to ${path} · ${map.groups[0].objects.length} objects` + (missingNote(assets) ? ' · ' + missingNote(assets) : ''), !!missingNote(assets));
       return;
     } catch (e) {
       if (!/export_map_zip|unknown command|not found/i.test(String(e))) { flash('Couldn\'t export: ' + e, true); return; }
@@ -6835,12 +7299,14 @@ async function saveMap() {
       id = stem;
       for (let n = 2; taken.has(id); n++) id = stem + '-' + n;
     }
-    await invoke('save_map', { id, mapJson: JSON.stringify(map, null, 2), assets: await mapAssets() });
+    const assets = await mapAssets();
+    await invoke('save_map', { id, mapJson: JSON.stringify(map, null, 2), assets });
     draft.savedId = id;
     draft.savedAt = Date.now();
     saveDraft();
     syncSaveState();
-    flash(`Saved "${map.name}" to your maps (${id})`);
+    const warn = missingNote(assets);
+    flash(`Saved "${map.name}" to your maps (${id})` + (warn ? ' · ' + warn : ''), !!warn);
   } catch (e) {
     flash(/save_map|unknown command|not found/i.test(String(e)) ? 'Update Recharge to save maps - this build can\'t yet. Export .zip still works.' : 'Couldn\'t save: ' + e, true);
   }
@@ -6859,8 +7325,10 @@ async function testInGame() {
   btn.disabled = true;
   btn.textContent = 'Launching…';
   try {
-    await window.__TAURI__.core.invoke('test_launch_map', { mapJson: JSON.stringify(map, null, 2), assets: await mapAssets() });
-    flash('Launching IGTAP - Navigator opens the map from the title screen.');
+    const assets = await mapAssets();
+    await window.__TAURI__.core.invoke('test_launch_map', { mapJson: JSON.stringify(map, null, 2), assets });
+    const warn = missingNote(assets);
+    flash('Launching IGTAP - Navigator opens the map from the title screen.' + (warn ? ' · ' + warn : ''), !!warn);
   } catch (e) {
     const msg = String(e);
     flash(/test_launch_map|not found|unknown command/i.test(msg) ? 'This Recharge build can\'t test-launch maps yet.' : msg, true);
@@ -6940,9 +7408,15 @@ function bindCanvas() {
     const rect = canvas.getBoundingClientRect();
     const wp = toWorld(e.clientX - rect.left, e.clientY - rect.top);
     hoverWorld = wp;
+    // TEMPORARY: report what a click sees here, before anything can return early.
+    {
+      const h = itemAt(wp.x, wp.y);
+      window.__dbg = `hit=${h ? h.kind + (h.index ?? '') : 'none'} sel=${selection?.kind || 'none'} grab=${grabsSelection(wp)} tool=${tool} base=${baseOn()}`;
+      updateStatus();
+    }
     if (e.altKey) { pickAt(wp.x, wp.y); return; }
     if (platformEdit != null) { drag = { pan: false, platform: true, before: snapshot(), changed: false }; platformPaint(wp); return; }
-    if (tool === 'select' || grabsSelection(wp)) { selectDown(e); return; }
+    if (tool === 'select' || (tool !== 'paste' && grabsSelection(wp))) { selectDown(e); return; }
     const c = eventCell(e);
     drag = { pan: false, before: snapshot(), changed: false };
     if (tool === 'arrow') { arrowDown(c.cx, c.cy); requestDraw(); return; }
@@ -6967,7 +7441,7 @@ function bindWindow() {
     }
     if (drag?.platform) { const r = canvas.getBoundingClientRect(); hoverWorld = toWorld(e.clientX - r.left, e.clientY - r.top); platformPaint(hoverWorld); return; }
     if (drag?.resize) { resizeMove(e); return; }
-    if (drag && (drag.region || drag.move || drag.moveSel || drag.zip || drag.gate || drag.group || drag.fspike || drag.sign)) { selectMove(e); return; }
+    if (drag && (drag.pending || drag.region || drag.move || drag.moveSel || drag.zip || drag.gate || drag.group || drag.fspike || drag.sign)) { selectMove(e); return; }
     if (!drag && tool === 'select' && e.target === canvas) canvas.style.cursor = edgeCursor(edgesAt(worldAt(e)));
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
@@ -6991,6 +7465,7 @@ function bindWindow() {
   });
   window.addEventListener('mouseup', () => {
     if (!drag) return;
+    if (drag.pending) pendingUp();
     if (drag.region && !drag.regionMoved && !drag.keep?.length) { selection = null; renderConfig(); requestDraw(); }
     if ((drag.moveSel || drag.resize) && drag.changed) { saveDraft(); renderConfig(); }
     if (drag.arrow) arrowUp();
@@ -7031,10 +7506,14 @@ function onKeyDown(e) {
   const k = e.key.toLowerCase();
   if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
   if (e.key === 'Escape') {
+    // Shift+Esc leaves the editor, saving what's there first. Plain Esc only
+    // backs out of what's open - it used to drop out of fullscreen here, but the
+    // editor now always fills the window (there's no button to toggle it), so
+    // doing that left a floating panel sitting on the home screen.
+    if (e.shiftKey) { leaveEditor(); return; }
     if (platformEdit != null) setPlatformEdit(null);
     else if (popCat) closePopover();
     else if (selection || tool === 'paste') { selection = null; renderConfig(); if (tool === 'paste') setTool('select'); requestDraw(); }
-    else if (!draft.inline) { draft.inline = true; saveDraft(); syncChrome(); }
     return;
   }
   if (e.key === 'Delete' || e.key === 'Backspace') { if (selection) { e.preventDefault(); deleteSelection(); } return; }
@@ -7120,8 +7599,7 @@ export async function mountEditor(container) {
         <div class="mm-group" aria-label="File">
           <button class="mm-tool mm-icon" id="mm-save" title="Save to your installed maps (Ctrl+S)">${icon('save')}</button>
           <button class="mm-tool mm-primary" id="mm-file-btn" title="Name, test in game, open and export (M)">Map ▾</button>
-          <button class="mm-tool" id="mm-full-btn"></button>
-          <button class="mm-tool" id="mm-back-btn" title="Back to Recharge">◀ App</button>
+
         </div>
       </div>
     </div>
@@ -7154,14 +7632,18 @@ export async function mountEditor(container) {
 `;
 
   canvas = root.querySelector('#mm-canvas');
-  ctx = canvas.getContext('2d');
+  // alpha: false - the canvas is opaque (it paints COLORS.bg over everything),
+  // so skipping the alpha channel lets the compositor skip a blend per frame.
+  // desynchronized - lets the canvas be presented without waiting on the main
+  // thread's paint to reach the compositor, which is the latency win for a view
+  // that's redrawn on every pan.
+  ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
   root.querySelector('[data-tool="erase"]').addEventListener('click', () => { closePopover(); setTool('erase'); });
   root.querySelector('[data-tool="select"]').addEventListener('click', () => { closePopover(); setTool('select'); });
   root.querySelector('#mm-layers-btn').addEventListener('click', () => togglePanel('mm-layers'));
   root.querySelector('#mm-keys-btn').addEventListener('click', () => togglePanel('mm-keys'));
   root.querySelector('#mm-sim-btn').addEventListener('click', () => toggleSimulate());
-  root.querySelector('#mm-full-btn').addEventListener('click', () => { draft.inline = !draft.inline; saveDraft(); syncChrome(); });
-  root.querySelector('#mm-back-btn').addEventListener('click', () => window.__amplifierOldClose && window.__amplifierOldClose());
+  // No back or fullscreen buttons: Shift+Esc leaves, saving first.
   new ResizeObserver(() => { const h = root.querySelector('.mm-bar')?.offsetHeight || 0; root.style.setProperty('--bar-h', h + 'px'); }).observe(root.querySelector('.mm-bar'));
   root.querySelector('#mm-file-btn').addEventListener('click', () => togglePanel('mm-file'));
   const snapSel = root.querySelector('#mm-snap');

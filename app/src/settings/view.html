@@ -61,6 +61,22 @@
       <button class="btn" id="channel-beta-btn" onclick="window.__setChannel('beta')">Beta</button>
     </div>
     <div id="channel-note" class="settings-sub">Stable gets tested changes. Beta gets the newest code first and may break.</div>
+    <div id="launcher-managed" hidden>
+      <div class="settings-sublabel">Launcher</div>
+      <div id="launcher-managed-status" class="settings-sub"></div>
+      <div class="settings-row launcher-actions">
+        <button class="btn" id="launcher-check-btn" onclick="window.__launcherCheck()">Check for updates</button>
+        <button class="btn" id="launcher-repair-btn" onclick="window.__launcherRepair()">Repair install</button>
+        <button class="btn btn-primary" id="launcher-restart-btn" onclick="window.__launcherRestart()" hidden>Restart to update</button>
+      </div>
+    </div>
+    <div id="migrate-box" hidden>
+      <div class="settings-sub" id="migrate-text"></div>
+      <label class="settings-sub" id="migrate-cleanup-row" hidden><input type="checkbox" id="migrate-cleanup"> <span id="migrate-cleanup-label">Remove the old install afterwards</span></label>
+      <div class="settings-row">
+        <button class="btn btn-primary" id="migrate-btn" onclick="window.__migrate()">Switch to the new Recharge updater</button>
+      </div>
+    </div>
     <div id="launcher-notes" class="settings-sub" hidden></div>
     <div id="launcher-update-progress" class="settings-sub" hidden></div>
   </div>

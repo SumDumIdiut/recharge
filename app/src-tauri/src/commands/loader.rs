@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -151,9 +151,7 @@ fn find_build_script(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(script) = super::live::loader_script(app) {
         return Ok(script);
     }
-    let path = app
-        .path()
-        .resolve("loader/build-loader.ps1", tauri::path::BaseDirectory::Resource)
+    let path = super::updater::resource_path(app, "loader/build-loader.ps1")
         .map_err(|e| format!("build-loader.ps1 resource not found: {e}"))?;
     let s = path.to_string_lossy();
     Ok(match s.strip_prefix(r"\\?\") {

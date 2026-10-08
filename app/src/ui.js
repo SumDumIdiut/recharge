@@ -21,6 +21,57 @@ export function closeModal(id) {
   document.getElementById(id).hidden = true;
 }
 
+// Asks before something irreversible, and makes the answer deliberate: the
+// confirm button stays disabled until the name is typed out in full.
+//
+// A window.confirm() is one stray Enter away from deleting an upload, which is
+// exactly how one of these went missing - so the name has to be retyped.
+export function confirmDestructive({ title, body, confirmLabel, name }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <div class="modal-title">${escapeHtml(title)}</div>
+        <div class="modal-body">
+          <p>${escapeHtml(body)}</p>
+          <label class="form-field">Type <strong>${escapeHtml(name)}</strong> to confirm
+            <input class="form-input" type="text" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(name)}" />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" data-act="cancel" type="button">Cancel</button>
+          <button class="btn btn-danger" data-act="ok" type="button" disabled>${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const input = overlay.querySelector('input');
+    const ok = overlay.querySelector('[data-act="ok"]');
+    const done = (result) => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve(result);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+    };
+
+    const check = () => { ok.disabled = input.value.trim() !== name; };
+    input.addEventListener('input', check);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !ok.disabled) { e.preventDefault(); done(true); }
+    });
+    overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => done(false));
+    ok.addEventListener('click', () => done(true));
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) done(false); });
+    document.addEventListener('keydown', onKey, true);
+
+    input.focus();
+    input.select();
+  });
+}
+
 // Cycles a badge button through install -> installing -> done/failed.
 export function setBadgeState(btn, state, installClass = 'badge-install') {
   if (state === 'installing') {

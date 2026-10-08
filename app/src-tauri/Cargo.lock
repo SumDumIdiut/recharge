@@ -2785,6 +2785,7 @@ version = "3.0.12"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

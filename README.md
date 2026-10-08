@@ -4,14 +4,20 @@ A mod manager for **IGTAP** (*an Incremental Game That's Also a Platformer*). Re
 
 ## Download
 
-**[Get the installer](https://github.com/SumDumIdiut/recharge/releases/tag/installer)** - one page, always current:
+**[Download Recharge](https://codecade.co.za/recharge/update/download)** - one small file, picked for your system (Windows: `Recharge.exe`, Linux: `recharge`; or ask for a platform: [`/download/windows-x64`](https://codecade.co.za/recharge/update/download/windows-x64), [`/download/linux-x64`](https://codecade.co.za/recharge/update/download/linux-x64)).
+
+Run it once: it installs itself (Windows: `%LOCALAPPDATA%\Recharge`, Linux: `~/.local/share/recharge`), downloads the app, adds a start-menu / application-menu entry, and from then on starts Recharge and keeps it up to date - only changed files are downloaded, a broken update rolls back by itself. `--channel beta` switches to the beta channel, `--repair` re-checks every file, `--uninstall` removes it.
+
+Already have Recharge from the old installer? Settings offers **Switch to the new Recharge updater**; your settings, mods and maps stay where they are.
+
+### Legacy installers
+
+The previous installers still work and are what existing installs update through until they switch:
 
 - **Windows:** [`RechargeSetup.exe`](https://github.com/SumDumIdiut/recharge/releases/download/installer/RechargeSetup.exe)
-- **Linux:** `curl -fsSL https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh | bash`
+- **Linux:** `curl -fsSL https://github.com/SumDumIdiut/recharge/releases/download/installer/install.sh | bash` (`apt` on Debian/Ubuntu, otherwise `~/.local`; `--user` forces that)
 
-These never go out of date: each one downloads and installs the newest release when you run it. On Linux the script uses `apt` on Debian/Ubuntu and otherwise installs under `~/.local` with no root (`--user` forces that). After that, Recharge updates itself from inside the app.
-
-Prefer a specific version? Every build is on the [Releases](https://github.com/SumDumIdiut/recharge/releases) page (`.deb` for Linux, `Setup.exe` for Windows).
+Every build is also on the [Releases](https://github.com/SumDumIdiut/recharge/releases) page (`.deb` for Linux, `Setup.exe` for Windows).
 
 ## What it does
 
@@ -58,8 +64,9 @@ For local mod development, clone the mod repos into `mods/` (git-ignored) or poi
 | `loader/` | RechargeLoader: `build-loader.ps1` (decompile, patch, build, deploy) and the `ModApi` / `Runtime` code every mod builds against. |
 | `installer/` | Installers: `bootstrap/` (the permanent, version-independent ones above), plus the Windows NSIS script and Arch `PKGBUILD`. |
 | `content/` | The app's local catalog of packaged mods. |
-| `tools/` | Developer scripts (release helper, dev tooling). |
-| `.github/workflows/` | `autorelease.yml` builds and publishes a package when the compiled app changes (`release.yml` builds a manually pushed `v*` tag); `bootstrap.yml` publishes the permanent installers. |
+| `launcher/` | The one-file launcher: installs itself, downloads/updates the app from the update hub (staged, hash-verified, rollback). |
+| `tools/` | Developer scripts: `publish-update.mjs` (publish a build to the update hub), `build-update-dir.sh` / `.ps1` (assemble a platform dir), release helper, dev tooling. |
+| `.github/workflows/` | `autorelease.yml` builds and publishes a package when the compiled app changes (`release.yml` builds a manually pushed `v*` tag); `bootstrap.yml` publishes the permanent installers; `update-hub.yml` builds launcher + app for both platforms and publishes them to the update hub (master = stable, dev = beta). It needs the repo secret **`UPDATE_KEY`** (the hub's `UPDATE_KEY`); optional variable `UPDATE_BASE`. The launcher is published only when `launcher/**` changed, or when the workflow is started by hand with "launcher" ticked (do that once for the first publish). |
 
 ## Recharge Hub
 

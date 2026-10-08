@@ -13,3 +13,24 @@
 .bg-playlist-row.is-active { border-color: var(--green); }
 .bg-playlist-name { flex: 1; }
 .bg-playlist-count { color: var(--text-dim); font-size: 15px; }
+
+.bg-playlist-row { flex-wrap: wrap; }
+.bg-playlist-status { color: var(--text-dim); font-size: 15px; }
+.bg-interval { width: auto; min-width: 120px; }
+.bg-yours { color: var(--green); border: 1px solid var(--green-dim); padding: 0 6px; text-transform: uppercase; }
+
+.bg-switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.bg-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.bg-switch-track { width: 34px; height: 16px; border: 1px solid var(--line-hi); position: relative; }
+.bg-switch-track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; background: var(--text-dim); transition: left 0.15s; }
+.bg-switch input:checked + .bg-switch-track { border-color: var(--green); }
+.bg-switch input:checked + .bg-switch-track::after { left: 20px; background: var(--green); }
+.bg-switch-label { min-width: 52px; }
+
+.bg-preview { position: fixed; inset: 0; z-index: 50; background: var(--overlay); display: flex; align-items: center; justify-content: center; }
+.bg-preview[hidden] { display: none; }
+.bg-preview-box { background: var(--panel); border: 1px solid var(--line-hi); width: min(900px, 92vw); max-height: 86vh; display: flex; flex-direction: column; }
+.bg-preview-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.bg-preview-head > div { flex: 1; }
+.bg-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding: 12px; overflow-y: auto; }
+.bg-preview-grid img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border: 1px solid var(--line); }

@@ -102,7 +102,7 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
   padding: 7px 14px; font-size: 13px; white-space: nowrap;
 }
 .mm-flash.error { border-color: var(--magenta); }
-.mm-status { display: none; }
+.mm-status { display: block; } /* TEMPORARY: was none, so the debug readout was invisible */
 
 /* ---- panels: the selection on the right, the rest docked on the left ---- */
 .mm-config {

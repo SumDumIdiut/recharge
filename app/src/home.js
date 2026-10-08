@@ -273,7 +273,7 @@ function applyVariantUi(active) {
     news.style.display = active?.variant === 'Full Game' ? '' : 'none';
     layoutNews();
   }
-  for (const id of ['home-mods-row', 'home-maps-row', 'home-skins-row']) {
+  for (const id of ['home-mods-row', 'home-maps-row', 'home-skins-row', 'home-amplifier-row']) {
     document.getElementById(id).style.display = unmoddable ? 'none' : '';
   }
 }
