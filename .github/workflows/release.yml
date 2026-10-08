@@ -1,9 +1,7 @@
 name: Release
 
+# Switched off (manual only): releases now go through the update hub (update-hub.yml).
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
