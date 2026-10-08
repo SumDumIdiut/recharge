@@ -1,12 +1,10 @@
 name: Auto release
 
 # Rebuilds and republishes the backend in place to one of two permanent releases ("latest"/"latest-beta") on every app/src-tauri change - no new release ever appears on the page.
+# Switched off (manual only): the Recharge launcher now updates everything from the update hub
+# (update-hub.yml), and GitHub releases are no longer used.
 on:
   workflow_dispatch:
-  push:
-    branches: [master, dev]
-    paths:
-      - 'app/src-tauri/**'
 
 concurrency:
   group: autorelease-${{ github.ref_name }}
