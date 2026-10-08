@@ -253,8 +253,8 @@ mod winnative {
                 }
                 return Err(hr as u32);
             }
-            let l = &**(link as *mut Obj<ShellLinkVtbl>);
-            let l = &*l.vtbl;
+            // A COM object's first field points at its vtable.
+            let l = &*(*(link as *mut Obj<ShellLinkVtbl>)).vtbl;
             let (t, w, d) = (wide(target), wide(workdir), wide("Recharge"));
             let mut hr = (l.set_path)(link, t.as_ptr());
             if hr >= 0 {
