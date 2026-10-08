@@ -83,7 +83,9 @@ jobs:
   build:
     needs: prepare
     strategy:
-      fail-fast: true
+      # Each platform runs to the end, so one failure doesn't hide the other's result.
+      # (publish still needs both builds.)
+      fail-fast: false
       matrix:
         include:
           - platform: ubuntu-22.04
@@ -157,7 +159,7 @@ jobs:
       - name: Assemble the platform dir (Linux)
         if: matrix.name == 'linux-x64'
         run: |
-          tools/build-update-dir.sh --platform linux-x64 --out dist/linux-x64
+          bash tools/build-update-dir.sh --platform linux-x64 --out dist/linux-x64
           # tar keeps the exec bits through the artifact upload
           tar -C dist -czf dist/linux-x64.tar.gz linux-x64
           mkdir -p dist/launcher
