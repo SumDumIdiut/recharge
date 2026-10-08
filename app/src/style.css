@@ -371,3 +371,5 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.news-changes { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.45; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; max-height: 8.5em; overflow: hidden; }
+.tag-release { color: var(--green); border-color: var(--green); }

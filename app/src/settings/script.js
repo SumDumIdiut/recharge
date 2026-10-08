@@ -6,6 +6,7 @@ import {
 import { startWaveform } from '/home.js';
 import { confirmDestructive } from '/ui.js';
 import { renderInstallList } from '/install-list.js';
+import { loadChangelog } from '/whatsnew.js';
 
 function renderAppearance() {
   const presetsEl = document.getElementById('theme-presets');
@@ -287,11 +288,23 @@ async function shownVersion(fallback) {
   const channel = await invoke('live_get_channel').then((c) => c.channel).catch(() => 'stable');
   if (channel !== 'beta') return base;
   const beta = await get('beta.json');
-  return beta?.build != null ? `${base}-beta.${beta.build}` : base;
+  return beta?.build != null ? `${base}-beta${beta.build}` : base;
 }
 
 // Set when the Recharge launcher started us (it then owns package updates and the channel).
 let launcherManaged = false;
+
+// "Recharge 4.0.0-beta1 (Beta) - up to date" / "... - update ready: 4.0.0-beta2 - restart to apply".
+// Channel comes from the launcher, not the live-code channel. The CI build counter only shows in the tooltip.
+function managedVersionLine(info) {
+  const channel = info.channel === 'beta' ? 'Beta' : 'Stable';
+  const head = `${info.version ? `Recharge ${info.version}` : 'Recharge'} (${channel})`;
+  let status;
+  if (info.ready) status = `update ready${info.readyVersion ? `: ${info.readyVersion}` : ''} - restart to apply`;
+  else status = 'up to date';
+  const tip = [info.build ? `Build ${info.build}` : '', info.ready ? `Staged build ${info.ready}` : ''].filter(Boolean).join(' - ');
+  return { text: `${head} - ${status}`, tip };
+}
 
 async function refreshManaged() {
   const { invoke } = window.__TAURI__.core;
@@ -300,15 +313,69 @@ async function refreshManaged() {
   launcherManaged = !!info?.managed;
   box.hidden = !launcherManaged;
   if (!launcherManaged) return;
-  document.getElementById('launcher-managed-status').textContent =
-    `Installed by the Recharge launcher - build ${info.build || '?'} (${info.channel})`;
+  document.getElementById('launcher-managed-status').textContent = 'Installed by the Recharge launcher';
   // The launcher, not the old package check, decides what "up to date" means here.
-  document.getElementById('launcher-status').textContent = info.ready
-    ? `build ${info.build || '?'} - update ready (build ${info.ready}), restart to apply`
-    : `build ${info.build || '?'} (up to date)`;
+  const line = managedVersionLine(info);
+  const status = document.getElementById('launcher-status');
+  status.textContent = line.text;
+  status.title = line.tip;
   document.getElementById('launcher-restart-btn').hidden = !info.ready;
   document.getElementById('launcher-update-btn').hidden = true;
 }
+
+// ---- uninstall ----
+
+function manualUninstallText(platform) {
+  const p = String(platform || '').toLowerCase();
+  if (p.includes('win')) return 'This copy of Recharge was not installed by the Recharge launcher. Uninstall it from Windows Settings > Apps > Installed apps > Recharge (or the "Uninstall Recharge" shortcut in the Start menu).';
+  return 'This copy of Recharge was not installed by the Recharge launcher. Remove it the way you installed it: "sudo apt remove recharge" (Debian/Ubuntu), "sudo pacman -R recharge" (Arch), or delete the AppImage / the files install.sh put in ~/.local (bin/recharge, lib/Recharge, share/applications/Recharge.desktop).';
+}
+
+function uninstallBody({ deleteData, restoreGame }) {
+  return `Recharge will be removed from this computer. ${deleteData ? 'Your settings, mods, skins and map saves will be deleted too. ' : 'Your settings, mods, skins and map saves are kept. '}${restoreGame ? 'RechargeLoader will be removed and the original game restored. ' : 'RechargeLoader stays in the game. '}Type UNINSTALL to go ahead.`;
+}
+
+function refreshUninstall() {
+  const managedBox = document.getElementById('uninstall-managed');
+  const manual = document.getElementById('uninstall-manual');
+  if (!managedBox || !manual) return;
+  managedBox.hidden = !launcherManaged;
+  manual.hidden = launcherManaged;
+  if (!launcherManaged) manual.textContent = manualUninstallText(typeof navigator !== 'undefined' ? navigator.platform || navigator.userAgent : '');
+}
+
+window.__uninstallRecharge = async function () {
+  const { invoke } = window.__TAURI__.core;
+  const btn = document.getElementById('uninstall-btn');
+  const note = document.getElementById('uninstall-note');
+  // Ask twice: this click arms, the next one opens the typed confirmation.
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = '1';
+    btn.textContent = 'Click again to continue';
+    setTimeout(() => { delete btn.dataset.armed; btn.textContent = 'Uninstall Recharge'; }, 6000);
+    return;
+  }
+  delete btn.dataset.armed;
+  btn.textContent = 'Uninstall Recharge';
+  const deleteData = !!document.getElementById('uninstall-data').checked;
+  const restoreGame = !!document.getElementById('uninstall-restore').checked;
+  const ok = await confirmDestructive({
+    title: 'Uninstall Recharge',
+    body: uninstallBody({ deleteData, restoreGame }),
+    confirmLabel: 'Uninstall',
+    name: 'UNINSTALL',
+  });
+  if (!ok) return;
+  btn.disabled = true;
+  note.hidden = false;
+  note.textContent = 'Uninstalling - this window will close.';
+  try {
+    await invoke('launcher_uninstall', { deleteData, restoreGame });
+  } catch (err) {
+    btn.disabled = false;
+    note.textContent = String(err);
+  }
+};
 
 window.__launcherCheck = async function () {
   const { invoke } = window.__TAURI__.core;
@@ -383,6 +450,7 @@ window.__migrate = async function () {
 async function refreshLauncherStatus() {
   refreshChannel();
   await refreshManaged();
+  refreshUninstall();
   refreshMigrate();
   const { invoke } = window.__TAURI__.core;
   const status = document.getElementById('launcher-status');
@@ -509,8 +577,29 @@ window.__launcherUpdate = async function () {
   }
 };
 
+async function openWhatsNew(force) {
+  const panel = document.getElementById('whatsnew-panel');
+  if (!panel) return;
+  if (!panel.hidden && !force) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = '<div class="empty-state">Loading...</div>';
+  const { invoke } = window.__TAURI__.core;
+  const info = await invoke('launcher_info').catch(() => null);
+  const channel = info?.managed && info.channel ? info.channel : await invoke('live_get_channel').then((c) => c.channel).catch(() => 'stable');
+  panel.innerHTML = (await loadChangelog(invoke, channel)).html;
+}
+window.__whatsNewToggle = () => openWhatsNew(false);
+
 export async function init() {
   const { listen } = window.__TAURI__.event;
+  window.addEventListener('open-whatsnew', () => openWhatsNew(true));
+  if (window.__openWhatsNew) {
+    window.__openWhatsNew = false;
+    openWhatsNew(true);
+  }
   listen('loader-progress', (event) => setProgress(event.payload));
   listen('launcher-update-ready', () => refreshManaged());
   listen('launcher-update-progress', (event) => {

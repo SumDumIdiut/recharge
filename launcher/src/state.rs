@@ -10,6 +10,9 @@ use std::path::Path;
 pub struct Snapshot {
     pub version: String,
     pub build: u64,
+    /// Channel this tree was published on (empty in state files written by older launchers).
+    #[serde(default)]
+    pub channel: String,
     pub launch: String,
     /// path -> sha256 as installed
     pub files: BTreeMap<String, String>,

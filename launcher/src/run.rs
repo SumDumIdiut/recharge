@@ -69,6 +69,7 @@ pub fn launch(root: &Path, launcher_exe: &Path, snap: &Snapshot, channel: &str, 
         .env("RECHARGE_LAUNCHER", launcher_exe)
         .env("RECHARGE_INSTALL_ROOT", root)
         .env("RECHARGE_BUILD", snap.build.to_string())
+        .env("RECHARGE_VERSION", &snap.version)
         .env("RECHARGE_CHANNEL", channel)
         .spawn()?;
     let _ = fs::write(pid_file(root), child.id().to_string());

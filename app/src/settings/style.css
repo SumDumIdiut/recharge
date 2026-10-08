@@ -96,3 +96,20 @@
 #launcher-managed-status { margin-bottom: 4px; }
 #migrate-box { margin-top: 14px; padding-top: 4px; }
 #migrate-box .settings-row { margin-top: 10px; }
+
+/* Fit to screen: cards flow into as many columns as fit; the header stays visible while they scroll. */
+#view-settings .page { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 0 18px; align-items: start; min-width: 0; }
+#view-settings .page-header { grid-column: 1 / -1; position: sticky; top: -28px; z-index: 2; background: var(--bg); padding: 28px 0 10px; margin: -28px 0 6px; }
+#view-settings .card { min-width: 0; overflow-wrap: anywhere; }
+#view-settings .card:first-of-type { grid-column: 1 / -1; }
+.css-textarea { max-width: 100%; box-sizing: border-box; }
+
+.whatsnew-panel { max-height: 260px; overflow-y: auto; border: 1px solid var(--line); background: var(--bg); padding: 8px 12px; margin-top: 8px; }
+.whatsnew-panel[hidden] { display: none; }
+.wn-entry { padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.wn-entry:last-child { border-bottom: 0; }
+.wn-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.wn-version { color: var(--green); font-size: 18px; }
+.wn-meta { color: var(--text-dim); font-size: 14px; }
+.wn-changes { margin: 4px 0 0; padding-left: 20px; }
+.wn-changes li { margin: 2px 0; }

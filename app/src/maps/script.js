@@ -1,4 +1,5 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { requireLogin } from '../login-prompt.js';
 import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
@@ -130,7 +131,7 @@ function render() {
   document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('maps-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('maps-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
-  document.getElementById('maps-upload-btn').style.display = isLoggedIn() ? '' : 'none';
+  document.getElementById('maps-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
   renderInstalled();
   renderBrowse();
 }
@@ -183,11 +184,7 @@ window.__mapConfirmUninstall = async function (id, name) {
 };
 
 window.__mapOpenUpload = function () {
-  if (!isLoggedIn()) {
-    alert('Log in first to upload a map.');
-    window.navigate('account');
-    return;
-  }
+  if (!requireLogin('a map')) return;
   // Your installed maps that aren't on the Hub yet.
   const pick = document.getElementById('maps-upload-map'), maps = uploadable();
   pick.innerHTML = maps.length

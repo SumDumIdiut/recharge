@@ -1,6 +1,7 @@
 const TOKEN_KEY = 'rechargeAuthToken';
 const USERNAME_KEY = 'rechargeAuthUsername';
 const ADMIN_KEY = 'rechargeAuthAdmin';
+const EXPIRED_KEY = 'rechargeSessionExpired';
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
 export function getToken() {
@@ -51,19 +52,57 @@ export function isLoggedIn() {
   return !!getToken();
 }
 
+export const EXPIRED_MESSAGE = 'Your login expired - log in again.';
+
+// Set when the hub rejected the stored token, until the login dialog has shown the note once.
+export function sessionExpired() {
+  try {
+    return localStorage.getItem(EXPIRED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function clearExpiredNote() {
+  try {
+    localStorage.removeItem(EXPIRED_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function markExpired() {
+  try {
+    localStorage.setItem(EXPIRED_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+  try {
+    window.dispatchEvent(new CustomEvent('session-expired', { detail: EXPIRED_MESSAGE }));
+  } catch {
+    /* no window (tests) */
+  }
+}
+
 // Asks the hub who this token belongs to (the login response doesn't say
 // whether the account is an admin). Only a 401 ends the session - being
-// offline just keeps whatever was stored.
-export async function refreshSession() {
+// offline just keeps whatever was stored, so "logged in" only ever lies while offline.
+// Returns 'expired' when the stale session was cleared.
+export async function refreshSession(fetchFn = (...a) => fetch(...a)) {
   const token = getToken();
-  if (!token) return;
+  if (!token) return 'none';
   try {
-    const res = await fetch(`${HUB_BASE}/api/me`, { headers: { Authorization: `Bearer ${token}` } });
-    if (res.status === 401) return clearSession();
-    if (!res.ok) return;
+    const res = await fetchFn(`${HUB_BASE}/api/me`, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 401) {
+      clearSession();
+      markExpired();
+      return 'expired';
+    }
+    if (!res.ok) return 'unchecked';
     const me = await res.json();
     setSession(token, me.username, !!me.admin);
+    return 'ok';
   } catch {
-    /* offline - keep the stored session */
+    return 'unchecked'; /* offline - keep the stored session */
   }
 }

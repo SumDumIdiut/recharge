@@ -16,6 +16,8 @@ pub struct Managed {
     pub launcher: PathBuf,
     pub root: PathBuf,
     pub build: String,
+    /// Version string of the running tree (RECHARGE_VERSION, e.g. 4.0.0-beta1); empty from older launchers.
+    pub version: String,
     pub channel: String,
 }
 
@@ -31,6 +33,7 @@ impl Managed {
             launcher: launcher.into(),
             root: root.into(),
             build: get("RECHARGE_BUILD").unwrap_or_default().trim().to_string(),
+            version: get("RECHARGE_VERSION").unwrap_or_default().trim().to_string(),
             channel: if get("RECHARGE_CHANNEL").as_deref() == Some("beta") { "beta" } else { "stable" }.into(),
         })
     }
@@ -150,22 +153,74 @@ fn read_channel_file(root: &Path) -> Option<String> {
 pub struct LauncherInfo {
     managed: bool,
     build: String,
+    /// Version of the running install, e.g. "4.0.0-beta1" (empty when unknown).
+    version: String,
     channel: String,
     /// Build staged and waiting for a restart.
     ready: Option<u64>,
+    /// Version of the staged build (from app.new.json), when one is waiting.
+    #[serde(rename = "readyVersion")]
+    ready_version: Option<String>,
+}
+
+/// Fields of the launcher's state.json / app.new.json we care about.
+#[derive(serde::Deserialize, Default)]
+struct SnapFile {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    build: u64,
+    #[serde(default)]
+    channel: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct StateFile {
+    current: Option<SnapFile>,
+}
+
+fn read_current(root: &Path) -> Option<SnapFile> {
+    serde_json::from_slice::<StateFile>(&std::fs::read(root.join("state.json")).ok()?).ok()?.current
+}
+
+/// The fully staged build waiting in app.new/ (the launcher writes app.new.json only once complete).
+fn read_staged(root: &Path) -> Option<SnapFile> {
+    if !root.join("app.new").is_dir() {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(root.join("app.new.json")).ok()?).ok()
+}
+
+fn info_from(m: &Managed, ready: Option<u64>) -> LauncherInfo {
+    let cur = read_current(&m.root);
+    let staged = read_staged(&m.root);
+    let cur_build: Option<u64> = m.build.parse().ok().or(cur.as_ref().map(|c| c.build));
+    // A staged tree of the build we are already running is not an update.
+    let staged = staged.filter(|s| Some(s.build) != cur_build);
+    let ready = ready.or(staged.as_ref().map(|s| s.build));
+    let version = Some(m.version.clone()).filter(|v| !v.is_empty()).or(cur.as_ref().map(|c| c.version.clone()).filter(|v| !v.is_empty()));
+    // channel.txt wins over the env and state.json: it changes while we run.
+    let channel = read_channel_file(&m.root)
+        .or(cur.map(|c| c.channel).filter(|c| c == "stable" || c == "beta"))
+        .unwrap_or_else(|| m.channel.clone());
+    LauncherInfo {
+        managed: true,
+        build: m.build.clone(),
+        version: version.unwrap_or_default(),
+        channel,
+        ready,
+        ready_version: staged.map(|s| s.version).filter(|v| !v.is_empty()),
+    }
 }
 
 #[tauri::command]
 pub fn launcher_info(app: AppHandle) -> LauncherInfo {
     match managed(&app) {
-        Some(m) => LauncherInfo {
-            managed: true,
-            build: m.build,
-            // channel.txt wins over the env: it changes while we run.
-            channel: read_channel_file(&m.root).unwrap_or(m.channel),
-            ready: *app.state::<UpdaterState>().ready.lock().unwrap(),
-        },
-        None => LauncherInfo { managed: false, build: String::new(), channel: String::new(), ready: None },
+        Some(m) => {
+            let ready = *app.state::<UpdaterState>().ready.lock().unwrap();
+            info_from(&m, ready)
+        }
+        None => LauncherInfo { managed: false, build: String::new(), version: String::new(), channel: String::new(), ready: None, ready_version: None },
     }
 }
 
@@ -203,6 +258,31 @@ pub fn launcher_restart(app: AppHandle, repair: bool) -> Result<(), String> {
     }
     app.exit(0);
     Ok(())
+}
+
+/// Settings > Uninstall Recharge: optionally put the game back to vanilla (RechargeLoader removed),
+/// then hand over to the launcher's uninstaller (it waits for us to exit) and quit.
+#[tauri::command]
+pub fn launcher_uninstall(app: AppHandle, delete_data: bool, restore_game: bool) -> Result<(), String> {
+    let m = managed(&app).ok_or("this install isn't managed by the Recharge launcher")?;
+    if restore_game {
+        super::loader::uninstall_loader(app.clone())?;
+    }
+    let pid = std::process::id().to_string();
+    let mut args = uninstall_args(delete_data);
+    args.extend(["--wait-pid".to_string(), pid]);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    spawn_detached(&m, &refs)?;
+    app.exit(0);
+    Ok(())
+}
+
+fn uninstall_args(delete_data: bool) -> Vec<String> {
+    let mut a = vec!["--uninstall".to_string(), "--yes".to_string()];
+    if delete_data {
+        a.push("--delete-data".into());
+    }
+    a
 }
 
 /// Folder holding the running binary when the launcher manages this install (the launcher lays
@@ -258,7 +338,7 @@ mod tests {
     fn started_marker_written_for_the_build_only() {
         let d = std::env::temp_dir().join(format!("rl-app-marker-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
-        let mk = |build: &str| Managed { launcher: "/l".into(), root: d.clone(), build: build.into(), channel: "stable".into() };
+        let mk = |build: &str| Managed { launcher: "/l".into(), root: d.clone(), build: build.into(), version: String::new(), channel: "stable".into() };
         mk("7").write_started_marker().unwrap();
         assert!(d.join("started-7.ok").is_file());
         mk("").write_started_marker().unwrap();
@@ -275,5 +355,37 @@ mod tests {
         assert_eq!(parse_stage_output("up to date\n"), None);
         assert_eq!(parse_stage_output("staged x\n"), None);
         assert_eq!(parse_stage_output(""), None);
+    }
+
+    #[test]
+    fn info_reads_version_channel_and_staged_from_the_launcher_files() {
+        let d = std::env::temp_dir().join(format!("rl-app-info-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("state.json"), br#"{"current":{"version":"4.0.0-beta1","build":10,"channel":"beta","launch":"x"},"pending":null}"#).unwrap();
+        let m = Managed { launcher: "/l".into(), root: d.clone(), build: "10".into(), version: String::new(), channel: "stable".into() };
+        let i = info_from(&m, None);
+        assert_eq!((i.version.as_str(), i.channel.as_str(), i.ready, i.ready_version.clone()), ("4.0.0-beta1", "beta", None, None));
+        // staged marker without app.new/ is not a ready update
+        std::fs::write(d.join("app.new.json"), br#"{"version":"4.0.0-beta2","build":11,"channel":"beta"}"#).unwrap();
+        assert_eq!(info_from(&m, None).ready, None);
+        std::fs::create_dir_all(d.join("app.new")).unwrap();
+        let i = info_from(&m, None);
+        assert_eq!((i.ready, i.ready_version.as_deref()), (Some(11), Some("4.0.0-beta2")));
+        // channel.txt and RECHARGE_VERSION win
+        write_channel_file(&d, "stable").unwrap();
+        let m2 = Managed { version: "9.9.9".into(), ..m.clone() };
+        let i = info_from(&m2, None);
+        assert_eq!((i.version.as_str(), i.channel.as_str()), ("9.9.9", "stable"));
+        // the build we already run is not an update
+        std::fs::write(d.join("app.new.json"), br#"{"version":"4.0.0-beta1","build":10}"#).unwrap();
+        assert_eq!(info_from(&m, None).ready, None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn uninstall_args_are_unattended_and_data_is_opt_in() {
+        assert_eq!(uninstall_args(false), ["--uninstall", "--yes"]);
+        assert_eq!(uninstall_args(true), ["--uninstall", "--yes", "--delete-data"]);
     }
 }

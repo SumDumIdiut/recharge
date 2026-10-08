@@ -77,6 +77,10 @@
         <button class="btn btn-primary" id="migrate-btn" onclick="window.__migrate()">Switch to the new Recharge updater</button>
       </div>
     </div>
+    <div class="settings-row">
+      <button class="btn" id="whatsnew-btn" onclick="window.__whatsNewToggle()">What's new</button>
+    </div>
+    <div id="whatsnew-panel" class="whatsnew-panel" hidden></div>
     <div id="launcher-notes" class="settings-sub" hidden></div>
     <div id="launcher-update-progress" class="settings-sub" hidden></div>
   </div>
@@ -102,5 +106,19 @@
       <div class="progress-fill" id="loader-progress-fill"></div>
     </div>
     <div id="loader-progress" class="settings-sub"></div>
+  </div>
+
+  <div class="card" id="uninstall-card">
+    <div class="settings-label">Uninstall Recharge</div>
+    <div id="uninstall-managed" hidden>
+      <div class="settings-sub">Removes Recharge from this computer. You can reinstall it any time.</div>
+      <label class="settings-sub"><input type="checkbox" id="uninstall-data" /> Also delete my settings, mods, skins and map saves</label>
+      <label class="settings-sub"><input type="checkbox" id="uninstall-restore" /> Restore the game to vanilla (remove RechargeLoader)</label>
+      <div class="settings-row">
+        <button class="btn btn-danger" id="uninstall-btn" onclick="window.__uninstallRecharge()">Uninstall Recharge</button>
+      </div>
+      <div id="uninstall-note" class="settings-sub" hidden></div>
+    </div>
+    <div id="uninstall-manual" class="settings-sub" hidden></div>
   </div>
 </main>

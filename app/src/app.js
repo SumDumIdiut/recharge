@@ -1,5 +1,6 @@
 import { initHome, refreshInstallStatus } from './home.js';
 import './live-update.js';
+import { maybeShowUpdatedBanner } from './whatsnew-banner.js';
 import { startBackgroundTimer } from './theme.js';
 
 const _tabLoaded = {};
@@ -82,6 +83,8 @@ function showToast(html) {
   }, 4000);
 }
 
+window.addEventListener('session-expired', (e) => showToast(e.detail || 'Your login expired - log in again.'));
+
 async function refreshTab(tab) {
   delete _tabLoaded[tab];
   if (tab === curTab) await ensureTab(tab);
@@ -90,6 +93,10 @@ async function refreshTab(tab) {
 window.__TAURI__.event.listen('hub-beam-installed', (event) => {
   const { kind, name } = event.payload;
   showToast(`Installed <strong>${name}</strong> from the Recharge Library`);
+  if (kind === 'background' || kind === 'playlist') {
+    window.dispatchEvent(new Event('backgrounds-changed'));
+    return;
+  }
   refreshTab(kind === 'mods' ? 'mods' : kind === 'skins' ? 'skins' : 'maps');
 });
 
@@ -126,6 +133,7 @@ window.addEventListener('keydown', async (e) => {
 
 initHome();
 startBackgroundTimer();
+maybeShowUpdatedBanner();
 
 try {
   const savedTab = localStorage.getItem('rechargeCurrentTab');

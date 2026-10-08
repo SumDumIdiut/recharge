@@ -34,3 +34,16 @@
 .bg-preview-head > div { flex: 1; }
 .bg-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding: 12px; overflow-y: auto; }
 .bg-preview-grid img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border: 1px solid var(--line); }
+
+/* Fit to screen: header + tabs stay put, the panel below scrolls, grids use the full width. */
+#view-backgrounds.v-on { display: flex; flex-direction: column; overflow: hidden; }
+#view-backgrounds .page { flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; }
+#view-backgrounds .page-header, #view-backgrounds .browser-toolbar, #view-backgrounds .settings-error { flex-shrink: 0; }
+#view-backgrounds .browser-toolbar { flex-wrap: wrap; }
+#bg-browse-view, #bg-playlists-view, #bg-community-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+#view-backgrounds .browser-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); width: 100%; }
+#view-backgrounds .browse-card { min-width: 0; }
+.bg-csections { margin-bottom: 14px; }
+.bg-playlist-name { min-width: 0; overflow-wrap: anywhere; }
+.browse-card-name { overflow-wrap: anywhere; }
+#view-backgrounds .browse-card-thumb { aspect-ratio: 16 / 10; background-size: cover; background-position: center; background-color: var(--bg); }

@@ -99,6 +99,7 @@ pub fn run() {
             loader::install_or_update_loader,
             loader::uninstall_loader,
             updater::launcher_info,
+            updater::launcher_uninstall,
             updater::launcher_check_now,
             updater::launcher_set_channel,
             updater::launcher_restart,
@@ -123,6 +124,11 @@ pub fn run() {
             backgrounds::publish_playlist,
             backgrounds::unpublish_playlist,
             backgrounds::download_hub_playlist,
+            backgrounds::download_hub_background,
+            backgrounds::publish_background_image,
+            backgrounds::unpublish_background_image,
+            hub::fetch_hub_backgrounds_cmd,
+            hub::fetch_changelog_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

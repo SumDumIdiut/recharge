@@ -3,6 +3,7 @@
 mod install;
 mod log;
 mod manifest;
+mod old;
 mod run;
 mod state;
 mod ui;
@@ -18,6 +19,10 @@ struct Opts {
     repair: bool,
     uninstall: bool,
     yes: bool,
+    /// With --uninstall: also delete settings, mods, skins and map saves.
+    delete_data: bool,
+    /// Dry run: list the old installs a first run would remove, change nothing.
+    scan_old: bool,
     no_ui: bool,
     check: bool,
     /// Download an update into app.new/ but neither swap nor launch (the running app polls this).
@@ -39,6 +44,8 @@ fn parse(args: &[OsString]) -> Result<Opts, String> {
             "--repair" => o.repair = true,
             "--uninstall" => o.uninstall = true,
             "--yes" | "-y" => o.yes = true,
+            "--delete-data" => o.delete_data = true,
+            "--scan-old" => o.scan_old = true,
             "--no-ui" => o.no_ui = true,
             "--check" => o.check = true,
             "--stage" => o.stage = true,
@@ -78,8 +85,17 @@ fn main() -> ExitCode {
     let root = o.root.clone().unwrap_or_else(install::default_root);
     let exe = std::env::current_exe().unwrap_or_default();
 
+    if o.scan_old {
+        for i in old::scan(&root, &exe) {
+            println!("would remove {}", i.describe());
+        }
+        return ExitCode::SUCCESS;
+    }
     if o.uninstall {
-        return match install::uninstall(&root, o.yes) {
+        if let Some(pid) = o.wait_pid {
+            run::wait_exit(pid, std::time::Duration::from_secs(30)); // the app that asked for this
+        }
+        return match install::uninstall(&root, o.yes, o.delete_data) {
             Ok(()) => {
                 println!("Recharge removed.");
                 ExitCode::SUCCESS
@@ -96,6 +112,10 @@ fn main() -> ExitCode {
 
     // First run from anywhere else (Downloads, a USB stick...): install, then continue as installed.
     if !install::is_installed(&root, &exe) {
+        log::init(&root);
+        // A fresh download replaces every older install first (before we write anything of our own:
+        // the old NSIS uninstaller deletes the Uninstall\Recharge registry key).
+        old::cleanup(&root, &exe);
         let installed = match install::install_self(&root, &exe) {
             Ok(p) => p,
             Err(e) => return fatal(&format!("Could not install Recharge to {}: {e}", root.display())),
