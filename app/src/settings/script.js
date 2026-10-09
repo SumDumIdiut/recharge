@@ -291,6 +291,7 @@ async function shownVersion(fallback) {
 
 // Set when the Recharge launcher started us (it then owns package updates and the channel).
 let launcherManaged = false;
+let devBuild = false;
 
 // "Recharge 4.0.0-beta1 (Beta) - up to date" / "... - update ready: 4.0.0-beta2 - restart to apply".
 // Channel comes from the launcher, not the live-code channel. The CI build counter only shows in the tooltip.
@@ -341,7 +342,7 @@ function refreshUninstall() {
   if (!managedBox || !manual) return;
   managedBox.hidden = !launcherManaged;
   manual.hidden = launcherManaged;
-  if (!launcherManaged) manual.textContent = manualUninstallText(typeof navigator !== 'undefined' ? navigator.platform || navigator.userAgent : '');
+  if (!launcherManaged) manual.textContent = devBuild ? 'Development build - not installed by the launcher.' : manualUninstallText(typeof navigator !== 'undefined' ? navigator.platform || navigator.userAgent : '');
 }
 
 window.__uninstallRecharge = async function () {
@@ -418,6 +419,8 @@ async function refreshMigrate() {
   const box = document.getElementById('migrate-box');
   if (!box) return;
   const info = launcherManaged ? null : await invoke('migrate_info').catch(() => null);
+  devBuild = !!info?.dev;
+  refreshUninstall();
   box.hidden = !info?.available;
   if (!info?.available) return;
   document.getElementById('migrate-text').textContent =

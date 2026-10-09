@@ -42,19 +42,33 @@ fn loader_status_blocking(app: &AppHandle) -> LoaderStatus {
         }
     }
 
+    // A game update removes the modded assembly but leaves ModApi.dll behind: still "installed", yet a modded launch can't work until the loader is rebuilt.
+    let build_missing = installed && game_path.as_deref().map(modded_build_missing).unwrap_or(false);
+
     let outdated = installed
-        && match (game_path.as_deref(), loader_stamp(&app)) {
+        && (build_missing || match (game_path.as_deref(), loader_stamp(&app)) {
             (Some(p), Some(current)) => std::fs::read_to_string(stamp_path(p))
                 .map(|deployed| deployed.trim() != current)
                 .unwrap_or(true),
             _ => false,
-        };
+        });
 
     LoaderStatus {
         installed,
         version: LOADER_VERSION.to_string(),
         outdated,
     }
+}
+
+/// True when the game has the loader's ModApi but no Assembly-CSharp.RECHARGE.dll to launch modded from.
+pub(crate) fn modded_build_missing(game_path: &str) -> bool {
+    super::steam::managed_dir(std::path::Path::new(game_path))
+        .map(|m| managed_modded_build_missing(&m))
+        .unwrap_or(false)
+}
+
+pub(crate) fn managed_modded_build_missing(managed: &std::path::Path) -> bool {
+    managed.join("Recharge.ModApi.dll").is_file() && !managed.join("Assembly-CSharp.RECHARGE.dll").is_file()
 }
 
 fn stamp_path(game_path: &str) -> PathBuf {
@@ -310,4 +324,21 @@ pub fn uninstall_loader(app: AppHandle) -> Result<(), String> {
     let _ = std::fs::remove_dir(PathBuf::from(&game_path).join("Recharge"));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod build_missing_tests {
+    use super::*;
+
+    #[test]
+    fn modapi_without_recharge_dll_is_flagged() {
+        let d = std::env::temp_dir().join(format!("rl-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(!managed_modded_build_missing(&d));
+        std::fs::write(d.join("Recharge.ModApi.dll"), b"x").unwrap();
+        assert!(managed_modded_build_missing(&d));
+        std::fs::write(d.join("Assembly-CSharp.RECHARGE.dll"), b"x").unwrap();
+        assert!(!managed_modded_build_missing(&d));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
