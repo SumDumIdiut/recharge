@@ -103,6 +103,8 @@ pub fn run() {
             updater::launcher_check_now,
             updater::launcher_set_channel,
             updater::launcher_restart,
+            updater::launcher_update_failure,
+            updater::launcher_open_log,
             migrate::migrate_info,
             migrate::migrate_to_launcher,
             launcher::check_launcher_update,

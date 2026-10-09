@@ -41,6 +41,7 @@ function setup(info) {
     calls.push(JSON.parse(JSON.stringify([cmd, args ?? null])));
     if (cmd === 'launcher_info') return info;
     if (cmd === 'launcher_check_now') return 12;
+    if (cmd === 'launcher_update_failure') return info.failure ?? null;
     if (cmd === 'check_launcher_update') return { appUpdateAvailable: false, mapsUpdateAvailable: false, currentVersion: '3.0.12' };
     if (cmd === 'live_get_channel') return { channel: 'stable' };
     if (cmd === 'live_set_channel') return 'upToDate';
@@ -136,6 +137,22 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   await t.window.__uninstallRecharge();
   await t.window.__uninstallRecharge();
   assert.deepEqual(t.calls.find((c) => c[0] === 'launcher_uninstall'), ['launcher_uninstall', { deleteData: true, restoreGame: true }]);
+}
+// --- failed restart is shown with Try again / Open log ---
+{
+  const t = setup({ managed: true, ready: 12, build: '10', failure: 'app -> app.old: Access denied' });
+  vm.runInContext(src('live-update.js').replace('const tauri', 'var tauri'), t.ctx);
+  await tick();
+  const b = t.document.getElementById('live-update-banner');
+  assert.equal(b.dataset.kind, 'failed', 'failure wins over the ready banner');
+  assert.match(b.children[0].textContent, /^Update didn't apply - app -> app.old: Access denied/);
+  assert.deepEqual(b.children.slice(1).map((c) => c.textContent), ['Try again', 'Open log', 'Dismiss']);
+  b.children[2].onclick();
+  b.children[1].onclick();
+  await tick();
+  assert.ok(t.calls.some((c) => c[0] === 'launcher_restart') && t.calls.some((c) => c[0] === 'launcher_open_log'));
+  t.listeners['launcher-update-ready'](12);
+  assert.equal(t.document.getElementById('live-update-banner').dataset.kind, 'failed', 'ready event does not hide the failure');
 }
 // --- channel selector follows the launcher ---
 {

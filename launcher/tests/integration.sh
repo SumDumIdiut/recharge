@@ -112,7 +112,7 @@ echo "== bad hash from server aborts update, keeps v2"
 gen 5 badhash; mark; $L --no-ui; rc=$?
 check "exit 0, still v2 running" "[ $rc -eq 0 ] && [ \"\$(tail -1 $ROOT/launches.log)\" = v2 ]"
 check "app dir untouched" "[ -f $ROOT/app/sub/new.txt ] && grep -q '\"build\": 2' $ROOT/state.json"
-check "retried once then gave up" "grep -c 'download recharge failed' $ROOT/launcher.log | grep -q 2"
+check "retried then gave up" "grep -c 'download recharge failed' $ROOT/launcher.log | grep -q 4"
 
 echo "== bad v3 (exit 1, no marker) -> rollback"
 gen 3 fail; mark; $L --no-ui; rc=$?
@@ -151,6 +151,28 @@ $L --wait-pid "$PID" --no-ui; rc=$?
 check "--wait-pid waited for exit, swapped to 9 and launched it" "[ $rc -eq 0 ] && ! kill -0 $PID 2>/dev/null && [ \"\$(tail -1 $ROOT/launches.log)\" = v9 ] && [ -f $ROOT/started-9.ok ]"
 out=$($L --stage --no-ui)
 check "--stage now says up to date" "[ \"$out\" = 'up to date' ]"
+
+echo "== swap retried while files are briefly locked, and a stale running.pid does not block it"
+gen 10 stay beta; mark; $L --no-ui
+PID=$(cat $ROOT/running.pid)
+gen 11 ok beta; mark; $L --stage --no-ui >/dev/null
+chmod a-w "$ROOT"; ( sleep 6.5; chmod u+w "$ROOT" ) & UNLOCK=$!
+$L --wait-pid "$PID" --no-ui; rc=$?; wait $UNLOCK
+check "locked swap retried, v11 swapped in and launched" "[ $rc -eq 0 ] && [ \"\$(tail -1 $ROOT/launches.log)\" = v11 ] && grep -q '\"build\": 11' $ROOT/state.json"
+check "each failed rename was logged" "grep -q 'rename .* failed (try 1/20)' $ROOT/launcher.log"
+gen 12 stay beta; mark; $L --no-ui
+PID=$(cat $ROOT/running.pid)
+gen 13 ok beta; mark; $L --stage --no-ui >/dev/null
+sleep 30 & STALE=$!
+while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done
+echo "$STALE" > $ROOT/running.pid
+$L --wait-pid "$PID" --no-ui; rc=$?
+kill $STALE 2>/dev/null; wait $STALE 2>/dev/null
+check "stale live pid in running.pid does not block the swap" "[ $rc -eq 0 ] && [ \"\$(tail -1 $ROOT/launches.log)\" = v13 ]"
+
+echo "== launcher does not keep the app dir as its cwd"
+out=$(cd "$ROOT/app" && RECHARGE_LAUNCHER_LOG_CWD=1 $L --scan-old 2>&1)
+check "launcher moved away from app/ at start" "echo '$out' | grep -q 'launcher-cwd ' && ! echo '$out' | grep -q 'launcher-cwd $ROOT/app'"
 
 echo "== state records channel"
 check "state records channel and version" "grep -q '\"channel\": \"beta\"' $ROOT/state.json && grep -q '\"version\"' $ROOT/state.json"

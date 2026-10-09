@@ -48,3 +48,11 @@ fn now() -> String {
 macro_rules! log {
     ($($t:tt)*) => { $crate::log::write(&format!($($t)*)) };
 }
+
+/// RECHARGE_LAUNCHER_LOG_CWD=1 (tests): print the working directory the launcher runs in.
+pub fn debug_cwd() {
+    if std::env::var_os("RECHARGE_LAUNCHER_LOG_CWD").is_some() {
+        let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+        eprintln!("launcher-cwd {cwd}");
+    }
+}
