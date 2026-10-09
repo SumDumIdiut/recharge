@@ -28,8 +28,7 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-// GitHub returns JSON null (not a missing key) for an empty release body,
-// which plain #[serde(default)] doesn't cover - only a missing key does.
+// GitHub returns JSON null (not a missing key) for an empty release body, which plain #[serde(default)] doesn't cover.
 fn null_as_default<'de, D: serde::Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
     Ok(Option::deserialize(d)?.unwrap_or_default())
 }
@@ -132,8 +131,7 @@ fn self_update_asset_url(assets: &[GithubAsset]) -> Option<String> {
     None
 }
 
-// Installed by installer/bootstrap/install.sh under ~/.local (no package
-// manager involved), which leaves a marker file behind.
+// Installed by installer/bootstrap/install.sh under ~/.local (no package manager), which leaves a marker file.
 #[cfg(not(windows))]
 pub(super) fn is_user_install() -> bool {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return false };

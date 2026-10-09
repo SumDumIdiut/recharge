@@ -1,10 +1,4 @@
-//! Finds and removes every older, non-launcher Recharge install (NSIS .exe installs, the .deb /
-//! pacman package, install.sh --user copies, AppImages, desktop entries pointing at them and
-//! other launcher roots). Settings, mods, skins and map saves are never touched: they live in the
-//! Tauri data folders, not in any install location.
-//!
-//! Only paths matching known Recharge install patterns are ever deleted, nothing scans the disk,
-//! and every step is logged. `scan` is the dry run (`--scan-old`); `remove` does the work.
+//! Finds and removes older non-launcher Recharge installs (NSIS, .deb/pacman, install.sh --user, AppImages, desktop entries, other roots); user data is never touched, only known install patterns are deleted, every step is logged.
 use crate::install::launcher_path;
 use crate::log;
 use std::fs;
@@ -106,8 +100,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
     n(a) == n(b)
 }
 
-/// The files of the hand-authored NSIS installer (installer/recharge-installer.nsi) / Tauri's NSIS
-/// bundle. Inside the launcher's own root only exactly these are removed.
+/// Files of the NSIS installer / Tauri bundle; inside the launcher's own root only exactly these are removed.
 const NSIS_FILES: [&str; 2] = ["recharge.exe", "uninstall.exe"];
 const NSIS_DIRS: [&str; 3] = ["content", "loader", "mods"];
 
@@ -121,9 +114,7 @@ fn find_ci(dir: &Path, name: &str) -> Option<PathBuf> {
     fs::read_dir(dir).ok()?.flatten().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name)).map(|e| e.path())
 }
 
-/// What to delete in a directory that may hold an old (non-launcher) Windows install. Empty unless
-/// it really looks like one. `root` is the launcher's own folder, which shares %LOCALAPPDATA%\Recharge
-/// with the old NSIS install dir, so there only the NSIS payload is removed.
+/// What to delete in a directory that may hold an old Windows install (empty unless it really looks like one); `root` shares %LOCALAPPDATA%\Recharge with the NSIS dir, so there only the NSIS payload goes.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn old_dir_items(dir: &Path, root: &Path) -> Vec<Item> {
     if !NSIS_FILES.iter().any(|f| has_ci(dir, f)) {
@@ -420,8 +411,7 @@ mod win {
         shortcuts(items);
     }
 
-    /// Start-menu folder and desktop shortcuts of the old installer, deleted only when the shortcut
-    /// really points at an old exe (the launcher's own shortcut targets recharge-launcher.exe).
+    /// Start-menu folder and desktop shortcuts of the old installer, deleted only when they point at an old exe.
     fn shortcuts(items: &mut Vec<Item>) {
         let mut cands: Vec<PathBuf> = Vec::new();
         let menus = [dirs::data_dir(), env_path("ProgramData")];
@@ -452,8 +442,7 @@ mod win {
         }
     }
 
-    /// `exe /S _?=dir`: _?= makes the NSIS uninstaller run in place (not from a temp copy) and block
-    /// until done; it must be the last argument and unquoted.
+    /// `exe /S _?=dir`: `_?=` runs the NSIS uninstaller in place and blocks until done; it must be the last argument, unquoted.
     pub fn run_uninstaller(exe: &Path, dir: &Path) {
         let mut c = hidden(&exe.display().to_string());
         c.arg("/S").raw_arg(format!("_?={}", dir.display())).current_dir(std::env::temp_dir());

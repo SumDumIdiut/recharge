@@ -1,8 +1,4 @@
-//! Progress window: a small tao window with a softbuffer-drawn bar, percent and one line of text
-//! (built-in 5x7 bitmap font, no font crate). The event loop runs on its own thread so downloads
-//! are never blocked. No window when disabled (--no-ui), when there is no display (Linux), or when
-//! window creation fails: the launcher then just logs. Never blocks launching.
-//! Self-contained (no crate:: references) so examples/ui_demo.rs can include it.
+//! Progress window (tao + softbuffer bar, built-in 5x7 font) on its own thread so downloads never block; no window with --no-ui, no display or on failure. Self-contained so examples/ui_demo.rs can include it.
 #![allow(dead_code)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -298,4 +294,3 @@ fn have_display() -> bool {
         true
     }
 }
-

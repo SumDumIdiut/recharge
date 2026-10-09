@@ -105,10 +105,7 @@ impl Plan {
     }
 }
 
-/// Diff manifest files against the installed tree in `app`.
-/// `installed` = path->sha from the last install, `cache` = stat taken then.
-/// Fast path (no hashing): installed sha == wanted and size+mtime unchanged.
-/// Otherwise the file is hashed, so a crash between swap and state write self-heals.
+/// Diff against the installed tree: unchanged sha + size + mtime skips hashing, otherwise the file is hashed so a crash between swap and state write self-heals.
 pub fn plan(
     files: &[FileEntry],
     installed: &BTreeMap<String, String>,

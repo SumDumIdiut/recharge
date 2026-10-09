@@ -1,5 +1,4 @@
-//! Glue to the one-file Recharge launcher. Only active when the launcher started us
-//! (RECHARGE_LAUNCHER + RECHARGE_INSTALL_ROOT set); otherwise every command reports "not managed".
+//! Glue to the Recharge launcher; only active when it started us (RECHARGE_LAUNCHER + RECHARGE_INSTALL_ROOT set), otherwise every command reports "not managed".
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,8 +25,7 @@ impl Managed {
         Self::from_vars(|k| std::env::var(k).ok()).or_else(|| Self::from_exe(&std::env::current_exe().ok()?))
     }
 
-    /// Started without the launcher's env (taskbar pin to app\\recharge.exe, a shortcut to the app):
-    /// an exe in <root>/app/ whose root holds the launcher and its state.json is still managed.
+    /// Started without the launcher's env (taskbar pin, shortcut): an exe in <root>/app/ whose root holds the launcher and state.json is still managed.
     fn from_exe(exe: &Path) -> Option<Managed> {
         let app_dir = exe.parent()?;
         if !app_dir.file_name()?.to_string_lossy().eq_ignore_ascii_case("app") {
@@ -161,9 +159,7 @@ fn restart_log(root: &Path, msg: &str) {
     }
 }
 
-/// The launcher starts the next process once we are gone, so detach it from us. Verifies the
-/// launcher really started (a spawn error, or a child that died within a moment) and logs to
-/// restart.log; an Err means the caller must NOT quit the app.
+/// Detach the launcher so it can start the next process once we are gone, and verify it really started (logged to restart.log); an Err means the caller must NOT quit.
 fn spawn_detached(m: &Managed, args: &[&str]) -> Result<(), String> {
     restart_log(&m.root, &format!("starting {} {}", m.launcher.display(), args.join(" ")));
     let mut errors: Vec<String> = Vec::new();
@@ -203,9 +199,7 @@ fn detached_attempts(m: &Managed, args: &[&str]) -> Vec<(&'static str, Command)>
     vec![("direct", c)]
 }
 
-/// Windows: the app (WebView2/Tauri, or whatever started it) may sit in a job object that kills
-/// its children on exit, so ask to break away first; if the job forbids that (ERROR_ACCESS_DENIED)
-/// retry without it, then go through cmd's `start`, which launches via the shell.
+/// Windows: the app may sit in a job object that kills children on exit, so try breakaway first, then without it, then cmd's `start`.
 #[cfg(windows)]
 fn detached_attempts(m: &Managed, args: &[&str]) -> Vec<(&'static str, Command)> {
     use std::os::windows::process::CommandExt;
@@ -248,8 +242,7 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// Did the update requested by the previous run apply? None = nothing to report (no request, or it worked).
-/// Some(reason) = the old build came back. Always consumes the request file.
+/// Did the update requested by the previous run apply? Some(reason) = the old build came back; None = nothing to report. Always consumes the request file.
 fn check_restart_outcome(m: &Managed) -> Option<String> {
     let path = m.root.join(REQUEST_FILE);
     let req: RestartRequest = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
@@ -370,6 +363,18 @@ fn read_staged(root: &Path) -> Option<SnapFile> {
     serde_json::from_slice(&std::fs::read(root.join("app.new.json")).ok()?).ok()
 }
 
+/// A real version ("4.0.0-beta8"); empty for nothing or a bare CI counter ("build-17", "build 17", "v17", "17").
+fn clean_version(v: &str) -> String {
+    let t = v.trim();
+    let lower = t.to_ascii_lowercase();
+    let rest = ["build", "b", "v"].iter().find_map(|p| lower.strip_prefix(p)).unwrap_or(&lower);
+    let digits = rest.trim_start_matches(['-', '_', ' ']);
+    if t.is_empty() || (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())) {
+        return String::new();
+    }
+    t.to_string()
+}
+
 fn info_from(m: &Managed, ready: Option<u64>) -> LauncherInfo {
     let cur = read_current(&m.root);
     let staged = read_staged(&m.root);
@@ -377,7 +382,7 @@ fn info_from(m: &Managed, ready: Option<u64>) -> LauncherInfo {
     // A staged tree of the build we are already running is not an update.
     let staged = staged.filter(|s| Some(s.build) != cur_build);
     let ready = ready.or(staged.as_ref().map(|s| s.build));
-    let version = Some(m.version.clone()).filter(|v| !v.is_empty()).or(cur.as_ref().map(|c| c.version.clone()).filter(|v| !v.is_empty()));
+    let version = Some(clean_version(&m.version)).filter(|v| !v.is_empty()).or(cur.as_ref().map(|c| clean_version(&c.version)).filter(|v| !v.is_empty()));
     // channel.txt wins over the env and state.json: it changes while we run.
     let channel = read_channel_file(&m.root)
         .or(cur.map(|c| c.channel).filter(|c| c == "stable" || c == "beta"))
@@ -388,7 +393,7 @@ fn info_from(m: &Managed, ready: Option<u64>) -> LauncherInfo {
         version: version.unwrap_or_default(),
         channel,
         ready,
-        ready_version: staged.map(|s| s.version).filter(|v| !v.is_empty()),
+        ready_version: staged.map(|s| clean_version(&s.version)).filter(|v| !v.is_empty()),
     }
 }
 
@@ -452,8 +457,7 @@ pub fn launcher_restart(app: AppHandle, repair: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Settings > Uninstall Recharge: optionally put the game back to vanilla (RechargeLoader removed),
-/// then hand over to the launcher's uninstaller (it waits for us to exit) and quit.
+/// Settings > Uninstall Recharge: optionally restore the game to vanilla, then hand over to the launcher's uninstaller and quit.
 #[tauri::command]
 pub fn launcher_uninstall(app: AppHandle, delete_data: bool, restore_game: bool) -> Result<(), String> {
     let m = managed(&app).ok_or("this install isn't managed by the Recharge launcher")?;
@@ -477,8 +481,7 @@ fn uninstall_args(delete_data: bool) -> Vec<String> {
     a
 }
 
-/// Folder holding the running binary when the launcher manages this install (the launcher lays
-/// loader/, electron/, src/ out right next to it). None otherwise.
+/// Folder holding the running binary when the launcher manages this install (loader/, electron/, src/ sit next to it); None otherwise.
 pub fn packaged_root() -> Option<PathBuf> {
     if !is_managed() {
         return None;
@@ -486,8 +489,7 @@ pub fn packaged_root() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
 }
 
-/// A bundled resource: next to the binary for launcher installs (Tauri's own lookup would point
-/// at /usr/lib/Recharge on Linux), Tauri's resource dir for everything else.
+/// A bundled resource: next to the binary for launcher installs (Tauri's lookup would point at /usr/lib/Recharge on Linux), Tauri's resource dir otherwise.
 pub fn resource_path(app: &AppHandle, rel: &str) -> Result<PathBuf, String> {
     if let Some(p) = packaged_root().map(|r| r.join(rel)).filter(|p| p.exists()) {
         return Ok(p);
@@ -536,6 +538,35 @@ mod tests {
         assert_eq!((m.root.as_path(), m.launcher.as_path()), (root.as_path(), l.as_path()));
         assert_eq!((m.build.as_str(), m.version.as_str(), m.channel.as_str()), ("42", "4.0.0-beta3", "beta"), "channel.txt wins");
         assert!(Managed::from_exe(&root.join("other").join("recharge")).is_none(), "parent must be named app");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clean_version_rejects_build_counters() {
+        for v in ["", "  ", "build-17", "build 17", "Build17", "v17", "17", "b-3"] {
+            assert_eq!(clean_version(v), "", "{v:?}");
+        }
+        for v in ["4.0.0", "4.0.0-beta8", " 4.0.0-beta8 ", "v4.0.0"] {
+            assert_eq!(clean_version(v), v.trim(), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn launcher_info_version_resolution() {
+        let root = std::env::temp_dir().join(format!("rl-app-info-ver-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mk = |ver: &str| Managed { launcher: "/l".into(), root: root.clone(), build: "17".into(), version: ver.into(), channel: "beta".into() };
+        // env wins when real
+        std::fs::write(root.join("state.json"), br#"{"current":{"version":"4.0.0-beta7","build":17}}"#).unwrap();
+        assert_eq!(info_from(&mk("4.0.0-beta8"), None).version, "4.0.0-beta8");
+        // env empty or counter-like -> state.json
+        assert_eq!(info_from(&mk(""), None).version, "4.0.0-beta7");
+        assert_eq!(info_from(&mk("build-17"), None).version, "4.0.0-beta7");
+        // older launcher: no version anywhere -> empty (the UI resolves it from the changelog)
+        std::fs::write(root.join("state.json"), br#"{"current":{"build":17}}"#).unwrap();
+        assert_eq!(info_from(&mk(""), None).version, "");
+        std::fs::write(root.join("state.json"), br#"{"current":{"version":"build-17","build":17}}"#).unwrap();
+        assert_eq!(info_from(&mk(""), None).version, "");
         let _ = std::fs::remove_dir_all(&root);
     }
 

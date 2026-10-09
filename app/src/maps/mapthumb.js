@@ -1,6 +1,4 @@
-// The extracted fullmap picture for a map (Hub id, which is also the id once the map is
-// installed): the picture installed maps already have, else one drawn from the map's
-// map.json - from the installed copy, or fetched from the Library just for this.
+// The extracted fullmap picture for a map (Hub id, also the id once installed): the installed map's own, else one drawn from its map.json (installed copy, or fetched from the Library).
 const inflight = new Map();
 // One at a time: thumbOf shares one offscreen renderer, so concurrent draws would race.
 let last = Promise.resolve(null);
@@ -15,9 +13,7 @@ async function work(id) {
   }
   if (!json) return null;
   try {
-    // The v2 thumb generation was removed. Fall back to null for maps that
-    // don't have a pre-rendered thumb. The server-side read_map_thumb will
-    // return one for installed maps.
+    // No pre-rendered thumb: fall back to null (the server-side read_map_thumb returns one for installed maps).
     await invoke('write_map_thumb', { id, data: null }).catch(() => {});
     return null;
   } catch (e) {

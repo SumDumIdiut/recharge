@@ -1,5 +1,4 @@
-//! Recharge launcher: installs itself, keeps app/ up to date from the hub (staged, hash-verified,
-//! with rollback) and starts the app. Contract/behaviour notes live in the module docs.
+//! Recharge launcher: installs itself, keeps app/ up to date from the hub (staged, hash-verified, rollback) and starts the app.
 mod install;
 mod log;
 mod manifest;
@@ -85,8 +84,7 @@ fn main() -> ExitCode {
     // A relative --root must be resolved before we move away from the caller's cwd.
     let root = o.root.clone().map(|r| std::path::absolute(&r).unwrap_or(r)).unwrap_or_else(install::default_root);
     let exe = std::env::current_exe().unwrap_or_default();
-    // The app starts us with its own cwd (<root>\app\); Windows will not rename a directory that
-    // is some process's cwd ("app -> app.old: os error 32"). Never sit in anything we may swap or delete.
+    // Windows cannot rename a directory that is some process's cwd (the app starts us in <root>\app\), so never sit in anything we may swap.
     let _ = std::env::set_current_dir(std::env::temp_dir());
     log::debug_cwd();
 
@@ -133,8 +131,7 @@ fn main() -> ExitCode {
     if !install::is_installed(&root, &exe) {
         log::init(&root);
         pick_first_channel(&o, &root, &exe);
-        // A fresh download replaces every older install first (before we write anything of our own:
-        // the old NSIS uninstaller deletes the Uninstall\Recharge registry key).
+        // A fresh download replaces every older install first: the old NSIS uninstaller deletes the Uninstall\Recharge registry key.
         old::cleanup(&root, &exe);
         let installed = match install::install_self(&root, &exe) {
             Ok(p) => p,
@@ -167,8 +164,7 @@ fn main() -> ExitCode {
         if !run::wait_exit(pid, std::time::Duration::from_secs(60)) {
             log!("pid {pid} still running after 60s, continuing anyway");
         }
-        // The app is gone (or hung): its WebView2 helpers can still hold files in app\, so close
-        // whatever of ours remains, and forget the pid so it cannot block the swap.
+        // App gone or hung: close leftover WebView2 helpers (they can hold files in app\) and drop the pid so it cannot block the swap.
         install::close_app(&root);
         run::clear_pid_file(&root);
     }
@@ -236,7 +232,14 @@ fn main() -> ExitCode {
 /// --stage: prepare an update in app.new/ and report; safe while the app runs (app/ is untouched).
 fn stage_only(ctx: &Ctx, st: &mut state::State) -> ExitCode {
     match update::stage_only(ctx, st) {
-        Ok(Some(build)) => println!("staged {build}"),
+        Ok(Some(build)) => {
+            println!("staged {build}");
+            // First install handed over by an older app that never restarts us: the menu entry lets the user finish.
+            if st.current.is_none() {
+                install::ensure_shortcuts(&ctx.root, &update::staged_version(ctx).unwrap_or_default());
+                log!("staged; start Recharge from your apps menu to finish");
+            }
+        }
         Ok(None) => println!("up to date"),
         Err(e) => {
             log!("stage failed: {e}");
@@ -261,19 +264,27 @@ fn recover(ctx: &Ctx, st: &mut state::State, exe: &std::path::Path, pass: &[OsSt
     ExitCode::FAILURE
 }
 
-/// First install only (no state.json / channel.txt in the root yet): record which channel to follow.
-/// Order: explicit --channel > own file name contains "beta" (the site's Beta download) > an older
-/// Recharge's settings.json says beta > stable. Existing installs are never touched here.
+/// Run from outside an install: record the channel (--channel > file name has "beta" > old settings.json says beta on first install > stable); on an existing install the downloaded copy's channel replaces channel.txt.
 fn pick_first_channel(o: &Opts, root: &std::path::Path, exe: &std::path::Path) {
-    if root.join("state.json").exists() || root.join("channel.txt").exists() {
+    let file = root.join("channel.txt");
+    let existing = root.join("state.json").exists() || file.exists();
+    let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if existing {
+        let c = first_channel(o.channel.as_deref(), &name, &[]);
+        let old = std::fs::read_to_string(&file).map(|s| s.trim().to_string()).unwrap_or_else(|_| "stable".into());
+        if old != c {
+            log!("existing install: channel {old} -> {c} (from downloaded {name})");
+            let _ = std::fs::write(&file, c);
+        } else {
+            log!("existing install: channel stays {c}");
+        }
         return;
     }
-    let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let dirs = install::data_dirs();
     let c = first_channel(o.channel.as_deref(), &name, &dirs);
     log!("first install: channel {c}");
     let _ = std::fs::create_dir_all(root);
-    let _ = std::fs::write(root.join("channel.txt"), c);
+    let _ = std::fs::write(&file, c);
 }
 
 fn first_channel(explicit: Option<&str>, exe_name: &str, settings_dirs: &[PathBuf]) -> &'static str {
@@ -375,6 +386,23 @@ fn fatal(msg: &str) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_copy_switches_existing_install_channel() {
+        let t = std::env::temp_dir().join(format!("rl-pc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        std::fs::write(t.join("channel.txt"), "stable").unwrap();
+        let o = Opts::default();
+        pick_first_channel(&o, &t, std::path::Path::new("/dl/recharge-beta"));
+        assert_eq!(std::fs::read_to_string(t.join("channel.txt")).unwrap(), "beta");
+        pick_first_channel(&o, &t, std::path::Path::new("/dl/Recharge.exe"));
+        assert_eq!(std::fs::read_to_string(t.join("channel.txt")).unwrap(), "stable");
+        let o = Opts { channel: Some("beta".into()), ..Default::default() };
+        pick_first_channel(&o, &t, std::path::Path::new("/dl/recharge"));
+        assert_eq!(std::fs::read_to_string(t.join("channel.txt")).unwrap(), "beta");
+        let _ = std::fs::remove_dir_all(&t);
+    }
 
     #[test]
     fn first_channel_order() {

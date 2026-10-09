@@ -1,8 +1,4 @@
-// The editor's cell collections, tracked: each counts its changes, notes which keys
-// changed (so the picture cache redraws only around them, and an undo or a drag puts
-// back only what moved), and keeps an index of its keys by area (so drawing, hovering
-// and box-selecting look at the cells near a point instead of every cell in the map -
-// a converted v2 map can hold hundreds of thousands).
+// The editor's cell collections, tracked: each counts changes, notes which keys changed (picture cache and undo/drag redo only what moved), and indexes keys by area so drawing, hovering and box-select skip distant cells.
 const CHUNK = 32; // cells per side of an area bucket
 const MAX_NOTES = 50000; // past this many changes, "everything changed" is cheaper
 

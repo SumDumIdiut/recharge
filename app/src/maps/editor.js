@@ -7,11 +7,7 @@ const END_BOX = { dx: 0, dy: -26, w: 240, h: 13 };
 const START_LIFT = 125;
 const SPAWN_BOX = { dx: 0, dy: 0, w: 32, h: 64 };
 const SPAWN_LIFT = 40;
-// A course's screen (the board showing its reward, best time and clones),
-// placed by the centre of its texts; the game's board image (350 x 150 scaled
-// 1.1 x 1.15) is centred 3.5 above that point (level course 1: texts at
-// 2189.6,-1.6, board at 2189.6,1.9). The mod centres the board image on the
-// same spot (MapCourses.PlaceScreen).
+// A course's screen (reward, best time, clones) sits at its texts' centre; the board image (350 x 150 scaled 1.1 x 1.15) is centred 3.5 above it, as MapCourses.PlaceScreen does.
 const SCREEN_BOX = { dx: 0, dy: 3.5, w: 385, h: 172.5 };
 const END_LIFT = 32;
 const CELL = 32;
@@ -54,8 +50,7 @@ let baseHaz = null;
 let baseVineKeys = [];
 
 let canvas, ctx, root;
-// Frames are drawn into backCanvas and copied to visCanvas (the one on screen) in a single drawImage,
-// so the visible canvas is never seen cleared or half-painted. Counters feed the debug strip.
+// Frames go into backCanvas and are copied to visCanvas in one drawImage, so the visible canvas is never seen cleared or half-painted.
 let visCanvas = null, visCtx = null, backCanvas = null, backCtx = null;
 const flick = { throws: 0, resizes: 0, lost: 0, restored: 0, copies: 0, purged: 0, skipped: 0, mismatch: 0 };
 let cam = { x: 0, y: 0, scale: 0.75 };
@@ -77,8 +72,7 @@ function emptyDraft() {
 let blocks = new TrackedMap();
 let spikes = new TrackedMap();
 let vines = new TrackedMap();
-// TrackedTiles counts its own changes, so the index below always knows when to
-// rebuild without any call site having to say so.
+// TrackedTiles counts its own changes, so the index below knows when to rebuild.
 let tiles = new TrackedTiles();
 // Which tiles are near the view, so drawing doesn't walk the whole map.
 const tileIndex = new TileIndex((layer) => layerGrid(layer));
@@ -119,8 +113,7 @@ function cellWorld(cx, cy) {
 }
 const baseOn = () => draft.useBase && base !== null;
 
-// The Maps and lists are built from `draft` (the module variable), so opening a
-// map doesn't have to save it and read it back.
+// The Maps and lists are built from `draft`, so opening a map doesn't save and re-read it.
 function loadDraftFrom(stored) {
   try {
     if (stored) draft = Object.assign(emptyDraft(), stored);
@@ -154,8 +147,7 @@ function loadDraftFrom(stored) {
   removed = new TrackedSet(draft.removed);
 }
 
-// Builds the Maps from a blank draft. The saved one is deliberately not read
-// back: opening the editor starts a new map, and leaving it saves.
+// Builds the Maps from a blank draft; opening the editor starts a new map and leaving it saves.
 function loadDraft() {
   let stored = null;
   try { stored = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch {}
@@ -206,14 +198,7 @@ function flushDraft() {
   persistDraft();
 }
 
-// The autosave. A map too big for localStorage's quota just doesn't get
-// autosaved - it's still open and still saves to a file, so this stays quiet
-// rather than breaking the editor.
-//
-// A big map's draft is tens of MB, and saveDraft runs on every edit, so once
-// one is known not to fit, building that string again for each keystroke is
-// wasted work. Remember the tile count that wouldn't fit and skip until the map
-// is small enough to be worth another try.
+// The autosave. A map too big for localStorage just isn't autosaved (still open, still saves to a file); once one doesn't fit, skip rebuilding the string per edit until the tile count shrinks.
 let tooBigAt = Infinity;
 function persistDraft() {
   persistTimer = 0;
@@ -223,8 +208,7 @@ function persistDraft() {
   catch { tooBigAt = tiles.size; }
 }
 
-// The tracked collections are frozen copies shared between steps (see tileindex.js); the
-// rest is small and mutated in place, so it's kept as a string.
+// Tracked collections are frozen copies shared between steps (tileindex.js); the rest is small, mutated in place, kept as a string.
 function snapshot() {
   const o = { blocks: blocks.freeze(), spikes: spikes.freeze(), vines: vines.freeze(), tiles: tiles.freeze(), moss: mossCells.freeze(), removed: removed.freeze(), removedVines: removedVines.freeze(), removedObjects: removedObjects.freeze(), removedScene: removedScene.freeze(), removedDeco: removedDeco.freeze() };
   const copied = blocks.copied + spikes.copied + vines.copied + tiles.copied + mossCells.copied + removed.copied + removedVines.copied + removedObjects.copied + removedScene.copied + removedDeco.copied;
@@ -234,10 +218,7 @@ function snapshot() {
   o.bytes = o.rest.length + 60 * (copied + cellGroups.size + movedScene.size + movedObjects.size + levelOrder.size + levelTf.size + levelGroups.size);
   return o;
 }
-// A big map's snapshot is tens of MB (one of b-sides' is ~27), so the stack is
-// capped by total size as well as by count - 200 of those would be gigabytes.
-// The budget scales with the memory the browser reports, which not every engine
-// does (WebKitGTK doesn't), so this settles on 512MB without it.
+// Big maps' snapshots are tens of MB, so the stack is capped by total size as well as count; the budget follows the reported memory, else 512MB (WebKitGTK reports none).
 const UNDO_MAX_BYTES = (() => {
   const mb = Math.max(256, Math.min(1024, Math.round(((typeof navigator !== 'undefined' && navigator.deviceMemory) || 4) * 128)));
   return mb * 1024 * 1024;
@@ -541,13 +522,7 @@ function catalogItem(o) {
   return list[i];
 }
 
-// A layer's grid. Some layers are only in art.levelTiles, not art.layers, and
-// their origin is not the default one - so both are looked in, levelTiles first
-// (that's where the level's own tiling lives).
-//
-// Cached: this is called for every tile on every frame, and the scan is 42
-// entries. The level data is loaded once and never changes, so the answer for
-// a given name can't change.
+// A layer's grid. Some layers exist only in art.levelTiles with a non-default origin, so look there first; cached because it's called per tile per frame.
 let gridCache = null;
 function layerGrid(name) {
   if (!gridCache) {
@@ -970,8 +945,7 @@ const mul2 = (a, b) => [a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[
 const rot2 = (rad) => [Math.cos(rad), -Math.sin(rad), Math.sin(rad), Math.cos(rad)];
 
 function drawPlacedTile(t, k, alpha = 1) {
-  // `sprite` is an explicit atlas index, for a tile the level has several
-  // sprites of under one name (the moss autotile). Otherwise look the name up.
+  // `sprite` is an explicit atlas index for tiles with several sprites under one name (moss autotile); otherwise look the name up.
   const sprite = t.sprite ?? base?.art?.tiles[t.tile];
   if (sprite === undefined || !artReady()) return;
   const w = tileCenter(t.layer, k), c = toScreen(w.x, w.y);
@@ -980,10 +954,7 @@ function drawPlacedTile(t, k, alpha = 1) {
   blitSprite(ctx, sprite, tileMatrix(t), cam.scale, c.x, c.y);
   ctx.restore();
 }
-// Only what's on screen: a map can hold hundreds of thousands of tiles (a v2 one
-// converted here does), and drawing all of them every frame would crawl.
-// toWorld has y growing downwards, so the two corners are sorted before comparing.
-// Layers go back to front by their order; `front` (order >= 5) is drawn over blocks and hazards.
+// Only what's on screen (a map can hold hundreds of thousands of tiles). toWorld has y growing downwards, so the corners are sorted; layers go back to front, `front` (order >= 5) over blocks and hazards.
 function drawPlacedTiles(front, margin = CELL) {
   const a = toWorld(0, 0), b = toWorld(canvas.width, canvas.height);
   const x0 = Math.min(a.x, b.x) - margin, x1 = Math.max(a.x, b.x) + margin;
@@ -1013,8 +984,7 @@ function zipPlatform(item) {
   return Math.abs(item.zip.end[1]) < Math.abs(item.zip.end[0]) ? { thick: w, span: h } : { thick: h, span: w };
 }
 // ---- zip platforms built from grate tiles ----
-// A zip mover's platform is a grid of cells around its moving part; the cells
-// under the gear are the root, and every other cell hangs off it (connected).
+// A zip mover's platform is a grid of cells around its moving part; the cells under the gear are the root, the rest hang off it.
 let platformEdit = null;
 const STEPS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const zipMovingPart = (item) => item?.parts?.find((p) => p.n === 'ZipMoverMovingPart');
@@ -1227,8 +1197,7 @@ function drawPlacedObject(o, alpha = 1) {
     ctx.restore();
   }
 }
-// Where along its track (0 start, 1 end) a zip mover is `now` seconds into
-// its loop: move, pause, return, pause - as the game plays one on its own.
+// Where along its track (0 start, 1 end) a zip mover is `now` seconds into its loop: move, pause, return, pause.
 function zipTravel(zip, now) {
   const go = Math.max(0.05, zip.time), back = Math.max(0.05, zip.backTime);
   const atEnd = Math.max(0, zip.pauseReturn ?? 0.5), atStart = Math.max(0, zip.pauseMove ?? 1), cycle = go + atEnd + back + atStart;
@@ -1658,8 +1627,7 @@ function baseCellsAt(cx, cy) {
   if (h && h.kind !== 'vine') return { kind: 'basecells', cells: [k0], what: 'Spike' };
   const hit = BASE_SETS().find(([, set]) => set?.has(k0));
   if (!hit) return null;
-  // The patch around the click, spreading outward (moss counts corners too), up to a bunch's worth:
-  // the level's moss and ground are mostly one connected mass.
+  // The patch around the click, spreading outward (moss counts corners), up to a bunch's worth: the level's moss and ground are mostly one connected mass.
   const [what, set] = hit, seen = new Set([k0]), queue = [[cx, cy]], LIMIT = what === 'Moss' ? 160 : 600;
   const around = what === 'Moss' ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] : [[1, 0], [-1, 0], [0, 1], [0, -1]];
   for (let qi = 0; qi < queue.length && seen.size < LIMIT; qi++) {
@@ -1693,7 +1661,6 @@ function objectBounds(o) {
   }
   return { x0, y0, x1, y1 };
 }
-
 
 function drawTarget(t) {
   const rectW = (x0, y0, x1, y1) => { const a = toScreen(x0, y1), b = toScreen(x1, y0); ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4); };
@@ -1866,8 +1833,7 @@ function selectMove(e) {
     drag = { pan: false, region: cellOf(drag.start.x, drag.start.y), keep };
   }
   if (drag.moveSel) {
-    // Rebuilt from the drag's start every time, so whatever the moving things
-    // pass over is only covered, never lost.
+    // Rebuilt from the drag's start every time, so what the moving things pass over is only covered, never lost.
     const dx = w.x - drag.start.x, dy = w.y - drag.start.y, fine = e.shiftKey, snap = fine ? 1 : snapV();
     const cx = Math.round(dx / CELL), cy = Math.round(dy / CELL);
     const sig = [Math.round(dx / snap), Math.round(dy / snap), cx, cy].join(',');
@@ -2015,8 +1981,7 @@ function turnSomething(dir, flip = false) {
   requestDraw();
 }
 
-// Moves one selected thing: dx, dy in cells for cell content and markers, in
-// snap steps for placed things. False for the level's own things (they can't move).
+// Moves one selected thing (dx, dy in cells for cell content and markers, snap steps for placed things); false for the level's own things.
 function shiftTarget(sel, dx, dy, fine) {
   const shiftKey = (k) => { const [x, y] = unkey(k); return key(x + dx, y + dy); };
   const moveArrow = (id) => { const a = arrows.find((x) => x.id === id); if (a) a.cells = a.cells.map(([x, y]) => [x + dx, y + dy]); };
@@ -2107,8 +2072,7 @@ function toggleInSelection(t) {
   const at = items.findIndex((x) => sameTarget(x, t));
   setSelection(at >= 0 ? items.filter((_, i) => i !== at) : [...items, t]);
 }
-// Moves every selected thing: placed things by the world offset (snapped),
-// cell content and markers by whole cells. Returns false if nothing could move.
+// Moves every selected thing: placed things by the snapped world offset, cell content and markers by whole cells; false if nothing moved.
 function moveTargets(targets, wx, wy, cx, cy, fine) {
   const snap = fine ? 1 : snapV(), sx = Math.round(wx / snap) * snap, sy = Math.round(wy / snap) * snap;
   let moved = false, fixed = false;
@@ -2143,8 +2107,7 @@ function nudgeSelection(dx, dy, fine) {
   requestDraw();
   return moved;
 }
-// Everything a dragged-out box covers: the placed things and markers whose
-// centre is inside, and the cells (for their content and region tools).
+// Everything a dragged-out box covers: placed things and markers whose centre is inside, and its cells.
 function marqueeTargets(r) {
   const a = cellWorld(r.x0, r.y0), b = cellWorld(r.x1 + 1, r.y1 + 1);
   const inside = (p) => p && p.x >= a.x && p.x < b.x && p.y >= a.y && p.y < b.y;
@@ -2265,8 +2228,7 @@ function drawStackEntries(list) {
   }
 }
 
-// The stack: placed objects, decorations and free spikes in draw order,
-// back to front. Each keeps a z; new things (no z yet) go on top as made.
+// The stack: placed objects, decorations and free spikes in draw order, back to front; new things (no z yet) go on top.
 function stack() {
   const all = [...placed.map((it, i) => ({ kind: 'object', index: i, it })), ...freeSpikes.map((it, i) => ({ kind: 'fspike', index: i, it })), ...signs.map((it, i) => ({ kind: 'sign', index: i, it })), ...csprites.map((it, i) => ({ kind: 'csprite', index: i, it }))];
   const z = (e) => e.it.z ?? Infinity;
@@ -3356,7 +3318,7 @@ async function toggleInstalledList() {
   // The base game is always the first entry: it starts a fresh map on the level.
   const show = (html) => {
     list.innerHTML = '<button class="mm-tool mm-load-item" data-base="1" title="Start a new map on the base game level">Base game<span>level</span></button>' + html;
-    list.querySelector('[data-base]').addEventListener('click', () => { newMapOnBase(); list.hidden = true; });
+    list.querySelector('[data-base]').addEventListener('click', async () => { if (await newMapOnBase()) list.hidden = true; });
   };
   show('<div class="mm-config-sub">Loading…</div>');
   let maps = [];
@@ -3376,11 +3338,7 @@ async function toggleInstalledList() {
 }
 
 async function openMap(map, label, installedId = null) {
-  // A map from the v2 editor opens here too: its file is already the format the
-  // game reads, but its tiles live in `tileLayers` (which v1 has no field for) and
-  // its editor state is v2's own, so both are converted - see fromv2.js. Converting
-  // the tiles needs the level data (each layer has its own grid), so it's loaded
-  // first. Whatever v1 has no field for is left out (see the note in fromv2.js).
+  // A v2-editor map opens here too: its tiles live in `tileLayers` (no v1 field) and its editor state is v2's own, so both are converted (see fromv2.js); the level data loads first since each layer has its own grid.
   if (isV2(map)) {
     try {
       if (!base) await loadBase(true);
@@ -3405,9 +3363,7 @@ async function openMap(map, label, installedId = null) {
   pushUndo();
   Object.assign(draft, { blocks: {}, spikes: {}, vines: {}, tiles: {}, moss: {}, arrows: [], placed: [], freeSpikes: [], signs: [], triggers: [], csprites: [], xspawns: [], cellGroups: {}, hiddenGroups: [], music: undefined, background: undefined, stageEdits: undefined, courses: [], baseEdits: {}, start: null, end: null, player: { ...DEFAULT_PLAYER }, ownProgress: false, removed: [], removedVines: [], removedObjects: [], removedScene: [], removedDeco: [], movedScene: {}, movedObjects: {}, levelOrder: {}, levelTf: {}, levelGroups: {} }, st);
   if (draft.useBase && !base) { try { await loadBase(true); } catch { draft.useBase = false; } }
-  // Built from the draft in memory, not saved-then-read-back: a big map (a v2 one
-  // converted here can be tens of MB) doesn't fit localStorage, and saving it
-  // first would only throw and leave the old draft behind.
+  // Built from the draft in memory, not saved-then-read-back: a big converted map doesn't fit localStorage, and saving would throw and leave the old draft.
   loadDraftFrom(null);
   flushDraft();
   applyBaseState();
@@ -3920,8 +3876,7 @@ function toWorld(sx, sy) {
 }
 
 const IN_WORKER = typeof document === 'undefined';
-// Canvases whose backing store the browser dropped (Chromium: GPU canvas memory pressure). Their
-// contents are gone - drawImage from one draws nothing - so every cache forgets them (purgeLost).
+// Canvases whose backing store the browser dropped (Chromium GPU memory pressure) hold nothing, so every cache forgets them (purgeLost).
 const lostCanvases = new Set();
 let cacheScale = 1; // shrinks the cache caps after each loss
 function makeCanvas() {
@@ -3931,8 +3886,7 @@ function makeCanvas() {
   cv.addEventListener('contextrestored', () => { flick.restored++; lostCanvases.delete(cv); requestDraw(); });
   return cv;
 }
-// Chromium throws InvalidStateError for drawImage from a zero-size canvas or a closed ImageBitmap, WebKit
-// doesn't; one such throw used to end the frame right after the background fill (a blank map).
+// Chromium throws InvalidStateError for drawImage from a zero-size canvas or closed ImageBitmap (WebKit doesn't); one throw would end the frame after the background fill.
 function guardCtx(g) {
   if (!g || g.drawImageSafe) return g;
   const d = g.drawImage;
@@ -4068,8 +4022,7 @@ const ART_CHUNK = 512;
 let atlasImg = null;
 let artIndex = null;
 let spriteOrders = [];
-// Drawing order where the level splits for things put behind it: below it are the
-// backgrounds and wall art, from it up the ground, objects and spikes.
+// Drawing order where the level splits for things put behind it: backgrounds and wall art below, ground, objects and spikes from it up.
 const LEVEL_CUT = 0;
 // Further back still: under every level tile layer (walls, wall art), over the far backdrop.
 const WALL_CUT = -20;
@@ -4320,8 +4273,7 @@ function drawBackdrop(W, H) {
 
 // A parallax layer (area 3's ParallaxController) sits between its parent and the camera.
 const layerAt = (b) => (b.par ? { x: b.px + (cam.x - b.px) * b.par[0], y: b.py + (cam.y - b.py) * b.par[1] } : { x: b.x, y: b.y });
-// Area 3's wallpaper: big tiled strips behind the level, each drifting with the view by its parallax.
-// Area 3's layers follow the camera (parallax), so they're only there while the view is in area 3.
+// Area 3's wallpaper: big tiled strips behind the level drifting by their parallax; they follow the camera, so they exist only while the view is in area 3.
 const inAreaOf = (path) => zoneAt(cam.x, cam.y) === String(path || '').split('/')[0].toLowerCase();
 function drawWorldBackdrops(W, H) {
   const list = base?.scene?.worldBackdrops;
@@ -4642,8 +4594,7 @@ function drawLiveItems(W, H) {
   const tl = toWorld(0, 0), br = toWorld(W, H);
   const visible = sceneList.items.filter((p) => p.live && !(p.id && removedScene.has(p.id)) && !(p.x + p.reach < tl.x || p.x - p.reach > br.x || p.y + p.reach < br.y || p.y - p.reach > tl.y));
   if (!visible.length) return;
-  // Each order's live sprites, then the level's layers above them drawn again over just
-  // that patch - so the ground and its moss cover them exactly as in the game.
+  // Each order's live sprites, then the level's layers above them redrawn over that patch, so ground and moss cover them as in the game.
   for (let i = 0; i < visible.length;) {
     const o = visible[i].o;
     let j = i;
@@ -5259,10 +5210,7 @@ function planPrefetch(W, H, full) {
 }
 function pumpPrefetch(workers) {
   if (!prefetch) return false;
-  // Walked in place rather than rebuilt. This runs every frame, and the queue
-  // holds every tile of the view plus a margin (and, when loading, the whole
-  // level) - rebuilding it meant a string key per entry, per frame, which is
-  // what made panning stutter.
+  // Walked in place, not rebuilt: this runs every frame and rebuilding the queue (a string key per entry) made panning stutter.
   const q = prefetch.queue, deadline = performance.now() + (loading ? 40 : 3);
   let kept = 0, sent = 0;
   for (let n = 0; n < q.length; n++) {
@@ -5291,11 +5239,7 @@ function startTileWorkers() {
   let off = false;
   try { off = !!localStorage.getItem('mapMakerNoWorkers'); } catch {}
   if (off || pool.workers.length || pool.failed || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return;
-  // One worker per physical core, bar one. Baking parallelises cleanly, but each
-  // worker parses its own 9.5MB basemap.json and holds the atlas, and hardwareConcurrency
-  // counts hyperthreads - so one worker per reported thread starves the main
-  // thread instead of using idle CPU, which showed up as lag and unresponsive
-  // clicks. Four is what this held up with.
+  // One worker per physical core, bar one (max four): each parses its own 9.5MB basemap.json and holds the atlas, and hardwareConcurrency counts hyperthreads, so one per thread starved the main thread.
   const count = Math.max(1, Math.min(4, Math.ceil((navigator.hardwareConcurrency || 4) / 2) - 1));
   for (let n = 0; n < count; n++) {
     let worker;
@@ -5403,9 +5347,7 @@ export function workerRenderTile(z, tx, ty, part = null) {
   return renderTile(z, tx, ty, part).transferToImageBitmap();
 }
 
-// Your tiles, blocks, spikes, vines and moss over the current view (the globals' canvas and cam),
-// back to front. Keyed by cell, so only the cells in the view's range are visited; a map can hold
-// hundreds of thousands. `tileMargin` is how far past the view a tile's centre may be and still draw.
+// Your tiles, blocks, spikes, vines and moss over the current view, back to front; keyed by cell so only the view's range is visited. `tileMargin` is how far past the view a tile's centre may be and still draw.
 function drawCellLayers(useArt, pad, tileMargin = CELL) {
   const W = canvas.width, H = canvas.height;
   const tl = cellOf(toWorld(0, 0).x, toWorld(0, 0).y), br = cellOf(toWorld(W, H).x, toWorld(W, H).y);
@@ -5441,16 +5383,14 @@ function drawCellLayers(useArt, pad, tileMargin = CELL) {
   if (useArt && !layerHidden('tiles')) drawPlacedTiles(true, tileMargin);
 }
 
-// ---- the picture cache: the sequence above, drawn once into 512px chunks at power-of-two zooms ----
-// Panning then only blits chunks; a chunk is redrawn when something under it changes.
+// ---- the picture cache: the sequence above, drawn once into 512px chunks at power-of-two zooms (panning only blits them) ----
 const CC_PX = 512, CC_MAX = 96, CC_LOW = -6, CC_HIGH = 2;
 const cellCache = { chunks: new Map(), pool: [], refs: null, sig: '', cold: true };
 const cellCacheOff = () => { try { return localStorage.mapMakerNoCellCache === '1'; } catch { return false; } };
 const ccSpan = (z) => CC_PX / Math.pow(2, z);
 const ccKey = (z, tx, ty) => z + '|' + tx + '|' + ty;
 // Stale chunks stay on screen until their replacement is built, so a change never opens a hole.
-// hard: the collections themselves were replaced (another map, a rebuilt state) - the old
-// picture would be wrong, not just old, so it goes and the rebuild gets the bigger budget.
+// hard: the collections themselves were replaced (another map, rebuilt state), so the old picture is wrong, not just old: drop it and give the rebuild the bigger budget.
 function ccDropAll(hard) {
   if (dbg.on) { dbg.cur.drops = (dbg.cur.drops || 0) + 1; dbgLog('ccDropAll ' + (hard ? 'hard' : 'soft')); }
   if (hard) {
@@ -5849,7 +5789,6 @@ function drawMarkers() {
   for (const r of sc.respawns || []) drawGate({ x: r.at[0], y: r.at[1] }, SPAWN_BOX, COLORS.respawn, 'C' + r.course + ' RESPAWN');
   ctx.restore();
 }
-
 
 function toggleHitboxes() {
   draft.hitboxes = !draft.hitboxes;
@@ -6689,8 +6628,7 @@ function replaceSelectionWith(it) {
   return true;
 }
 
-// Leaving the editor for the main menu. The draft is saved here, so walking out
-// never loses work - and nothing is restored when the editor is next opened.
+// Leaving the editor for the main menu: the draft is saved here so no work is lost, and nothing is restored on reopening.
 function leaveEditor() {
   saveDraft();
   flushDraft();
@@ -6917,8 +6855,7 @@ function drawCourses() {
 function gateAt(cx, cy, kind) {
   if (kind === 'spawn') for (let n = 0; n < 200 && isSolid(cx, cy); n++) cy++;
   const w = cellWorld(cx, cy);
-  // A reset is a full-height trigger like the level's own course resets, so a run
-  // ends whichever way the player passes through it.
+  // A reset is a full-height trigger like the level's own, so a run ends whichever way the player passes.
   if (kind === 'reset') return { x: w.x + CELL / 2, y: w.y + END_LIFT, w: 20, h: 400, dx: 0, dy: 150 };
   return { x: w.x + CELL / 2, y: w.y + { start: START_LIFT, end: END_LIFT, spawn: SPAWN_LIFT }[kind] };
 }
@@ -6946,9 +6883,7 @@ const RESET_BOX = { dx: 0, dy: 150, w: 20, h: 400 };
 const MARKER_BOX = { spawn: SPAWN_BOX, start: START_BOX, end: END_BOX, reset: RESET_BOX, get screen() { return screenBox(); } };
 const screenBox = () => SCREEN_BOX;
 
-// The game's own board image (the course Canvas's "Screen" Image, Screen_0),
-// stretched the way the game's UI stretches it: 9-sliced, 30px borders at 120
-// pixels per unit on a 100-unit canvas scaled 1.1 x 1.15.
+// The game's board image (course Canvas "Screen_0") stretched as its UI does: 9-sliced, 30px borders at 120 pixels per unit on a 100-unit canvas scaled 1.1 x 1.15.
 const BOARD_SLICE = 30, BOARD_EDGE = [(30 / 1.2) * 1.1, (30 / 1.2) * 1.15];
 let boardImg = null;
 function drawBoardSprite(x, y, w, h) {
@@ -7148,8 +7083,7 @@ function applyTool(cx, cy) {
     draft.activeCourse = c.id;
     if (drag) drag.placedObject = true;
   } else if (tool === 'reset') {
-    // A reset ends the run without finishing the course, so no reward. Several
-    // per course, on a list rather than a single gate.
+    // A reset ends the run without finishing the course, so no reward; there can be several per course.
     if (drag?.placedObject) return false;
     let c = courseById(draft.activeCourse);
     if (!c) c = courses().find((x) => x.start && !x.end) || newCourse();
@@ -7277,13 +7211,11 @@ async function toggleBase() {
 async function newMapOnBase() {
   const hasContent = blocks.size || spikes.size || vines.size || tiles.size || mossCells.size
     || placed.length || freeSpikes.length || signs.length || triggers.length || csprites.length || arrows.length
-    || removed.size || draft.courses.length;
-  if (hasContent && !confirm('Start a new map on the base game? Your current draft will be replaced - export it first if you want to keep it.')) return;
-  pushUndo();
-  resetDraftContents();
-  draft.name = '';
-  draft.description = '';
-  draft.baseState = 'start';
+    || removed.size || draft.courses.length || movedScene.size || movedObjects.size || levelTf.size || levelOrder.size
+    || levelGroups.size || cellGroups.size || Object.keys(draft.baseEdits || {}).length || draft.music || draft.background
+    || (draft.assets || []).length || (draft.stageEdits && Object.keys(draft.stageEdits).length);
+  if (hasContent && !confirm('Start a new map on the base game? Your current draft will be replaced - export it first if you want to keep it.')) return false;
+  // Load the level before touching the draft: a failed load leaves the current map alone.
   if (!baseOn()) {
     const btn = root.querySelector('#mm-base');
     btn.disabled = true;
@@ -7292,7 +7224,7 @@ async function newMapOnBase() {
       await loadBase(true);
     } catch (e) {
       flash("Couldn't load the base game map: " + e, true);
-      return;
+      return false;
     } finally {
       btn.disabled = false;
       btn.classList.remove('mm-busy');
@@ -7300,17 +7232,36 @@ async function newMapOnBase() {
     draft.useBase = true;
     fillJumpList();
   }
+  pushUndo();
+  resetDraftContents();
+  draft.name = '';
+  draft.description = '';
+  draft.baseState = 'start';
+  // resetDraftContents keeps the map's own settings, so drop the old map's level edits and media too.
+  draft.stageEdits = undefined;
+  draft.baseEdits = {};
+  movedScene.clear();
+  movedObjects.clear();
+  levelOrder.clear();
+  levelTf.clear();
+  levelGroups.clear();
+  cellGroups.clear();
+  draft.hiddenGroups = [];
+  draft.music = undefined;
+  draft.background = undefined;
+  draft.assets = [];
+  draft.activeCourse = null;
+  if (base) applyBaseState();
   if (base?.courses?.[0]) jumpTo(base.courses[0].start.x, base.courses[0].start.y);
   saveDraft();
   syncBaseUi();
   requestDraw();
   flash('New map on the base game.');
+  return true;
 }
 
 // ---- the overgrown stages: edited separately for the Start and Overgrown states ----
-// The cells the overgrowth changes (its sprites, and ground / moss only one state
-// has), plus a cell around them. Edits there belong to the state being viewed;
-// everything else is shared by both.
+// The cells the overgrowth changes (its sprites, and ground / moss only one state has) plus a cell around them: edits there belong to the viewed state, everything else is shared.
 let stageMask = null;
 function stageCells() {
   if (stageMask) return stageMask;
@@ -7467,8 +7418,7 @@ async function exportZip() {
 // The editor's own test map is overwritten by every test run, so it's never a save target.
 const TEST_MAP_ID = 'map-maker-test';
 
-// Saves into the game's installed maps: the first save picks a folder from the
-// map's name (never another map's), later ones replace that same map.
+// Saves into the game's installed maps: the first save picks a folder from the map's name (never another map's), later ones replace that map.
 async function saveMap() {
   let map;
   try { map = buildMap(); } catch (e) { flash(e.message, true); return; }
@@ -7703,10 +7653,7 @@ function onKeyDown(e) {
   const k = e.key.toLowerCase();
   if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
   if (e.key === 'Escape') {
-    // Shift+Esc leaves the editor, saving what's there first. Plain Esc only
-    // backs out of what's open - it used to drop out of fullscreen here, but the
-    // editor now always fills the window (there's no button to toggle it), so
-    // doing that left a floating panel sitting on the home screen.
+    // Shift+Esc leaves the editor, saving first; plain Esc only backs out of what's open.
     if (e.shiftKey) { leaveEditor(); return; }
     if (platformEdit != null) setPlatformEdit(null);
     else if (popCat) closePopover();
@@ -7829,11 +7776,7 @@ export async function mountEditor(container) {
 `;
 
   canvas = root.querySelector('#mm-canvas');
-  // alpha: false - the canvas is opaque (it paints COLORS.bg over everything),
-  // so skipping the alpha channel lets the compositor skip a blend per frame.
-  // Not desynchronized: draw() paints the background first and the level over it, and a
-  // desynchronized canvas may be presented between those steps - a frame that is only the
-  // background, which looks like the whole map blinking off while panning.
+  // alpha: false (the canvas is opaque) lets the compositor skip a blend per frame; not desynchronized, which could present a background-only frame mid-draw and blink the map off while panning.
   ctx = canvas.getContext('2d', { alpha: false });
   visCanvas = canvas; visCtx = ctx;
   // The main canvas can lose its backing too (Chromium GPU memory pressure / device reset): repaint on restore.
@@ -7910,4 +7853,3 @@ export async function mountEditor(container) {
   resize();
   updateStatus();
 }
-

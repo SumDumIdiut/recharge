@@ -90,8 +90,7 @@ fn unplayable_reason(game: &HubGame) -> Option<String> {
     Some(format!("This is a {} build - it can't run on this computer.", game.platform))
 }
 
-// The Windows build script strips the `\\?\` prefix Tauri gives resource paths
-// for the same reason: many programs can't open a path in that form.
+// The Windows build script strips the `\\?\` prefix Tauri gives resource paths for the same reason: many programs can't open that form.
 fn plain(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
@@ -279,8 +278,7 @@ fn electron_asset() -> Result<String, String> {
     Ok(format!("electron-v{ELECTRON_VERSION}-{os}-{arch}.zip"))
 }
 
-/// The Electron runtime the web games run in. It's ~120-160 MB, so it isn't
-/// shipped with Recharge - it's downloaded once, the first time it's needed.
+/// The Electron runtime the web games run in (~120-160 MB), downloaded once on first use instead of shipped.
 fn ensure_electron(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     let root = app
         .path()

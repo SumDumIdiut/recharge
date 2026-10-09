@@ -4,9 +4,10 @@ import {
   getWaveSettings, saveWaveSettings,
 } from '/theme.js';
 import { startWaveform } from '/home.js';
+import { runMigrate } from '/migrate-ui.js';
 import { confirmDestructive } from '/ui.js';
 import { renderInstallList } from '/install-list.js';
-import { loadChangelog } from '/whatsnew.js';
+import { loadChangelog, resolveVersion, cleanVersion } from '/whatsnew.js';
 
 function renderAppearance() {
   const presetsEl = document.getElementById('theme-presets');
@@ -137,8 +138,7 @@ function initWaveform() {
   densityEl.value = settings.density;
   slidersEl.style.opacity = settings.enabled ? '1' : '0.4';
 
-  // Dragging a slider fires 'input' continuously; rebuilding the whole
-  // waveform on every tick is needless work mid-drag, so debounce it.
+  // Debounce: dragging a slider fires 'input' continuously and rebuilding the waveform each tick is wasted work.
   let applyTimer = null;
   function apply() {
     const next = {
@@ -271,9 +271,7 @@ async function refreshStatus() {
 
 let launcherUpdateInfo = null;
 
-// Recharge is delivered as live code, so the number shown is the one shipped
-// with the code (version.json, bumped on every push) rather than the version
-// of the installed package. The beta channel adds its own build counter.
+// Recharge is delivered as live code, so the shown number is the one shipped with it (version.json), not the installed package's; beta adds its own build counter.
 async function shownVersion(fallback) {
   const get = async (file) => {
     try {
@@ -298,7 +296,8 @@ let launcherManaged = false;
 // Channel comes from the launcher, not the live-code channel. The CI build counter only shows in the tooltip.
 function managedVersionLine(info) {
   const channel = info.channel === 'beta' ? 'Beta' : 'Stable';
-  const head = `${info.version ? `Recharge ${info.version}` : 'Recharge'} (${channel})`;
+  const version = typeof cleanVersion === 'function' ? cleanVersion(info.version) : info.version;
+  const head = `${version ? `Recharge ${version}` : 'Recharge'} (${channel})`;
   let status;
   if (info.ready) status = `update ready${info.readyVersion ? `: ${info.readyVersion}` : ''} - restart to apply`;
   else status = 'up to date';
@@ -314,7 +313,8 @@ async function refreshManaged() {
   box.hidden = !launcherManaged;
   if (!launcherManaged) return;
   document.getElementById('launcher-managed-status').textContent = 'Installed by the Recharge launcher';
-  // The launcher, not the old package check, decides what "up to date" means here.
+  // The launcher decides what "up to date" means; older launchers stored no version (or only the CI counter), so look it up from the hub changelog.
+  try { info.version = await resolveVersion(invoke, info); } catch {}
   const line = managedVersionLine(info);
   const status = document.getElementById('launcher-status');
   status.textContent = line.text;
@@ -385,7 +385,8 @@ window.__launcherCheck = async function () {
   try {
     const staged = await invoke('launcher_check_now');
     refreshManaged();
-    note.textContent = staged ? `Build ${staged} is ready.` : "You're up to date.";
+    note.textContent = staged ? 'An update is ready.' : "You're up to date.";
+    note.title = staged ? `Build ${staged}` : '';
     document.getElementById('launcher-restart-btn').hidden = !staged;
   } catch (err) {
     note.textContent = `Couldn't check: ${String(err)}`;
@@ -430,25 +431,9 @@ async function refreshMigrate() {
   }
 }
 
-window.__migrate = async function () {
-  const { invoke } = window.__TAURI__.core;
-  const btn = document.getElementById('migrate-btn');
-  const progress = document.getElementById('launcher-update-progress');
-  const cleanup = !document.getElementById('migrate-cleanup-row').hidden && document.getElementById('migrate-cleanup').checked;
-  btn.disabled = true;
-  progress.hidden = false;
-  progress.textContent = 'Downloading the new Recharge and setting it up - this window will close and reopen.';
-  try {
-    const hint = await invoke('migrate_to_launcher', { cleanup });
-    if (hint) progress.textContent = hint;
-  } catch (err) {
-    btn.disabled = false;
-    progress.textContent = String(err);
-  }
-};
+window.__migrate = runMigrate;
 
 async function refreshLauncherStatus() {
-  refreshChannel();
   await refreshManaged();
   refreshUninstall();
   refreshMigrate();
@@ -505,56 +490,6 @@ async function refreshLauncherStatus() {
     status.textContent = String(err);
   }
 }
-
-const CHANNEL_HELP = 'Stable gets tested changes. Beta gets the newest code first and may break.';
-
-// Under the launcher, its channel.txt is the truth (the live-code setting can lag behind it).
-function shownChannel(liveChannel, launcherInfo) {
-  if (launcherInfo?.managed && (launcherInfo.channel === 'stable' || launcherInfo.channel === 'beta')) return launcherInfo.channel;
-  return liveChannel;
-}
-
-async function refreshChannel() {
-  const { invoke } = window.__TAURI__.core;
-  const note = document.getElementById('channel-note');
-  try {
-    const info = await invoke('live_get_channel');
-    const launcher = await invoke('launcher_info').catch(() => null);
-    const channel = shownChannel(info.channel, launcher);
-    document.getElementById('channel-stable-btn').classList.toggle('btn-primary', channel === 'stable');
-    document.getElementById('channel-beta-btn').classList.toggle('btn-primary', channel === 'beta');
-    note.textContent = info.needsPackage
-      ? 'The latest code on this channel needs a newer Recharge package - update the app above, then try again.'
-      : CHANNEL_HELP;
-  } catch {
-    // An older build without channels - hide the row rather than show a dead control.
-    document.getElementById('channel-stable-btn').closest('.settings-row').hidden = true;
-    note.hidden = true;
-  }
-}
-
-window.__setChannel = async function (channel) {
-  const { invoke } = window.__TAURI__.core;
-  const note = document.getElementById('channel-note');
-  const buttons = [document.getElementById('channel-stable-btn'), document.getElementById('channel-beta-btn')];
-  buttons.forEach((b) => { b.disabled = true; });
-  note.textContent = 'Switching...';
-  try {
-    if (launcherManaged) {
-      await invoke('launcher_set_channel', { channel });
-      await invoke('launcher_check_now').catch(() => null);
-      await refreshManaged();
-    }
-    const result = await invoke('live_set_channel', { channel });
-    await refreshChannel();
-    if (result === 'applied') note.textContent = `Switched to ${channel}. Reload to start using it.`;
-    else if (result === 'upToDate') note.textContent = `You're on the latest ${channel} code.`;
-  } catch (err) {
-    note.textContent = `Couldn't switch: ${String(err)}`;
-  } finally {
-    buttons.forEach((b) => { b.disabled = false; });
-  }
-};
 
 window.__launcherUpdate = async function () {
   const { invoke } = window.__TAURI__.core;

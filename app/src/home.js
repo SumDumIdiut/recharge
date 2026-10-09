@@ -80,8 +80,7 @@ export function startWaveform() {
   svg.setAttribute('viewBox', `0 0 ${totalWidth * 2} ${svgHeight}`);
   polyline.setAttribute('points', allPoints.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
 
-  // Indexed in lockstep with units (a Map keyed by object was needless hashing
-  // overhead on every frame for what's just "the previous value at this slot").
+  // Indexed in lockstep with units (a Map keyed by object hashed on every frame for nothing).
   const lastScreenX = new Array(units.length).fill(null);
   const start = performance.now();
 
@@ -264,9 +263,7 @@ window.__homeAccountBadgeClick = function () {
   }
 };
 
-// Only the full game can be modded - not the demo or the playtest build. Greys
-// out the Modded launch tile and hides the mod-management entry points rather
-// than leaving them there to fail every time.
+// Only the full game can be modded, not the demo or playtest build: grey out the Modded launch tile and hide mod entry points.
 function applyVariantUi(active) {
   const unmoddable = !!active && active.variant !== 'Full Game';
   document.getElementById('home-modded-tile').disabled = unmoddable;
@@ -306,9 +303,7 @@ export async function refreshInstallStatus(opts = {}) {
   });
 }
 
-// With more than one install (full game + demo), start on the first one
-// detected - the full game, since it's listed first - without asking. Every
-// install stays in the Installation list to switch to.
+// With several installs (full game + demo) start on the first detected without asking; all stay in the Installation list.
 async function autoSelectInstall() {
   const { invoke } = window.__TAURI__.core;
   const saved = await invoke('get_saved_game_path').catch(() => null);
@@ -343,9 +338,7 @@ async function checkForLauncherUpdate() {
   }
   if (!info.updateAvailable) return;
 
-  // Don't nag: a build that can't install packages itself (a dev build, say)
-  // gets a log line instead of a dialog, and a version the user said "Later"
-  // to stays quiet until a newer one comes out.
+  // Don't nag: a build that can't install packages itself gets a log line, and a version the user said "Later" to stays quiet until a newer one.
   if (info.appUpdateAvailable && !info.mapsUpdateAvailable) {
     if (!info.downloadUrl) {
       logLine(`update available: <b>v${info.latestVersion}</b> (this install can't update itself)`);
@@ -402,8 +395,7 @@ async function checkForLauncherUpdate() {
       }
     };
     nowBtn.onclick = install;
-    // New releases carry backend changes that can't be applied live, so the
-    // app installs them itself instead of waiting to be asked.
+    // New releases carry backend changes that can't be applied live, so the app installs them itself.
     if (info.downloadUrl) install();
   } else if (info.mapsUpdateAvailable) {
     logLine(`Navigator mod update available: <b>v${info.bundledMapsVersion}</b> (game has v${info.deployedMapsVersion})`);
@@ -489,8 +481,7 @@ export async function initHome() {
        <p>Head to Settings to check the detected path, or verify IGTAP is installed via Steam.</p>`
     );
   } else if (!loaderInstalled && install.variant === 'Full Game') {
-    // Only the full game is set up for mods; the demo can't take them at all
-    // and the playtest build isn't something to install the loader into.
+    // Only the full game is set up for mods (the demo can't take them, the playtest build isn't for the loader).
     showOnboarding(
       `<p>Almost there - <b>RechargeLoader</b> isn't installed yet, and it's what lets mods actually run in-game.</p>
        <p>Go to Settings and click <b>Install / Update</b> under RechargeLoader to finish setup.</p>`
@@ -516,8 +507,7 @@ export async function initHome() {
     try {
       await invoke('restore_vanilla_build');
     } catch { /* no install detected yet, or nothing to restore - fine */ }
-    // Mods are built against the loader's ModApi; a game still holding an
-    // older one shows half-built mod menus, so bring it up to date quietly.
+    // Mods are built against the loader's ModApi; a game with an older one shows half-built mod menus, so update it quietly.
     if (loaderInstalled && loaderOutdated && install?.variant === 'Full Game') redeployLoader();
   }
 

@@ -88,11 +88,7 @@ export function mergeEntries(lists, max = MAX_ENTRIES) {
     .slice(0, max);
 }
 
-// A skin's own image is the Unity animator sheet, not a curated thumbnail:
-// always 6 rows in this fixed order (Idle, run, Fall, Jump, wallPose, Dash -
-// see TemplateGrid.cs in recharge-skins), so row 0 is always Idle regardless
-// of column count. Crops to that row's first (leftmost) frame, assuming
-// roughly square cells like the rest of the skin pipeline does.
+// A skin's own image is the Unity animator sheet: 6 rows in fixed order (Idle, run, Fall, Jump, wallPose, Dash; see TemplateGrid.cs in recharge-skins), so crop row 0's leftmost frame, assuming roughly square cells.
 function applySkinThumb(el, src) {
   const probe = new Image();
   probe.onload = () => {
@@ -144,8 +140,7 @@ export function layoutNews() {
 export async function initHomeNews() {
   entries = mergeEntries(await Promise.all([additions(), releases()]));
   layoutNews();
-  // Maps get the same extracted fullmap picture as the Maps tab instead (a
-  // Hub gallery image, when there is one, stays the fallback until it arrives).
+  // Maps get the extracted fullmap picture as in the Maps tab; a Hub gallery image stays the fallback until it arrives.
   for (const e of entries) {
     if (e.tag !== 'Map' || !e.id) continue;
     const img = await mapThumbFor(e.id).catch(() => null);

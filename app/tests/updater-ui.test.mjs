@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
+import { cleanVersion } from '../src/whatsnew.js';
 
 const src = (f) => fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
 
@@ -27,7 +28,7 @@ function makeDom() {
     createElement: (t) => new El(t),
     getElementById: (id) => byId.get(id) ?? null,
   };
-  for (const id of ['launcher-managed', 'launcher-managed-status', 'launcher-restart-btn', 'launcher-update-btn', 'launcher-notes', 'launcher-repair-btn', 'launcher-status', 'channel-note', 'channel-stable-btn', 'channel-beta-btn', 'uninstall-managed', 'uninstall-manual', 'uninstall-btn', 'uninstall-note', 'uninstall-data', 'uninstall-restore']) {
+  for (const id of ['launcher-managed', 'launcher-managed-status', 'launcher-restart-btn', 'launcher-update-btn', 'launcher-notes', 'launcher-repair-btn', 'launcher-status', 'uninstall-managed', 'uninstall-manual', 'uninstall-btn', 'uninstall-note', 'uninstall-data', 'uninstall-restore']) {
     const e = new El('div'); e.id = id; byId.set(id, e);
   }
   return { document, byId };
@@ -86,7 +87,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 {
   const t = setup({ managed: true, ready: null, build: '10', version: '4.0.0-beta1', readyVersion: null, channel: 'beta' });
   const code = src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, '');
-  vm.runInContext(code, t.ctx);
+  vm.runInContext('var runMigrate = () => {};' + code, t.ctx);
   await vm.runInContext('refreshLauncherStatus()', t.ctx);
   assert.equal(t.byId.get('launcher-managed').hidden, false);
   assert.equal(t.byId.get('launcher-managed-status').textContent, 'Installed by the Recharge launcher');
@@ -96,26 +97,29 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   assert.equal(t.byId.get('launcher-status').textContent, 'Recharge 4.0.0-beta1 (Beta) - up to date', 'status reflects the launcher version + launcher channel');
   await t.window.__launcherCheck();
   assert.equal(t.byId.get('launcher-restart-btn').hidden, false, 'check that stages shows restart');
-  await t.window.__setChannel('stable');
   const names = t.calls.map((c) => c[0]);
-  assert.ok(names.includes('launcher_set_channel') && names.indexOf('launcher_set_channel') < names.indexOf('live_set_channel'));
+  assert.ok(!names.includes('launcher_set_channel') && !names.includes('live_set_channel'), 'settings no longer switches channel');
+  assert.equal(t.window.__setChannel, undefined, 'channel picker handler is gone');
   await t.window.__launcherRepair();
   assert.ok(!names.includes('launcher_restart') && !t.calls.some((c) => c[0] === 'launcher_restart'), 'first click only arms');
   await t.window.__launcherRepair();
   assert.deepEqual(t.calls.at(-1), ['launcher_restart', { repair: true }]);
 
   const u = setup({ managed: false });
-  vm.runInContext(code, u.ctx);
+  vm.runInContext('var runMigrate = () => {};' + code, u.ctx);
   await vm.runInContext('refreshLauncherStatus()', u.ctx);
   assert.equal(u.byId.get('launcher-managed').hidden, true, 'hidden when not launcher-managed');
 }
 // --- version line variants + uninstall ---
 {
   const t = setup({ managed: true });
-  vm.runInContext(src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, ''), t.ctx);
+  t.ctx.cleanVersion = cleanVersion;
+  vm.runInContext('var runMigrate = () => {};' + src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, ''), t.ctx);
   const line = (i) => vm.runInContext(`managedVersionLine(${JSON.stringify(i)})`, t.ctx);
   assert.equal(line({ version: '4.0.0-beta1', channel: 'beta', ready: 12, readyVersion: '4.0.0-beta2', build: '11' }).text, 'Recharge 4.0.0-beta1 (Beta) - update ready: 4.0.0-beta2 - restart to apply');
   assert.equal(line({ version: '4.0.0', channel: 'stable' }).text, 'Recharge 4.0.0 (Stable) - up to date');
+  assert.equal(line({ version: 'build-17', channel: 'beta', build: '17' }).text, 'Recharge (Beta) - up to date');
+  assert.equal(line({ version: 'build-17', channel: 'beta', build: '17' }).tip, 'Build 17');
   assert.equal(line({ channel: 'stable', ready: 3 }).text, 'Recharge (Stable) - update ready - restart to apply');
   assert.match(vm.runInContext("manualUninstallText('Win32')", t.ctx), /Windows Settings/);
   assert.match(vm.runInContext("manualUninstallText('Linux x86_64')", t.ctx), /apt remove recharge/);
@@ -154,14 +158,9 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   t.listeners['launcher-update-ready'](12);
   assert.equal(t.document.getElementById('live-update-banner').dataset.kind, 'failed', 'ready event does not hide the failure');
 }
-// --- channel selector follows the launcher ---
+// --- the channel picker is gone from the settings view ---
 {
-  const t = setup({ managed: true, channel: 'beta' });
-  const code = src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, '');
-  vm.runInContext(code, t.ctx);
-  assert.equal(vm.runInContext("shownChannel('stable', { managed: true, channel: 'beta' })", t.ctx), 'beta', 'launcher channel wins when managed');
-  assert.equal(vm.runInContext("shownChannel('stable', { managed: false, channel: 'beta' })", t.ctx), 'stable');
-  assert.equal(vm.runInContext("shownChannel('beta', null)", t.ctx), 'beta');
-  assert.equal(vm.runInContext("shownChannel('beta', { managed: true, channel: '' })", t.ctx), 'beta');
+  const html = fs.readFileSync(new URL('../src/settings/view.html', import.meta.url), 'utf8');
+  assert.ok(!/channel-(stable|beta)-btn|Update channel|channel-note/.test(html));
 }
 console.log('updater-ui: all checks passed');

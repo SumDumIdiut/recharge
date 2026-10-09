@@ -1,18 +1,13 @@
 name: Publish to update hub
 
-# Builds the launcher + app for windows-x64 and linux-x64, assembles the platform dirs
-# (tools/build-update-dir.*) and publishes them to the Recharge update hub with
-# tools/publish-update.mjs. master -> stable channel, dev -> beta channel.
+# Builds the launcher + app for windows-x64 and linux-x64 (tools/build-update-dir.*) and publishes them to the update hub with tools/publish-update.mjs. master -> stable, dev -> beta.
 #
-# Runs alongside the legacy autorelease.yml / release.yml (GitHub releases + installers), which stay
-# until every install has migrated to the launcher.
+# Runs alongside the legacy autorelease.yml / release.yml until every install has migrated to the launcher.
 #
 # REQUIRED REPO SECRET:  UPDATE_KEY   - must equal the UPDATE_KEY env var of the hub (recharge-hub).
 # Optional repo variable: UPDATE_BASE - hub base URL, default https://codecade.co.za/recharge
 #
-# The launcher binary is only published when launcher/** changed (clients replace their launcher
-# whenever its hash differs, so republishing a rebuild every time would churn every install), or
-# when this workflow is started by hand with "launcher" ticked (needed for the very first publish).
+# The launcher binary is only published when launcher/** changed (clients replace theirs whenever its hash differs) or when started by hand with "launcher" ticked (first publish).
 on:
   workflow_dispatch:
     inputs:
@@ -83,8 +78,7 @@ jobs:
   build:
     needs: prepare
     strategy:
-      # Each platform runs to the end, so one failure doesn't hide the other's result.
-      # (publish still needs both builds.)
+      # Each platform runs to the end so one failure doesn't hide the other's result (publish still needs both).
       fail-fast: false
       matrix:
         include:
@@ -133,8 +127,7 @@ jobs:
           cp -r "$src"/* loader/tools/ilspycmd/
           rm -rf .ilspycmd-install-tmp
 
-      # The Windows code (registry, shortcuts, uninstaller) compiles for the first time here: the
-      # checks run before the long release builds so a failure shows up early.
+      # The Windows code (registry, shortcuts, uninstaller) first compiles here: run the checks before the long release builds.
       - name: Check Windows target (launcher; the app's release build below is the real compile)
         if: matrix.name == 'windows-x64'
         shell: bash
@@ -218,9 +211,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$UPDATE_KEY" ] || { echo "repo secret UPDATE_KEY is not set" >&2; exit 1; }
-          # Changelog: commit subjects since the commit this channel last published (read from the
-          # live manifest), else the last 15 commits; noise (merges, bumps, promotions) is dropped
-          # and identical lines are listed once (first occurrence kept).
+          # Changelog: commit subjects since this channel's last published commit (from the live manifest), else the last 15; merges, bumps and promotions are dropped, duplicates listed once.
           prev=$(curl -fsS --max-time 20 "$BASE/update/$CHANNEL/manifest.json" 2>/dev/null \
             | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit',''))" 2>/dev/null || true)
           if [ -n "$prev" ] && git cat-file -e "$prev^{commit}" 2>/dev/null && [ "$prev" != "$GITHUB_SHA" ]; then

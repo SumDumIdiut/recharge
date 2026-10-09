@@ -84,10 +84,7 @@ function markExpired() {
   }
 }
 
-// Asks the hub who this token belongs to (the login response doesn't say
-// whether the account is an admin). Only a 401 ends the session - being
-// offline just keeps whatever was stored, so "logged in" only ever lies while offline.
-// Returns 'expired' when the stale session was cleared.
+// Asks the hub who this token belongs to (login doesn't say whether the account is an admin). Only a 401 ends the session; offline keeps the stored one. Returns 'expired' when a stale session was cleared.
 export async function refreshSession(fetchFn = (...a) => fetch(...a)) {
   const token = getToken();
   if (!token) return 'none';

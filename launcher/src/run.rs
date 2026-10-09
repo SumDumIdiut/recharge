@@ -12,8 +12,7 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(20);
 fn pid_file(root: &Path) -> PathBuf { root.join("running.pid") }
 pub fn started_marker(root: &Path, build: u64) -> PathBuf { root.join(format!("started-{build}.ok")) }
 
-/// The launcher records the pid it spawned; the app counts as running while that pid is alive.
-/// (Updates only swap when this is false, because Windows cannot replace a running exe.)
+/// The launcher records the pid it spawned; the app counts as running while it is alive (updates only swap when it is not).
 pub fn app_running(root: &Path) -> bool {
     fs::read_to_string(pid_file(root))
         .ok()
@@ -44,8 +43,7 @@ pub fn pid_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// `tasklist /FO CSV /NH` rows are "name","pid","session",...; match the pid field exactly
-/// (a substring test also matched memory columns like "1,234 K" and kept the app "running" forever).
+/// `tasklist /FO CSV /NH` rows: match the pid field exactly (a substring test also hit memory columns like "1,234 K").
 pub fn tasklist_has_pid(out: &str, pid: u32) -> bool {
     out.lines().any(|l| l.split("\",\"").nth(1).map(|f| f.trim_matches('"') == pid.to_string()).unwrap_or(false))
 }
@@ -87,8 +85,7 @@ pub fn launch(root: &Path, launcher_exe: &Path, snap: &Snapshot, channel: &str, 
     Ok(child)
 }
 
-/// Wait for started-<build>.ok. False if the app exits unhappily, exits without the marker,
-/// or the marker does not appear within 20 s (child is killed then).
+/// Wait for started-<build>.ok; false if the app exits unhappily, exits without the marker, or no marker appears within 20 s (child is killed).
 pub fn health_check(root: &Path, child: &mut Child, build: u64) -> bool {
     let marker = started_marker(root, build);
     let t0 = Instant::now();

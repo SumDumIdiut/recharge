@@ -40,8 +40,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # --tool-path installs a shim + nested .store/, not the flat DLL folder
-      # build-loader.ps1 expects, so the real files get copied up from there.
+      # --tool-path installs a shim + nested .store/, not the flat DLL folder build-loader.ps1 expects, so copy the real files up.
       - name: Install ilspycmd (bundled decompiler tool)
         shell: bash
         run: |
