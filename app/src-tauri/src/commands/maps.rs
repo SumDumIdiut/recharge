@@ -161,6 +161,82 @@ pub fn write_map_thumb(app: AppHandle, id: String, data: String) -> Result<(), S
     std::fs::write(dir.join("thumb.png"), base64_decode(&data)?).map_err(|e| e.to_string())
 }
 
+// ---- the drawn map view pictures: <app data>/map-thumbs/<id>@<stamp>.png, one per map (a newer stamp replaces the old file) ----
+
+fn views_dir(app: &AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app.path().app_local_data_dir().ok().map(|d| d.join("map-thumbs"))
+}
+
+/// A stamp (the map's last-updated time or version) as safe file-name text.
+fn view_stamp(stamp: &str) -> String {
+    stamp.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect()
+}
+
+fn view_name(id: &str, stamp: &str) -> String {
+    format!("{id}@{}.png", view_stamp(stamp))
+}
+
+/// When an installed map was last changed (its map.json's modified time, in ms), as the stamp its picture is kept under.
+#[tauri::command]
+pub fn map_view_stamp(app: AppHandle, id: String) -> Option<String> {
+    if !safe_file(&id) {
+        return None;
+    }
+    let t = std::fs::metadata(maps_dir(&app)?.join(&id).join("map.json")).and_then(|m| m.modified()).ok()?;
+    Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis().to_string())
+}
+
+/// The kept drawn picture for this map and stamp, base64; none when there isn't one for exactly this stamp.
+#[tauri::command]
+pub fn read_map_view(app: AppHandle, id: String, stamp: String) -> Option<String> {
+    if !safe_file(&id) {
+        return None;
+    }
+    std::fs::read(views_dir(&app)?.join(view_name(&id, &stamp))).ok().map(|b| base64_encode(&b))
+}
+
+/// Keeps the drawn picture for this map and stamp, dropping the ones for its older stamps.
+#[tauri::command]
+pub fn write_map_view(app: AppHandle, id: String, stamp: String, data: String) -> Result<(), String> {
+    if !safe_file(&id) {
+        return Err(format!("invalid id: '{id}'"));
+    }
+    let dir = views_dir(&app).ok_or("no app data folder")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let keep = view_name(&id, &stamp);
+    let prefix = format!("{id}@");
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        if n.starts_with(&prefix) && n != keep {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    std::fs::write(dir.join(keep), base64_decode(&data)?).map_err(|e| e.to_string())
+}
+
+/// The path of the kept picture (for an upload, which takes files), when there is one for this stamp.
+#[tauri::command]
+pub fn map_view_path(app: AppHandle, id: String, stamp: String) -> Option<String> {
+    if !safe_file(&id) {
+        return None;
+    }
+    let p = views_dir(&app)?.join(view_name(&id, &stamp));
+    p.is_file().then(|| p.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    #[test]
+    fn view_names_are_keyed_by_id_and_stamp_and_path_safe() {
+        assert_eq!(view_name("abc", "1.0.0|2026-10-09T19:42:53.944Z"), "abc@1.0.0_2026-10-09T19_42_53.944Z.png");
+        assert_ne!(view_name("abc", "1"), view_name("abc", "2"));
+        assert!(!view_name("abc", "../x/y").contains('/'));
+    }
+}
+
 #[derive(Serialize)]
 pub struct MapSummary {
     pub id: String,

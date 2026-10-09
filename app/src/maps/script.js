@@ -1,5 +1,6 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
 import { requireLogin } from '../login-prompt.js';
+import { hubStamp, cardImage, needsView } from './mapthumb.js';
 import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
@@ -9,7 +10,6 @@ let searchTerm = '';
 let installedCache = [];
 // Installed maps' pictures (the whole map, zoomed out): id -> data URL.
 const thumbs = new Map();
-let drawing = null;
 let catalog = [];
 let catalogError = false;
 let myUploadIds = new Set();
@@ -30,6 +30,7 @@ async function loadCatalog() {
       name: row.name,
       author: row.author,
       description: row.description,
+      stamp: hubStamp(row.createdAt),
       image: row.gallery?.length ? `${HUB_BASE}/api/maps/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
     }));
     catalogError = false;
@@ -71,10 +72,10 @@ function renderInstalled() {
   }
   list.innerHTML = filtered
     .map((m) => {
-      const entry = catalog.find((c) => c.id === m.id);
+      const entry = catalog.find((c) => c.id === m.id || c.id === m.hub);
       return `
     <div class="browse-card">
-      ${thumb(thumbs.get(m.id) || entry?.image)}
+      ${thumb(cardImage(entry?.image, thumbs.get(m.id)))}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(shownName(m))}</div>
         <div class="browse-card-meta">${m.groupCount} course${m.groupCount === 1 ? '' : 's'}</div>
@@ -111,7 +112,7 @@ function renderBrowse() {
       const mine = myUploadIds.has(entry.id);
       return `
     <div class="browse-card">
-      ${thumb(thumbs.get(entry.id) || entry.image, badge)}
+      ${thumb(cardImage(entry.image, thumbs.get(entry.id)), badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
         <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
@@ -200,7 +201,7 @@ window.__mapOpenUpload = function () {
 function renderGalleryChoice() {
   const el = document.getElementById('maps-upload-gallery-path');
   if (!chosenGalleryPaths.length) {
-    el.textContent = `None chosen (optional, up to ${MAX_GALLERY_IMAGES})`;
+    el.textContent = `None chosen: the map's drawn view is used (up to ${MAX_GALLERY_IMAGES} screenshots)`;
     return;
   }
   const first = chosenGalleryPaths[0].split(/[\\/]/).pop();
@@ -273,13 +274,20 @@ async function submitUpload() {
   confirmBtn.textContent = 'Uploading…';
   const { invoke } = window.__TAURI__.core;
   try {
+    // No screenshots picked: the map's drawn view goes up as its picture.
+    let gallery = chosenGalleryPaths;
+    if (!gallery.length) {
+      const { mapViewFile } = await import('./mapthumb.js');
+      const view = await mapViewFile(id).catch(() => null);
+      if (view) gallery = [view];
+    }
     await invoke('submit_installed_map_cmd', {
       token: getToken(),
       id,
       displayName: name,
       author: getUsername(),
       description,
-      galleryPaths: chosenGalleryPaths,
+      galleryPaths: gallery,
     });
     closeUploadModal();
     await loadCatalog();
@@ -302,38 +310,30 @@ async function refresh() {
   loadThumbs();
 }
 
-// Each map's picture: the saved one while newer than the map, else one drawn here (one at a time, in the background) and kept beside the map.
+// Maps with no uploaded picture get their drawn view: the kept one while the map is unchanged, else drawn here (one at a time, in the background) and kept in the app's data folder.
+let viewing = null;
 async function loadThumbs() {
-  const { invoke } = window.__TAURI__.core, missing = [];
-  for (const m of installedCache) {
-    const b64 = await invoke('read_map_thumb', { id: m.id }).catch(() => null);
-    if (b64) thumbs.set(m.id, 'data:image/png;base64,' + b64); else missing.push(m.id);
-  }
-  render();
-  if (!missing.length || drawing) return;
-  drawing = (async () => {
-    const { mapThumbFor } = await import('./mapthumb.js');
-    for (const id of missing) {
-      try {
-        const img = await mapThumbFor(id);
-        if (!img) continue;
-        thumbs.set(id, img);
-        render();
-        await invoke('write_map_thumb', { id, data: img });
-      } catch (e) { console.warn('map picture', id, e); }
-      await sleep(50);
-    }
-  })().finally(() => { drawing = null; });
-}
-
-// Browse cards get the same extracted fullmap picture as installed maps when we can make one.
-async function loadBrowseThumbs() {
-  const { mapThumbFor } = await import('./mapthumb.js');
-  for (const entry of catalog) {
-    if (thumbs.has(entry.id)) continue;
-    const img = await mapThumbFor(entry.id).catch(() => null);
-    if (img) { thumbs.set(entry.id, img); render(); }
-  }
+  if (viewing) { viewing.again = true; return; }
+  const run = viewing = { again: false };
+  try {
+    do {
+      run.again = false;
+      const { mapThumbFor } = await import('./mapthumb.js');
+      // Installed maps first (what the user sees), then the Browse maps they haven't installed.
+      const todo = [];
+      for (const m of installedCache) {
+        const entry = catalog.find((c) => c.id === m.id || c.id === m.hub);
+        todo.push({ key: m.id, id: m.id, stamp: entry && entry.id === m.id ? entry.stamp : undefined, uploaded: entry?.image });
+      }
+      for (const entry of catalog) if (!todo.some((t) => t.key === entry.id)) todo.push({ key: entry.id, id: entry.id, stamp: entry.stamp, uploaded: entry.image });
+      for (const t of todo) {
+        if (!needsView(t.uploaded, thumbs.get(t.key))) continue;
+        const img = await mapThumbFor(t.id, { stamp: t.stamp }).catch(() => null);
+        if (img) { thumbs.set(t.key, img); render(); }
+        await sleep(50);
+      }
+    } while (run.again);
+  } finally { viewing = null; }
 }
 
 // Each installed Hub map's Hub name beside it, for the game's map list to show.
@@ -358,5 +358,5 @@ export async function onShow() {
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
   syncHubNames();
-  loadBrowseThumbs();
+  loadThumbs();
 }
