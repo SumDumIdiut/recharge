@@ -688,7 +688,7 @@ pub fn hub_submit_background(token: &str, name: &str, author: &str, path: &std::
 pub fn hub_download_background(id: &str) -> Result<Vec<u8>, String> {
     sanitize_id(id)?;
     let mut res = ureq::get(&format!("{HUB_BASE}/api/backgrounds/{id}/file")).call().map_err(|e| playlist_err("download", e))?;
-    res.body_mut().with_config().limit(15 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())
+    res.body_mut().with_config().limit(95 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
