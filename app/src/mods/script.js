@@ -94,12 +94,14 @@ function renderInstalled() {
   list.innerHTML = filtered
     .map((m) => {
       const entry = catalog.find((c) => c.modId === m.id);
+      // Picture: the hub entry of this mod (by mod id, else by name); a neutral placeholder if the hub has none.
+      const pic = entry?.image || catalog.find((c) => c.image && String(c.name).trim().toLowerCase() === String(m.displayName).trim().toLowerCase())?.image;
       const protectedMod = PROTECTED_MOD_IDS.has(m.id);
       const hasUpdate = entry && !protectedMod && isNewerVersion(entry.version, m.version);
       const author = entry?.author || m.author;
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
-      ${thumb(entry, hasUpdate ? `<button class="badge badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
+      ${sharedThumb(pic, hasUpdate ? `<button class="badge badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
         <div class="browse-card-name${protectedMod ? ' browse-card-name-protected' : ''}">${escapeHtml(m.displayName)}</div>
         <div class="browse-card-meta">${author ? escapeHtml(author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>

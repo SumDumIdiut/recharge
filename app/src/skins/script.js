@@ -105,7 +105,7 @@ function renderInstalled() {
     .map(
       (s) => `
     <div class="browse-card" onclick="window.__skinOpenDetail('${escapeHtml(s.hubId ? 'hub:' + s.hubId : 'local:' + s.folderName)}')">
-      ${thumb(thumbCache.get(s.folderName))}
+      ${thumb(thumbCache.get(s.folderName) || catalog.find((c) => c.id === s.hubId)?.image)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(displayName(s))}</div>
       </div>
