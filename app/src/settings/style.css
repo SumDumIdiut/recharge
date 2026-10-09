@@ -1,18 +1,14 @@
-.settings-label { font-size: 20px; margin-bottom: 6px; color: var(--text); }
+.settings-label { font-size: 21px; margin-bottom: 10px; color: var(--green); }
 .settings-row { display: flex; align-items: center; gap: 8px; }
 .settings-input {
   flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  color: var(--text);
   font: inherit;
-  padding: 8px 10px;
+  padding: 9px 12px;
 }
 
 .theme-presets { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
 .preset-option {
   background: none;
-  border: 2px solid var(--line);
   color: var(--text);
   font: inherit;
   font-size: 17px;
@@ -69,11 +65,8 @@
   width: 100%;
   min-height: 140px;
   margin-top: 10px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  color: var(--text);
   font: 15px ui-monospace, monospace;
-  padding: 10px;
+  padding: 12px;
   resize: vertical;
 }
 
@@ -97,14 +90,24 @@
 #migrate-box { margin-top: 14px; padding-top: 4px; }
 #migrate-box .settings-row { margin-top: 10px; }
 
-/* Fit to screen: cards flow into as many columns as fit; the header stays visible while they scroll. */
-#view-settings .page { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 0 18px; align-items: start; min-width: 0; }
-#view-settings .page-header { grid-column: 1 / -1; position: sticky; top: -28px; z-index: 2; background: var(--bg); padding: 28px 0 10px; margin: -28px 0 6px; }
+/* Layout: one column (Recharge, Game path, Loader, Appearance, Uninstall); two balanced columns when wide. The view itself scrolls. */
+#view-settings .page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 18px; align-items: start; min-width: 0; }
+#view-settings .page-header { justify-self: start; position: sticky; top: -28px; z-index: 2; background: var(--bg); padding: 28px 0 10px; margin: -28px 0 6px; }
 #view-settings .card { min-width: 0; overflow-wrap: anywhere; }
-#view-settings .card:first-of-type { grid-column: 1 / -1; }
+#view-settings .col-main, #view-settings .col-appearance { display: flex; flex-direction: column; min-width: 0; }
+#view-settings .col-main { order: 1; }
+#view-settings .col-appearance { order: 2; }
+#view-settings #uninstall-card { order: 3; }
+@media (min-width: 1100px) {
+  #view-settings .page { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #view-settings .page-header { grid-column: 1 / -1; }
+  #view-settings .col-appearance { grid-column: 1; grid-row: 2; order: 0; }
+  #view-settings .col-main { grid-column: 2; grid-row: 2; order: 0; }
+  #view-settings #uninstall-card { grid-column: 1 / -1; grid-row: 3; order: 0; }
+}
 .css-textarea { max-width: 100%; box-sizing: border-box; }
 
-.whatsnew-panel { max-height: 260px; overflow-y: auto; border: 1px solid var(--line); background: var(--bg); padding: 8px 12px; margin-top: 8px; }
+.whatsnew-panel { max-height: 260px; overflow-y: auto; padding: 10px 14px; margin-top: 8px; }
 .whatsnew-panel[hidden] { display: none; }
 .wn-entry { padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
 .wn-entry:last-child { border-bottom: 0; }

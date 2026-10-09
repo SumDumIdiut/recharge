@@ -221,7 +221,7 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
     let source = if modded { &recharge } else { &original };
     if modded && !source.is_file() {
         return Err(
-            "Modded launch needs RechargeLoader installed (or reinstalled after a game update) - Settings > Install/Update."
+            "The modded build is missing (a game update removes it) - open Settings > RechargeLoader > Install / Update, then launch again."
                 .into(),
         );
     }
@@ -251,9 +251,47 @@ pub enum LaunchMethod {
     Steam,
 }
 
+/// Append a line to <app data>/<file> (best effort; keeps the last ~200 KB via one rotated .old file).
+pub(crate) fn append_log(app: &AppHandle, file: &str, msg: &str) {
+    use tauri::Manager;
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(file);
+    if std::fs::metadata(&path).map(|m| m.len() > 200_000).unwrap_or(false) {
+        let _ = std::fs::rename(&path, dir.join(format!("{file}.old")));
+    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(f, "[{secs}] {msg}");
+    }
+}
+
+/// Append a line to <app data>/launch.log.
+pub(crate) fn log_launch(app: &AppHandle, msg: &str) {
+    append_log(app, "launch.log", msg);
+}
+
+/// Frontend background-media diagnostics -> <app data>/media.log (one line, capped length).
+#[tauri::command]
+pub fn media_log(app: AppHandle, line: String) {
+    let line: String = line.chars().filter(|c| !c.is_control()).take(500).collect();
+    append_log(&app, "media.log", &line);
+}
+
 #[tauri::command]
 pub fn launch_game(app: AppHandle, modded: bool) -> Result<LaunchMethod, String> {
-    let game_path = settings::get_game_path(app)
+    log_launch(&app, &format!("launch requested (modded={modded})"));
+    let result = launch_game_inner(&app, modded);
+    match &result {
+        Ok(m) => log_launch(&app, &format!("launch ok via {}", if matches!(m, LaunchMethod::Steam) { "steam" } else { "direct" })),
+        Err(e) => log_launch(&app, &format!("launch FAILED: {e}")),
+    }
+    result
+}
+
+fn launch_game_inner(app: &AppHandle, modded: bool) -> Result<LaunchMethod, String> {
+    let game_path = settings::get_game_path(app.clone())
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     let game_dir = PathBuf::from(&game_path);
 
@@ -268,6 +306,7 @@ pub fn launch_game(app: AppHandle, modded: bool) -> Result<LaunchMethod, String>
     }
 
     deploy_build(&game_dir, modded)?;
+    log_launch(app, &format!("build deployed ({}), starting {}", if modded { "modded" } else { "vanilla" }, exe.path().display()));
 
     launch_exe(&exe, &game_dir)
 }

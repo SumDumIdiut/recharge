@@ -121,6 +121,23 @@ pub struct MigrateInfo {
     can_cleanup: bool,
     /// For installs we do not remove: what the user should run / delete afterwards.
     hint: String,
+    /// A development / test build (debug, RECHARGE_NO_LIVE / RECHARGE_LIVE_LOCAL, or run from a cargo target dir): never offered the switch-over.
+    dev: bool,
+}
+
+/// True for a path inside a cargo target dir (target/release, target/debug, or a CARGO_TARGET_DIR named cargo-target-*).
+fn path_is_cargo_target(p: &Path) -> bool {
+    let s = p.to_string_lossy().replace('\\', "/");
+    s.contains("/target/release/")
+        || s.contains("/target/debug/")
+        || p.components().any(|c| c.as_os_str().to_string_lossy().starts_with("cargo-target-"))
+}
+
+fn is_dev_build() -> bool {
+    cfg!(debug_assertions)
+        || std::env::var_os("RECHARGE_NO_LIVE").is_some()
+        || std::env::var_os("RECHARGE_LIVE_LOCAL").is_some()
+        || std::env::current_exe().map(|p| path_is_cargo_target(&p)).unwrap_or(false)
 }
 
 fn describe(old: &Old) -> (&'static str, bool, String) {
@@ -136,17 +153,20 @@ fn describe(old: &Old) -> (&'static str, bool, String) {
 #[tauri::command]
 pub async fn migrate_info(_app: AppHandle) -> MigrateInfo {
     tauri::async_runtime::spawn_blocking(|| {
-        let none = MigrateInfo { available: false, launcher_version: String::new(), old: "unknown".into(), can_cleanup: false, hint: String::new() };
+        let none = MigrateInfo { available: false, launcher_version: String::new(), old: "unknown".into(), can_cleanup: false, hint: String::new(), dev: false };
         if super::updater::is_managed() {
             return none;
+        }
+        if is_dev_build() {
+            return MigrateInfo { dev: true, ..none };
         }
         let Some(plat) = platform_id() else { return none };
         let Ok(l) = fetch_launcher_info(plat) else { return none };
         let (old, can_cleanup, hint) = describe(&detect_old());
-        MigrateInfo { available: true, launcher_version: l.version, old: old.into(), can_cleanup, hint }
+        MigrateInfo { available: true, launcher_version: l.version, old: old.into(), can_cleanup, hint, dev: false }
     })
     .await
-    .unwrap_or(MigrateInfo { available: false, launcher_version: String::new(), old: "unknown".into(), can_cleanup: false, hint: String::new() })
+    .unwrap_or(MigrateInfo { available: false, launcher_version: String::new(), old: "unknown".into(), can_cleanup: false, hint: String::new(), dev: false })
 }
 
 /// Download `sha` to `dest`, checking size and hash; nothing is left behind on failure.
@@ -502,6 +522,16 @@ fn installed_launcher_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_target_paths_are_dev_builds() {
+        assert!(path_is_cargo_target(Path::new("/home/o/Recharge/app/src-tauri/target/release/recharge")));
+        assert!(path_is_cargo_target(Path::new("/x/target/debug/recharge")));
+        assert!(path_is_cargo_target(Path::new("/run/media/o/Drive/claude-activity/cargo-target-app/release/recharge")));
+        assert!(!path_is_cargo_target(Path::new("/usr/bin/recharge")));
+        assert!(!path_is_cargo_target(Path::new("/opt/Recharge/recharge")));
+        assert!(!path_is_cargo_target(Path::new("/home/o/.local/share/recharge/app/recharge")));
+    }
 
     #[test]
     fn total_is_read_from_the_launcher_log() {
