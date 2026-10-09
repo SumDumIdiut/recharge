@@ -189,5 +189,35 @@ check "desktop entry removed" "[ ! -e $XDG_DATA_HOME/applications/recharge.deskt
 check "temp copy removed itself" "[ -z \"\$(ls ${TMPDIR:-/tmp}/recharge-uninstall-* 2>/dev/null | grep -v '\.log$')\" ]"
 wait $FAKE 2>/dev/null
 
+echo "== first install picks the channel (--channel > file name > old settings > stable)"
+gen 1 ok; serve
+export RECHARGE_LAUNCHER_NO_HEALTHCHECK=1
+fresh() { rm -rf "$ROOT" "$DATA_OLD"; }
+chan() { cat "$ROOT/channel.txt" 2>/dev/null; }
+mkdir -p "$W/dl"; cp "$BIN" "$W/dl/recharge-beta"; cp "$BIN" "$W/dl/Recharge-Beta.exe"; cp "$BIN" "$W/dl/recharge"
+fresh; "$W/dl/recharge" --no-ui >/dev/null 2>&1
+check "plain name -> stable" "[ \"\$(chan)\" = stable ]"
+fresh; "$W/dl/recharge-beta" --no-ui >/dev/null 2>&1
+check "file named recharge-beta -> beta" "[ \"\$(chan)\" = beta ]"
+fresh; "$W/dl/Recharge-Beta.exe" --no-ui >/dev/null 2>&1
+check "Recharge-Beta.exe (any case) -> beta" "[ \"\$(chan)\" = beta ]"
+fresh; mkdir -p "$DATA_OLD"; echo '{"update_channel":"beta"}' > "$DATA_OLD/settings.json"
+"$W/dl/recharge" --no-ui >/dev/null 2>&1
+check "old settings.json says beta -> beta" "[ \"\$(chan)\" = beta ]"
+check "old settings.json left alone" "grep -q beta $DATA_OLD/settings.json"
+fresh; mkdir -p "$DATA_OLD"; echo 'not json {' > "$DATA_OLD/settings.json"
+"$W/dl/recharge" --no-ui >/dev/null 2>&1
+check "invalid settings.json -> stable" "[ \"\$(chan)\" = stable ]"
+fresh; mkdir -p "$DATA_OLD"; echo '{"update_channel":"beta"}' > "$DATA_OLD/settings.json"
+"$W/dl/recharge-beta" --channel stable --no-ui >/dev/null 2>&1
+check "--channel stable overrides name and settings" "[ \"\$(chan)\" = stable ]"
+fresh; "$W/dl/recharge" --channel beta --no-ui >/dev/null 2>&1
+check "--channel beta on plain name -> beta" "[ \"\$(chan)\" = beta ]"
+echo stable > "$ROOT/channel.txt"; rm -f "$ROOT/state.json"
+"$W/dl/recharge-beta" --no-ui >/dev/null 2>&1
+check "existing channel.txt is kept" "[ \"\$(chan)\" = stable ]"
+unset RECHARGE_LAUNCHER_NO_HEALTHCHECK
+unserve; fresh
+
 echo; echo "passed $pass, failed $failn"
 [ $failn -eq 0 ]

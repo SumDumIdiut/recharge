@@ -127,6 +127,7 @@ fn main() -> ExitCode {
     // First run from anywhere else (Downloads, a USB stick...): install, then continue as installed.
     if !install::is_installed(&root, &exe) {
         log::init(&root);
+        pick_first_channel(&o, &root, &exe);
         // A fresh download replaces every older install first (before we write anything of our own:
         // the old NSIS uninstaller deletes the Uninstall\Recharge registry key).
         old::cleanup(&root, &exe);
@@ -251,6 +252,39 @@ fn recover(ctx: &Ctx, st: &mut state::State, exe: &std::path::Path, pass: &[OsSt
     ExitCode::FAILURE
 }
 
+/// First install only (no state.json / channel.txt in the root yet): record which channel to follow.
+/// Order: explicit --channel > own file name contains "beta" (the site's Beta download) > an older
+/// Recharge's settings.json says beta > stable. Existing installs are never touched here.
+fn pick_first_channel(o: &Opts, root: &std::path::Path, exe: &std::path::Path) {
+    if root.join("state.json").exists() || root.join("channel.txt").exists() {
+        return;
+    }
+    let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let dirs = install::data_dirs();
+    let c = first_channel(o.channel.as_deref(), &name, &dirs);
+    log!("first install: channel {c}");
+    let _ = std::fs::create_dir_all(root);
+    let _ = std::fs::write(root.join("channel.txt"), c);
+}
+
+fn first_channel(explicit: Option<&str>, exe_name: &str, settings_dirs: &[PathBuf]) -> &'static str {
+    match explicit {
+        Some("beta") => return "beta",
+        Some(_) => return "stable",
+        None => {}
+    }
+    if exe_name.to_lowercase().contains("beta") {
+        return "beta";
+    }
+    for d in settings_dirs {
+        let v: Option<serde_json::Value> = std::fs::read(d.join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        if v.and_then(|v| v.get("update_channel")?.as_str().map(|s| s == "beta")) == Some(true) {
+            return "beta";
+        }
+    }
+    "stable"
+}
+
 fn resolve_channel(o: &Opts, root: &std::path::Path) -> String {
     let file = root.join("channel.txt");
     if let Some(c) = &o.channel {
@@ -327,4 +361,32 @@ fn fatal(msg: &str) -> ExitCode {
         let _ = Command::new("powershell").args(["-NoProfile", "-Command", &ps]).creation_flags(0x0800_0000).status();
     }
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_channel_order() {
+        let t = std::env::temp_dir().join(format!("rl-fc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (a, b, c) = (t.join("a"), t.join("b"), t.join("c"));
+        for d in [&a, &b, &c] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(b.join("settings.json"), "{not json").unwrap();
+        std::fs::write(c.join("settings.json"), r#"{"update_channel":"beta"}"#).unwrap();
+        let none = [a.clone(), b.clone()];
+        let beta = [a.clone(), b.clone(), c.clone()];
+        assert_eq!(first_channel(None, "Recharge.exe", &none), "stable");
+        assert_eq!(first_channel(None, "Recharge-Beta.exe", &none), "beta");
+        assert_eq!(first_channel(None, "recharge-beta", &none), "beta");
+        assert_eq!(first_channel(None, "recharge", &beta), "beta");
+        assert_eq!(first_channel(Some("stable"), "recharge-beta", &beta), "stable");
+        assert_eq!(first_channel(Some("beta"), "recharge", &none), "beta");
+        std::fs::write(c.join("settings.json"), r#"{"update_channel":"stable"}"#).unwrap();
+        assert_eq!(first_channel(None, "recharge", &beta), "stable");
+        let _ = std::fs::remove_dir_all(&t);
+    }
 }
