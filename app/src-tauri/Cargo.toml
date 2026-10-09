@@ -28,3 +28,6 @@ tiny_http = "0.12.0"
 sha2 = "0.10"
 ureq = { version = "3.4.0", features = ["json", "multipart"] }
 
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }

@@ -1,3 +1,5 @@
+import { mediaBase, mediaUrl, showVideo, clearVideo, setSound, soundFor, pollGameRunning, currentVideo, currentSound } from './bgmedia.js';
+
 export const PRESETS = [
   {
     id: 'dark',
@@ -99,6 +101,12 @@ const FADE_MS = 1000;
 let bgClock = () => Date.now(); // overridable for tests
 let bgBusy = false;
 
+// One steady flag: <html class="has-bg"> while a background playlist is active. Set at startup (from the last shown item)
+// and corrected by changeBackground() once the config is known; never touched per item or while media loads.
+function setHasBg(on) {
+  document.documentElement.classList.toggle('has-bg', !!on);
+}
+
 function bgLoad(key) {
   try { return localStorage.getItem(key); } catch (e) { return null; }
 }
@@ -128,6 +136,37 @@ function crossfadeTexture(dataUrl) {
   });
 }
 
+// Not due yet (e.g. restarted within the interval): bring back the current item's video and sound without rotating.
+async function restoreCurrent(invoke, playlist) {
+  const cur = bgLoad(BG_CUR_KEY);
+  if (!cur || !(playlist.images || []).includes(cur)) return;
+  const isVideo = /\.(mp4|webm)$/i.test(cur);
+  const sound = soundFor(playlist.sound, playlist.images, isVideo);
+  if (isVideo && !currentVideo()) {
+    const base = await mediaBase(invoke);
+    const video = await showVideo(mediaUrl(base, cur));
+    if (!video) return;
+  }
+  await syncSound(invoke, playlist);
+}
+
+// Swap the sound for the current item in place (sound setting changed): never picks or advances the background.
+async function syncSound(invoke, playlist) {
+  const cur = bgLoad(BG_CUR_KEY);
+  const isVideo = !!cur && /\.(mp4|webm)$/i.test(cur);
+  const sound = soundFor(playlist.sound, playlist.images, isVideo);
+  if (sound !== (currentSound() || null)) setSound(sound, sound && sound !== 'own' ? await mediaBase(invoke) : null);
+}
+
+export async function applySoundSetting() {
+  try {
+    const { invoke } = window.__TAURI__.core;
+    const config = await invoke('get_backgrounds_config');
+    const playlist = (config.playlists || []).find((p) => p.id === config.active_playlist);
+    if (playlist) await syncSound(invoke, playlist);
+  } catch (e) {}
+}
+
 // mode 'launch': change if the active playlist is every-launch or due; 'tick': only timed playlists that are due; 'force': always.
 export async function changeBackground(mode = 'launch') {
   if (bgBusy) return false;
@@ -136,16 +175,36 @@ export async function changeBackground(mode = 'launch') {
     const { invoke } = window.__TAURI__.core;
     const config = await invoke('get_backgrounds_config');
     const playlist = (config.playlists || []).find((p) => p.id === config.active_playlist);
-    if (!playlist) return false;
+    if (!playlist) {
+      setHasBg(false);
+      clearVideo();
+      setSound(null);
+      return false;
+    }
+    setHasBg(true);
     const interval = playlist.interval || 0;
     const last = Number(bgLoad(BG_LAST_KEY)) || 0;
     const due = interval > 0 && bgClock() - last >= interval * 1000;
-    if (mode === 'tick' ? !due : mode === 'launch' && interval > 0 && !due) return false;
+    if (mode === 'tick' ? !due : mode === 'launch' && interval > 0 && !due) {
+      await restoreCurrent(invoke, playlist);
+      return false;
+    }
     const picked = await invoke('pick_background', { exclude: bgLoad(BG_CUR_KEY) });
-    if (!picked || !picked.data_url) return false;
+    if (!picked || (picked.kind !== 'video' && !picked.data_url)) return false;
+    if (picked.kind === 'video') {
+      const base = await mediaBase(invoke);
+      const video = await showVideo(mediaUrl(base, picked.file));
+      if (!video) return false;
+      bgStore(BG_LAST_KEY, String(bgClock()));
+      bgStore(BG_CUR_KEY, picked.file);
+      setSound(picked.sound, base);
+      return true;
+    }
     bgStore(BG_LAST_KEY, String(bgClock()));
     bgStore(BG_CUR_KEY, picked.file);
     await crossfadeTexture(picked.data_url);
+    clearVideo();
+    setSound(picked.sound, picked.sound && picked.sound !== 'own' ? await mediaBase(invoke) : null);
     return true;
   } catch (e) {
     return false;
@@ -161,11 +220,18 @@ export function applyRandomBackground() {
 
 // App-wide: checks now and every `periodMs` whether a timed playlist is due. Safe to call twice.
 let bgTimer = null;
+let gameTimer = null;
 export function startBackgroundTimer({ periodMs = 15000, now } = {}) {
   if (now) bgClock = now;
   if (bgTimer) clearInterval(bgTimer);
+  setHasBg(!!bgLoad(BG_CUR_KEY));
   bgTimer = setInterval(() => changeBackground('tick'), periodMs);
-  return () => { clearInterval(bgTimer); bgTimer = null; };
+  // Videos and sound stop while the game runs: look every few seconds.
+  const poll = () => { const invoke = window.__TAURI__?.core?.invoke; if (invoke) pollGameRunning(invoke); };
+  poll();
+  if (gameTimer) clearInterval(gameTimer);
+  gameTimer = setInterval(poll, 5000);
+  return () => { clearInterval(bgTimer); clearInterval(gameTimer); bgTimer = null; gameTimer = null; };
 }
 
 // Call after the active playlist changed (force) or its interval did (re-check if due).

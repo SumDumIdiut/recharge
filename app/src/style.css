@@ -46,6 +46,16 @@
   --danger-dim: oklch(65% 0.2 25 / 0.6);
   --overlay: rgba(0, 0, 0, 0.65);
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  /* Shared tokens: tight corners, see-through panel, one faint 1px edge, no glow. */
+  --radius: 6px;
+  --radius-sm: 4px;
+  --glass: color-mix(in srgb, var(--panel) 74%, transparent);
+  --glass-hi: color-mix(in srgb, var(--panel) 88%, transparent);
+  /* Cheap on purpose: a blurred shadow or a two-layer inset behind every card repaints on each scroll step in WebKitGTK
+     (measured: 29 -> 19 ms/frame on a 48-card page), so cards get one flat 1px ring and no blurred shadow. */
+  --hl: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
+  --shadow-soft: 0 0 0 transparent;
+  --hover: color-mix(in srgb, var(--text) 9%, transparent);
   color-scheme: dark;
 }
 
@@ -54,14 +64,34 @@ body {
   font-family: 'VT323', ui-monospace, monospace;
   font-size: 19px;
   background-color: var(--bg);
+  color: var(--text);
+  position: relative;
+  scrollbar-width: thin;
+  scrollbar-color: var(--green-dim) transparent;
+}
+/* The picture lives on its own fixed, composited layer instead of body's background-attachment:fixed: WebKitGTK repaints a
+   fixed background on every scroll step, a separate layer is just moved. Sits above the canvas colour and below the video layer. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background-image: var(--bg-image);
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  background-attachment: fixed;
-  color: var(--text);
-  position: relative;
+  transform: translateZ(0);
+  will-change: transform;
 }
+.bg-video-layer { transform: translateZ(0); will-change: transform; }
+* { scrollbar-color: var(--green-dim) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--green); }
+::-webkit-scrollbar-track { background: transparent; }
+:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; border-radius: var(--radius-sm); }
+
 
 #bg-grid {
   position: fixed;
@@ -88,19 +118,19 @@ body {
 .wave-trace polyline.beat-sharp { animation: wave-beat-3 0.4s ease-out; }
 
 @keyframes wave-beat-1 {
-  0%, 100% { stroke-width: 2; filter: drop-shadow(0 0 0 transparent); }
-  50% { stroke-width: 3.2; filter: drop-shadow(0 0 7px var(--green)); }
+  0%, 100% { stroke-width: 2; }
+  50% { stroke-width: 3.2; }
 }
 @keyframes wave-beat-2 {
-  0%, 100% { stroke-width: 2; filter: drop-shadow(0 0 0 transparent); }
-  25% { stroke-width: 3; filter: drop-shadow(0 0 5px var(--green)); }
-  45% { stroke-width: 2; filter: drop-shadow(0 0 0 transparent); }
-  60% { stroke-width: 3.6; filter: drop-shadow(0 0 8px var(--green)); }
+  0%, 100% { stroke-width: 2; }
+  25% { stroke-width: 3; }
+  45% { stroke-width: 2; }
+  60% { stroke-width: 3.6; }
 }
 @keyframes wave-beat-3 {
-  0% { stroke-width: 2; filter: drop-shadow(0 0 0 transparent); }
-  15% { stroke-width: 4; filter: drop-shadow(0 0 9px var(--green)); }
-  100% { stroke-width: 2; filter: drop-shadow(0 0 0 transparent); }
+  0% { stroke-width: 2; }
+  15% { stroke-width: 4; }
+  100% { stroke-width: 2; }
 }
 
 .crumb-bar {
@@ -111,7 +141,8 @@ body {
   display: flex;
   align-items: center;
   padding: 0 28px;
-  background: var(--panel);
+  /* translucent like the panels, so the background picture shows through the top bar */
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
   border-bottom: 1px solid var(--line);
 }
 .crumb-bar[hidden] { display: none; }
@@ -131,6 +162,7 @@ body {
   left: 0; right: 0; bottom: 0;
   top: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: none;
   z-index: 1;
   padding: 28px 36px;
@@ -143,38 +175,50 @@ body {
 
 .home-page { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
-.home-header { margin-bottom: 34px; }
+.home-header { margin-bottom: 26px; }
 .home-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .home-title-right { display: flex; align-items: center; gap: 18px; }
 .home-title-left { display: flex; align-items: center; gap: 14px; }
-.home-logo { width: 140px; height: 140px; display: block; }
-.home-title { font-size: 76px; letter-spacing: 2px; color: var(--text); text-transform: uppercase; }
+.home-logo { width: 120px; height: 120px; display: block; }
+.home-title { font-size: 76px; letter-spacing: 3px; color: var(--text); text-transform: uppercase; }
 
 .home-account-badge {
-  background: none;
-  border: 1px solid var(--line);
-  color: var(--text-dim);
+  background: var(--glass);
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--hl);
+  color: var(--text);
   font: inherit;
   font-size: 16px;
   text-transform: uppercase;
-  padding: 9px 20px;
+  padding: 9px 22px;
   cursor: pointer;
   flex-shrink: 0;
+  transition: box-shadow 140ms ease, color 140ms ease;
 }
-.home-account-badge:hover { border-color: var(--line-hi); color: var(--text); }
-.home-account-badge.is-logged-in { border-color: var(--green-dim); color: var(--green); }
+.home-account-badge:hover { background: var(--glass-hi); }
+.home-account-badge.is-logged-in { color: var(--green); box-shadow: var(--hl), inset 0 0 0 1px var(--green-dim); }
 .home-account-badge.is-admin {
   font-size: 19px;
   letter-spacing: 1px;
   padding: 11px 24px;
-  border-color: var(--green);
-  box-shadow: 0 0 12px rgba(61, 220, 132, 0.25);
+  color: var(--green);
+  box-shadow: var(--hl), inset 0 0 0 1px var(--green);
 }
 
 /* The three columns share the window's width so a wide window leaves no unused strip on the right. */
-.home-grid { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; flex: 1; min-height: 0; }
+/* Wide: one bounded row, so the What's new panel is exactly as tall as the space under the header and its list scrolls inside.
+   (A wrapping row sizes its line to the tallest item and would let the list grow past the window.) */
+.home-grid { display: flex; flex-wrap: nowrap; gap: 24px; align-items: stretch; flex: 1; min-height: 0; }
+/* Narrow: the columns wrap, so the page scrolls instead and the news panel gets a fixed share of the viewport. */
+@media (max-width: 1100px) {
+  .home-grid { flex-wrap: wrap; flex: none; }
+  #view-home.v-on { overflow-y: auto; }
+  .home-page { flex: none; }
+  .home-log-panel { height: 60vh; min-height: 260px; }
+}
 
-.home-panel-title { font-size: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; }
+.home-panel-title { font-size: 20px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--green); margin-bottom: 12px; }
 .home-install-list { display: flex; flex-direction: column; gap: 14px; margin: 10px 0; }
 
 .home-patreon-link { display: flex; align-items: center; color: var(--text-dim); transition: color 0.15s; }
@@ -186,7 +230,7 @@ body {
   align-items: stretch;
   gap: 10px;
   padding-bottom: 14px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
 }
 .home-install-row:last-child { border-bottom: none; padding-bottom: 0; }
 .home-install-row .btn { width: 100%; margin-top: 0; }
@@ -200,7 +244,7 @@ body {
 /* Installation takes a modest share of the row: wide enough for the path, narrow enough not to compete with the menu. */
 .home-panel { flex: 0.7 1 280px; min-width: 250px; max-width: 340px; }
 
-.home-menu-col { display: flex; flex-direction: column; gap: 14px; flex: 1.7 1 420px; min-width: 400px; }
+.home-menu-col { display: flex; flex-direction: column; gap: 16px; flex: 1.7 1 420px; min-width: 400px; }
 
 .home-log-panel { display: flex; flex-direction: column; flex: 0.9 1 320px; min-width: 300px; max-width: 460px; min-height: 0; }
 .home-news {
@@ -209,64 +253,83 @@ body {
   gap: 12px;
   margin: 10px 0 18px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 2px 6px 6px 2px;
   flex: 1; /* runs to the bottom of the window and scrolls, rather than stopping short */
   min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--green-dim) transparent;
 }
-.news-block { background: var(--panel); border: 1px solid var(--line); padding: 14px; display: flex; flex-direction: column; gap: 8px; }
-/* A tile with one of library's thumbnails lets the app background pass through. */
-.news-block:has(.news-img), .news-block:has(.news-img-crop) { background: transparent; }
+/* Cards: soft glass, rounded, inner highlight; a tile with a library picture lets the app background pass through its text area too. */
+.news-block { flex-shrink: 0; position: relative; overflow: hidden; background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 16px 16px 16px 18px; display: flex; flex-direction: column; gap: 8px; transition: box-shadow 140ms ease, background 140ms ease; }
 .news-block[onclick] { cursor: pointer; }
-.news-block[onclick]:hover { border-color: var(--line-hi); }
-.news-meta { font-size: 12px; color: var(--text-dim); }
+.news-block[onclick]:hover { background: var(--glass-hi); box-shadow: var(--hl), var(--shadow-soft); }
+.news-block[onclick]::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; background: var(--green); opacity: 0; transition: opacity 140ms ease; }
+.news-block[onclick]:hover::before { opacity: 1; }
+.news-meta { font-size: 13px; color: var(--green); letter-spacing: 0.04em; }
 .news-title { font-size: 18px; line-height: 1.25; word-break: break-word; }
-.news-img { width: 100%; max-height: 96px; object-fit: cover; display: block; border: 1px solid var(--line); }
-.news-img-crop { width: 124px; height: 124px; margin: 0 auto; background-repeat: no-repeat; background-color: transparent; border: 1px solid var(--line); display: block; }
+.news-img { width: 100%; max-height: 96px; object-fit: cover; display: block; border-radius: var(--radius-sm); }
+.news-img-crop { width: 124px; height: 124px; margin: 0 auto; background-repeat: no-repeat; background-color: transparent; border-radius: var(--radius-sm); display: block; }
 .news-body { font-size: 13px; line-height: 1.45; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
-.home-launch-row { display: flex; gap: 12px; }
+.home-launch-row { display: flex; gap: 16px; }
 .home-launch-row .home-tile { flex: 1; }
+/* Vanilla / Modded: big green-edged play buttons. */
 .home-tile {
-  background: none;
-  border: 1px solid var(--line);
+  position: relative;
+  background: var(--glass);
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: var(--hl), inset 0 0 0 1px var(--green-dim);
   color: var(--green);
   font: inherit;
-  font-size: 23px;
+  font-size: 28px;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 24px 22px;
+  padding: 30px 26px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 120ms ease;
+  transition: box-shadow 140ms ease, background 140ms ease, transform 140ms ease;
 }
-.home-tile:hover:not(:disabled) { border-color: var(--green-dim); }
+.home-tile:hover:not(:disabled) { background: var(--glass-hi); box-shadow: var(--hl), inset 0 0 0 1px var(--green); }
+.home-tile:active:not(:disabled) { transform: translateY(1px); }
 .home-tile:disabled { opacity: 0.5; cursor: default; }
 
 .home-play-status { color: var(--text-dim); font-size: 15px; min-height: 20px; }
+.home-play-status:empty { min-height: 0; margin-top: -8px; }
 
-/* One row per entry: a two-column grid left odd rows stranded with a hole beside them. */
-.home-menu-rows { display: flex; flex-direction: column; gap: 10px; }
+/* The menu is one rounded card; rows are divided by hairlines and light up green on hover. */
+.home-menu-rows { display: flex; flex-direction: column; background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 6px; }
 
 .home-menu-row {
+  position: relative;
   background: none;
-  border: 1px solid var(--line);
+  border: none;
+  border-radius: var(--radius-sm);
   color: var(--text);
   font: inherit;
-  font-size: 22px;
+  font-size: 23px;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 20px 22px;
+  padding: 17px 22px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
-.home-menu-row:hover { border-color: var(--line-hi); background: rgba(249, 255, 228, 0.05); }
+.home-menu-row + .home-menu-row::after { content: ''; position: absolute; left: 22px; right: 22px; top: 0; height: 1px; background: color-mix(in srgb, var(--text) 9%, transparent); }
+.home-menu-row::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; background: var(--green); opacity: 0; transition: opacity 140ms ease; }
+.home-menu-row:hover, .home-menu-row:focus-visible { background: var(--hover); outline: none; }
+.home-menu-row:hover::before, .home-menu-row:focus-visible::before { opacity: 1; }
+.home-menu-row:hover::after, .home-menu-row:hover + .home-menu-row::after { opacity: 0; }
 
 .page-header { font-size: 26px; color: var(--text); margin-bottom: 16px; letter-spacing: 0.5px; text-transform: uppercase; }
 
 .btn {
   appearance: none;
   -webkit-appearance: none;
-  background: none;
-  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--hl);
   color: var(--text);
   font: inherit;
   font-size: 18px;
@@ -276,11 +339,12 @@ body {
   height: 48px;
   box-sizing: border-box;
   cursor: pointer;
+  transition: background 140ms ease, box-shadow 140ms ease, color 140ms ease;
 }
-.btn:hover { border-color: var(--line-hi); }
+.btn:hover { background: color-mix(in srgb, var(--text) 14%, transparent); }
 .btn:disabled { cursor: default; }
-.btn-primary { border-color: var(--green-dim); color: var(--green); }
-.btn-primary:hover { border-color: var(--green); }
+.btn-primary { background: var(--green); color: var(--bg); box-shadow: none; }
+.btn-primary:hover { background: var(--green); filter: brightness(1.08); }
 
 .home-panel .btn { width: 100%; margin-top: 22px; }
 
@@ -370,3 +434,24 @@ body {
 }
 .news-changes { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.45; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; max-height: 8.5em; overflow: hidden; }
 .tag-release { color: var(--green); border-color: var(--green); }
+
+
+/* A background playlist is active: theme.js sets the steady class has-bg on <html>. Text stays in the theme's own colours;
+   headers, tabs and the top bar get a see-through panel of the theme's panel colour so they read on any picture. */
+:root.has-bg .crumb-bar { background: color-mix(in srgb, var(--panel) 82%, transparent); border-bottom-color: transparent; }
+:root.has-bg #bg-grid { display: none; }
+:root.has-bg { --glass: color-mix(in srgb, var(--panel) 86%, transparent); --glass-hi: color-mix(in srgb, var(--panel) 94%, transparent); }
+:root.has-bg .page-header,
+:root.has-bg .browser-subtabs,
+:root.has-bg .home-play-status:not(:empty) {
+  background: var(--glass);
+  border-radius: var(--radius-sm);
+}
+:root.has-bg .page-header { display: inline-block; padding: 4px 12px; }
+:root.has-bg .browser-subtabs { padding: 4px; }
+/* Panels are glass with or without a picture. */
+.home-panel { background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); }
+.home-log-panel { background: none; box-shadow: none; padding: 0 !important; }
+.home-play-status:not(:empty) { padding: 8px 14px; }
+/* What's new is a plain green heading; over a picture the whole column sits on one glass panel so the title reads. */
+:root.has-bg .home-log-panel { background: var(--glass); box-shadow: var(--hl); padding: 16px 14px 0 !important; }
