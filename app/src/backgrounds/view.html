@@ -7,20 +7,51 @@
       <button class="subtab-btn" data-subtab="playlists" onclick="window.__bgSubtab('playlists')">Playlists</button>
       <button class="subtab-btn" data-subtab="community" onclick="window.__bgSubtab('community')">Community</button>
     </div>
-    <button class="btn" id="bg-upload-btn">Upload</button>
+    <div class="bg-toolbar-right">
+      <button class="btn" id="bg-speaker" title="Play the sound of the active background (off by default; never plays during the game)" aria-pressed="false">Sound off</button>
+      <input type="range" id="bg-volume" min="0" max="100" step="1" title="Volume" />
+      <label class="bg-switch bg-keep" title="Keep the sound going when Recharge is minimised"><input type="checkbox" id="bg-keep-playing" /><span class="bg-switch-track"></span><span class="bg-switch-label">Keep playing in background</span></label>
+      <button class="btn" id="bg-upload-btn" title="Add a picture, video or sound from your computer">Add image...</button>
+      <button class="btn" id="bg-share-btn" title="Share images with the community" aria-pressed="false">Upload</button>
+    </div>
   </div>
+  <div class="bg-share-hint" id="bg-share-hint" hidden></div>
 
   <div id="bg-browse-view">
-    <div class="settings-row bg-selection-bar" id="bg-selection-bar" hidden>
-      <div class="settings-sub" id="bg-selection-count"></div>
-      <input type="text" class="settings-input" id="bg-selection-name" placeholder="Playlist name" style="max-width: 220px;" />
-      <button class="btn btn-primary" id="bg-selection-save">Save playlist</button>
-      <button class="btn" id="bg-selection-cancel">Cancel</button>
-    </div>
     <div class="browser-grid" id="bg-browse-grid"></div>
   </div>
 
   <div id="bg-playlists-view" style="display: none;">
+    <div class="bg-pl-toolbar" id="bg-pl-toolbar"><button class="btn btn-primary" id="bg-pl-new">+ New playlist</button></div>
+    <div class="bg-editor" id="bg-editor" hidden>
+      <div class="bg-editor-title" id="bg-editor-title">New playlist</div>
+      <div class="bg-editor-row">
+        <input type="text" class="settings-input" id="bg-ed-name" placeholder="Playlist name" maxlength="80" aria-label="Playlist name" />
+        <select class="settings-input bg-interval" id="bg-ed-interval" title="Change background" aria-label="Change background"></select>
+        <select class="settings-input bg-interval" id="bg-ed-sound" title="Sound while this playlist is active (turn the speaker on above)" aria-label="Sound"></select>
+      </div>
+      <div class="bg-editor-row">
+        <button class="btn" id="bg-ed-files">Add files...</button>
+        <button class="btn" id="bg-ed-folder">Add folder...</button>
+        <label class="bg-check"><input type="checkbox" id="bg-ed-recursive" /> include sub-folders</label>
+        <button class="btn" id="bg-ed-library">Add from library...</button>
+      </div>
+      <div class="bg-editor-progress" id="bg-ed-progress" role="status" hidden></div>
+      <div class="bg-editor-skipped" id="bg-ed-skipped" hidden></div>
+      <div class="bg-library-picker" id="bg-ed-picker" hidden>
+        <div class="bg-picker-grid" id="bg-ed-picker-grid"></div>
+        <div class="bg-editor-row">
+          <button class="btn btn-primary" id="bg-ed-picker-add">Add selected</button>
+          <button class="btn" id="bg-ed-picker-close">Close</button>
+        </div>
+      </div>
+      <div class="bg-strip-label" id="bg-ed-count"></div>
+      <div class="bg-strip" id="bg-ed-strip"></div>
+      <div class="bg-editor-row">
+        <button class="btn btn-primary" id="bg-ed-save">Save</button>
+        <button class="btn" id="bg-ed-cancel">Cancel</button>
+      </div>
+    </div>
     <div class="bg-playlist-list" id="bg-playlist-list"></div>
   </div>
 

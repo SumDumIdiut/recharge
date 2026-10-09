@@ -1,8 +1,12 @@
 import { escapeHtml, ICON_TRASH } from '../ui.js';
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
 import { openAccount } from '../login-prompt.js';
-import { recheckBackground } from '../theme.js';
+import { recheckBackground, applySoundSetting } from '../theme.js';
+import { getAudioPrefs, saveAudioPrefs } from '../bgmedia.js';
+import { lazyThumb, loadThumb } from './thumbs.js';
+import { mediaKind, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, activeTarget, soundOptions, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB } from './media.js';
 
+import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, LIMITS_TEXT } from './editor.js';
 import { loadCommunity, imageCardsHtml, playlistCardsHtml, playlistGalleryUrl as galleryUrl, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
 
 const INTERVALS = [
@@ -16,11 +20,14 @@ const INTERVALS = [
 ];
 
 let images = []; // filenames, newest first
-let selected = new Set();
-let editingId = null;
+let draft = null; // the playlist being edited in the Playlists tab
 let currentSubtab = 'browse';
 let communitySection = 'images';
 let imagePublic = {}; // file -> hub id while public
+let shareMode = false;
+const NOTE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg>';
+
+const audioPrefs = () => getAudioPrefs();
 
 function showError(msg, withAccountLink = false) {
   const el = document.getElementById('bg-error');
@@ -47,59 +54,80 @@ async function refreshImages() {
   imagePublic = config.image_public || {};
 }
 
-function updateSelectionBar() {
-  const bar = document.getElementById('bg-selection-bar');
-  bar.hidden = selected.size === 0;
-  document.getElementById('bg-selection-count').textContent = `${selected.size} selected`;
+// Puts the picture / video frame of a library file into a thumbnail element (and a video's duration into its badge).
+// Small cached thumbnails (see thumbs.js), fetched only when the element is near the viewport.
+function fillThumb(invoke, el, file) {
+  const kind = mediaKind(file);
+  if (kind !== 'image' && kind !== 'video') return;
+  lazyThumb(el, async () => {
+    const t = await loadThumb(invoke, file, kind);
+    if (!el.isConnected && !t) return;
+    if (t?.url) el.style.backgroundImage = `url("${t.url}")`;
+    else if (kind === 'image' && !t) {
+      // media server not reachable: fall back to the whole picture through the backend
+      invoke('read_background_image', { fileName: file }).then((url) => { el.style.backgroundImage = `url("${url}")`; }).catch(() => {});
+    }
+    if (kind === 'video') {
+      const badge = el.parentElement?.querySelector('[data-duration]');
+      if (badge) badge.textContent = formatDuration(t?.duration) || 'video';
+    }
+  });
 }
 
-function resetSelection() {
-  editingId = null;
-  selected = new Set();
-  document.getElementById('bg-selection-name').value = '';
+function updateShareUi() {
+  const btn = document.getElementById('bg-share-btn');
+  btn.classList.toggle('btn-primary', shareMode);
+  btn.classList.toggle('is-on', shareMode);
+  btn.setAttribute('aria-pressed', String(shareMode));
+  const hint = document.getElementById('bg-share-hint');
+  hint.hidden = !shareMode;
+  hint.textContent = SHARE_HINT;
 }
 
 function renderBrowse() {
   const { invoke } = window.__TAURI__.core;
   const grid = document.getElementById('bg-browse-grid');
+  grid.classList.toggle('bg-share-mode', shareMode);
+  updateShareUi();
   if (!images.length) {
-    grid.innerHTML = '<div class="empty-state">No background images yet - click Upload to add some.</div>';
-    updateSelectionBar();
+    grid.innerHTML = '<div class="empty-state">No backgrounds yet - click Add image... to add pictures, videos or sounds.</div>';
     return;
   }
   grid.innerHTML = images
-    .map(
-      (file) => `
-    <div class="browse-card${selected.has(file) ? ' bg-card-selected' : ''}" data-file="${escapeHtml(file)}">
-      <div class="browse-card-media"><div class="browse-card-thumb" data-thumb="${escapeHtml(file)}"></div></div>
+    .map((file) => {
+      const kind = mediaKind(file);
+      const shared = !!imagePublic[file];
+      return `
+    <div class="browse-card" data-file="${escapeHtml(file)}" data-kind="${kind}">
+      <div class="browse-card-media">
+        <div class="browse-card-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}</div>
+        ${kind === 'video' ? '<span class="bg-duration" data-duration></span>' : ''}
+        ${shared ? '<span class="badge-shared">Shared</span>' : ''}
+      </div>
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(file)}</div>
       </div>
       <div class="browse-card-actions">
-        <span class="browse-card-meta" data-status>${selected.has(file) ? 'Selected' : ''}</span>
+        <span class="browse-card-meta" data-status></span>
         <div class="browse-card-actions-right">
-          <label class="bg-switch" title="Share this image with the community">
-            <input type="checkbox" data-act="public"${imagePublic[file] ? ' checked' : ''} />
-            <span class="bg-switch-track"></span>
-            <span class="bg-switch-label">${imagePublic[file] ? 'Public' : 'Private'}</span>
-          </label>
           <button class="icon-btn" title="Delete" data-act="delete">${ICON_TRASH}</button>
         </div>
       </div>
-    </div>`
-    )
+    </div>`;
+    })
     .join('');
 
   grid.querySelectorAll('.browse-card').forEach((card) => {
     const file = card.dataset.file;
     card.onclick = () => {
-      if (selected.has(file)) selected.delete(file);
-      else selected.add(file);
-      renderBrowse();
+      const action = cardAction({ shareMode, shared: !!imagePublic[file], loggedIn: isLoggedIn() });
+      if (action === 'none') return;
+      if (action === 'login') {
+        showError('Log in to share an image.', true);
+      } else {
+        setImagePublic(card, file, action === 'publish');
+      }
     };
-    const sw = card.querySelector('.bg-switch');
-    sw.onclick = (e) => e.stopPropagation();
-    card.querySelector('[data-act=public]').onchange = (e) => setImagePublic(card, file, e.target.checked);
     card.querySelector('[data-act=delete]').onclick = async (e) => {
       e.stopPropagation();
       clearError();
@@ -118,17 +146,11 @@ function renderBrowse() {
         }
       }
       await invoke('delete_background_image', { fileName: file });
-      selected.delete(file);
       await refreshImages();
       renderBrowse();
     };
   });
-  grid.querySelectorAll('[data-thumb]').forEach((el) => {
-    invoke('read_background_image', { fileName: el.dataset.thumb })
-      .then((url) => { el.style.backgroundImage = `url("${url}")`; })
-      .catch(() => {});
-  });
-  updateSelectionBar();
+  grid.querySelectorAll('[data-thumb]').forEach((el) => fillThumb(invoke, el, el.dataset.thumb));
 }
 
 function setCardBusy(card, text) {
@@ -137,15 +159,10 @@ function setCardBusy(card, text) {
   card.querySelectorAll('input, button').forEach((c) => { c.disabled = !!text; });
 }
 
-// Private <-> Public switch of an image card.
+// Share mode click: upload the image as public, or take the public copy down again.
 async function setImagePublic(card, file, on) {
   const { invoke } = window.__TAURI__.core;
   clearError();
-  if (!isLoggedIn()) {
-    card.querySelector('[data-act=public]').checked = !on;
-    showError('Log in to make an image public.', true);
-    return;
-  }
   setCardBusy(card, on ? 'Uploading...' : 'Removing from the hub...');
   try {
     if (on) await invoke('publish_background_image', { token: getToken(), fileName: file, author: getUsername() || '' });
@@ -204,7 +221,7 @@ async function renderPlaylists() {
   const config = await invoke('get_backgrounds_config').catch(() => ({ playlists: [], active_playlist: null }));
   const list = document.getElementById('bg-playlist-list');
   if (!config.playlists.length) {
-    list.innerHTML = '<div class="empty-state">No playlists yet - select some images in Browse and save them as one.</div>';
+    list.innerHTML = '<div class="empty-state">No playlists yet - click + New playlist to make one.</div>';
     return;
   }
   list.innerHTML = config.playlists
@@ -222,7 +239,10 @@ async function renderPlaylists() {
         <span class="bg-switch-track"></span>
         <span class="bg-switch-label">${p.public_id ? 'Public' : 'Private'}</span>
       </label>
-      <button class="btn" data-act="active">${p.id === config.active_playlist ? 'Active' : 'Make active'}</button>
+      <select class="settings-input bg-interval" data-act="sound" title="Sound while this playlist is active (turn the speaker on above)">
+        ${soundOptions(images).map(([v, label]) => `<option value="${escapeHtml(v)}"${(p.sound || 'auto') === v ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}
+      </select>
+      <button class="btn" data-act="active">${activeButtonLabel(p.id, config.active_playlist)}</button>
       <button class="btn" data-act="edit">Edit</button>
       <button class="btn" data-act="delete">Delete</button>
     </div>`
@@ -232,9 +252,13 @@ async function renderPlaylists() {
     const id = row.dataset.id;
     const playlist = config.playlists.find((p) => p.id === id);
     row.querySelector('[data-act=active]').onclick = async () => {
-      await invoke('set_active_playlist', { id });
+      await invoke('set_active_playlist', { id: activeTarget(id, config.active_playlist) });
       renderPlaylists();
       recheckBackground(true);
+    };
+    row.querySelector('[data-act=sound]').onchange = async (e) => {
+      await invoke('set_playlist_sound', { id, sound: e.target.value });
+      applySoundSetting();
     };
     row.querySelector('[data-act=interval]').onchange = async (e) => {
       await invoke('set_playlist_interval', { id, interval: Number(e.target.value) });
@@ -242,10 +266,7 @@ async function renderPlaylists() {
     };
     row.querySelector('[data-act=public]').onchange = (e) => setPublic(row, playlist, e.target.checked);
     row.querySelector('[data-act=edit]').onclick = () => {
-      editingId = id;
-      selected = new Set(playlist.images);
-      document.getElementById('bg-selection-name').value = playlist.name;
-      window.__bgSubtab('browse');
+      openEditor(draftFromPlaylist(playlist));
     };
     row.querySelector('[data-act=delete]').onclick = async () => {
       clearError();
@@ -275,7 +296,8 @@ window.__bgSubtab = function (tab) {
   document.getElementById('bg-browse-view').style.display = tab === 'browse' ? '' : 'none';
   document.getElementById('bg-playlists-view').style.display = tab === 'playlists' ? '' : 'none';
   document.getElementById('bg-community-view').style.display = tab === 'community' ? '' : 'none';
-  document.getElementById('bg-upload-btn').style.display = tab === 'community' ? 'none' : '';
+  for (const id of ['bg-upload-btn', 'bg-share-btn']) document.getElementById(id).style.display = tab === 'community' ? 'none' : '';
+  document.getElementById('bg-share-hint').hidden = !(shareMode && tab === 'browse');
   clearError();
   if (tab === 'browse') renderBrowse();
   else if (tab === 'playlists') renderPlaylists();
@@ -289,10 +311,11 @@ async function renderCommunity() {
   grid.innerHTML = '<div class="empty-state">Loading...</div>';
   const data = await loadCommunity(invoke);
   if (communitySection === 'images') {
-    grid.innerHTML = imageCardsHtml(data.images, data.myImages);
+    grid.innerHTML = imageCardsHtml(data.images, data.myImages, data.imageAdded);
     grid.querySelectorAll('.browse-card').forEach((card) => {
       const row = data.images.rows.find((r) => r.id === card.dataset.id);
       card.querySelector('[data-act=add-image]').onclick = async (e) => {
+        if (e.currentTarget.disabled) return;
         const btn = e.currentTarget;
         clearError();
         btn.disabled = true;
@@ -310,9 +333,9 @@ async function renderCommunity() {
     });
     return;
   }
-  grid.innerHTML = playlistCardsHtml(data.playlists, data.myPlaylists);
+  grid.innerHTML = playlistCardsHtml(data.playlists, data.myPlaylists, data.playlistAdded);
   grid.querySelectorAll('.browse-card').forEach((card) => {
-    card.onclick = () => openPreview(data.playlists.rows.find((r) => r.id === card.dataset.id));
+    card.onclick = () => openPreview(data.playlists.rows.find((r) => r.id === card.dataset.id), data.playlistAdded);
   });
 }
 
@@ -325,17 +348,19 @@ function closePreview() {
   document.getElementById('bg-preview').hidden = true;
 }
 
-function openPreview(row) {
+function openPreview(row, isAdded = () => false) {
   const { invoke } = window.__TAURI__.core;
   const box = document.getElementById('bg-preview');
   document.getElementById('bg-preview-title').textContent = `${row.name} - by ${row.author || '?'}`;
   document.getElementById('bg-preview-grid').innerHTML = (row.gallery || [])
-    .map((f) => `<img loading="lazy" src="${galleryUrl(row, f)}" alt="">`)
+    .map((f) => `<img loading="lazy" decoding="async" src="${galleryUrl(row, f)}" alt="">`)
     .join('');
   const add = document.getElementById('bg-preview-add');
-  add.disabled = false;
-  add.textContent = 'Add to my playlists';
+  const already = isAdded(row);
+  add.disabled = already;
+  add.textContent = already ? 'Added' : 'Add to my playlists';
   add.onclick = async () => {
+    if (already) return;
     clearError();
     add.disabled = true;
     add.textContent = 'Adding...';
@@ -354,6 +379,236 @@ function openPreview(row) {
   box.hidden = false;
 }
 
+// ---- Playlist editor ----
+const $ = (id) => document.getElementById(id);
+let importing = false;
+let pickerChosen = new Set();
+
+function setProgress(text) {
+  const el = $('bg-ed-progress');
+  el.textContent = text || '';
+  el.hidden = !text;
+}
+
+function setSkipped(lines) {
+  const el = $('bg-ed-skipped');
+  el.innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('') + (lines.length ? `<div>${escapeHtml(LIMITS_TEXT)}</div>` : '');
+  el.hidden = !lines.length;
+}
+
+function openEditor(d) {
+  const { invoke } = window.__TAURI__.core;
+  clearError();
+  draft = d;
+  $('bg-editor-title').textContent = d.id ? `Edit playlist` : 'New playlist';
+  $('bg-ed-name').value = d.name;
+  $('bg-ed-interval').innerHTML = INTERVALS.map(([sec, label]) => `<option value="${sec}"${d.interval === sec ? ' selected' : ''}>${label}</option>`).join('');
+  setProgress('');
+  setSkipped([]);
+  $('bg-ed-picker').hidden = true;
+  $('bg-editor').hidden = false;
+  $('bg-pl-toolbar').hidden = true;
+  $('bg-playlist-list').hidden = true;
+  renderEditor(invoke);
+  $('bg-ed-name').focus();
+}
+
+function closeEditor() {
+  draft = null;
+  importing = false;
+  $('bg-editor').hidden = true;
+  $('bg-pl-toolbar').hidden = false;
+  $('bg-playlist-list').hidden = false;
+}
+
+function renderSoundSelect() {
+  $('bg-ed-sound').innerHTML = editorSoundOptions(draft)
+    .map(([v, label]) => `<option value="${escapeHtml(v)}"${draft.sound === v ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+    .join('');
+}
+
+function renderEditor(invoke) {
+  renderSoundSelect();
+  const n = draft.items.length;
+  $('bg-ed-count').textContent = `${n} item${n === 1 ? '' : 's'} - drag to reorder`;
+  const strip = $('bg-ed-strip');
+  if (!n) {
+    strip.innerHTML = '<div class="bg-empty-strip">Nothing here yet - add files, a folder, or items from your library.</div>';
+    return;
+  }
+  strip.innerHTML = draft.items
+    .map((file, i) => {
+      const kind = mediaKind(file);
+      return `<div class="bg-strip-item" draggable="true" data-i="${i}" data-kind="${kind}">
+      <button class="bg-strip-remove" data-act="remove" title="Remove from playlist" aria-label="Remove ${escapeHtml(file)}">x</button>
+      <div class="bg-strip-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? '<span class="bg-badge" data-duration>video</span>' : ''}</div>
+      <div class="bg-strip-name" title="${escapeHtml(file)}">${escapeHtml(file)}</div>
+      <div class="bg-strip-ctl"><button data-act="left" title="Move earlier" aria-label="Move earlier"${i === 0 ? ' disabled' : ''}>&larr;</button><button data-act="right" title="Move later" aria-label="Move later"${i === n - 1 ? ' disabled' : ''}>&rarr;</button></div>
+    </div>`;
+    })
+    .join('');
+  let dragFrom = null;
+  strip.querySelectorAll('.bg-strip-item').forEach((el) => {
+    const i = Number(el.dataset.i);
+    fillThumb(invoke, el.querySelector('[data-thumb]'), draft.items[i]);
+    el.querySelector('[data-act=remove]').onclick = () => { removeItem(draft, i); renderEditor(invoke); };
+    el.querySelector('[data-act=left]').onclick = () => { moveItem(draft, i, i - 1); renderEditor(invoke); };
+    el.querySelector('[data-act=right]').onclick = () => { moveItem(draft, i, i + 1); renderEditor(invoke); };
+    el.ondragstart = (e) => {
+      dragFrom = i;
+      el.classList.add('is-dragging');
+      if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); }
+    };
+    el.ondragend = () => { el.classList.remove('is-dragging'); strip.querySelectorAll('.is-over').forEach((x) => x.classList.remove('is-over')); };
+    el.ondragover = (e) => { if (dragFrom === null) return; e.preventDefault(); el.classList.add('is-over'); };
+    el.ondragleave = () => el.classList.remove('is-over');
+    el.ondrop = (e) => {
+      e.preventDefault();
+      el.classList.remove('is-over');
+      if (dragFrom === null) return;
+      moveItem(draft, dragFrom, i);
+      dragFrom = null;
+      renderEditor(invoke);
+    };
+  });
+}
+
+// Imports the given paths one at a time (so the progress line updates), then adds them to the draft.
+async function importPaths(invoke, paths, extra = {}) {
+  if (!paths.length) {
+    setSkipped(skippedText([], extra));
+    return;
+  }
+  importing = true;
+  setSkipped([]);
+  const results = [];
+  for (let i = 0; i < paths.length; i++) {
+    setProgress(progressText(i, paths.length));
+    try {
+      const r = await invoke('import_background_files', { paths: [paths[i]] });
+      results.push(...r);
+    } catch (err) {
+      results.push({ source: paths[i], error: String(err) });
+    }
+    if (!draft) { importing = false; return; } // editor closed meanwhile
+  }
+  const { added, skipped } = summarizeImport(results);
+  addItems(draft, added);
+  await refreshImages();
+  importing = false;
+  setProgress(`Added ${added.length} of ${paths.length}.`);
+  setSkipped(skippedText(skipped, extra));
+  renderEditor(invoke);
+}
+
+function openPicker(invoke) {
+  pickerChosen = new Set();
+  const grid = $('bg-ed-picker-grid');
+  if (!images.length) {
+    grid.innerHTML = '<div class="bg-empty-strip">Your library is empty - use Add files... first.</div>';
+  } else {
+    grid.innerHTML = images
+      .map((file) => {
+        const kind = mediaKind(file);
+        const inList = draft.items.includes(file);
+        return `<label class="bg-pick" data-file="${escapeHtml(file)}">
+        <input type="checkbox" ${inList ? 'checked disabled' : ''} aria-label="${escapeHtml(file)}" />
+        <div class="bg-strip-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? '<span class="bg-badge" data-duration>video</span>' : ''}${kind === 'audio' ? '<span class="bg-badge">sound</span>' : ''}</div>
+        <div class="bg-strip-name" title="${escapeHtml(file)}">${escapeHtml(file)}${inList ? ' (in playlist)' : ''}</div>
+      </label>`;
+      })
+      .join('');
+    grid.querySelectorAll('.bg-pick').forEach((el) => {
+      fillThumb(invoke, el.querySelector('[data-thumb]'), el.dataset.file);
+      const box = el.querySelector('input');
+      box.onchange = () => {
+        if (box.checked) pickerChosen.add(el.dataset.file);
+        else pickerChosen.delete(el.dataset.file);
+        el.classList.toggle('is-picked', box.checked);
+      };
+    });
+  }
+  $('bg-ed-picker').hidden = false;
+}
+
+function wireEditor(invoke) {
+  $('bg-pl-new').onclick = () => openEditor(newDraft());
+  $('bg-ed-cancel').onclick = () => closeEditor();
+  $('bg-ed-name').oninput = (e) => { draft.name = e.target.value; };
+  $('bg-ed-interval').onchange = (e) => { draft.interval = Number(e.target.value); };
+  $('bg-ed-sound').onchange = (e) => { draft.sound = e.target.value; };
+
+  $('bg-ed-files').onclick = async () => {
+    if (importing) return;
+    clearError();
+    try {
+      const chosen = await window.__TAURI__.dialog.open({
+        multiple: true,
+        title: 'Add pictures, videos and sounds',
+        filters: [
+          { name: 'Pictures, videos and sounds', extensions: [...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS] },
+          { name: 'Pictures', extensions: IMAGE_EXTS },
+          { name: 'Videos', extensions: VIDEO_EXTS },
+          { name: 'Sounds', extensions: AUDIO_EXTS },
+        ],
+      });
+      await importPaths(invoke, pathsFrom(chosen));
+    } catch (err) {
+      importing = false;
+      showError(String(err));
+    }
+  };
+
+  $('bg-ed-folder').onclick = async () => {
+    if (importing) return;
+    clearError();
+    try {
+      const chosen = pathsFrom(await window.__TAURI__.dialog.open({ directory: true, multiple: false, title: 'Add a folder' }))[0];
+      if (!chosen) return;
+      setProgress('Looking through the folder...');
+      const listing = await invoke('list_media_in_folder', { path: chosen, recursive: $('bg-ed-recursive').checked });
+      setProgress('');
+      if (!listing.files.length) {
+        setSkipped(['No pictures, videos or sounds found in that folder.', ...skippedText([], listing)]);
+        return;
+      }
+      await importPaths(invoke, listing.files, { unsupported: listing.unsupported, truncated: listing.truncated });
+    } catch (err) {
+      importing = false;
+      setProgress('');
+      showError(String(err));
+    }
+  };
+
+  $('bg-ed-library').onclick = () => (!$('bg-ed-picker').hidden ? ($('bg-ed-picker').hidden = true) : openPicker(invoke));
+  $('bg-ed-picker-close').onclick = () => { $('bg-ed-picker').hidden = true; };
+  $('bg-ed-picker-add').onclick = () => {
+    // keep the library's order
+    addItems(draft, images.filter((f) => pickerChosen.has(f)));
+    $('bg-ed-picker').hidden = true;
+    renderEditor(invoke);
+  };
+
+  $('bg-ed-save').onclick = async () => {
+    clearError();
+    if (importing) { showError('Wait for the files to finish adding.'); return; }
+    const bad = validateDraft(draft);
+    if (bad) { showError(bad); $('bg-ed-name').focus(); return; }
+    const p = savePayload(draft);
+    try {
+      const saved = await invoke('save_playlist', { id: p.id, name: p.name, images: p.images });
+      await invoke('set_playlist_interval', { id: saved.id, interval: p.interval });
+      await invoke('set_playlist_sound', { id: saved.id, sound: p.sound });
+      closeEditor();
+      await renderPlaylists();
+      recheckBackground(true);
+      if (saved.public_id) await republish(saved);
+    } catch (err) {
+      showError(String(err));
+    }
+  };
+}
+
 export async function init() {
   const { invoke } = window.__TAURI__.core;
   await refreshImages();
@@ -370,8 +625,13 @@ export async function init() {
     const { open } = window.__TAURI__.dialog;
     const chosen = await open({
       multiple: false,
-      title: 'Upload a background image',
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+      title: 'Add a background',
+      filters: [
+        { name: 'Pictures, videos and sounds', extensions: [...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS] },
+        { name: 'Pictures', extensions: IMAGE_EXTS },
+        { name: 'Videos', extensions: VIDEO_EXTS },
+        { name: 'Sounds', extensions: AUDIO_EXTS },
+      ],
     });
     if (!chosen) return;
     try {
@@ -383,26 +643,28 @@ export async function init() {
     }
   };
 
-  document.getElementById('bg-selection-save').onclick = async () => {
-    document.getElementById('bg-error').hidden = true;
-    const name = document.getElementById('bg-selection-name').value.trim();
-    if (!name) {
-      showError('Give the playlist a name.');
-      return;
-    }
-    try {
-      const saved = await invoke('save_playlist', { id: editingId, name, images: Array.from(selected) });
-      resetSelection();
-      renderBrowse();
-      await renderPlaylists();
-      if (saved.public_id) await republish(saved);
-    } catch (err) {
-      showError(String(err));
-    }
-  };
-
-  document.getElementById('bg-selection-cancel').onclick = () => {
-    resetSelection();
+  document.getElementById('bg-share-btn').onclick = () => {
+    shareMode = !shareMode;
+    clearError();
     renderBrowse();
   };
+
+  // Speaker + volume (the sound itself is chosen per playlist; off by default).
+  const speaker = document.getElementById('bg-speaker');
+  const volume = document.getElementById('bg-volume');
+  const keep = document.getElementById('bg-keep-playing');
+  const syncAudioUi = () => {
+    const p = audioPrefs();
+    speaker.classList.toggle('is-on', p.enabled);
+    speaker.textContent = p.enabled ? 'Sound on' : 'Sound off';
+    speaker.setAttribute('aria-pressed', String(p.enabled));
+    volume.value = String(Math.round(p.volume * 100));
+    keep.checked = p.keepPlaying;
+  };
+  speaker.onclick = () => { const p = audioPrefs(); saveAudioPrefs({ ...p, enabled: !p.enabled }); syncAudioUi(); };
+  volume.oninput = () => saveAudioPrefs({ ...audioPrefs(), volume: Number(volume.value) / 100 });
+  keep.onchange = () => saveAudioPrefs({ ...audioPrefs(), keepPlaying: keep.checked });
+  syncAudioUi();
+
+  wireEditor(invoke);
 }
