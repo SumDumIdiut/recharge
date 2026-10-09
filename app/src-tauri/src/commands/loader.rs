@@ -305,5 +305,11 @@ pub fn uninstall_loader(app: AppHandle) -> Result<(), String> {
     if mods_dir.is_dir() {
         std::fs::remove_dir_all(&mods_dir).map_err(|e| format!("Failed to remove deployed mods: {e}"))?;
     }
+
+    // Drop the loader's stamps too, or a later launch reads them as state that's no longer there.
+    let _ = std::fs::remove_file(managed.join("Assembly-CSharp.deployed.stamp"));
+    let _ = std::fs::remove_file(stamp_path(&game_path));
+    let _ = std::fs::remove_dir(PathBuf::from(&game_path).join("Recharge"));
+
     Ok(())
 }

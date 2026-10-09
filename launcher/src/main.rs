@@ -92,10 +92,24 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if o.uninstall {
+        if !install::is_uninstall_copy() {
+            // Run from a temp copy so no file in the root is locked by the process deleting it.
+            return match install::uninstall_via_copy(&root, &exe, &args, o.yes) {
+                Ok(c) => ExitCode::from(c as u8),
+                Err(e) => {
+                    eprintln!("uninstall: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        log::init_at(&std::env::temp_dir().join("recharge-uninstall.log"));
+        log!("uninstalling {}", root.display());
         if let Some(pid) = o.wait_pid {
             run::wait_exit(pid, std::time::Duration::from_secs(30)); // the app that asked for this
         }
-        return match install::uninstall(&root, o.yes, o.delete_data) {
+        let res = install::uninstall(&root, o.yes, o.delete_data);
+        install::schedule_self_delete();
+        return match res {
             Ok(()) => {
                 println!("Recharge removed.");
                 ExitCode::SUCCESS
@@ -179,6 +193,8 @@ fn main() -> ExitCode {
     if st.pending.is_some() {
         // Fresh swap: refresh start-menu / uninstall entries (icon and version may have changed).
         install::refresh_shortcut(&root, &cur.version);
+    } else {
+        install::ensure_shortcuts(&root, &cur.version); // reinstall over leftovers, deleted shortcut
     }
 
     let mut child = match run::launch(&root, &exe, &cur, &ctx.channel, &o.pass) {

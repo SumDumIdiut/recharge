@@ -508,13 +508,21 @@ async function refreshLauncherStatus() {
 
 const CHANNEL_HELP = 'Stable gets tested changes. Beta gets the newest code first and may break.';
 
+// Under the launcher, its channel.txt is the truth (the live-code setting can lag behind it).
+function shownChannel(liveChannel, launcherInfo) {
+  if (launcherInfo?.managed && (launcherInfo.channel === 'stable' || launcherInfo.channel === 'beta')) return launcherInfo.channel;
+  return liveChannel;
+}
+
 async function refreshChannel() {
   const { invoke } = window.__TAURI__.core;
   const note = document.getElementById('channel-note');
   try {
     const info = await invoke('live_get_channel');
-    document.getElementById('channel-stable-btn').classList.toggle('btn-primary', info.channel === 'stable');
-    document.getElementById('channel-beta-btn').classList.toggle('btn-primary', info.channel === 'beta');
+    const launcher = await invoke('launcher_info').catch(() => null);
+    const channel = shownChannel(info.channel, launcher);
+    document.getElementById('channel-stable-btn').classList.toggle('btn-primary', channel === 'stable');
+    document.getElementById('channel-beta-btn').classList.toggle('btn-primary', channel === 'beta');
     note.textContent = info.needsPackage
       ? 'The latest code on this channel needs a newer Recharge package - update the app above, then try again.'
       : CHANNEL_HELP;

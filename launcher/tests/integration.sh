@@ -166,5 +166,28 @@ mkdir -p "$ROOT"; echo '{}' > "$ROOT/state.json"
 "$BIN" --uninstall --yes --delete-data >/dev/null 2>&1; rc=$?
 check "--uninstall --delete-data also removes app data" "[ ! -e $ROOT ] && [ ! -e $DATA_OLD ] && [ ! -e $XDG_CONFIG_HOME/co.za.codecade.recharge ]"
 
+echo "== reinstall over a leftover root recreates the desktop entry"
+mkdir -p "$ROOT/app"; echo '{}' > "$ROOT/state.json"; echo junk > "$ROOT/launcher.log"
+rm -f "$XDG_DATA_HOME/applications/recharge.desktop"
+mark; "$BIN" --no-ui >/dev/null 2>&1
+check "reinstall wrote the desktop entry" "grep -q 'Exec=.*recharge-launcher' $XDG_DATA_HOME/applications/recharge.desktop"
+rm -f "$XDG_DATA_HOME/applications/recharge.desktop"
+$ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "a plain run recreates a deleted desktop entry" "[ -f $XDG_DATA_HOME/applications/recharge.desktop ]"
+
+echo "== uninstall closes a running app (temp copy) and --delete-data empties data dirs"
+cp "$(command -v sleep)" "$ROOT/app/fakeapp"
+"$ROOT/app/fakeapp" 300 & FAKE=$!
+sleep 0.3
+mkdir -p "$DATA_OLD/EBWebView" "$XDG_CONFIG_HOME/co.za.codecade.recharge"; echo c > "$DATA_OLD/EBWebView/c"; echo m > "$XDG_CONFIG_HOME/co.za.codecade.recharge/mod.txt"
+"$ROOT/recharge-launcher" --uninstall --yes --delete-data >/dev/null 2>&1; rc=$?
+check "uninstall exit 0" "[ $rc -eq 0 ]"
+check "running fake app was killed" "! kill -0 $FAKE 2>/dev/null"
+check "root removed despite the running app" "[ ! -e $ROOT ]"
+check "data dirs removed" "[ ! -e $DATA_OLD ] && [ ! -e $XDG_CONFIG_HOME/co.za.codecade.recharge ]"
+check "desktop entry removed" "[ ! -e $XDG_DATA_HOME/applications/recharge.desktop ]"
+check "temp copy removed itself" "[ -z \"\$(ls ${TMPDIR:-/tmp}/recharge-uninstall-* 2>/dev/null | grep -v '\.log$')\" ]"
+wait $FAKE 2>/dev/null
+
 echo; echo "passed $pass, failed $failn"
 [ $failn -eq 0 ]

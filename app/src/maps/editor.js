@@ -54,6 +54,10 @@ let baseHaz = null;
 let baseVineKeys = [];
 
 let canvas, ctx, root;
+// Frames are drawn into backCanvas and copied to visCanvas (the one on screen) in a single drawImage,
+// so the visible canvas is never seen cleared or half-painted. Counters feed the debug strip.
+let visCanvas = null, visCtx = null, backCanvas = null, backCtx = null;
+const flick = { throws: 0, resizes: 0, lost: 0, restored: 0, copies: 0, purged: 0, skipped: 0, mismatch: 0 };
 let cam = { x: 0, y: 0, scale: 0.75 };
 let tool = 'block';
 let hover = null;
@@ -3911,8 +3915,37 @@ function toWorld(sx, sy) {
 }
 
 const IN_WORKER = typeof document === 'undefined';
+// Canvases whose backing store the browser dropped (Chromium: GPU canvas memory pressure). Their
+// contents are gone - drawImage from one draws nothing - so every cache forgets them (purgeLost).
+const lostCanvases = new Set();
+let cacheScale = 1; // shrinks the cache caps after each loss
 function makeCanvas() {
-  return IN_WORKER ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
+  if (IN_WORKER) return new OffscreenCanvas(1, 1);
+  const cv = document.createElement('canvas');
+  cv.addEventListener('contextlost', (e) => { e.preventDefault?.(); flick.lost++; cacheScale = Math.max(0.25, cacheScale * 0.7); lostCanvases.add(cv); dbgLog('contextlost on cache canvas ' + cv.width + 'x' + cv.height); requestDraw(); });
+  cv.addEventListener('contextrestored', () => { flick.restored++; lostCanvases.delete(cv); requestDraw(); });
+  return cv;
+}
+// Chromium throws InvalidStateError for drawImage from a zero-size canvas or a closed ImageBitmap, WebKit
+// doesn't; one such throw used to end the frame right after the background fill (a blank map).
+function guardCtx(g) {
+  if (!g || g.drawImageSafe) return g;
+  const d = g.drawImage;
+  g.drawImage = function (...a) { try { return d.apply(this, a); } catch (e) { flick.throws++; dbgLog('drawImage threw: ' + (e && e.message || e)); } };
+  g.drawImageSafe = true;
+  return g;
+}
+function purgeLost() {
+  if (!lostCanvases.size) return;
+  const gone = (cv) => lostCanvases.has(cv);
+  for (const [k, c] of [...tileCache]) if (gone(c)) { tileCache.delete(k); dirtyGen.set(k, stateVersion); flick.purged++; }
+  for (const [k, j] of [...tileJobs]) if (gone(j.cv)) { tileJobs.delete(k); flick.purged++; }
+  for (const [k, c] of [...cellCache.chunks]) if (gone(c.cv)) { cellCache.chunks.delete(k); flick.purged++; }
+  cellCache.pool = cellCache.pool.filter((c) => !gone(c));
+  for (const k of Object.keys(scratchCanvas)) if (gone(scratchCanvas[k])) delete scratchCanvas[k];
+  for (const [k, c] of [...tintCache]) if (gone(c)) tintCache.delete(k);
+  for (const g of sceneList?.groups || []) if (g.canvas && gone(g.canvas.canvas)) g.canvas = null;
+  lostCanvases.clear();
 }
 
 // ---- motion: eased camera, living selection outlines, place / delete effects ----
@@ -3990,7 +4023,7 @@ function targetPoint(t) {
 function requestDraw() {
   if (IN_WORKER || frameQueued) return;
   frameQueued = true;
-  requestAnimationFrame(() => { frameQueued = false; stepCamera(); draw(); drawFx(); });
+  requestAnimationFrame(() => { frameQueued = false; stepCamera(); draw(); });
 }
 
 function cellRect(cx, cy, len = 1) {
@@ -4845,6 +4878,9 @@ function drawGate(g, box, color, label) {
 const TILE_PX = 128;
 const TILE_BUDGET_MS = 6;
 const MAX_TILES = 3000;
+// Cached canvases share a memory budget (Chromium drops canvas backings past its GPU limit): ~160 MB at full scale.
+const CANVAS_BUDGET_PX = 40e6;
+const maxTiles = () => Math.max(768, Math.min(MAX_TILES, Math.floor((CANVAS_BUDGET_PX * cacheScale - cellCache.chunks.size * CC_PX * CC_PX) / (TILE_PX * TILE_PX))));
 const tileCache = new Map();
 let baseVersion = 0;
 let staticRender = false;
@@ -5097,7 +5133,7 @@ function drawFromFiner(z, tx, ty, x0, y0, w, h, part = null) {
 
 function storeTile(key, tile) {
   tileCache.set(key, tile);
-  while (tileCache.size > MAX_TILES) {
+  for (let cap = maxTiles(); tileCache.size > cap;) {
     const oldest = tileCache.keys().next().value;
     tileCache.get(oldest)?.close?.();
     tileCache.delete(oldest);
@@ -5457,7 +5493,7 @@ function ccRender(z, tx, ty, useArt, pad) {
   const old = cc.chunks.get(ccKey(z, tx, ty));
   const cv = cc.pool.pop() || makeCanvas();
   if (cv.width !== CC_PX) cv.width = cv.height = CC_PX;
-  const g = cv.getContext('2d');
+  const g = guardCtx(cv.getContext('2d'));
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.globalAlpha = 1;
   g.clearRect(0, 0, CC_PX, CC_PX);
@@ -5531,35 +5567,102 @@ function drawCellView(useArt, pad) {
     else dbg.cur.none = (dbg.cur.none || 0) + 1;
   }
   // Oldest first out, but never what's in view.
-  const cap = Math.max(CC_MAX, view.length + 24);
+  const cap = Math.max(Math.round(CC_MAX * cacheScale), view.length + 24);
   for (const [k, c] of cc.chunks) { if (cc.chunks.size <= cap) break; cc.chunks.delete(k); if (cc.pool.length < 8) cc.pool.push(c.cv); }
 }
 
-// localStorage.mapMakerDebug = '1': a counter strip over the canvas and a log ring (click the strip to copy it).
-const dbg = { on: false, n: 0, ring: [], el: null, cur: {} };
+// Debug strip: localStorage.mapMakerDebug = '1' or Ctrl+Shift+D in the editor (release builds have no devtools).
+// Counters over the canvas, a log ring, and a "Copy debug log" button.
+const dbg = { on: false, n: 0, ring: [], el: null, pre: null, cur: {} };
 try { dbg.on = localStorage.mapMakerDebug === '1'; } catch { /* off */ }
 function dbgLog(msg) { if (!dbg.on) return; dbg.ring.push(((performance.now() / 1000).toFixed(3)) + ' f' + dbg.n + ' ' + msg); if (dbg.ring.length > 400) dbg.ring.shift(); }
+function dbgReport() {
+  const r = (c) => { try { const b = c.getBoundingClientRect(); return b.width.toFixed(0) + 'x' + b.height.toFixed(0) + ' css'; } catch { return '?'; } };
+  const sz = (c) => c ? c.width + 'x' + c.height : '-';
+  const mb = ((tileCache.size * TILE_PX * TILE_PX + cellCache.chunks.size * CC_PX * CC_PX) * 4 / 1048576).toFixed(0);
+  return [
+    'Amplifier debug log ' + new Date().toISOString(),
+    'userAgent: ' + navigator.userAgent,
+    'devicePixelRatio: ' + window.devicePixelRatio + ' screen ' + screen.width + 'x' + screen.height,
+    'canvases: visible ' + sz(visCanvas) + ' (' + (visCanvas ? r(visCanvas) : '?') + '), back ' + sz(backCanvas),
+    'caches: tiles ' + tileCache.size + '/' + maxTiles() + ', chunks ' + cellCache.chunks.size + ' (pool ' + cellCache.pool.length + '), tileJobs ' + tileJobs.size + ', ahead ' + aheadQueue.size + ', ~' + mb + ' MB, lostCanvases ' + lostCanvases.size + ', cacheScale ' + cacheScale.toFixed(2),
+    'counters: ' + Object.entries(flick).map(([k, v]) => k + '=' + v).join(' ') + ' frames=' + dbg.n,
+    'baseVersion ' + baseVersion + ' stateVersion ' + stateVersion + ' scale ' + cam.scale.toFixed(4),
+    '--- ring (' + dbg.ring.length + ') ---',
+    ...dbg.ring,
+  ].join('\n');
+}
+function dbgCopy() {
+  const text = dbgReport();
+  console.log(text);
+  const done = () => flash('Debug log copied');
+  const fallback = () => {
+    // No async clipboard (or it was refused): a textarea to select, copied with execCommand when that works.
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.readOnly = true;
+    ta.style.cssText = 'position:fixed;left:8px;right:8px;bottom:60px;height:35%;z-index:9999;font:11px monospace;background:#111;color:#9f9;border:1px solid #9f9';
+    ta.title = 'Select all and copy; Esc or click away closes this';
+    ta.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') ta.remove(); });
+    ta.addEventListener('blur', () => setTimeout(() => ta.remove(), 150));
+    (canvas?.parentElement || document.body).appendChild(ta);
+    ta.focus(); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { /* manual */ }
+    if (ok) { ta.remove(); done(); } else flash('Select the text and press Ctrl+C');
+  };
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+}
+function setDebug(on) {
+  dbg.on = on;
+  try { if (on) localStorage.mapMakerDebug = '1'; else localStorage.removeItem('mapMakerDebug'); } catch { /* not persisted */ }
+  if (!on && dbg.el) { dbg.el.remove(); dbg.el = dbg.pre = null; }
+  if (on) dbgLog('debug on');
+  flash(on ? 'Debug strip on (Ctrl+Shift+D hides it)' : 'Debug strip off');
+  requestDraw();
+}
 function dbgFrame(ms, err) {
   if (!dbg.on || IN_WORKER) return;
   dbg.n++;
   const c = dbg.cur;
-  const line = `f${dbg.n} ${ms.toFixed(1)}ms ${canvas.width}x${canvas.height} tiles ${c.shown ?? '-'}/${c.inView ?? '-'} miss ${c.missing ? 'Y' : 'n'} z${c.z ?? '-'} | chunks built ${c.built ?? '-'} miss ${c.ccMissing ?? '-'} none ${c.none ?? 0} stand ${c.stand ?? 0} | bv${baseVersion} sv${stateVersion} drops ${c.drops || 0}${err ? ' ERR ' + err : ''}`;
+  const line = `f${dbg.n} ${ms.toFixed(1)}ms ${canvas.width}x${canvas.height} tiles ${c.shown ?? '-'}/${c.inView ?? '-'} miss ${c.missing ? 'Y' : 'n'} z${c.z ?? '-'} | chunks built ${c.built ?? '-'} miss ${c.ccMissing ?? '-'} none ${c.none ?? 0} stand ${c.stand ?? 0} | bv${baseVersion} sv${stateVersion} drops ${c.drops || 0} | thr${flick.throws} skip${flick.skipped} mis${flick.mismatch} rs${flick.resizes} lost${flick.lost}/${flick.restored} purged${flick.purged} cp${flick.copies} cs${cacheScale.toFixed(2)}${err ? ' ERR ' + err : ''}`;
   if (err || ms > 40 || c.none || c.drops) dbgLog(line);
   if (!dbg.el) {
-    dbg.el = document.createElement('pre');
-    dbg.el.style.cssText = 'position:absolute;left:4px;bottom:4px;z-index:50;margin:0;padding:3px 6px;font:11px monospace;color:#9f9;background:rgba(0,0,0,.7);cursor:copy;white-space:pre-wrap;max-width:95%';
-    dbg.el.title = 'Click to copy the debug log';
-    dbg.el.addEventListener('click', () => { const t = dbg.ring.join('\n'); navigator.clipboard?.writeText(t).catch(() => {}); console.log(t); });
+    dbg.el = document.createElement('div');
+    dbg.el.style.cssText = 'position:absolute;left:4px;bottom:4px;z-index:50;display:flex;gap:6px;align-items:flex-end;max-width:95%';
+    dbg.pre = document.createElement('pre');
+    dbg.pre.style.cssText = 'margin:0;padding:3px 6px;font:11px monospace;color:#9f9;background:rgba(0,0,0,.7);white-space:pre-wrap;pointer-events:none';
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = 'Copy debug log';
+    btn.style.cssText = 'font:11px sans-serif;padding:3px 8px;cursor:pointer;color:#9f9;background:rgba(0,0,0,.8);border:1px solid #9f9;border-radius:3px';
+    btn.addEventListener('click', dbgCopy);
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+    dbg.el.append(dbg.pre, btn);
     canvas.parentElement.appendChild(dbg.el);
   }
-  if (dbg.n % 6 === 0 || err) dbg.el.textContent = line + '\nlog ' + dbg.ring.length + ' lines (click to copy)';
+  if (dbg.n % 6 === 0 || err || !dbg.pre.textContent) dbg.pre.textContent = line + '\nlog ' + dbg.ring.length + ' lines';
   dbg.cur = {};
 }
 
 function draw() {
   const t0 = dbg.on ? performance.now() : 0;
   let err = null;
-  try { drawFrame(); } catch (e) { err = String(e && e.message || e); dbgLog('draw threw: ' + (e && e.stack || e)); if (!dbg.on) throw e; }
+  purgeLost();
+  const vis = visCanvas;
+  if (vis && vis.isConnected !== false && vis.width && vis.height) {
+    if (!backCanvas) { backCanvas = makeCanvas(); backCanvas.addEventListener('contextlost', () => { backCtx = null; }); backCanvas.addEventListener('contextrestored', () => { backCtx = null; requestDraw(); }); }
+    if (backCanvas.width !== vis.width || backCanvas.height !== vis.height) { backCanvas.width = vis.width; backCanvas.height = vis.height; backCtx = null; }
+    if (!backCtx) backCtx = guardCtx(backCanvas.getContext('2d', { alpha: false }));
+    const saved = [canvas, ctx];
+    canvas = backCanvas; ctx = backCtx;
+    let ok = false;
+    try { drawFrame(); drawFx(); ok = true; } catch (e) { err = String(e && e.message || e); flick.skipped++; dbgLog('present SKIPPED, frame threw: ' + (e && e.stack || e)); if (!dbg.on) throw e; }
+    finally { [canvas, ctx] = saved; }
+    if (backCanvas.width !== vis.width || backCanvas.height !== vis.height) { flick.mismatch++; dbgLog('size mismatch: back ' + backCanvas.width + 'x' + backCanvas.height + ' vs visible ' + vis.width + 'x' + vis.height); }
+    // One present: the finished frame replaces the visible one in a single copy.
+    if (ok) { visCtx.setTransform(1, 0, 0, 1, 0, 0); visCtx.globalAlpha = 1; visCtx.globalCompositeOperation = 'copy'; visCtx.drawImage(backCanvas, 0, 0); visCtx.globalCompositeOperation = 'source-over'; flick.copies++; }
+  } else {
+    try { drawFrame(); drawFx(); } catch (e) { err = String(e && e.message || e); dbgLog('draw threw (direct): ' + (e && e.stack || e)); if (!dbg.on) throw e; }
+  }
   if (dbg.on) dbgFrame(performance.now() - t0, err);
 }
 function drawFrame() {
@@ -7429,10 +7532,12 @@ function resize() {
   const w = Math.round(r.width), h = Math.round(r.height);
   if (canvas.width === w && canvas.height === h) return;
   dbgLog('canvas resize ' + canvas.width + 'x' + canvas.height + ' -> ' + w + 'x' + h);
+  flick.resizes++;
   canvas.width = w;
   canvas.height = h;
-  // Resizing blanks the canvas; paint again before the browser does.
-  if (ctx && !IN_WORKER) { try { draw(); drawFx(); } catch { /* next frame */ } }
+  visCtx = canvas.getContext('2d', { alpha: false });
+  // Resizing blanks the canvas; paint again before the browser does (the one draw outside the rAF loop).
+  if (ctx && !IN_WORKER) { try { draw(); } catch { /* next frame */ } }
   requestDraw();
 }
 
@@ -7542,6 +7647,7 @@ function onWheel(e) {
 
 function onKeyDown(e) {
   if (!mounted || !canvas.isConnected || canvas.offsetParent === null) return;
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); setDebug(!dbg.on); return; }
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
   if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
@@ -7685,6 +7791,10 @@ export async function mountEditor(container) {
   // desynchronized canvas may be presented between those steps - a frame that is only the
   // background, which looks like the whole map blinking off while panning.
   ctx = canvas.getContext('2d', { alpha: false });
+  visCanvas = canvas; visCtx = ctx;
+  // The main canvas can lose its backing too (Chromium GPU memory pressure / device reset): repaint on restore.
+  canvas.addEventListener('contextlost', (e) => { e.preventDefault?.(); flick.lost++; cacheScale = Math.max(0.25, cacheScale * 0.7); dbgLog('contextlost on main canvas'); });
+  canvas.addEventListener('contextrestored', () => { flick.restored++; visCtx = canvas.getContext('2d', { alpha: false }); requestDraw(); });
   root.querySelector('[data-tool="erase"]').addEventListener('click', () => { closePopover(); setTool('erase'); });
   root.querySelector('[data-tool="select"]').addEventListener('click', () => { closePopover(); setTool('select'); });
   root.querySelector('#mm-layers-btn').addEventListener('click', () => togglePanel('mm-layers'));

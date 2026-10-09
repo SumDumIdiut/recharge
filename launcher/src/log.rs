@@ -18,6 +18,12 @@ pub fn init(root: &Path) {
     let _ = LOG.set(Mutex::new(file));
 }
 
+/// Log to an explicit file (the uninstall copy logs to the temp dir: the root is being deleted).
+pub fn init_at(path: &Path) {
+    let file = OpenOptions::new().create(true).append(true).open(path).ok();
+    let _ = LOG.set(Mutex::new(file));
+}
+
 pub fn write(msg: &str) {
     eprintln!("{msg}");
     if let Some(m) = LOG.get() {
