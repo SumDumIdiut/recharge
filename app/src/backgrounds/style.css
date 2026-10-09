@@ -1,6 +1,3 @@
-.bg-selection-bar { margin-bottom: 14px; flex-wrap: wrap; }
-
-.browse-card.bg-card-selected { border-color: var(--green); }
 
 .bg-playlist-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .bg-playlist-row {
@@ -9,10 +6,15 @@
   gap: 10px;
   border: 1px solid var(--line);
   padding: 8px 10px;
+  /* translucent panel like the top bar/cards, so the row is readable on any picture */
+  background: color-mix(in srgb, var(--panel) 88%, transparent); /* no per-row blur: it re-blurs the picture/video behind on every scroll frame */
 }
 .bg-playlist-row.is-active { border-color: var(--green); }
-.bg-playlist-name { flex: 1; }
+.bg-playlist-name { flex: 1; color: var(--text); }
 .bg-playlist-count { color: var(--text-dim); font-size: 15px; }
+/* normal panel text colours inside the row: never light-on-light over a bright picture */
+.bg-playlist-row .bg-switch-label { color: var(--text-dim); }
+.bg-playlist-row .btn { color: var(--text); }
 
 .bg-playlist-row { flex-wrap: wrap; }
 .bg-playlist-status { color: var(--text-dim); font-size: 15px; }
@@ -42,8 +44,211 @@
 #view-backgrounds .browser-toolbar { flex-wrap: wrap; }
 #bg-browse-view, #bg-playlists-view, #bg-community-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
 #view-backgrounds .browser-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); width: 100%; }
-#view-backgrounds .browse-card { min-width: 0; }
+#view-backgrounds .browse-card { min-width: 0; content-visibility: auto; contain-intrinsic-size: auto 330px; }
+#view-backgrounds .bg-pick { content-visibility: auto; contain-intrinsic-size: auto 110px; }
 .bg-csections { margin-bottom: 14px; }
 .bg-playlist-name { min-width: 0; overflow-wrap: anywhere; }
 .browse-card-name { overflow-wrap: anywhere; }
 #view-backgrounds .browse-card-thumb { aspect-ratio: 16 / 10; background-size: cover; background-position: center; background-color: var(--bg); }
+
+.bg-toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bg-toolbar-right input[type=range] { width: 90px; accent-color: var(--green); }
+#bg-speaker.is-on, #bg-share-btn.is-on { border-color: var(--green); color: var(--green); }
+.bg-keep .bg-switch-label { min-width: 0; font-size: 15px; }
+.bg-share-hint { color: var(--green); border: 1px solid var(--green-dim); background: var(--panel); padding: 6px 12px; margin-bottom: 12px; flex-shrink: 0; }
+.bg-share-mode .browse-card { cursor: copy; }
+.bg-share-mode .browse-card:hover { border-color: var(--green); }
+.badge-shared, .badge-added { position: absolute; top: 8px; left: 8px; background: var(--panel); color: var(--green); border: 1px solid var(--green-dim); padding: 0 8px; text-transform: uppercase; font-size: 15px; }
+.bg-duration { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.7); color: #fff; padding: 0 6px; font-size: 15px; }
+.bg-audio-thumb { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+.bg-audio-thumb svg { width: 56px; height: 56px; }
+
+/* Playlist editor: same translucent panel as .bg-playlist-row, normal panel text colours */
+.bg-pl-toolbar { margin-bottom: 10px; }
+.bg-editor, .bg-library-picker {
+  border: 1px solid var(--line);
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.bg-editor[hidden], .bg-library-picker[hidden], .bg-editor [hidden] { display: none; }
+.bg-library-picker { background: color-mix(in srgb, var(--bg) 40%, var(--panel)); margin-bottom: 0; }
+.bg-editor-title { font-size: 20px; color: var(--text); }
+.bg-editor-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bg-editor-row .settings-input[type=text] { flex: 1; min-width: 180px; max-width: 320px; }
+.bg-editor .btn:not(.btn-primary) { color: var(--text); }
+.bg-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; }
+.bg-check input, .bg-pick input { accent-color: var(--green); }
+.bg-editor-progress { color: var(--green); }
+.bg-editor-skipped { color: var(--text-dim); border-left: 2px solid var(--line-hi); padding-left: 8px; overflow-wrap: anywhere; }
+.bg-strip-label { color: var(--text-dim); }
+.bg-strip { display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; }
+.bg-empty-strip { color: var(--text-dim); padding: 8px 0; }
+.bg-strip-item { position: relative; width: 132px; border: 1px solid var(--line-hi); background: var(--panel); cursor: grab; display: flex; flex-direction: column; }
+.bg-strip-item.is-dragging { opacity: 0.4; }
+.bg-strip-item.is-over { border-color: var(--green); }
+.bg-strip-thumb { aspect-ratio: 16 / 10; background-size: cover; background-position: center; background-color: var(--bg); position: relative; }
+.bg-strip-name { font-size: 14px; color: var(--text); padding: 2px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-strip-ctl { display: flex; justify-content: space-between; border-top: 1px solid var(--line); }
+.bg-strip-ctl button { flex: 1; background: transparent; border: 0; color: var(--text); cursor: pointer; font: inherit; padding: 0 4px; }
+.bg-strip-ctl button:hover:not(:disabled) { color: var(--green); }
+.bg-strip-ctl button:disabled { opacity: 0.3; cursor: default; }
+.bg-strip-remove { position: absolute; top: 2px; right: 2px; z-index: 1; background: var(--panel); color: var(--text); border: 1px solid var(--line-hi); cursor: pointer; width: 22px; height: 22px; line-height: 18px; padding: 0; font: inherit; }
+.bg-strip-remove:hover { border-color: var(--green); color: var(--green); }
+.bg-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; max-height: 300px; overflow-y: auto; }
+.bg-pick { position: relative; border: 1px solid var(--line); background: var(--panel); cursor: pointer; display: block; }
+.bg-pick.is-picked { border-color: var(--green); }
+.bg-pick input { position: absolute; top: 4px; left: 4px; z-index: 1; width: 16px; height: 16px; }
+.bg-pick .bg-strip-thumb { pointer-events: none; }
+.bg-pick .bg-strip-name { pointer-events: none; }
+.bg-badge { position: absolute; right: 4px; bottom: 4px; background: rgba(0, 0, 0, 0.7); color: #fff; padding: 0 6px; font-size: 14px; }
+.bg-playlist-list[hidden], .bg-pl-toolbar[hidden] { display: none; }
+
+/* ---- Backgrounds page: one light text colour on dark see-through panels, no lines ---- */
+#view-backgrounds {
+  --bgp-panel: color-mix(in srgb, var(--panel) 82%, transparent);
+  --bgp-fill: color-mix(in srgb, var(--text) 9%, transparent);
+  --bgp-hi: color-mix(in srgb, var(--text) 16%, transparent);
+}
+#view-backgrounds .page-header {
+  background: var(--bgp-panel);
+  padding: 4px 12px;
+  align-self: flex-start;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+#view-backgrounds .browser-subtabs,
+#view-backgrounds .bg-toolbar-right {
+  background: var(--bgp-panel);
+  padding: 4px;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+#view-backgrounds .bg-toolbar-right { padding: 4px 8px; }
+#view-backgrounds .bg-keep .bg-switch-label,
+#view-backgrounds .bg-playlist-count,
+#view-backgrounds .bg-playlist-status,
+#view-backgrounds .bg-playlist-row .bg-switch-label,
+#view-backgrounds .bg-check,
+#view-backgrounds .bg-strip-label,
+#view-backgrounds .bg-empty-strip,
+#view-backgrounds .bg-editor-skipped { color: var(--text); }
+
+/* no borders on tabs, buttons, selects, inputs, rows */
+#view-backgrounds .subtab-btn,
+#view-backgrounds .btn,
+#view-backgrounds .btn-primary,
+#view-backgrounds .btn-danger,
+#view-backgrounds .settings-input,
+#view-backgrounds .bg-playlist-row,
+#view-backgrounds .bg-editor,
+#view-backgrounds .bg-library-picker,
+#view-backgrounds .bg-strip-item,
+#view-backgrounds .bg-strip-remove,
+#view-backgrounds .bg-pick,
+#view-backgrounds .bg-yours { border: 0; }
+#view-backgrounds .bg-editor-skipped { border-left: 0; padding-left: 0; }
+#view-backgrounds .bg-strip-ctl { border-top: 0; }
+#view-backgrounds .bg-switch-track { border: 0; background: var(--bgp-fill); }
+#view-backgrounds .bg-switch input:checked + .bg-switch-track { background: var(--bgp-hi); }
+#bg-speaker.is-on, #bg-share-btn.is-on { border: 0; background: var(--bgp-hi); color: var(--text); }
+
+/* one text colour: tabs, buttons, selects, inputs */
+#view-backgrounds .subtab-btn,
+#view-backgrounds .btn,
+#view-backgrounds .btn-primary,
+#view-backgrounds .btn-danger,
+#view-backgrounds .settings-input,
+#view-backgrounds .bg-yours,
+#view-backgrounds .bg-editor-progress,
+#view-backgrounds .bg-playlist-row .btn,
+#view-backgrounds .bg-editor .btn:not(.btn-primary) { color: var(--text); }
+
+/* fills: selected/active = slightly lighter panel, hover = lighter still */
+#view-backgrounds .btn,
+#view-backgrounds .subtab-btn { background: transparent; transition: background 0.12s ease; }
+#view-backgrounds .settings-input { background: var(--bgp-fill); }
+#view-backgrounds .subtab-btn.active,
+#view-backgrounds .bg-playlist-row.is-active,
+#view-backgrounds .bg-strip-item.is-over,
+#view-backgrounds .bg-pick.is-picked { background: color-mix(in srgb, var(--text) 12%, var(--bgp-panel)); }
+#view-backgrounds .subtab-btn:hover,
+#view-backgrounds .btn:hover:not(:disabled),
+#view-backgrounds .settings-input:hover,
+#view-backgrounds .bg-strip-remove:hover { background: var(--bgp-hi); }
+#view-backgrounds .subtab-btn.active:hover { background: var(--bgp-hi); }
+#view-backgrounds .btn-primary { background: var(--bgp-fill); }
+#view-backgrounds .btn:disabled { opacity: 0.5; }
+#view-backgrounds .bg-strip-remove:hover,
+#view-backgrounds .bg-strip-ctl button:hover:not(:disabled) { color: var(--text); }
+#view-backgrounds .bg-share-mode .browse-card:hover { border-color: var(--line); }
+
+#view-backgrounds :focus:not(:focus-visible) { outline: none; }
+/* no blue ring on mouse click; keyboard focus gets a lighter fill */
+#view-backgrounds button:focus,
+#view-backgrounds select:focus,
+#view-backgrounds input:focus { outline: none; }
+#view-backgrounds button:focus-visible,
+#view-backgrounds select:focus-visible,
+#view-backgrounds input[type=text]:focus-visible { outline: none; background: var(--bgp-hi); }
+/* "+ New playlist" sits straight on the picture: give it the dark panel */
+#view-backgrounds .bg-pl-toolbar .btn { background: var(--bgp-panel); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+#view-backgrounds .bg-pl-toolbar .btn:hover { background: color-mix(in srgb, var(--text) 14%, var(--bgp-panel)); }
+
+/* ---- Soft UI pass (shared look; kept cheap here: no blur, no per-card drop shadows, so grid scrolling stays smooth) ---- */
+#view-backgrounds { --bgp-panel: var(--glass); }
+#view-backgrounds .page-header,
+#view-backgrounds .browser-subtabs,
+#view-backgrounds .bg-toolbar-right,
+#view-backgrounds .bg-pl-toolbar .btn { -webkit-backdrop-filter: none; backdrop-filter: none; }
+#view-backgrounds .page-header { color: var(--green); border-radius: var(--radius-sm); }
+#view-backgrounds .browser-subtabs { border-radius: var(--radius-sm); box-shadow: none; padding: 0 6px; }
+#view-backgrounds .bg-toolbar-right { border-radius: var(--radius-sm); box-shadow: var(--hl); padding: 4px 12px; }
+#view-backgrounds .subtab-btn { border-radius: 0; color: var(--text-dim); background: none; }
+#view-backgrounds .subtab-btn:hover { background: none; color: var(--text); }
+#view-backgrounds .subtab-btn.active,
+#view-backgrounds .subtab-btn.active:hover { background: none; color: var(--text); box-shadow: inset 0 -2px 0 var(--green); }
+#view-backgrounds .btn,
+#view-backgrounds .settings-input,
+#view-backgrounds .bg-strip-remove { border-radius: var(--radius-sm); }
+#view-backgrounds .btn:hover:not(:disabled) { background: var(--bgp-hi); }
+#view-backgrounds .btn-primary { background: var(--green); color: var(--bg); }
+#view-backgrounds .btn-primary:hover:not(:disabled) { background: var(--green); color: var(--bg); filter: brightness(1.08); }
+#view-backgrounds .bg-pl-toolbar .btn-primary { background: var(--green); }
+#bg-speaker.is-on, #bg-share-btn.is-on { background: var(--bgp-hi); color: var(--text); box-shadow: inset 0 -2px 0 var(--green); }
+#view-backgrounds .bg-switch-track { border-radius: 999px; }
+#view-backgrounds .bg-switch-track::after { border-radius: 50%; top: 3px; left: 3px; width: 10px; height: 10px; }
+#view-backgrounds .bg-switch input:checked + .bg-switch-track { background: var(--green); }
+#view-backgrounds .bg-switch input:checked + .bg-switch-track::after { background: var(--bg); }
+
+/* cards: rounded, glass, inner highlight only; hover = tint (no shadow, no glow, no accent pseudo-element) */
+#view-backgrounds .browse-card { border-radius: var(--radius); box-shadow: var(--hl); }
+#view-backgrounds .browse-card::before { display: none; }
+#view-backgrounds .browse-card:hover { background: var(--glass-hi); box-shadow: var(--hl); }
+#view-backgrounds .browse-card[onclick]:hover::before { display: block; }
+#view-backgrounds .bg-share-mode .browse-card:hover { box-shadow: var(--hl), inset 0 0 0 1px var(--green); }
+#view-backgrounds .browse-card-thumb { border-radius: 0; }
+
+/* rows, editor, strips */
+#view-backgrounds .bg-playlist-row { position: relative; border-radius: var(--radius); box-shadow: var(--hl); padding: 12px 16px; }
+#view-backgrounds .bg-playlist-row.is-active { background: var(--glass-hi); box-shadow: var(--hl), inset 3px 0 0 var(--green); }
+#view-backgrounds .bg-playlist-list { gap: 10px; }
+#view-backgrounds .bg-editor,
+#view-backgrounds .bg-library-picker { border-radius: var(--radius); box-shadow: var(--hl); -webkit-backdrop-filter: none; backdrop-filter: none; padding: 16px; }
+#view-backgrounds .bg-editor-title { color: var(--green); }
+#view-backgrounds .bg-strip-item,
+#view-backgrounds .bg-pick { border-radius: var(--radius-sm); overflow: hidden; }
+#view-backgrounds .bg-strip-item.is-over,
+#view-backgrounds .bg-pick.is-picked { box-shadow: inset 0 0 0 2px var(--green); }
+#view-backgrounds .bg-yours,
+.badge-shared, .badge-added { border-radius: var(--radius-sm); background: var(--green); color: var(--bg); border: 0; padding: 0 8px; }
+.bg-share-hint { border-radius: var(--radius-sm); border: 0; background: var(--glass); box-shadow: var(--hl); }
+.bg-preview-box { border: 0; border-radius: calc(var(--radius) + 2px); overflow: hidden; box-shadow: var(--hl), 0 8px 20px rgba(0, 0, 0, 0.4); }
+.bg-preview-head { border-bottom: 0; }
+.bg-preview-grid img { border: 0; border-radius: var(--radius-sm); }
