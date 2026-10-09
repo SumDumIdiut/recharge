@@ -3353,12 +3353,17 @@ async function toggleInstalledList() {
   const list = root.querySelector('#mm-load-list');
   if (!list.hidden) { list.hidden = true; return; }
   list.hidden = false;
-  list.innerHTML = '<div class="mm-config-sub">Loading…</div>';
+  // The base game is always the first entry: it starts a fresh map on the level.
+  const show = (html) => {
+    list.innerHTML = '<button class="mm-tool mm-load-item" data-base="1" title="Start a new map on the base game level">Base game<span>level</span></button>' + html;
+    list.querySelector('[data-base]').addEventListener('click', () => { newMapOnBase(); list.hidden = true; });
+  };
+  show('<div class="mm-config-sub">Loading…</div>');
   let maps = [];
-  try { maps = await window.__TAURI__.core.invoke('list_maps'); } catch (e) { list.innerHTML = `<div class="mm-config-sub mm-warn">Couldn't list installed maps: ${e}</div>`; return; }
+  try { maps = await window.__TAURI__.core.invoke('list_maps'); } catch (e) { show(`<div class="mm-config-sub mm-warn">Couldn't list installed maps: ${e}</div>`); return; }
   maps = maps.filter((m) => m.id !== 'map-maker-test');
-  if (!maps.length) { list.innerHTML = '<div class="mm-config-sub">No maps installed.</div>'; return; }
-  list.innerHTML = maps.map((m) => `<button class="mm-tool mm-load-item" data-id="${m.id}" title="${(m.description || '').replace(/"/g, '&quot;')}">${m.name || m.id}<span>${m.id === 'map-maker-test' ? 'last test' : m.id}</span></button>`).join('');
+  if (!maps.length) { show('<div class="mm-config-sub">No maps installed.</div>'); return; }
+  show(maps.map((m) => `<button class="mm-tool mm-load-item" data-id="${m.id}" title="${(m.description || '').replace(/"/g, '&quot;')}">${m.name || m.id}<span>${m.id === 'map-maker-test' ? 'last test' : m.id}</span></button>`).join(''));
   list.querySelectorAll('[data-id]').forEach((b) => b.addEventListener('click', async () => {
     try {
       const text = await window.__TAURI__.core.invoke('read_map', { id: b.dataset.id });
@@ -7268,6 +7273,40 @@ async function toggleBase() {
   requestDraw();
 }
 
+// Start over on the base game's level, with nothing placed.
+async function newMapOnBase() {
+  const hasContent = blocks.size || spikes.size || vines.size || tiles.size || mossCells.size
+    || placed.length || freeSpikes.length || signs.length || triggers.length || csprites.length || arrows.length
+    || removed.size || draft.courses.length;
+  if (hasContent && !confirm('Start a new map on the base game? Your current draft will be replaced - export it first if you want to keep it.')) return;
+  pushUndo();
+  resetDraftContents();
+  draft.name = '';
+  draft.description = '';
+  draft.baseState = 'start';
+  if (!baseOn()) {
+    const btn = root.querySelector('#mm-base');
+    btn.disabled = true;
+    btn.classList.add('mm-busy');
+    try {
+      await loadBase(true);
+    } catch (e) {
+      flash("Couldn't load the base game map: " + e, true);
+      return;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('mm-busy');
+    }
+    draft.useBase = true;
+    fillJumpList();
+  }
+  if (base?.courses?.[0]) jumpTo(base.courses[0].start.x, base.courses[0].start.y);
+  saveDraft();
+  syncBaseUi();
+  requestDraw();
+  flash('New map on the base game.');
+}
+
 // ---- the overgrown stages: edited separately for the Start and Overgrown states ----
 // The cells the overgrowth changes (its sprites, and ground / moss only one state
 // has), plus a cell around them. Edits there belong to the state being viewed;
@@ -7494,9 +7533,8 @@ async function copyJson() {
   }
 }
 
-function clearAll() {
-  if (!confirm('Clear everything you placed or erased in this draft?')) return;
-  pushUndo();
+// Wipes everything placed or erased, keeping the map's own settings.
+function resetDraftContents() {
   blocks.clear();
   spikes.clear();
   vines.clear();
@@ -7518,6 +7556,12 @@ function clearAll() {
   renderConfig();
   draft.courses = [];
   draft.spawn = null;
+}
+
+function clearAll() {
+  if (!confirm('Clear everything you placed or erased in this draft?')) return;
+  pushUndo();
+  resetDraftContents();
   saveDraft();
   requestDraw();
 }

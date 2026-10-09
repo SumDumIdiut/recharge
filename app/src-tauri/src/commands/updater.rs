@@ -233,6 +233,8 @@ fn detached_attempts(m: &Managed, args: &[&str]) -> Vec<(&'static str, Command)>
 
 /// Written before a restart-to-update; the next start compares builds to see whether it worked.
 const REQUEST_FILE: &str = "restart-request.json";
+/// A request older than this is not the restart that just happened.
+const STALE_REQUEST_SECS: u64 = 15 * 60;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
 struct RestartRequest {
@@ -252,6 +254,9 @@ fn check_restart_outcome(m: &Managed) -> Option<String> {
     let path = m.root.join(REQUEST_FILE);
     let req: RestartRequest = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
     let _ = std::fs::remove_file(&path);
+    if now_secs() > req.at + STALE_REQUEST_SECS {
+        return None; // left behind by an older build that never consumed it: not about this start
+    }
     let running = Some(m.build.as_str()).filter(|b| !b.is_empty()).map(str::to_string)
         .or(read_current(&m.root).map(|c| c.build.to_string()))
         .unwrap_or_default();
@@ -596,19 +601,24 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let mk = |build: &str| Managed { launcher: "/l".into(), root: d.clone(), build: build.into(), version: String::new(), channel: "stable".into() };
         let req = |at: u64| serde_json::to_vec(&RestartRequest { from_build: "13".into(), from_version: "4.0.0".into(), to_build: 14, at }).unwrap();
+        let t0 = now_secs() - 5;
         // worked: now running 14
-        std::fs::write(d.join(REQUEST_FILE), req(1000)).unwrap();
+        std::fs::write(d.join(REQUEST_FILE), req(t0)).unwrap();
         assert_eq!(check_restart_outcome(&mk("14")), None);
         assert!(!d.join(REQUEST_FILE).exists(), "request consumed");
         // launcher never wrote a line since the request
-        std::fs::write(d.join(REQUEST_FILE), req(1000)).unwrap();
+        std::fs::write(d.join(REQUEST_FILE), req(t0)).unwrap();
         std::fs::write(d.join("launcher.log"), "[10] old line\n").unwrap();
         assert!(check_restart_outcome(&mk("13")).unwrap().contains("never started"));
         // launcher logged a swap failure
-        std::fs::write(d.join(REQUEST_FILE), req(1000)).unwrap();
-        std::fs::write(d.join("launcher.log"), "[10] old\n[1001] update failed, keeping installed version: app -> app.old: Access denied\n[1002] launching x\n").unwrap();
+        std::fs::write(d.join(REQUEST_FILE), req(t0)).unwrap();
+        std::fs::write(d.join("launcher.log"), &format!("[10] old\n[{}] update failed, keeping installed version: app -> app.old: Access denied\n[{}] launching x\n", t0 + 1, t0 + 2)).unwrap();
         let r = check_restart_outcome(&mk("13")).unwrap();
         assert!(r.contains("Access denied"), "{r}");
+        // a stale request from an older build is ignored (and consumed)
+        std::fs::write(d.join(REQUEST_FILE), req(now_secs() - 3600)).unwrap();
+        assert_eq!(check_restart_outcome(&mk("13")), None);
+        assert!(!d.join(REQUEST_FILE).exists());
         // no request: nothing
         assert_eq!(check_restart_outcome(&mk("13")), None);
         let _ = std::fs::remove_dir_all(&d);
