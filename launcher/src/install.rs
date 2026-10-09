@@ -392,7 +392,9 @@ pub fn uninstall_via_copy(root: &Path, exe: &Path, args: &[std::ffi::OsString], 
     fs::copy(exe, &copy).map_err(|e| format!("could not copy the uninstaller to {}: {e}", copy.display()))?;
     crate::update::set_exec(&copy);
     let mut cmd = std::process::Command::new(&copy);
-    cmd.args(args).env(COPY_ENV, "1");
+    // Never inherit the shortcut's "Start in" (the install root): a process whose cwd is the root
+    // keeps the directory itself locked and the final remove fails.
+    cmd.args(args).env(COPY_ENV, "1").current_dir(std::env::temp_dir());
     if !args.iter().any(|a| a == "--root") {
         cmd.arg("--root").arg(root);
     }
@@ -569,6 +571,10 @@ fn remove_dir_retry(d: &Path) -> Result<(), String> {
 }
 
 pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String> {
+    // Do not hold the install root open through our own cwd.
+    if root.is_absolute() {
+        let _ = std::env::set_current_dir(std::env::temp_dir());
+    }
     // Never rm -rf an arbitrary directory because of a bad --root.
     if !launcher_path(root).exists() && !root.join("state.json").exists() {
         return Err(format!("{} does not look like a Recharge install, refusing", root.display()));
