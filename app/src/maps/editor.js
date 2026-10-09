@@ -5347,6 +5347,58 @@ export function workerRenderTile(z, tx, ty, part = null) {
   return renderTile(z, tx, ty, part).transferToImageBitmap();
 }
 
+// The map view picture: Amplifier zoomed out over the whole map (the level when the map uses it, then its tiles, blocks, spikes, vines, moss and spawns/gates), fitted into W x H. Runs in the tile worker, whose module state is its own, so a live editor is never touched. `map` is a map.json object (v2 maps are converted first). Returns a PNG Blob, or null when the map has no editor data.
+export async function workerRenderMapView(map, W = 960, H = 540) {
+  if (isV2(map)) {
+    const gridOf = (name) => ({ ...layerGrid(name), mats: base?.mats });
+    const vineSprites = base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite);
+    map = { ...map, editor: toV1State(map, gridOf, vineSprites) };
+  }
+  if (!map?.editor) return null;
+  draft = emptyDraft();
+  loadDraftFrom(map.editor);
+  applyBaseState();
+  applyBaseMoves();
+  syncRemovedPaths();
+  baseVersion++;
+  let area = baseOn() ? null : exportArea();
+  if (!area) {
+    // A map on the base game with nothing else: the cells it changed, else the level itself.
+    const b = baseOn() ? levelBounds() : null;
+    const ch = exportArea();
+    if (ch) area = ch;
+    else if (b && Number.isFinite(b.x0)) area = { x0: Math.floor(b.x0 / CELL), x1: Math.ceil(b.x1 / CELL), y0: Math.floor((b.y0 - OFFSET_Y) / CELL), y1: Math.ceil((b.y1 - OFFSET_Y) / CELL) };
+    else area = { x0: -20, x1: 20, y0: -10, y1: 10 };
+  }
+  const lo = cellWorld(area.x0, area.y0), hi = cellWorld(area.x1 + 1, area.y1 + 1);
+  const aw = Math.max(hi.x - lo.x, CELL * 8), ah = Math.max(hi.y - lo.y, CELL * 8);
+  const ss = 2; // drawn at twice the size, then scaled down: smoother than a 0.02 zoom drawn directly
+  const w = W * ss, h = H * ss;
+  const scale = Math.min(MAX_SCALE, (w * 0.92) / aw, (h * 0.92) / ah);
+  const cv = makeCanvas();
+  cv.width = w; cv.height = h;
+  const saved = [canvas, ctx, cam, renderPart];
+  canvas = cv; ctx = guardCtx(cv.getContext('2d', { alpha: false })); cam = { x: (lo.x + hi.x) / 2, y: (lo.y + hi.y) / 2, scale }; renderPart = null;
+  staticRender = true;
+  try {
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, w, h);
+    const useArt = artReady();
+    if (baseOn()) renderBaseLayer(w, h, useArt);
+    drawCellLayers(useArt, scale < 0.1 ? 0.6 : 0.5);
+    try { drawCourses(); } catch (e) { console.warn('[map view] gates', e); }
+  } finally {
+    staticRender = false;
+    [canvas, ctx, cam, renderPart] = saved;
+  }
+  const out = makeCanvas();
+  out.width = W; out.height = H;
+  const g = out.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(cv, 0, 0, W, H);
+  return out.convertToBlob({ type: 'image/png' });
+}
+
 // Your tiles, blocks, spikes, vines and moss over the current view, back to front; keyed by cell so only the view's range is visited. `tileMargin` is how far past the view a tile's centre may be and still draw.
 function drawCellLayers(useArt, pad, tileMargin = CELL) {
   const W = canvas.width, H = canvas.height;

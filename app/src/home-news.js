@@ -1,6 +1,6 @@
 // "What's new": the newest Library additions plus Recharge releases.
 import { escapeHtml } from './ui.js';
-import { mapThumbFor } from './maps/mapthumb.js';
+import { mapThumbFor, hubStamp } from './maps/mapthumb.js';
 
 const HUB = 'https://codecade.co.za/recharge';
 const MAX_ENTRIES = 10;
@@ -137,13 +137,23 @@ export function layoutNews() {
   renderNews(entries);
 }
 
+let generation = 0;
+
+// Always rebuilt from fresh API lists (nothing is cached between calls), so items deleted on the hub vanish at once.
+// A newer call supersedes an older one still in flight.
 export async function initHomeNews() {
-  entries = mergeEntries(await Promise.all([additions(), releases()]));
+  const mine = ++generation;
+  const fresh = mergeEntries(await Promise.all([additions(), releases()]));
+  if (mine !== generation) return;
+  entries = fresh;
   layoutNews();
-  // Maps get the extracted fullmap picture as in the Maps tab; a Hub gallery image stays the fallback until it arrives.
-  for (const e of entries) {
-    if (e.tag !== 'Map' || !e.id) continue;
-    const img = await mapThumbFor(e.id).catch(() => null);
+  // A map with no uploaded picture gets its drawn view (as in the Maps tab); an uploaded one stays.
+  for (const e of fresh) {
+    if (e.tag !== 'Map' || !e.id || e.image) continue;
+    const img = await mapThumbFor(e.id, { stamp: hubStamp(e.when) }).catch(() => null);
+    if (mine !== generation) return;
     if (img) { e.image = img; layoutNews(); }
   }
 }
+
+export const refreshHomeNews = initHomeNews;
