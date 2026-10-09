@@ -326,18 +326,6 @@ pub fn data_dirs() -> Vec<PathBuf> {
     v
 }
 
-fn delete_data() {
-    for d in data_dirs() {
-        if !d.exists() {
-            continue;
-        }
-        match fs::remove_dir_all(&d) {
-            Ok(()) => eprintln!("removed {}", d.display()),
-            Err(e) => eprintln!("could not remove {}: {e}", d.display()),
-        }
-    }
-}
-
 /// y/n question: on the terminal when there is one, else a dialog (zenity / PowerShell message box).
 /// No way to ask means no.
 fn ask(question: &str) -> bool {
@@ -369,6 +357,217 @@ fn ask(question: &str) -> bool {
     }
 }
 
+/// True when the Start-menu / .desktop entry (and on Windows the Apps & features entry) exist.
+#[cfg(unix)]
+fn shortcuts_present() -> bool {
+    desktop_file().map(|p| p.is_file()).unwrap_or(true)
+}
+#[cfg(windows)]
+fn shortcuts_present() -> bool {
+    let lnks = lnk_path().map(|p| p.is_file()).unwrap_or(true) && uninstall_lnk_path().map(|p| p.is_file()).unwrap_or(true);
+    let out = hidden("reg").args(["query", UNINSTALL_KEY, "/v", "UninstallString"]).output();
+    lnks && out.map(|o| o.status.success()).unwrap_or(true)
+}
+
+/// Every launcher run: recreate missing shortcuts / uninstall entry (a reinstall over leftovers,
+/// or a user who deleted the shortcut). Idempotent and cheap when nothing is missing.
+pub fn ensure_shortcuts(root: &Path, version: &str) {
+    if !shortcuts_present() {
+        log!("shortcuts or uninstall entry missing, recreating");
+        refresh_shortcut(root, version);
+    }
+}
+
+// ---- uninstall ----
+
+const COPY_ENV: &str = "RECHARGE_UNINSTALL_COPY";
+
+/// First stage of --uninstall: copy this exe to the OS temp dir and run that copy, so nothing in
+/// the install root is locked by the process that deletes it. Returns the copy's exit code on
+/// unix (the root exe can be deleted while running); on Windows the copy is detached and we return
+/// at once so our own exe in the root gets freed.
+pub fn uninstall_via_copy(root: &Path, exe: &Path, args: &[std::ffi::OsString], yes: bool) -> Result<i32, String> {
+    let name = format!("recharge-uninstall-{}{}", std::process::id(), if cfg!(windows) { ".exe" } else { "" });
+    let copy = std::env::temp_dir().join(name);
+    fs::copy(exe, &copy).map_err(|e| format!("could not copy the uninstaller to {}: {e}", copy.display()))?;
+    crate::update::set_exec(&copy);
+    let mut cmd = std::process::Command::new(&copy);
+    cmd.args(args).env(COPY_ENV, "1");
+    if !args.iter().any(|a| a == "--root") {
+        cmd.arg("--root").arg(root);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP survive our exit; silent runs get no window.
+        let flags = if yes { 0x0800_0000 | 0x0000_0200 } else { 0x0000_0200 };
+        let _ = yes;
+        cmd.creation_flags(flags);
+        cmd.spawn().map_err(|e| format!("could not start the uninstaller: {e}"))?;
+        return Ok(0);
+    }
+    #[cfg(unix)]
+    {
+        let _ = yes;
+        let st = cmd.status().map_err(|e| format!("could not start the uninstaller: {e}"))?;
+        Ok(st.code().unwrap_or(1))
+    }
+}
+
+pub fn is_uninstall_copy() -> bool {
+    std::env::var_os(COPY_ENV).is_some()
+}
+
+/// Ids of processes whose executable lives under `dir` (Linux: /proc/<pid>/exe).
+#[cfg(target_os = "linux")]
+fn pids_running_from(dir: &Path) -> Vec<u32> {
+    let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let me = std::process::id();
+    let mut v = Vec::new();
+    let Ok(rd) = fs::read_dir("/proc") else { return v };
+    for e in rd.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        if pid == me {
+            continue;
+        }
+        if let Ok(p) = fs::read_link(format!("/proc/{pid}/exe")) {
+            let s = p.to_string_lossy().trim_end_matches(" (deleted)").to_string();
+            if Path::new(&s).starts_with(&dir) && crate::run::pid_alive(pid) {
+                v.push(pid);
+            }
+        }
+    }
+    v
+}
+
+#[cfg(target_os = "linux")]
+fn ppid_of(pid: u32) -> Option<u32> {
+    let s = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    s.rsplit(')').next()?.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// `roots` plus all their descendants (WebKitWebProcess etc. on Linux).
+#[cfg(target_os = "linux")]
+fn with_descendants(roots: &[u32]) -> Vec<u32> {
+    let mut all: Vec<u32> = roots.to_vec();
+    let Ok(rd) = fs::read_dir("/proc") else { return all };
+    let procs: Vec<(u32, u32)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let pid = e.file_name().to_str()?.parse::<u32>().ok()?;
+            Some((pid, ppid_of(pid)?))
+        })
+        .collect();
+    loop {
+        let before = all.len();
+        for (pid, pp) in &procs {
+            if all.contains(pp) && !all.contains(pid) {
+                all.push(*pid);
+            }
+        }
+        if all.len() == before {
+            return all;
+        }
+    }
+}
+
+/// Is a Recharge app running from <root>/app?
+pub fn app_is_running(root: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        !pids_running_from(&root.join("app")).is_empty()
+    }
+    #[cfg(windows)]
+    {
+        !win_ps(&format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -like '{}\\app\\*' }} | ForEach-Object {{ $_.ProcessId }}",
+            ps_quote(root)
+        ))
+        .trim()
+        .is_empty()
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let _ = root;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn ps_quote(p: &Path) -> String {
+    p.display().to_string().replace('\'', "''")
+}
+
+#[cfg(windows)]
+fn win_ps(script: &str) -> String {
+    hidden("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// Stop the app under <root>/app and its helper processes (WebView2 children that hold the
+/// co.za.codecade.recharge\EBWebView user-data folder; WebKit processes on Linux). Nothing else.
+pub fn close_app(root: &Path) {
+    #[cfg(target_os = "linux")]
+    {
+        let app = pids_running_from(&root.join("app"));
+        if app.is_empty() {
+            return;
+        }
+        let all = with_descendants(&app);
+        log!("closing Recharge (pids {all:?})");
+        let kill = |sig: &str| {
+            for p in &all {
+                let _ = std::process::Command::new("kill").args([sig, &p.to_string()]).status();
+            }
+        };
+        kill("-TERM");
+        for _ in 0..20 {
+            if all.iter().all(|p| !crate::run::pid_alive(*p)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        kill("-KILL");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    #[cfg(windows)]
+    {
+        // Own windows first (graceful), then force. WebView2 helpers are matched by the user-data
+        // folder in their command line so other apps' WebView2 processes are never touched.
+        let script = format!(
+            "$r='{root}\\app\\*'; \
+             Get-Process | Where-Object {{ $_.Path -like $r }} | ForEach-Object {{ [void]$_.CloseMainWindow() }}; \
+             Start-Sleep -Milliseconds 1500; \
+             Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -like $r -or ($_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -like '*{id}\\EBWebView*') }} | \
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+            root = ps_quote(root),
+            id = APP_IDENTIFIER
+        );
+        log!("closing Recharge and its WebView2 processes");
+        win_ps(&script);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    let _ = root;
+}
+
+/// remove_dir_all with retries: files may stay locked for a moment after their process dies.
+fn remove_dir_retry(d: &Path) -> Result<(), String> {
+    let mut last = String::new();
+    for _ in 0..20 {
+        match fs::remove_dir_all(d) {
+            Ok(()) => return Ok(()),
+            Err(e) if !d.exists() && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Err(last)
+}
+
 pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String> {
     // Never rm -rf an arbitrary directory because of a bad --root.
     if !launcher_path(root).exists() && !root.join("state.json").exists() {
@@ -381,10 +580,11 @@ pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String>
         if !delete {
             delete = ask("Also delete your Recharge settings, mods, skins and map saves?");
         }
+        if app_is_running(root) && !ask("Recharge is running - close it?") {
+            return Err("cancelled: Recharge is still running".into());
+        }
     }
-    if delete {
-        delete_data();
-    }
+    close_app(root);
     #[cfg(unix)]
     if let Some(p) = desktop_file() {
         let _ = fs::remove_file(p);
@@ -397,15 +597,40 @@ pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String>
         if !winnative::delete_uninstall_entry() {
             let _ = hidden("reg").args(["delete", UNINSTALL_KEY, "/f"]).status();
         }
-        // The running exe cannot delete itself: hand the folder to a detached cmd that retries.
-        let _ = hidden("cmd")
-            .args(["/C", &format!("ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", root.display())])
-            .spawn();
-        return Ok(());
+    }
+    let mut failed = Vec::new();
+    if let Err(e) = remove_dir_retry(root) {
+        log!("could not remove {}: {e}", root.display());
+        failed.push(format!("{}: {e}", root.display()));
+    }
+    if delete {
+        for d in data_dirs() {
+            if d.exists() {
+                match remove_dir_retry(&d) {
+                    Ok(()) => log!("removed {}", d.display()),
+                    Err(e) => {
+                        log!("could not remove {}: {e}", d.display());
+                        failed.push(format!("{}: {e}", d.display()));
+                    }
+                }
+            }
+        }
+    }
+    if failed.is_empty() { Ok(()) } else { Err(format!("some files could not be removed: {}", failed.join("; "))) }
+}
+
+/// The temp copy deletes itself after it exits.
+pub fn schedule_self_delete() {
+    if !is_uninstall_copy() {
+        return;
+    }
+    let Ok(me) = std::env::current_exe() else { return };
+    #[cfg(windows)]
+    {
+        let _ = hidden("cmd").args(["/C", &format!("ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"", me.display())]).spawn();
     }
     #[cfg(unix)]
     {
-        fs::remove_dir_all(root).map_err(|e| format!("remove {}: {e}", root.display()))?;
-        Ok(())
+        let _ = fs::remove_file(me);
     }
 }

@@ -137,4 +137,14 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   await t.window.__uninstallRecharge();
   assert.deepEqual(t.calls.find((c) => c[0] === 'launcher_uninstall'), ['launcher_uninstall', { deleteData: true, restoreGame: true }]);
 }
+// --- channel selector follows the launcher ---
+{
+  const t = setup({ managed: true, channel: 'beta' });
+  const code = src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, '');
+  vm.runInContext(code, t.ctx);
+  assert.equal(vm.runInContext("shownChannel('stable', { managed: true, channel: 'beta' })", t.ctx), 'beta', 'launcher channel wins when managed');
+  assert.equal(vm.runInContext("shownChannel('stable', { managed: false, channel: 'beta' })", t.ctx), 'stable');
+  assert.equal(vm.runInContext("shownChannel('beta', null)", t.ctx), 'beta');
+  assert.equal(vm.runInContext("shownChannel('beta', { managed: true, channel: '' })", t.ctx), 'beta');
+}
 console.log('updater-ui: all checks passed');

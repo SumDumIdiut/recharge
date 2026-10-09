@@ -23,7 +23,32 @@ pub struct Managed {
 
 impl Managed {
     pub fn from_env() -> Option<Managed> {
-        Self::from_vars(|k| std::env::var(k).ok())
+        Self::from_vars(|k| std::env::var(k).ok()).or_else(|| Self::from_exe(&std::env::current_exe().ok()?))
+    }
+
+    /// Started without the launcher's env (taskbar pin to app\\recharge.exe, a shortcut to the app):
+    /// an exe in <root>/app/ whose root holds the launcher and its state.json is still managed.
+    fn from_exe(exe: &Path) -> Option<Managed> {
+        let app_dir = exe.parent()?;
+        if !app_dir.file_name()?.to_string_lossy().eq_ignore_ascii_case("app") {
+            return None;
+        }
+        let root = app_dir.parent()?;
+        let launcher = root.join(if cfg!(windows) { "recharge-launcher.exe" } else { "recharge-launcher" });
+        if !launcher.is_file() || !root.join("state.json").is_file() {
+            return None;
+        }
+        let cur = read_current(root);
+        let channel = read_channel_file(root)
+            .or(cur.as_ref().map(|c| c.channel.clone()).filter(|c| c == "beta" || c == "stable"))
+            .unwrap_or_else(|| "stable".into());
+        Some(Managed {
+            launcher,
+            root: root.to_path_buf(),
+            build: cur.as_ref().map(|c| c.build.to_string()).filter(|b| b != "0").unwrap_or_default(),
+            version: cur.map(|c| c.version).unwrap_or_default(),
+            channel,
+        })
     }
 
     fn from_vars(get: impl Fn(&str) -> Option<String>) -> Option<Managed> {
@@ -326,6 +351,25 @@ mod tests {
         assert!(Managed::from_vars(vars(&[("RECHARGE_LAUNCHER", ""), ("RECHARGE_INSTALL_ROOT", "/r")])).is_none());
         let m = Managed::from_vars(vars(&[("RECHARGE_LAUNCHER", "/l"), ("RECHARGE_INSTALL_ROOT", "/r"), ("RECHARGE_BUILD", "12"), ("RECHARGE_CHANNEL", "beta")])).unwrap();
         assert_eq!((m.build.as_str(), m.channel.as_str()), ("12", "beta"));
+    }
+
+    #[test]
+    fn managed_detected_from_exe_path() {
+        let root = std::env::temp_dir().join(format!("rl-app-exe-{}", std::process::id()));
+        let app = root.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        let exe = app.join("recharge");
+        assert!(Managed::from_exe(&exe).is_none(), "no launcher yet");
+        let l = root.join(if cfg!(windows) { "recharge-launcher.exe" } else { "recharge-launcher" });
+        std::fs::write(&l, b"x").unwrap();
+        assert!(Managed::from_exe(&exe).is_none(), "no state.json yet");
+        std::fs::write(root.join("state.json"), br#"{"current":{"version":"4.0.0-beta3","build":42,"channel":"stable"}}"#).unwrap();
+        std::fs::write(root.join("channel.txt"), "beta").unwrap();
+        let m = Managed::from_exe(&exe).unwrap();
+        assert_eq!((m.root.as_path(), m.launcher.as_path()), (root.as_path(), l.as_path()));
+        assert_eq!((m.build.as_str(), m.version.as_str(), m.channel.as_str()), ("42", "4.0.0-beta3", "beta"), "channel.txt wins");
+        assert!(Managed::from_exe(&root.join("other").join("recharge")).is_none(), "parent must be named app");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
