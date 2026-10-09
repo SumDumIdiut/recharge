@@ -82,8 +82,13 @@ fn main() -> ExitCode {
         println!("recharge-launcher {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
-    let root = o.root.clone().unwrap_or_else(install::default_root);
+    // A relative --root must be resolved before we move away from the caller's cwd.
+    let root = o.root.clone().map(|r| std::path::absolute(&r).unwrap_or(r)).unwrap_or_else(install::default_root);
     let exe = std::env::current_exe().unwrap_or_default();
+    // The app starts us with its own cwd (<root>\app\); Windows will not rename a directory that
+    // is some process's cwd ("app -> app.old: os error 32"). Never sit in anything we may swap or delete.
+    let _ = std::env::set_current_dir(std::env::temp_dir());
+    log::debug_cwd();
 
     if o.scan_old {
         for i in old::scan(&root, &exe) {
@@ -159,9 +164,13 @@ fn main() -> ExitCode {
     }
     if let Some(pid) = o.wait_pid {
         // The app is restarting itself into an update: its files must be free before we swap.
-        if !run::wait_exit(pid, std::time::Duration::from_secs(30)) {
-            log!("pid {pid} still running after 30s, continuing anyway");
+        if !run::wait_exit(pid, std::time::Duration::from_secs(60)) {
+            log!("pid {pid} still running after 60s, continuing anyway");
         }
+        // The app is gone (or hung): its WebView2 helpers can still hold files in app\, so close
+        // whatever of ours remains, and forget the pid so it cannot block the swap.
+        install::close_app(&root);
+        run::clear_pid_file(&root);
     }
 
     let online = match update::prepare(&ctx, &mut st) {

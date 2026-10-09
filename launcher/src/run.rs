@@ -37,11 +37,22 @@ pub fn pid_alive(pid: u32) -> bool {
 pub fn pid_alive(pid: u32) -> bool {
     use std::os::windows::process::CommandExt;
     Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
         .creation_flags(0x0800_0000)
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .map(|o| tasklist_has_pid(&String::from_utf8_lossy(&o.stdout), pid))
         .unwrap_or(false)
+}
+
+/// `tasklist /FO CSV /NH` rows are "name","pid","session",...; match the pid field exactly
+/// (a substring test also matched memory columns like "1,234 K" and kept the app "running" forever).
+pub fn tasklist_has_pid(out: &str, pid: u32) -> bool {
+    out.lines().any(|l| l.split("\",\"").nth(1).map(|f| f.trim_matches('"') == pid.to_string()).unwrap_or(false))
+}
+
+/// Forget a pid file whose process is gone (or never was ours): it must not block a swap.
+pub fn clear_pid_file(root: &Path) {
+    let _ = fs::remove_file(pid_file(root));
 }
 
 /// Poll until `pid` is gone. False on timeout.
@@ -116,6 +127,19 @@ pub fn clean_markers(root: &Path, keep_build: u64) {
                 let _ = fs::remove_file(e.path());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_any {
+    use super::*;
+    #[test]
+    fn tasklist_pid_match_is_exact() {
+        let out = "\"recharge.exe\",\"1234\",\"Console\",\"1\",\"98,765 K\"\r\n";
+        assert!(tasklist_has_pid(out, 1234));
+        assert!(!tasklist_has_pid(out, 98), "memory column is not a pid");
+        assert!(!tasklist_has_pid(out, 123));
+        assert!(!tasklist_has_pid("INFO: No tasks are running which match the specified criteria.\r\n", 1234));
     }
 }
 

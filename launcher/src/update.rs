@@ -207,7 +207,7 @@ fn download_all(ctx: &Ctx, files: &[FileEntry], dest: &Path) -> Result<(), Strin
     }
 }
 
-/// Fetch one content-addressed file, verify size + sha256, retry once.
+/// Fetch one content-addressed file, verify size + sha256, retry a few times (a pooled connection the server closed fails once).
 fn download_one(ctx: &Ctx, agent: &ureq::Agent, f: &FileEntry, dest: &Path) -> Result<(), String> {
     let rel = manifest::safe_rel(&f.path).ok_or_else(|| format!("unsafe path in manifest: {}", f.path))?;
     if !manifest::is_hex_sha(&f.sha256) {
@@ -217,7 +217,7 @@ fn download_one(ctx: &Ctx, agent: &ureq::Agent, f: &FileEntry, dest: &Path) -> R
     mkparent(&target)?;
     let url = format!("{}/update/files/{}", ctx.base, f.sha256);
     let mut last = String::new();
-    for attempt in 1..=2 {
+    for attempt in 1..=4 {
         match fetch_to(agent, &url, &target, f, &ctx.progress) {
             Ok(()) => return Ok(()),
             Err(e) => {
@@ -293,7 +293,7 @@ fn finish_staged(ctx: &Ctx, st: &mut State) -> Result<(), String> {
             log!("swapping in previously staged build {}", s.build);
             swap_in(ctx, st, s)?;
         }
-        Some(_) => {}
+        Some(s) => log!("staged build {} not swapped: the app is still running (running.pid {:?})", s.build, fs::read_to_string(ctx.root.join("running.pid")).unwrap_or_default().trim()),
         None => discard_staged(ctx),
     }
     Ok(())
@@ -397,17 +397,26 @@ pub fn rm_rf(p: &Path) {
     }
 }
 
-/// Windows AV/indexers briefly lock freshly written files; retry renames a few times.
+/// Windows AV/indexers and slow-exiting WebView2 helpers lock files for a while: retry up to 10 s.
 fn rename_retry(a: &Path, b: &Path) -> std::io::Result<()> {
+    let tries = rename_tries();
     let mut last = None;
-    for _ in 0..5 {
+    for i in 1..=tries {
         match fs::rename(a, b) {
             Ok(()) => return Ok(()),
-            Err(e) => last = Some(e),
+            Err(e) => {
+                log!("rename {} -> {} failed (try {i}/{tries}): {e}", a.display(), b.display());
+                last = Some(e);
+            }
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(RENAME_WAIT_MS));
     }
     Err(last.unwrap())
+}
+
+const RENAME_WAIT_MS: u64 = 500;
+fn rename_tries() -> u32 {
+    std::env::var("RECHARGE_RENAME_TRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(20)
 }
 
 #[cfg(unix)]

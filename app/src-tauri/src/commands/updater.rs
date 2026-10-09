@@ -85,6 +85,8 @@ fn parse_stage_output(out: &str) -> Option<u64> {
 pub struct UpdaterState {
     /// Build waiting in app.new/ (set by the background check or "Check for updates").
     ready: Mutex<Option<u64>>,
+    /// Why the last "Restart to update" did not apply (set at startup).
+    failure: Mutex<Option<String>>,
 }
 
 fn managed(app: &AppHandle) -> Option<Managed> {
@@ -138,6 +140,10 @@ pub fn init(app: &AppHandle) {
             std::thread::sleep(Duration::from_millis(100));
         }
         let _ = m.write_started_marker();
+        if let Some(reason) = check_restart_outcome(&m) {
+            *app.state::<UpdaterState>().failure.lock().unwrap() = Some(reason.clone());
+            let _ = app.emit("launcher-update-failed", reason);
+        }
         std::thread::sleep(FIRST_CHECK_AFTER);
         loop {
             let _ = check_and_notify(&app, &m);
@@ -146,21 +152,164 @@ pub fn init(app: &AppHandle) {
     });
 }
 
-/// The launcher starts the next process once we are gone, so detach it from us.
+/// Appends a line to <root>/restart.log (the app's side of a restart; launcher.log has the other).
+fn restart_log(root: &Path, msg: &str) {
+    use std::io::Write;
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(root.join("restart.log")) {
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
+
+/// The launcher starts the next process once we are gone, so detach it from us. Verifies the
+/// launcher really started (a spawn error, or a child that died within a moment) and logs to
+/// restart.log; an Err means the caller must NOT quit the app.
 fn spawn_detached(m: &Managed, args: &[&str]) -> Result<(), String> {
+    restart_log(&m.root, &format!("starting {} {}", m.launcher.display(), args.join(" ")));
+    let mut errors: Vec<String> = Vec::new();
+    for (label, mut c) in detached_attempts(m, args) {
+        match c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            Ok(mut child) => {
+                // A launcher killed with our job object, or one that crashes on start, is gone in well under this.
+                std::thread::sleep(Duration::from_millis(400));
+                match child.try_wait() {
+                    Ok(Some(st)) if !st.success() => {
+                        let e = format!("{label}: launcher exited at once with {st}");
+                        restart_log(&m.root, &e);
+                        errors.push(e);
+                        continue;
+                    }
+                    _ => {
+                        restart_log(&m.root, &format!("{label}: started (pid {})", child.id()));
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                let e = format!("{label}: {e}");
+                restart_log(&m.root, &format!("spawn failed, {e}"));
+                errors.push(e);
+            }
+        }
+    }
+    Err(format!("couldn't start the updater ({}). Details are in {}", errors.join("; "), m.root.join("restart.log").display()))
+}
+
+#[cfg(not(windows))]
+fn detached_attempts(m: &Managed, args: &[&str]) -> Vec<(&'static str, Command)> {
+    use std::os::unix::process::CommandExt;
     let mut c = Command::new(&m.launcher);
-    c.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        c.process_group(0);
+    c.args(args).process_group(0).current_dir(&m.root);
+    vec![("direct", c)]
+}
+
+/// Windows: the app (WebView2/Tauri, or whatever started it) may sit in a job object that kills
+/// its children on exit, so ask to break away first; if the job forbids that (ERROR_ACCESS_DENIED)
+/// retry without it, then go through cmd's `start`, which launches via the shell.
+#[cfg(windows)]
+fn detached_attempts(m: &Managed, args: &[&str]) -> Vec<(&'static str, Command)> {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const NEW_GROUP: u32 = 0x0000_0200;
+    const NO_WINDOW: u32 = 0x0800_0000;
+    const BREAKAWAY: u32 = 0x0100_0000;
+    let mk = |flags: u32| {
+        let mut c = Command::new(&m.launcher);
+        // cwd = root: inheriting <root>\app\ would make the launcher block its own app -> app.old rename.
+        c.args(args).current_dir(&m.root).creation_flags(flags);
+        c
+    };
+    let mut shell = Command::new("cmd");
+    shell.arg("/c").arg("start").arg("").arg("/b").arg(&m.launcher).args(args).current_dir(&m.root).creation_flags(NO_WINDOW | BREAKAWAY);
+    let mut shell_nb = Command::new("cmd");
+    shell_nb.arg("/c").arg("start").arg("").arg("/b").arg(&m.launcher).args(args).current_dir(&m.root).creation_flags(NO_WINDOW);
+    vec![
+        ("breakaway", mk(DETACHED_PROCESS | NO_WINDOW | NEW_GROUP | BREAKAWAY)),
+        ("detached", mk(DETACHED_PROCESS | NO_WINDOW | NEW_GROUP)),
+        ("cmd-start", shell),
+        ("cmd-start-nobreakaway", shell_nb),
+    ]
+}
+
+/// Written before a restart-to-update; the next start compares builds to see whether it worked.
+const REQUEST_FILE: &str = "restart-request.json";
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct RestartRequest {
+    from_build: String,
+    from_version: String,
+    to_build: u64,
+    at: u64,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Did the update requested by the previous run apply? None = nothing to report (no request, or it worked).
+/// Some(reason) = the old build came back. Always consumes the request file.
+fn check_restart_outcome(m: &Managed) -> Option<String> {
+    let path = m.root.join(REQUEST_FILE);
+    let req: RestartRequest = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let running = Some(m.build.as_str()).filter(|b| !b.is_empty()).map(str::to_string)
+        .or(read_current(&m.root).map(|c| c.build.to_string()))
+        .unwrap_or_default();
+    if running == req.to_build.to_string() {
+        return None;
     }
+    if running != req.from_build {
+        return None; // some other build (e.g. a newer one); not our failure
+    }
+    let reason = failure_reason(&m.root, req.at);
+    restart_log(&m.root, &format!("update to build {} did not apply: {reason}", req.to_build));
+    Some(reason)
+}
+
+/// The most telling launcher.log line written since `since` (epoch seconds), or a generic cause.
+fn failure_reason(root: &Path, since: u64) -> String {
+    let log = std::fs::read_to_string(root.join("launcher.log")).unwrap_or_default();
+    let recent: Vec<&str> = log
+        .lines()
+        .filter(|l| {
+            l.strip_prefix('[')
+                .and_then(|r| r.split(']').next())
+                .and_then(|t| t.parse::<u64>().ok())
+                .map(|t| t + 2 >= since)
+                .unwrap_or(false)
+        })
+        .collect();
+    if recent.is_empty() {
+        return "the updater never started (see restart.log)".into();
+    }
+    let strip = |l: &str| l.split_once("] ").map(|x| x.1).unwrap_or(l).to_string();
+    for key in ["swap failed", "failed", "could not", "impossible", "still running", "keeping installed", "->"] {
+        if let Some(l) = recent.iter().rev().find(|l| l.contains(key)) {
+            return strip(l);
+        }
+    }
+    "the updater ran but did not swap the new files in (see launcher.log)".into()
+}
+
+/// Shown by the page after a restart that did not take.
+#[tauri::command]
+pub fn launcher_update_failure(app: AppHandle) -> Option<String> {
+    app.try_state::<UpdaterState>()?.failure.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn launcher_open_log(app: AppHandle) -> Result<(), String> {
+    let m = managed(&app).ok_or("not started by the Recharge launcher")?;
+    let log = m.root.join("launcher.log");
+    let path = if log.is_file() { log } else { m.root.join("restart.log") };
     #[cfg(windows)]
-    {
+    let r = {
         use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0000_0008 | 0x0800_0000 | 0x0000_0200); // DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
-    }
-    c.spawn().map(|_| ()).map_err(|e| format!("couldn't start the launcher: {e}"))
+        Command::new("explorer").arg(&path).creation_flags(0x0800_0000).spawn()
+    };
+    #[cfg(not(windows))]
+    let r = Command::new("xdg-open").arg(&path).spawn();
+    r.map(|_| ()).map_err(|e| format!("couldn't open {}: {e}", path.display()))
 }
 
 fn write_channel_file(root: &Path, channel: &str) -> std::io::Result<()> {
@@ -279,7 +428,20 @@ pub fn launcher_restart(app: AppHandle, repair: bool) -> Result<(), String> {
     if repair {
         spawn_detached(&m, &["--repair", "--wait-pid", &pid])?;
     } else {
-        spawn_detached(&m, &["--wait-pid", &pid, "--no-ui"])?;
+        let staged = read_staged(&m.root);
+        let req = RestartRequest {
+            from_build: m.build.clone(),
+            from_version: m.version.clone(),
+            to_build: staged.map(|s| s.build).unwrap_or(0),
+            at: now_secs(),
+        };
+        if req.to_build != 0 {
+            let _ = std::fs::write(m.root.join(REQUEST_FILE), serde_json::to_vec(&req).unwrap_or_default());
+        }
+        if let Err(e) = spawn_detached(&m, &["--wait-pid", &pid, "--no-ui"]) {
+            let _ = std::fs::remove_file(m.root.join(REQUEST_FILE));
+            return Err(e); // the app stays open
+        }
     }
     app.exit(0);
     Ok(())
@@ -424,6 +586,44 @@ mod tests {
         // the build we already run is not an update
         std::fs::write(d.join("app.new.json"), br#"{"version":"4.0.0-beta1","build":10}"#).unwrap();
         assert_eq!(info_from(&m, None).ready, None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn restart_outcome_reports_old_build_and_launcher_reason() {
+        let d = std::env::temp_dir().join(format!("rl-app-outcome-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mk = |build: &str| Managed { launcher: "/l".into(), root: d.clone(), build: build.into(), version: String::new(), channel: "stable".into() };
+        let req = |at: u64| serde_json::to_vec(&RestartRequest { from_build: "13".into(), from_version: "4.0.0".into(), to_build: 14, at }).unwrap();
+        // worked: now running 14
+        std::fs::write(d.join(REQUEST_FILE), req(1000)).unwrap();
+        assert_eq!(check_restart_outcome(&mk("14")), None);
+        assert!(!d.join(REQUEST_FILE).exists(), "request consumed");
+        // launcher never wrote a line since the request
+        std::fs::write(d.join(REQUEST_FILE), req(1000)).unwrap();
+        std::fs::write(d.join("launcher.log"), "[10] old line\n").unwrap();
+        assert!(check_restart_outcome(&mk("13")).unwrap().contains("never started"));
+        // launcher logged a swap failure
+        std::fs::write(d.join(REQUEST_FILE), req(1000)).unwrap();
+        std::fs::write(d.join("launcher.log"), "[10] old\n[1001] update failed, keeping installed version: app -> app.old: Access denied\n[1002] launching x\n").unwrap();
+        let r = check_restart_outcome(&mk("13")).unwrap();
+        assert!(r.contains("Access denied"), "{r}");
+        // no request: nothing
+        assert_eq!(check_restart_outcome(&mk("13")), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn spawn_detached_reports_missing_launcher_and_logs() {
+        let d = std::env::temp_dir().join(format!("rl-app-spawn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let m = Managed { launcher: d.join("nope"), root: d.clone(), build: "1".into(), version: String::new(), channel: "stable".into() };
+        assert!(spawn_detached(&m, &["--x"]).is_err());
+        assert!(std::fs::read_to_string(d.join("restart.log")).unwrap().contains("spawn failed"));
+        let ok = Managed { launcher: "true".into(), ..m };
+        assert!(spawn_detached(&ok, &[]).is_ok() || cfg!(windows));
         let _ = std::fs::remove_dir_all(&d);
     }
 

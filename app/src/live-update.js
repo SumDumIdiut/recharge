@@ -17,7 +17,7 @@ function makeBanner(kind, text) {
 
 function showLauncherBanner() {
   const old = document.getElementById('live-update-banner');
-  if (old?.dataset.kind === 'launcher') return;
+  if (old?.dataset.kind === 'launcher' || old?.dataset.kind === 'failed') return;
   old?.remove();
   const banner = makeBanner('launcher', 'Update ready');
   const restart = document.createElement('button');
@@ -42,6 +42,39 @@ function showLauncherBanner() {
   document.body.appendChild(banner);
 }
 
+// The last "Restart to update" did not take: say why, never a silent no-op.
+function showFailureBanner(reason) {
+  document.getElementById('live-update-banner')?.remove();
+  const banner = makeBanner('failed', `Update didn't apply - ${reason}`);
+  banner.style.whiteSpace = 'normal';
+  banner.style.maxWidth = '560px';
+  const retry = document.createElement('button');
+  retry.className = 'btn btn-primary';
+  retry.textContent = 'Try again';
+  retry.style.cssText = 'white-space:nowrap;padding:6px 14px;';
+  retry.onclick = async () => {
+    retry.disabled = true;
+    try {
+      await tauri.core.invoke('launcher_restart', { repair: false });
+    } catch (err) {
+      retry.disabled = false;
+      banner.firstChild.textContent = `Update didn't apply - ${String(err)}`;
+    }
+  };
+  const log = document.createElement('button');
+  log.className = 'btn';
+  log.textContent = 'Open log';
+  log.style.cssText = 'white-space:nowrap;padding:6px 14px;';
+  log.onclick = () => tauri.core.invoke('launcher_open_log').catch((err) => { banner.firstChild.textContent = String(err); });
+  const close = document.createElement('button');
+  close.className = 'btn';
+  close.textContent = 'Dismiss';
+  close.style.cssText = 'white-space:nowrap;padding:6px 14px;';
+  close.onclick = () => banner.remove();
+  banner.append(retry, log, close);
+  document.body.appendChild(banner);
+}
+
 function showBanner() {
   if (document.getElementById('live-update-banner')) return;
   const banner = makeBanner('live', 'Recharge updated.');
@@ -61,5 +94,7 @@ function showBanner() {
 
 tauri?.event?.listen?.('live-updated', showBanner);
 tauri?.event?.listen?.('launcher-update-ready', showLauncherBanner);
+tauri?.event?.listen?.('launcher-update-failed', (e) => showFailureBanner(String(e?.payload ?? 'see the launcher log')));
+tauri?.core?.invoke?.('launcher_update_failure').then((r) => { if (r) showFailureBanner(r); }).catch(() => {});
 // An update staged before this page loaded (reload, or the check ran during startup).
 tauri?.core?.invoke?.('launcher_info').then((i) => { if (i?.managed && i.ready) showLauncherBanner(); }).catch(() => {});
