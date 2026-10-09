@@ -6,10 +6,12 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export const ICON_IMAGE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16"/><circle cx="9" cy="10" r="1.8"/><path d="M3 18l6-5 4 3 3-2 5 4"/></svg>';
+
 export function thumb(src, badge) {
   const img = src
     ? `<img class="browse-card-thumb" src="${escapeHtml(src)}" alt="" />`
-    : `<div class="browse-card-thumb browse-card-thumb-empty"></div>`;
+    : `<div class="browse-card-thumb browse-card-thumb-empty">${ICON_IMAGE}</div>`;
   return `<div class="browse-card-media">${img}${badge || ''}</div>`;
 }
 

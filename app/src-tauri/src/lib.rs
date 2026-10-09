@@ -24,6 +24,20 @@ fn apply_nvidia_webkit_workarounds() {
     }
 }
 
+// wry already sets the Allow autoplay policy (and WebView2's autoplay flag on Windows), but WebKitGTK still gates play() on a user gesture through this setting, so background playlist sound needs it off.
+#[cfg(target_os = "linux")]
+fn allow_media_without_gesture(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    use webkit2gtk::{SettingsExt, WebViewExt};
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.with_webview(|wv| {
+            if let Some(settings) = wv.inner().settings() {
+                settings.set_media_playback_requires_user_gesture(false);
+            }
+        });
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
@@ -36,6 +50,8 @@ pub fn run() {
             hub::start_beam_server(app.handle().clone());
             live::init(app.handle());
             updater::init(app.handle());
+            #[cfg(target_os = "linux")]
+            allow_media_without_gesture(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -83,6 +99,10 @@ pub fn run() {
             maps::set_map_hub_name,
             maps::read_map_thumb,
             maps::write_map_thumb,
+            maps::map_view_stamp,
+            maps::read_map_view,
+            maps::write_map_view,
+            maps::map_view_path,
             maps::test_launch_map,
             skins::list_installed_skins,
             skins::read_skin_thumbnail,
@@ -107,6 +127,8 @@ pub fn run() {
             play::restore_vanilla_build,
             backgrounds::list_background_images,
             backgrounds::upload_background_image,
+            backgrounds::import_background_files,
+            backgrounds::list_media_in_folder,
             backgrounds::delete_background_image,
             backgrounds::read_background_image,
             backgrounds::get_backgrounds_config,
@@ -116,6 +138,9 @@ pub fn run() {
             backgrounds::pick_random_background,
             backgrounds::pick_background,
             backgrounds::set_playlist_interval,
+            backgrounds::set_playlist_sound,
+            backgrounds::background_media_base,
+            play::media_log,
             backgrounds::publish_playlist,
             backgrounds::unpublish_playlist,
             backgrounds::download_hub_playlist,

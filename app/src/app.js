@@ -44,6 +44,7 @@ window.navigate = function navigate(tab) {
 
   if (tab === 'home') {
     refreshInstallStatus({ log: false });
+    import('/home-news.js').then((m) => m.refreshHomeNews()).catch(() => {});
     return;
   }
   loadTab(tab, target, ++navGeneration);

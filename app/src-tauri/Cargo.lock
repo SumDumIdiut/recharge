@@ -2792,6 +2792,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tiny_http",
  "ureq",
+ "webkit2gtk",
  "zip",
 ]
 

@@ -11,9 +11,8 @@
   background: var(--green);
 }
 
-.card, .home-panel { border: 1px solid var(--line); }
-.card { background: var(--panel); padding: 18px; margin-bottom: 14px; }
-.home-panel { width: 320px; flex-shrink: 0; padding: 28px; }
+.card { border: 1px solid var(--line); background: var(--panel); padding: 18px; margin-bottom: 14px; }
+.home-panel { width: 320px; flex-shrink: 0; padding: 26px; }
 
 .tag { display: inline-block; margin-right: 8px; padding: 0 6px; border: 1px solid var(--line); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }
 .tag-library { color: var(--green); border-color: var(--green); }
@@ -97,7 +96,15 @@
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
-.browse-card-thumb-empty { background: var(--bg); height: 170px; }
+.browse-card-thumb-empty {
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.browse-card-thumb-empty svg { width: 30px; height: 30px; opacity: 0.6; }
 
 .browse-card-media { position: relative; }
 .browse-card-info { min-width: 0; }
@@ -110,7 +117,7 @@
   left: 10px;
   width: 30px;
   height: 30px;
-  border-radius: 50%;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -120,7 +127,8 @@
   cursor: default;
 }
 .badge svg { width: 16px; height: 16px; }
-.badge-installed { color: var(--green); border-color: var(--green); }
+.badge-installed { color: var(--green); border-color: var(--green); width: auto; padding: 0 10px 0 8px; gap: 6px; border-radius: var(--radius-sm); }
+.badge-installed::after { content: 'Installed'; font-size: 15px; text-transform: uppercase; }
 .badge-install { color: var(--text-dim); cursor: pointer; }
 .badge-install:hover { color: var(--green); border-color: var(--green); }
 .badge-update { color: var(--magenta); border-color: var(--magenta-dim); cursor: pointer; animation: badge-update-pulse 2s ease-in-out infinite; }
@@ -172,7 +180,7 @@
   transform: translateY(-50%);
   width: 40px;
   height: 40px;
-  border-radius: 50%;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.55);
   color: var(--text);
@@ -192,7 +200,7 @@
   right: 12px;
   bottom: 12px;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.6);
   color: var(--text);
   font-size: 13px;
@@ -205,3 +213,118 @@
 .detail-actions { max-width: 320px; display: flex; flex-direction: column; gap: 10px; }
 .btn-danger { color: var(--danger); border-color: var(--danger-dim); }
 .btn-danger:hover { border-color: var(--danger); }
+
+/* ====================================================================================================
+   Shared look: tight corners, see-through, one faint edge, green only where it means something. Tokens live in style.css :root.
+   Recipes: glass surface = var(--glass) + var(--radius) + var(--hl) + var(--shadow-soft);
+            field         = text-tinted fill + var(--radius-sm), green inner ring on focus;
+            hover item    = var(--hover) fill + green accent bar (::before) + no glow.
+   ==================================================================================================== */
+:root { --field: color-mix(in srgb, var(--text) 8%, transparent); --field-hi: color-mix(in srgb, var(--text) 14%, transparent); }
+
+/* page chrome */
+.crumb-bar { background: var(--glass-hi); border-bottom: none; box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent); }
+:root.has-bg .crumb-bar { background: var(--glass-hi); border-bottom: none; }
+.crumb-back { padding: 8px 18px; border-radius: var(--radius-sm); background: var(--field); box-shadow: var(--hl); transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
+.crumb-back:hover { background: var(--field-hi); }
+.page-header { color: var(--green); letter-spacing: 0.08em; margin-bottom: 20px; }
+
+/* cards and panels */
+.card { background: var(--glass); border: none; border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 22px 24px; margin-bottom: 18px; }
+.settings-label { color: var(--green); font-size: 21px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 10px; }
+.settings-sublabel { border-top-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.progress-track { border: none; border-radius: 2px; background: var(--field); overflow: hidden; }
+.progress-fill { border-radius: 0; }
+
+/* fields */
+.form-input, .settings-input, .browser-search, .css-textarea, .form-browse-path {
+  background: var(--field); border: none; border-radius: var(--radius-sm); color: var(--text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+  transition: box-shadow 140ms ease, background 140ms ease;
+}
+.browser-search { padding: 9px 16px; border-radius: var(--radius-sm); }
+.form-input:hover, .settings-input:hover, .browser-search:hover { background: var(--field-hi); }
+.form-input:focus, .settings-input:focus, .browser-search:focus, .css-textarea:focus { outline: none; border: none; box-shadow: inset 0 0 0 1.5px var(--green); background: var(--field-hi); }
+select.form-input, select.settings-input { cursor: pointer; }
+.toggle { border: none; border-radius: 999px; background: var(--field-hi); position: relative; }
+.toggle.is-on { background: var(--green); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
+
+/* tabs */
+.browser-subtabs { gap: 2px; padding: 0; background: none; box-shadow: none; }
+.subtab-btn { background: none; border: none; border-radius: 0; color: var(--text-dim); padding: 7px 18px; transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
+.subtab-btn:hover { color: var(--text); }
+.subtab-btn.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--green); }
+.browser-toolbar { margin-bottom: 22px; }
+:root.has-bg .browser-subtabs { background: var(--glass); border-radius: var(--radius-sm); padding: 0 6px; }
+
+/* buttons */
+.btn-danger { background: color-mix(in srgb, var(--danger) 12%, transparent); box-shadow: var(--hl); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.btn:disabled:not(.btn-primary) { opacity: 0.55; }
+.icon-btn { border: none; border-radius: var(--radius-sm); background: var(--field); transition: background 140ms ease, color 140ms ease; }
+.icon-btn:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+
+/* browse cards: glass, rounded, green bar + tint on hover */
+.browser-grid { gap: 22px; }
+.browse-card { position: relative; overflow: hidden; background: var(--glass); border: none; border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); transition: background 140ms ease, box-shadow 140ms ease; }
+.browse-card::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; z-index: 2; background: var(--green); opacity: 0; transition: opacity 140ms ease; pointer-events: none; }
+.browse-card[onclick]:hover { background: var(--glass-hi); box-shadow: var(--hl), var(--shadow-soft); }
+.browse-card[onclick]:hover::before { opacity: 1; }
+.browse-card-thumb { border-bottom: none; }
+.browse-card-name { letter-spacing: 0.03em; }
+.browse-card-name-protected, .detail-name-protected { color: var(--green); }
+
+/* badges and tags */
+.badge { background: color-mix(in srgb, var(--panel) 88%, transparent); border: none; box-shadow: var(--hl); }
+.badge-installed { background: var(--green); color: var(--bg); border: none; }
+.badge-install:hover, .badge.is-done { background: var(--glass-hi); color: var(--green); border: none; }
+.badge-update { border: none; box-shadow: var(--hl), inset 0 0 0 1px var(--magenta-dim); }
+.tag { border: none; border-radius: var(--radius-sm); padding: 1px 8px; background: var(--field); }
+.tag-library, .tag-release { border: none; background: none; box-shadow: inset 0 0 0 1px var(--green-dim); color: var(--green); }
+
+/* details / gallery */
+.detail-image { border: none; border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); background: var(--glass); }
+.gallery-nav { border: none; border-radius: var(--radius-sm); box-shadow: var(--hl); }
+.gallery-nav:hover { background: var(--green); color: var(--bg); }
+.detail-name { color: var(--green); }
+
+/* modals, toasts, progress */
+.modal { background: var(--panel); border: none; border-radius: calc(var(--radius) + 2px); box-shadow: var(--hl), 0 8px 20px rgba(0, 0, 0, 0.4); padding: 28px; }
+.modal-title { color: var(--green); letter-spacing: 0.06em; }
+.toast, .global-progress { background: var(--panel); border: none; border-radius: var(--radius); box-shadow: var(--hl), 0 4px 10px rgba(0, 0, 0, 0.35); }
+.list-row, .dep-list li { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
+
+/* settings */
+.preset-option { border: none; border-radius: var(--radius); background: var(--field); box-shadow: var(--hl); transition: background 140ms ease, box-shadow 140ms ease; }
+.preset-option:hover { background: var(--field-hi); }
+.theme-swatch { border: none; border-radius: var(--radius-sm); }
+.color-field input[type="color"] { border: none; border-radius: var(--radius-sm); overflow: hidden; }
+.texture-preview { border: none; border-radius: var(--radius-sm); }
+.whatsnew-panel { border: none; border-radius: var(--radius-sm); background: var(--field); }
+.wn-entry { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.theme-colors { border-top-color: color-mix(in srgb, var(--text) 9%, transparent); }
+#view-settings .page-header { background: transparent; }
+:root.has-bg #view-settings .page-header { background: var(--glass); border-radius: var(--radius-sm); padding: 4px 12px; margin: 0 0 20px; position: static; display: inline-block; }
+:root.has-bg #view-settings .page { padding-top: 0; }
+
+/* credits */
+.credits-person-photo { border: none; border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); }
+.credits-logo { border-radius: var(--radius); }
+
+/* short windows: tighter Home menu so Settings / Credits are not clipped */
+@media (max-height: 860px) {
+  .home-header { margin-bottom: 14px; }
+  .home-logo { width: 96px; height: 96px; }
+  .home-title { font-size: 62px; }
+  #wave-banner { margin-top: 2px; height: 36px; }
+  .home-tile { padding: 20px 24px; font-size: 25px; }
+  .home-menu-row { padding: 11px 22px; font-size: 21px; }
+  .home-menu-col { gap: 12px; }
+  .home-panel { padding: 20px; }
+}
+.toggle { width: 40px; height: 22px; }
+.toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-dim); transition: left 140ms ease, background 140ms ease; }
+.toggle.is-on::after { left: 21px; background: var(--bg); }
+:root.has-bg .browser-search { background: var(--glass); }
+:root.has-bg .browser-search:focus { background: var(--glass-hi); }
