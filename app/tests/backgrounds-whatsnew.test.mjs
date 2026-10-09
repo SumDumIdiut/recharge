@@ -1,7 +1,7 @@
 // Node-only tests (stub DOM/invoke): node tests/backgrounds-whatsnew.test.mjs
 import assert from 'node:assert/strict';
 import { loadCommunity, imageCardsHtml, playlistCardsHtml, UNSUPPORTED_IMAGES } from '../src/backgrounds/community.js';
-import { renderChangelog, loadChangelog, bannerDecision, versionForBuild, BUILD_KEY } from '../src/whatsnew.js';
+import { cleanVersion, resolveVersion, renderChangelog, loadChangelog, bannerDecision, versionForBuild, BUILD_KEY } from '../src/whatsnew.js';
 import { maybeShowUpdatedBanner } from '../src/whatsnew-banner.js';
 
 let n = 0;
@@ -55,7 +55,8 @@ await test('whatsnew: render + escaping', () => {
   const html = renderChangelog({ entries: [{ version: '3.1.0<script>', build: 42, date: '2026-10-01', changes: ['Fixed <img onerror=x>', 'Second & third'] }] });
   assert.ok(!html.includes('<script>') && !html.includes('<img'));
   assert.match(html, /3\.1\.0&lt;script&gt;/);
-  assert.match(html, /build 42/);
+  assert.match(html, /title="Build 42"/);
+  assert.doesNotMatch(html, />build 42</);
   assert.equal((html.match(/<li>/g) || []).length, 2);
   assert.match(html, /Second &amp; third/);
 });
@@ -75,7 +76,8 @@ await test('banner decision', () => {
   assert.deepEqual(bannerDecision('13', '12'), { show: true, store: '13' });
   assert.deepEqual(bannerDecision('', '12'), { show: false, store: null });
   assert.equal(versionForBuild([{ build: 13, version: '3.1' }], '13'), '3.1');
-  assert.equal(versionForBuild([], '13'), 'build 13');
+  assert.equal(versionForBuild([], '13'), '');
+  assert.equal(versionForBuild([{ build: 13, version: 'build-13' }], '13'), '');
 });
 
 function stubDoc() {
@@ -103,6 +105,32 @@ await test('banner flow: shows after build change, stores build, silent otherwis
   // storage that throws must not break
   const bad = { getItem() { throw new Error('x'); }, setItem() { throw new Error('x'); } };
   assert.equal(await maybeShowUpdatedBanner(tauri, bad, stubDoc()), false);
+});
+
+await test('version never shows the CI counter; unknown resolved from changelog and cached', async () => {
+  for (const v of ['build-17', 'build 17', 'Build17', 'v17', '17', '', null]) assert.equal(cleanVersion(v), '', String(v));
+  assert.equal(cleanVersion('4.0.0-beta8'), '4.0.0-beta8');
+  const store = new Map();
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  let calls = 0;
+  const invoke = async () => { calls++; return { entries: [{ build: 17, version: '4.0.0-beta8', changes: [] }] }; };
+  const info = { build: '17', version: 'build-17', channel: 'beta' };
+  assert.equal(await resolveVersion(invoke, info, storage), '4.0.0-beta8');
+  assert.equal(await resolveVersion(invoke, info, storage), '4.0.0-beta8');
+  assert.equal(calls, 1, 'second lookup comes from the cache');
+  assert.equal(await resolveVersion(invoke, { build: '17', version: '4.0.1' }, storage), '4.0.1', 'launcher version wins');
+  assert.equal(await resolveVersion(async () => { throw new Error('NOT_FOUND'); }, { build: '99', channel: 'beta' }, storage), '');
+});
+
+await test('banner falls back to a plain message, never "build N"', async () => {
+  globalThis.window = {};
+  const store = new Map([[BUILD_KEY, '12']]);
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  const tauri = { core: { invoke: stub({ launcher_info: { managed: true, build: '17', version: 'build-17', channel: 'beta' }, fetch_changelog_cmd: { entries: [] } }) } };
+  const doc = stubDoc();
+  assert.equal(await maybeShowUpdatedBanner(tauri, storage, doc), true);
+  assert.equal(doc.created[1].textContent, 'Recharge was updated');
+  assert.equal(doc.created[1].title, 'Build 17');
 });
 
 console.log(`${n} tests passed`);

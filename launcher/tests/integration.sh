@@ -19,7 +19,7 @@ fetches() { grep -c "GET /update/files/" "$LOG"; }
 mark()    { : > "$LOG"; }
 serve()   { (cd "$SITE" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>"$LOG") & SRV=$!; sleep 0.7; }
 unserve() { kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
-trap 'unserve; rm -rf "$W"' EXIT
+trap 'unserve; [ -n "${KEEP:-}" ] || rm -rf "$W"' EXIT
 gen() { python3 -I "$HERE/gen_site.py" "$SITE" "$@"; }
 
 echo "== old installs are found (--scan-old) and removed by a first run"
@@ -237,7 +237,54 @@ fresh; "$W/dl/recharge" --channel beta --no-ui >/dev/null 2>&1
 check "--channel beta on plain name -> beta" "[ \"\$(chan)\" = beta ]"
 echo stable > "$ROOT/channel.txt"; rm -f "$ROOT/state.json"
 "$W/dl/recharge-beta" --no-ui >/dev/null 2>&1
-check "existing channel.txt is kept" "[ \"\$(chan)\" = stable ]"
+check "downloaded recharge-beta over an existing stable install -> beta" "[ \"\$(chan)\" = beta ]"
+"$W/dl/recharge" --no-ui >/dev/null 2>&1
+check "downloaded plain recharge over a beta install -> stable" "[ \"\$(chan)\" = stable ]"
+"$W/dl/recharge-beta" --channel stable --no-ui >/dev/null 2>&1
+check "explicit --channel wins over the downloaded name" "[ \"\$(chan)\" = stable ]"
+
+echo "== beta also takes newer stable releases; stable never takes beta"
+bld() { grep -o '"build": *[0-9]*' "$ROOT/state.json" | grep -o '[0-9]*$' | head -1; }
+fresh; gen 20 ok; gen 15 ok beta
+"$W/dl/recharge-beta" --no-ui >/dev/null 2>&1
+check "beta picks the newer stable build (20 over 15)" "[ \"\$(chan)\" = beta ] && [ \"\$(bld)\" = 20 ] && grep -q 'using the stable manifest (build 20)' $ROOT/launcher.log"
+gen 25 ok beta; mark; $ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "beta keeps beta when beta is newer (25 over 20)" "[ \"\$(bld)\" = 25 ] && grep -q 'using the beta manifest (build 25)' $ROOT/launcher.log && grep -q 'GET /update/stable/manifest.json' $LOG"
+gen 30 ok; $ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "beta takes a later stable release (30 over 25)" "[ \"\$(bld)\" = 30 ] && [ \"\$(chan)\" = beta ]"
+rm -rf "$SITE/update/stable"; gen 40 ok beta; $ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "beta works when the stable manifest is missing (404)" "[ \"\$(bld)\" = 40 ]"
+gen 31 ok; rm -rf "$SITE/update/beta"; $ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "beta works when the beta manifest is missing (only stable left)" "[ \"\$(bld)\" = 31 ]"
+fresh; gen 30 ok; gen 99 ok beta
+"$W/dl/recharge" --no-ui >/dev/null 2>&1
+check "stable never takes a newer beta build" "[ \"\$(chan)\" = stable ] && [ \"\$(bld)\" = 30 ]"
+mark; $ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "stable never even asks for the beta manifest" "! grep -q 'GET /update/beta/manifest.json' $LOG"
+"$W/dl/recharge-beta" --no-ui >/dev/null 2>&1
+check "re-running a downloaded recharge-beta over the stable install switches to beta and updates" "[ \"\$(chan)\" = beta ] && [ \"\$(bld)\" = 99 ]"
+$ROOT/recharge-launcher --no-ui >/dev/null 2>&1
+check "re-running the installed launcher keeps the channel" "[ \"\$(chan)\" = beta ]"
+
+echo "== migration from an old app: --stage on a first install, then the hand-over"
+fresh; rm -rf "$SITE/update/beta"; gen 7 ok
+DESK="$XDG_DATA_HOME/applications/recharge.desktop"
+mkdir -p "$W/mig"; cp "$BIN" "$W/mig/recharge-launcher"
+out=$(cd "$W/mig" && ./recharge-launcher --stage --no-ui --channel beta 2>&1 </dev/null)
+check "--stage on a first install stages and installs the launcher" "echo \"\$out\" | grep -q 'staged 7' && [ -x $ROOT/recharge-launcher ] && [ -d $ROOT/app.new ] && [ ! -d $ROOT/app ]"
+check "--stage on a first install creates the menu entry pointing at the launcher" "[ -f $DESK ] && grep -q 'Exec=\"$ROOT/recharge-launcher\"' $DESK"
+check "--stage logs how to finish" "grep -q 'start Recharge from your apps menu to finish' $ROOT/launcher.log"
+check "--stage did not start the app" "[ ! -e $ROOT/started-7.ok ]"
+# the old app is a process that exits a moment later; the launcher must wait for it, swap and start the new app
+sleep 2 & OLDPID=$!
+rm -f "$DESK"
+( cd "$W" && $ROOT/recharge-launcher --no-ui --wait-pid $OLDPID --channel beta >/dev/null 2>&1 </dev/null ) & HO=$!
+sleep 0.6
+check "hand-over waits while the old app still runs" "[ ! -d $ROOT/app ]"
+wait $HO
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f $ROOT/started-7.ok ] && break; sleep 0.3; done
+check "hand-over swapped app.new into app/ and started the new app" "[ -x $ROOT/app/recharge ] && [ ! -d $ROOT/app.new ] && [ -f $ROOT/started-7.ok ]"
+check "hand-over created the menu entry" "[ -f $DESK ]"
 unset RECHARGE_LAUNCHER_NO_HEALTHCHECK
 unserve; fresh
 

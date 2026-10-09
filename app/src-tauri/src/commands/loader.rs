@@ -61,8 +61,7 @@ fn stamp_path(game_path: &str) -> PathBuf {
     PathBuf::from(game_path).join("Recharge").join("loader.stamp")
 }
 
-// FNV-1a over every loader source file (ModApi, Runtime, build script), in a
-// stable order, so any change to what gets compiled into the game changes it.
+// FNV-1a over every loader source file in a stable order, so any change to what is compiled into the game changes it.
 fn loader_stamp(app: &AppHandle) -> Option<String> {
     let script = find_build_script(app).ok()?;
     let root = script.parent()?;
@@ -110,8 +109,7 @@ fn settings_game_path(app: &AppHandle) -> Option<String> {
     super::settings::get_game_path(app.clone())
 }
 
-// Windows canonicalized paths come back as `\\?\C:\...`, which the build
-// script's Join-Path can't parse.
+// Windows canonicalized paths come back as `\\?\C:\...`, which the build script's Join-Path can't parse.
 fn plain_path(path: &str) -> String {
     if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")

@@ -135,8 +135,7 @@ pub fn find_map_asset(app: AppHandle, file: String) -> Result<String, String> {
     Err(format!("{file} not found"))
 }
 
-/// A map's picture (thumb.png beside it: the whole map, zoomed out), base64, while it's
-/// newer than the map; none when it's missing or the map changed since.
+/// A map's picture (thumb.png beside it), base64, while newer than the map; none when missing or stale.
 #[tauri::command]
 pub fn read_map_thumb(app: AppHandle, id: String) -> Option<String> {
     if !safe_file(&id) {
@@ -216,8 +215,7 @@ pub fn read_map(app: AppHandle, id: String) -> Result<String, String> {
     std::fs::read_to_string(dir.join(&id).join("map.json")).map_err(|e| format!("couldn't read map '{id}': {e}"))
 }
 
-// Writes the editor's map into the installed maps as <id>/map.json, replacing that map if it exists.
-// The version it replaces is kept in <id>/history (autosaves apart, so they never push out saves).
+// Writes the editor's map into the installed maps as <id>/map.json; the replaced version goes to <id>/history (autosaves kept apart so they never push out saves).
 #[tauri::command]
 pub fn save_map(app: AppHandle, id: String, map_json: String, assets: Option<Vec<MapAsset>>, auto: Option<bool>) -> Result<(), String> {
     if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
@@ -406,7 +404,12 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
 const TEST_MAP_ID: &str = "map-maker-test";
 
 #[tauri::command]
-pub fn test_launch_map(app: AppHandle, map_json: String, assets: Option<Vec<MapAsset>>) -> Result<super::play::LaunchMethod, String> {
+pub async fn test_launch_map(app: AppHandle, map_json: String, assets: Option<Vec<MapAsset>>) -> Result<super::play::LaunchMethod, String> {
+    // Closing a running game polls for a few seconds: keep that off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || test_launch_map_blocking(app, map_json, assets)).await.map_err(|e| e.to_string())?
+}
+
+fn test_launch_map_blocking(app: AppHandle, map_json: String, assets: Option<Vec<MapAsset>>) -> Result<super::play::LaunchMethod, String> {
     serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
     let dir = maps_dir(&app).ok_or("game path not set")?;
     // Dev: a locally-built Navigator (RECHARGE_DEV_NAVIGATOR_DLL) overrides the installed one.
@@ -420,7 +423,7 @@ pub fn test_launch_map(app: AppHandle, map_json: String, assets: Option<Vec<MapA
     write_assets(&app, &target, assets.as_deref().unwrap_or(&[]))?;
     let request = dir.parent().ok_or("bad maps folder")?.join("autoplay.txt");
     std::fs::write(&request, TEST_MAP_ID).map_err(|e| e.to_string())?;
-    super::play::launch_game(app, true).map_err(|e| {
+    super::play::close_then_launch(app).map_err(|e| {
         let _ = std::fs::remove_file(&request);
         e
     })

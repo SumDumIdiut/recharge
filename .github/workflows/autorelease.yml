@@ -1,8 +1,7 @@
 name: Auto release
 
 # Rebuilds and republishes the backend in place to one of two permanent releases ("latest"/"latest-beta") on every app/src-tauri change - no new release ever appears on the page.
-# Switched off (manual only): the Recharge launcher now updates everything from the update hub
-# (update-hub.yml), and GitHub releases are no longer used.
+# Switched off (manual only): the launcher updates everything from the update hub (update-hub.yml).
 on:
   workflow_dispatch:
 
@@ -98,8 +97,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # --tool-path installs a shim + nested .store/, not the flat DLL folder
-      # build-loader.ps1 expects, so the real files get copied up from there.
+      # --tool-path installs a shim + nested .store/, not the flat DLL folder build-loader.ps1 expects, so copy the real files up.
       - name: Install ilspycmd (bundled decompiler tool)
         shell: bash
         run: |
@@ -127,8 +125,7 @@ jobs:
           args: ${{ matrix.args }}
 
   publish:
-    # Only once both platforms are attached, so the updater never sees a
-    # release that is missing its own platform's package.
+    # Only once both platforms are attached, so the updater never sees a release missing its own platform's package.
     needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
@@ -145,9 +142,7 @@ jobs:
           echo -n "$VERSION" > VERSION.txt
           gh release upload "$TAG" SOURCE_SHA.txt VERSION.txt --repo "${{ github.repository }}" --clobber
 
-          # Filenames are versioned, not clobbered by name, so old ones pile up unless pruned - keep only the newest per type.
-          # The dot is matched as [.] rather than \. : gh's jq takes the pattern as a string, where a
-          # backslash is an invalid escape - that parse error failed the whole publish step.
+          # Filenames are versioned, so old ones pile up unless pruned: keep the newest per type. The dot is [.] because \. is an invalid escape in gh's jq string.
           for pattern in '-setup[.]exe$' '[.]deb$'; do
             gh release view "$TAG" --repo "${{ github.repository }}" --json assets \
               --jq "[.assets[] | select(.name | test(\"$pattern\"))] | sort_by(.createdAt) | .[:-1][].name" |

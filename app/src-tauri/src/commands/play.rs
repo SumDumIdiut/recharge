@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -133,7 +133,7 @@ pub fn is_game_running(app: AppHandle) -> bool {
     is_process_running(&exe.file_name())
 }
 
-// A cheap content stamp (same FNV-1a as loader.rs's own source stamp) - "is this byte-for-byte what I wrote".
+// A cheap content stamp (FNV-1a, as in loader.rs): "is this byte-for-byte what I wrote".
 fn fnv1a_file(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -148,7 +148,7 @@ fn deployed_stamp_path(managed: &Path) -> PathBuf {
     managed.join("Assembly-CSharp.deployed.stamp")
 }
 
-// The install script deploys the dll directly, bypassing deploy_build - without this the next launch's stale stamp reads as a Steam update and deletes it.
+// The install script deploys the dll directly, bypassing deploy_build; without this the next launch reads the stale stamp as a Steam update and deletes it.
 pub(crate) fn refresh_deploy_stamp(managed: &Path) {
     let deployed = managed.join("Assembly-CSharp.dll");
     if let Some(stamp) = fnv1a_file(&deployed) {
@@ -165,13 +165,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-// Does this assembly carry the loader bootstrap the Recharge patch adds? Steam's own
-// never does - it is the one reliable way to tell our patched build from the game's.
-//
-// Without this, a manual `build-loader.ps1` run writes Assembly-CSharp.dll directly and
-// leaves the old stamp behind, so the next launch reads that as a game update: it copies
-// our patched dll over ORIGINAL and deletes Assembly-CSharp.RECHARGE.dll. That destroys
-// the only vanilla copy of the assembly, and there is no way back except Steam.
+// Does this assembly carry the loader bootstrap the patch adds? Steam's never does. Without the check a manual build-loader.ps1 run leaves a stale stamp, the next launch reads it as a game update and deletes the only vanilla copy (no way back except Steam).
 fn is_patched_build(path: &Path) -> bool {
     const MARKER: &[u8] = b"RechargeLoaderBootstrap";
     let Ok(bytes) = std::fs::read(path) else {
@@ -193,7 +187,7 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
     let recharge = managed.join("Assembly-CSharp.RECHARGE.dll");
     let stamp_path = deployed_stamp_path(&managed);
 
-    // The stamp is the hash of what *we* last wrote - a rebuild's non-byte-stable output would otherwise look like a Steam update. No stamp yet falls back to a direct comparison.
+    // The stamp is the hash of what we last wrote (a non-byte-stable rebuild would otherwise look like a Steam update); no stamp falls back to a direct comparison.
     let matches_our_stamp = deployed.is_file()
         && match read_stamp(&stamp_path) {
             Some(stamp) => fnv1a_file(&deployed).as_deref() == Some(stamp.as_str()),
@@ -203,8 +197,7 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
             }
         };
 
-    // Our own patched build sitting there under a stale stamp is not a game update -
-    // re-stamp it instead of overwriting ORIGINAL with a modded assembly.
+    // Our own patched build under a stale stamp is not a game update: re-stamp it instead of overwriting ORIGINAL with a modded assembly.
     let deployed_is_ours = deployed.is_file() && is_patched_build(&deployed);
     if deployed_is_ours && !matches_our_stamp {
         if let Some(stamp) = fnv1a_file(&deployed) {
@@ -340,4 +333,230 @@ pub fn restore_vanilla_build(app: AppHandle) -> Result<(), String> {
     let game_path = settings::get_game_path(app)
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     deploy_build(&PathBuf::from(&game_path), false)
+}
+
+// ---- closing a running game ----
+
+/// One running process, as read from /proc (Linux) - the matching below is a pure function over these.
+#[derive(Debug, Clone)]
+pub(crate) struct ProcEntry {
+    pub pid: u32,
+    /// argv, already split.
+    pub args: Vec<String>,
+}
+
+fn norm_path(s: &str) -> String {
+    let t = s.replace('\\', "/").to_lowercase();
+    t.strip_prefix("z:").map(str::to_string).unwrap_or(t)
+}
+
+fn base_name(arg: &str) -> String {
+    norm_path(arg).rsplit('/').next().unwrap_or("").to_string()
+}
+
+/// Pids of processes that are this game (the game exe in a Wine/Proton argument, or the Unity crash handler from the game folder); nothing else, never `self_pid`.
+pub(crate) fn matching_game_pids(procs: &[ProcEntry], exe_name: &str, game_dir: &Path, self_pid: u32) -> Vec<u32> {
+    // Viewers/editors/shells that may merely have the file name as an argument.
+    const NOT_GAME: &[&str] = &[
+        "vim", "nvim", "vi", "nano", "less", "more", "cat", "grep", "rg", "pgrep", "pkill", "ls", "tail", "head", "stat", "file", "cp", "mv", "rm",
+        "code", "kate", "gedit", "xdg-open", "sh", "bash", "zsh", "fish", "claude", "node", "git", "strings", "sha256sum", "md5sum", "tar", "zip", "unzip",
+    ];
+    let exe = exe_name.to_lowercase();
+    let dir = norm_path(&game_dir.to_string_lossy());
+    let dir = dir.trim_end_matches('/');
+    procs
+        .iter()
+        .filter(|p| p.pid != self_pid && p.pid > 1)
+        .filter(|p| {
+            let Some(first) = p.args.first() else { return false };
+            if NOT_GAME.contains(&base_name(first).as_str()) {
+                return false;
+            }
+            p.args.iter().any(|a| {
+                let b = base_name(a);
+                if b == exe {
+                    return true;
+                }
+                // Crash handler: only the one started from this game's folder.
+                b == "unitycrashhandler64.exe" && !dir.is_empty() && norm_path(a).starts_with(&format!("{dir}/"))
+            })
+        })
+        .map(|p| p.pid)
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn list_procs() -> Vec<ProcEntry> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir("/proc") else { return out };
+    for e in rd.flatten() {
+        let Some(pid) = e.file_name().to_string_lossy().parse::<u32>().ok() else { continue };
+        let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else { continue };
+        if raw.is_empty() || is_zombie(pid) {
+            continue;
+        }
+        let args = raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).to_string()).collect();
+        out.push(ProcEntry { pid, args });
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn game_pids(exe_name: &str, game_dir: &Path) -> Vec<u32> {
+    matching_game_pids(&list_procs(), exe_name, game_dir, std::process::id())
+}
+
+#[cfg(not(windows))]
+fn signal_pids(pids: &[u32], sig: &str) {
+    for pid in pids {
+        let _ = Command::new("kill").args([sig, &pid.to_string()]).stderr(std::process::Stdio::null()).status();
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_gone(exe_name: &str, game_dir: &Path, max: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < max {
+        if game_pids(exe_name, game_dir).is_empty() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    game_pids(exe_name, game_dir).is_empty()
+}
+
+/// End every running instance of the game. Returns true if anything was running.
+#[cfg(not(windows))]
+fn close_game_processes(exe_name: &str, game_dir: &Path) -> Result<bool, String> {
+    let pids = game_pids(exe_name, game_dir);
+    if pids.is_empty() {
+        return Ok(false);
+    }
+    signal_pids(&pids, "-TERM");
+    if !wait_gone(exe_name, game_dir, std::time::Duration::from_secs(5)) {
+        signal_pids(&game_pids(exe_name, game_dir), "-KILL");
+        if !wait_gone(exe_name, game_dir, std::time::Duration::from_secs(3)) {
+            return Err("The running game wouldn't close - close it yourself and try again.".into());
+        }
+    }
+    // Steam keeps the app marked as running for a moment after the processes are gone; a launch in that window is refused.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn close_game_processes(exe_name: &str, game_dir: &Path) -> Result<bool, String> {
+    if !is_process_running(exe_name) {
+        return Ok(false);
+    }
+    let hidden = |program: &str| {
+        let mut c = Command::new(program);
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    let _ = hidden("taskkill").args(["/IM", exe_name, "/F", "/T"]).output();
+    // The crash handler may outlive its parent: end whatever still runs from the game folder.
+    let dir = game_dir.to_string_lossy().replace('\'', "''");
+    let _ = hidden("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith('{dir}', [StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+            ),
+        ])
+        .output();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(8) {
+        if !is_process_running(exe_name) {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            return Ok(true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Err("The running game wouldn't close - close it yourself and try again.".into())
+}
+
+/// "Test in game": close any running IGTAP first (emits `test-game-status` {phase:"closing"} only if one was running, then {phase:"launching"}), then launch modded; blocking.
+pub fn close_then_launch(app: AppHandle) -> Result<LaunchMethod, String> {
+    if let Some(game_path) = settings::get_game_path(app.clone()) {
+        let game_dir = PathBuf::from(&game_path);
+        if let Some(exe) = find_exe(&game_dir) {
+            let name = exe.file_name();
+            if is_process_running(&name) {
+                let _ = app.emit("test-game-status", serde_json::json!({ "phase": "closing" }));
+                if let Err(e) = close_game_processes(&name, &game_dir) {
+                    let _ = app.emit("test-game-status", serde_json::json!({ "phase": "failed", "error": e }));
+                    return Err(e);
+                }
+            }
+        }
+    }
+    let _ = app.emit("test-game-status", serde_json::json!({ "phase": "launching" }));
+    launch_game(app, true)
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    fn p(pid: u32, args: &[&str]) -> ProcEntry {
+        ProcEntry { pid, args: args.iter().map(|s| s.to_string()).collect() }
+    }
+    const DIR: &str = "/home/u/.steam/steamapps/common/IGTAP";
+
+    #[test]
+    fn matches_only_igtap() {
+        let procs = vec![
+            p(10, &["Z:\\home\\u\\.steam\\steamapps\\common\\IGTAP\\IGTAPfullGame.exe"]),
+            p(11, &["/usr/bin/proton", "waitforexitandrun", "/home/u/.steam/steamapps/common/IGTAP/IGTAPfullGame.exe"]),
+            p(12, &["Z:\\home\\u\\.steam\\steamapps\\common\\IGTAP\\UnityCrashHandler64.exe", "--attach"]),
+            p(13, &["/usr/bin/wine64", "C:\\Other\\Game\\Game.exe"]),
+            p(14, &["Z:\\home\\u\\.steam\\steamapps\\common\\OtherUnity\\UnityCrashHandler64.exe"]),
+            p(15, &["/usr/bin/firefox"]),
+            p(16, &["vim", "IGTAPfullGame.exe"]),
+            p(17, &["/usr/bin/steam", "steam://rungameid/1"]),
+            p(18, &["/opt/IGTAPfullGame.exe.bak.sh"]),
+            p(19, &["grep", "-r", "IGTAPfullGame.exe", "."]),
+            p(20, &["c:\\x\\igtapfullgame.EXE"]),
+            p(21, &[]),
+        ];
+        assert_eq!(matching_game_pids(&procs, "IGTAPfullGame.exe", Path::new(DIR), 0), vec![10, 11, 12, 20]);
+    }
+
+    #[test]
+    fn never_self_or_init() {
+        let procs = vec![p(1, &["IGTAPfullGame.exe"]), p(99, &["IGTAPfullGame.exe"]), p(5, &["IGTAPfullGame.exe"])];
+        assert_eq!(matching_game_pids(&procs, "IGTAPfullGame.exe", Path::new(DIR), 99), vec![5]);
+    }
+
+    #[test]
+    fn empty_when_nothing_runs() {
+        assert!(matching_game_pids(&[p(2, &["/bin/sleep", "5"])], "IGTAPfullGame.exe", Path::new(DIR), 0).is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn live_dummy_process_is_matched_and_killed() {
+        // A copy of `sleep` named like the game, in a temp dir: only it may be matched and ended.
+        let dir = std::env::temp_dir().join(format!("rl-igtap-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("IGTAPfullGame.exe");
+        std::fs::copy("/bin/sleep", &fake).unwrap();
+        let mut child = Command::new(&fake).arg("60").spawn().unwrap();
+        let bystander = Command::new("/bin/sleep").arg("60").spawn();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let found = game_pids("IGTAPfullGame.exe", &dir);
+        assert_eq!(found, vec![child.id()]);
+        signal_pids(&found, "-KILL");
+        let _ = child.wait();
+        assert!(game_pids("IGTAPfullGame.exe", &dir).is_empty());
+        if let Ok(mut b) = bystander {
+            assert!(b.try_wait().unwrap().is_none(), "bystander must survive");
+            let _ = b.kill();
+            let _ = b.wait();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

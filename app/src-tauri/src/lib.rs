@@ -5,21 +5,14 @@ use commands::{backgrounds, games, hub, launcher, live, loader, maps, migrate, m
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
-    // GPU rasterisation for the map editor's canvas. WebKitGTK only composites
-    // through the GPU when it is told to, and it defaults to software on many
-    // setups - the editor redraws every frame while panning, so that is the
-    // difference between smooth and crawling on a big map.
-    //
-    // Both are set only if unset, so a user can override either from the
-    // environment (setting WEBKIT_COMPOSITING_MODE=0 turns this back off).
+    // GPU rasterisation for the map editor canvas (WebKitGTK defaults to software compositing); each var is set only if unset, so the user can override.
     if std::env::var_os("WEBKIT_COMPOSITING_MODE").is_none() {
         std::env::set_var("WEBKIT_COMPOSITING_MODE", "1");
     }
     if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
     }
-    // The canvas is opaque and mostly flat colour; hinting that lets the
-    // compositor skip work it would otherwise do per frame.
+    // Hint that the canvas is opaque and mostly flat colour so the compositor skips per-frame work.
     if std::env::var_os("WEBKIT_DISABLE_ACCELERATED_2D_CANVAS").is_none() {
         std::env::set_var("WEBKIT_DISABLE_ACCELERATED_2D_CANVAS", "0");
     }

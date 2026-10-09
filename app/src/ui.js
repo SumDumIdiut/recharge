@@ -21,11 +21,7 @@ export function closeModal(id) {
   document.getElementById(id).hidden = true;
 }
 
-// Asks before something irreversible, and makes the answer deliberate: the
-// confirm button stays disabled until the name is typed out in full.
-//
-// A window.confirm() is one stray Enter away from deleting an upload, which is
-// exactly how one of these went missing - so the name has to be retyped.
+// Asks before something irreversible: the confirm button stays disabled until the name is retyped in full (a window.confirm is one stray Enter from deleting an upload).
 export function confirmDestructive({ title, body, confirmLabel, name }) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');

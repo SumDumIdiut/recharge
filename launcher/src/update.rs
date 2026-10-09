@@ -1,6 +1,4 @@
-//! Olympus-style staged update: diff manifest -> build a complete app.new/ (hard links for
-//! unchanged files, hash-verified downloads for the rest) -> swap app.new -> app (old kept in
-//! app.old for rollback). The running tree is never modified in place.
+//! Staged update: diff manifest, build a complete app.new/ (hard links for unchanged files, hash-verified downloads for the rest), swap it in, keep app.old for rollback.
 use crate::log;
 use crate::manifest::{self, FileEntry, Manifest, Plan, Platform};
 use crate::run;
@@ -50,12 +48,31 @@ fn get_text(url: &str, secs: u64) -> Result<String, String> {
     r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| format!("GET {url}: {e}"))
 }
 
-pub fn fetch_manifest(ctx: &Ctx) -> Result<Manifest, String> {
-    let url = format!("{}/update/{}/manifest.json", ctx.base, ctx.channel);
+fn fetch_channel_manifest(ctx: &Ctx, channel: &str) -> Result<Manifest, String> {
+    let url = format!("{}/update/{}/manifest.json", ctx.base, channel);
     let m: Manifest = serde_json::from_str(&get_text(&url, 5)?).map_err(|e| format!("bad manifest: {e}"))?;
     if m.format != 1 {
         return Err(format!("unsupported manifest format {}", m.format));
     }
+    Ok(m)
+}
+
+/// Builds are one global CI counter; beta also takes stable releases, so use whichever channel has the higher build (ties keep the channel's own).
+pub fn pick_newest(own: Result<Manifest, String>, other: Result<Manifest, String>) -> Result<(Manifest, bool), String> {
+    match (own, other) {
+        (Ok(a), Ok(b)) if b.build > a.build => Ok((b, true)),
+        (Ok(a), _) => Ok((a, false)),
+        (Err(_), Ok(b)) => Ok((b, true)),
+        (Err(e), Err(_)) => Err(e),
+    }
+}
+
+pub fn fetch_manifest(ctx: &Ctx) -> Result<Manifest, String> {
+    if ctx.channel != "beta" {
+        return fetch_channel_manifest(ctx, &ctx.channel);
+    }
+    let (m, from_stable) = pick_newest(fetch_channel_manifest(ctx, "beta"), fetch_channel_manifest(ctx, "stable"))?;
+    log!("beta channel: using the {} manifest (build {})", if from_stable { "stable" } else { "beta" }, m.build);
     Ok(m)
 }
 
@@ -121,8 +138,7 @@ pub fn prepare(ctx: &Ctx, st: &mut State) -> Result<bool, String> {
     Ok(true)
 }
 
-/// --stage: like `prepare` but never swaps (and never touches a staged tree it does not replace).
-/// Some(build) = a complete app.new/ for that build is waiting; None = nothing newer.
+/// --stage: like `prepare` but never swaps; Some(build) = a complete app.new/ for that build is waiting.
 pub fn stage_only(ctx: &Ctx, st: &mut State) -> Result<Option<u64>, String> {
     let m = fetch_manifest(ctx)?;
     let plat = platform(ctx, &m)?;
@@ -280,8 +296,12 @@ fn read_staged(ctx: &Ctx) -> Option<Snapshot> {
     serde_json::from_slice(&fs::read(ctx.staged_marker()).ok()?).ok()
 }
 
-/// A previous run may have left a complete app.new/ (app was running). Swap it in if possible,
-/// discard it if it is partial or known bad.
+/// Version of the complete build waiting in app.new/, if any.
+pub fn staged_version(ctx: &Ctx) -> Option<String> {
+    read_staged(ctx).map(|s| s.version)
+}
+
+/// Swap in a complete app.new/ left by an earlier run if possible; discard it if partial or known bad.
 fn finish_staged(ctx: &Ctx, st: &mut State) -> Result<(), String> {
     if !ctx.app_new().exists() {
         let _ = fs::remove_file(ctx.staged_marker());
@@ -446,6 +466,21 @@ mod tests {
     }
     fn snap(build: u64) -> Snapshot {
         Snapshot { version: format!("v{build}"), build, launch: "x".into(), ..Default::default() }
+    }
+
+    fn man(build: u64) -> Manifest {
+        serde_json::from_str(&format!(r#"{{"format":1,"version":"v","build":{build},"platforms":{{}}}}"#)).unwrap()
+    }
+
+    #[test]
+    fn pick_newest_prefers_higher_build() {
+        let e = || Err::<Manifest, String>("x".into());
+        assert_eq!(pick_newest(Ok(man(5)), Ok(man(9))).unwrap().1, true);
+        assert_eq!(pick_newest(Ok(man(9)), Ok(man(5))).unwrap().0.build, 9);
+        assert_eq!(pick_newest(Ok(man(7)), Ok(man(7))).unwrap().1, false);
+        assert_eq!(pick_newest(Ok(man(5)), e()).unwrap().1, false);
+        assert_eq!(pick_newest(e(), Ok(man(3))).unwrap().0.build, 3);
+        assert!(pick_newest(e(), e()).is_err());
     }
 
     #[test]

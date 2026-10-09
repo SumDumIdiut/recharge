@@ -9,8 +9,7 @@ let navGeneration = 0; // bumped on every navigate(), so a slow load that's sinc
 
 const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games']);
 
-// Loads/refreshes a tab's content after it's already visible, so switching to
-// it is never blocked on the fetch, the script import or its own refresh.
+// Loads/refreshes a tab's content after it is visible, so switching never blocks on the fetch, import or refresh.
 async function loadTab(tab, target, token) {
   if (!_tabLoaded[tab]) {
     target.innerHTML = '<div class="empty-state">Loading…</div>';
@@ -52,8 +51,7 @@ window.navigate = function navigate(tab) {
 
 window.goHome = () => window.navigate('home');
 
-// Amplifier, the map editor: the old one. It fills the window over whatever
-// page is open. (The v2 editor has been removed.)
+// Amplifier, the map editor: fills the window over whatever page is open.
 let oldAmplifierRoot = null;
 window.chooseAmplifier = () => openOldAmplifier();
 window.__amplifierOldClose = () => {

@@ -9,8 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const LIVE_PORT: u16 = 39285;
-/// Bump together with app/live.json's "apiLevel" when a change adds or alters
-/// a Rust command, so older binaries stop applying bundles that need it.
+/// Bump with app/live.json's "apiLevel" when a change adds or alters a Rust command, so older binaries stop applying bundles that need it.
 const API_LEVEL: u64 = 12;
 const REPO: &str = "SumDumIdiut/recharge";
 const MAX_BUNDLE_BYTES: u64 = 200 * 1024 * 1024;
@@ -51,9 +50,7 @@ fn live_root(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_local_data_dir().ok().map(|d| d.join("live"))
 }
 
-/// Installs managed by the Recharge launcher carry src/, loader/ and live.json next to the
-/// binary (see tools/build-update-dir.sh): that folder is the bundle and the launcher keeps it
-/// current, so the GitHub live updater stays out of it. None for every other install.
+/// Launcher-managed installs carry src/, loader/ and live.json next to the binary (the launcher keeps it current), so the GitHub live updater stays out; None otherwise.
 fn packaged_dir() -> Option<PathBuf> {
     let dir = super::updater::packaged_root()?;
     dir.join("src").join("index.html").is_file().then_some(dir)
@@ -93,8 +90,7 @@ fn bundle_usable(app: &AppHandle) -> bool {
     dir.join("src").join("index.html").is_file() && required_api_level(&dir) <= API_LEVEL
 }
 
-/// The live copy of build-loader.ps1 (with the packaged decompiler tools
-/// alongside it), if a live bundle is active.
+/// The live copy of build-loader.ps1 (with the packaged decompiler tools beside it), if a live bundle is active.
 pub fn loader_script(app: &AppHandle) -> Option<PathBuf> {
     if !bundle_usable(app) {
         return None;
@@ -121,7 +117,7 @@ pub fn init(app: &AppHandle) {
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        // Reload automatically just this once - the dismissible banner alone left a stale first load unnoticed.
+        // Reload automatically just this once (the dismissible banner alone left a stale first load unnoticed).
         let mut first = true;
         loop {
             match check_and_apply(&app) {
@@ -210,8 +206,7 @@ pub fn live_status(app: AppHandle, redirect: Option<bool>) -> LiveInfo {
     let sha = current_dir(&app).and_then(|d| read_file(&d.join("sha")));
     let mut active = bundle_usable(&app) && app.state::<LiveState>().server_started.load(Ordering::SeqCst);
 
-    // If the live page never manages to report in (e.g. this platform blocks
-    // its IPC), stop redirecting to it instead of stranding the user there.
+    // If the live page never reports in (e.g. blocked IPC), stop redirecting to it instead of stranding the user.
     if active && redirect.unwrap_or(false) {
         if let Some(root) = live_root(&app) {
             if !root.join("acked").exists() {
@@ -237,8 +232,7 @@ pub fn live_ack(app: AppHandle) {
     log(&app, "live page confirmed");
 }
 
-/// Saved settings/session travel between the built-in origin and the live one
-/// (browser storage is per origin) through this one-shot stash.
+/// Settings/session travel between the built-in origin and the live one (storage is per origin) through this one-shot stash.
 #[tauri::command]
 pub fn live_stash(state: State<LiveState>, json: String) {
     *state.stash.lock().unwrap() = Some(json);
@@ -249,10 +243,9 @@ pub fn live_take_stash(state: State<LiveState>) -> Option<String> {
     state.stash.lock().unwrap().take()
 }
 
-// ---- updating ----------------------------------------------------------
+// ---- updating ----
 
-// git's own protocol (what `git ls-remote` uses) isn't rate-limited like
-// api.github.com is; that's kept only as a fallback.
+// git's own protocol (like `git ls-remote`) isn't rate-limited like api.github.com, which stays as a fallback.
 fn remote_sha(app: &AppHandle, branch: &str) -> Result<String, String> {
     match remote_sha_via_git(branch) {
         Ok(sha) => Ok(sha),
@@ -323,12 +316,10 @@ fn remote_sha_via_api(app: &AppHandle, branch: &str) -> Result<String, String> {
     Ok(sha)
 }
 
-/// Folders a local checkout has that are build output or machine-local tools,
-/// never part of a bundle.
+/// Build output and machine-local folders of a local checkout; never part of a bundle.
 const SKIP_DIRS: [&str; 6] = [".dotnet-sdk", ".git", "bin", "obj", "node_modules", "tools"];
 
-// Windows can briefly deny renaming a directory whose files just got written
-// (antivirus grabbing a look at them) - retry instead of failing outright.
+// Windows can briefly deny renaming a directory just written (antivirus); retry.
 fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     let mut last_err = None;
     for attempt in 0..20 {
@@ -391,8 +382,7 @@ fn extract_bundle(bytes: Vec<u8>, next: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Source for the bundle: a local checkout (RECHARGE_LIVE_LOCAL, for
-/// development) or the newest master commit on GitHub.
+/// Bundle source: a local checkout (RECHARGE_LIVE_LOCAL) or the newest master commit on GitHub.
 fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> {
     if let Some(local) = std::env::var_os("RECHARGE_LIVE_LOCAL").map(PathBuf::from) {
         let current_sha = current_dir(app).and_then(|d| read_file(&d.join("sha")));
@@ -455,8 +445,7 @@ fn check_and_apply(app: &AppHandle) -> Result<Outcome, String> {
         return Ok(Outcome::NeedsPackage);
     }
 
-    // The loader script looks for its decompiler next to itself, and that
-    // isn't in the repo - reuse the copy that shipped with the package.
+    // The loader script looks for its decompiler next to itself, which isn't in the repo: reuse the packaged copy.
     if let Ok(packaged) = super::updater::resource_path(app, "loader/tools") {
         let packaged = PathBuf::from(packaged.to_string_lossy().trim_start_matches(r"\\?\"));
         if packaged.is_dir() {
@@ -502,8 +491,7 @@ pub fn live_get_channel(app: AppHandle) -> ChannelInfo {
     }
 }
 
-/// Switches between "stable" (master) and "beta" (dev) and fetches that
-/// channel's code right away.
+/// Switches between "stable" (master) and "beta" (dev) and fetches that channel's code right away.
 #[tauri::command]
 pub async fn live_set_channel(app: AppHandle, channel: String) -> Result<String, String> {
     if channel != "stable" && channel != "beta" {

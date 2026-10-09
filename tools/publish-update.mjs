@@ -12,25 +12,10 @@
 //     --launcher-version 1.0.0 [--base ...] [--key-env ...] [--dry-run]
 //   (launcher and build options may be combined in one call)
 //
-// Each platform dir is walked; every file is sha256-hashed. Component is inferred from the
-// top-level folder (src/ -> screens, loader/ -> loader, content/ -> content, electron/ ->
-// electron, anything else incl. root files -> app); --components-map is a JSON object of
-// path-prefix -> component overrides (longest prefix wins). The launch file and (for
-// non-windows platforms) files with an exec bit get "exec": true. The server is asked which
-// hashes it lacks, only those are uploaded (streamed), then the manifest is PUT.
-//
-// --commit / --changes-file / --changes: release notes. The commit goes into the manifest ("commit");
-// the change lines are sent as "changes" in the manifest PUT body and the hub stores them in
-// /update/<channel>/changelog.json (they are not kept in the manifest itself). Both options may be
-// combined; blank lines are dropped.
-//
-// The key is read from the env var named by --key-env (default UPDATE_KEY); it must equal the
-// UPDATE_KEY configured on the hub. Not needed for --dry-run.
-//
-// CI / ship.sh: after building the release dirs, call e.g.
-//   UPDATE_KEY=... node tools/publish-update.mjs --channel beta --version "$VER" --build "$BUILD" \
-//     --api-level "$API" --platform windows-x64=dist/win --platform linux-x64=dist/linux
-//   (--channel stable for --promote; the same files are re-used by hash, so promoting uploads ~nothing)
+// Each platform dir is walked and sha256-hashed; the component comes from the top-level folder (src/ screens, loader/, content/, electron/, else app), overridable with --components-map (longest prefix wins). The launch file and, off Windows, exec-bit files get "exec": true. Only hashes the server lacks are uploaded, then the manifest is PUT.
+// --commit goes into the manifest; --changes-file / --changes lines are sent as "changes" and stored by the hub in /update/<channel>/changelog.json (blank lines dropped).
+// The key comes from the env var named by --key-env (default UPDATE_KEY); not needed for --dry-run.
+// CI / ship.sh: UPDATE_KEY=... node tools/publish-update.mjs --channel beta --version "$VER" --build "$BUILD" --api-level "$API" --platform windows-x64=dist/win --platform linux-x64=dist/linux (--channel stable for --promote re-uses files by hash).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';

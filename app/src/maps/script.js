@@ -302,8 +302,7 @@ async function refresh() {
   loadThumbs();
 }
 
-// Each map's picture: the saved one while it's newer than the map, else one drawn here (one map
-// at a time, in the background) and kept beside the map.
+// Each map's picture: the saved one while newer than the map, else one drawn here (one at a time, in the background) and kept beside the map.
 async function loadThumbs() {
   const { invoke } = window.__TAURI__.core, missing = [];
   for (const m of installedCache) {

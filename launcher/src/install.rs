@@ -99,8 +99,7 @@ fn dir_size_kb(p: &Path) -> u32 {
     (walk(p) / 1024).min(u32::MAX as u64) as u32
 }
 
-/// Start-menu shortcut + "Apps & features" entry: native (COM + registry) first, PowerShell /
-/// reg.exe only if the native call fails.
+/// Start-menu shortcut + "Apps & features" entry: native (COM + registry) first, PowerShell / reg.exe as fallback.
 #[cfg(windows)]
 pub fn refresh_shortcut(root: &Path, version: &str) {
     let exe = launcher_path(root);
@@ -151,8 +150,7 @@ pub fn refresh_shortcut(root: &Path, version: &str) {
     }
 }
 
-/// Native Win32 helpers (windows-sys has no COM method wrappers, so the two vtables are declared
-/// here). Not compiled on Linux: written against the windows-sys 0.61 docs, untested.
+/// Native Win32 helpers (windows-sys has no COM method wrappers); not compiled on Linux, untested.
 #[cfg(windows)]
 mod winnative {
     use std::ffi::c_void;
@@ -305,9 +303,7 @@ mod winnative {
     }
 }
 
-/// Tauri app data folders (identifier co.za.codecade.recharge): settings, mods, skins, map saves,
-/// backgrounds, WebView storage. Windows: %APPDATA% and %LOCALAPPDATA%; Linux: ~/.local/share,
-/// ~/.config and ~/.cache. Mirrors app_data_dir / app_local_data_dir / app_config_dir / app_cache_dir.
+/// Tauri app data folders (settings, mods, skins, map saves, backgrounds, WebView storage) under %APPDATA%/%LOCALAPPDATA% or ~/.local/share, ~/.config, ~/.cache.
 pub const APP_IDENTIFIER: &str = "co.za.codecade.recharge";
 
 pub fn data_dirs() -> Vec<PathBuf> {
@@ -326,8 +322,7 @@ pub fn data_dirs() -> Vec<PathBuf> {
     v
 }
 
-/// y/n question: on the terminal when there is one, else a dialog (zenity / PowerShell message box).
-/// No way to ask means no.
+/// y/n question on the terminal, else a dialog; no way to ask means no.
 fn ask(question: &str) -> bool {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
@@ -369,8 +364,7 @@ fn shortcuts_present() -> bool {
     lnks && out.map(|o| o.status.success()).unwrap_or(true)
 }
 
-/// Every launcher run: recreate missing shortcuts / uninstall entry (a reinstall over leftovers,
-/// or a user who deleted the shortcut). Idempotent and cheap when nothing is missing.
+/// Every run: recreate missing shortcuts / uninstall entry (reinstall over leftovers, deleted shortcut); cheap when nothing is missing.
 pub fn ensure_shortcuts(root: &Path, version: &str) {
     if !shortcuts_present() {
         log!("shortcuts or uninstall entry missing, recreating");
@@ -382,18 +376,14 @@ pub fn ensure_shortcuts(root: &Path, version: &str) {
 
 const COPY_ENV: &str = "RECHARGE_UNINSTALL_COPY";
 
-/// First stage of --uninstall: copy this exe to the OS temp dir and run that copy, so nothing in
-/// the install root is locked by the process that deletes it. Returns the copy's exit code on
-/// unix (the root exe can be deleted while running); on Windows the copy is detached and we return
-/// at once so our own exe in the root gets freed.
+/// First stage of --uninstall: run a temp copy of this exe so nothing in the root is locked; on Windows the copy is detached and we return at once.
 pub fn uninstall_via_copy(root: &Path, exe: &Path, args: &[std::ffi::OsString], yes: bool) -> Result<i32, String> {
     let name = format!("recharge-uninstall-{}{}", std::process::id(), if cfg!(windows) { ".exe" } else { "" });
     let copy = std::env::temp_dir().join(name);
     fs::copy(exe, &copy).map_err(|e| format!("could not copy the uninstaller to {}: {e}", copy.display()))?;
     crate::update::set_exec(&copy);
     let mut cmd = std::process::Command::new(&copy);
-    // Never inherit the shortcut's "Start in" (the install root): a process whose cwd is the root
-    // keeps the directory itself locked and the final remove fails.
+    // Never inherit the shortcut's "Start in" (the root): a cwd in the root keeps it locked and the final remove fails.
     cmd.args(args).env(COPY_ENV, "1").current_dir(std::env::temp_dir());
     if !args.iter().any(|a| a == "--root") {
         cmd.arg("--root").arg(root);
@@ -509,8 +499,7 @@ fn win_ps(script: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Stop the app under <root>/app and its helper processes (WebView2 children that hold the
-/// co.za.codecade.recharge\EBWebView user-data folder; WebKit processes on Linux). Nothing else.
+/// Stop the app under <root>/app and its helper processes (WebView2 children holding the EBWebView folder; WebKit processes on Linux). Nothing else.
 pub fn close_app(root: &Path) {
     #[cfg(target_os = "linux")]
     {
@@ -537,8 +526,7 @@ pub fn close_app(root: &Path) {
     }
     #[cfg(windows)]
     {
-        // Own windows first (graceful), then force. WebView2 helpers are matched by the user-data
-        // folder in their command line so other apps' WebView2 processes are never touched.
+        // Own windows first (graceful), then force; WebView2 helpers are matched by user-data folder so other apps' are never touched.
         let script = format!(
             "$r='{root}\\app\\*'; \
              Get-Process | Where-Object {{ $_.Path -like $r }} | ForEach-Object {{ [void]$_.CloseMainWindow() }}; \
