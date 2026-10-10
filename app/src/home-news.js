@@ -1,6 +1,9 @@
 // "What's new": the newest Library additions plus Recharge releases.
 import { escapeHtml, galleryImages } from './ui.js';
 import { mapThumbFor, hubStamp } from './maps/mapthumb.js';
+import { hubVideoSource, rowPicture } from './backgrounds/community.js';
+import { mediaKind } from './backgrounds/media.js';
+import { urlReader } from './backgrounds/cover.js';
 
 const HUB = 'https://codecade.co.za/recharge';
 const MAX_ENTRIES = 10;
@@ -32,7 +35,16 @@ async function additions() {
   const lists = await Promise.all(
     LIBRARY.map(async (kind) => {
       try {
-        return (await json(`${HUB}/api/${kind.path}`)).map((row) => ({
+        return (await json(`${HUB}/api/${kind.path}`)).map((row) => {
+          const media = kind.path === 'playlists' || kind.path === 'backgrounds';
+          const pic = media ? rowPicture(row, kind.path === 'playlists' ? 'playlist' : 'background') : null;
+          return {
+          // no picture and no poster, but the first gallery file is a video: its cover / frame picture is fetched later (never the video itself)
+          video: !pic && !galleryImages(row.gallery).length && mediaKind(row.gallery?.[0]) === 'video' && media
+            ? hubVideoSource(row, kind.path === 'playlists' ? 'playlist' : 'background')
+            : null,
+          // a poster (plain JPEG of a video) is shown like a cover: picture with a play button
+          cover: pic?.poster ? pic.url : null,
           kind: 'library',
           tag: kind.tag,
           tab: kind.tab,
@@ -42,7 +54,8 @@ async function additions() {
           by: row.author,
           body: row.description || '',
           image: galleryImages(row.gallery).length ? `${HUB}/api/${kind.path}/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
-        }));
+          };
+        });
       } catch {
         return [];
       }
@@ -118,11 +131,12 @@ export function renderNews(entries) {
         : isSkin
           ? `<div class="news-img-crop" data-skin-src="${escapeHtml(e.image)}"></div>`
           : `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />`;
+      const cover = !e.image && e.cover ? `<div class="news-cover"><img class="news-img" src="${escapeHtml(e.cover)}" alt="" onerror="this.parentNode.remove()" /><span class="bg-play" aria-hidden="true"></span></div>` : '';
       return `
       <div class="news-block" ${e.tab ? `onclick="navigate('${e.tab}')"` : ''}>
         <div class="news-meta"><span class="tag tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
         <div class="news-title">${escapeHtml(e.title)}</div>
-        ${img}
+        ${img}${cover}
         ${e.changes?.length ? `<ul class="news-changes">${e.changes.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>` : ''}
         ${e.body ? `<div class="news-body">${escapeHtml(e.body)}</div>` : ''}
       </div>`;
@@ -138,22 +152,47 @@ export function layoutNews() {
 }
 
 let generation = 0;
+let coverJob = null;
+
+const defaultCover = async (key, reader) => (await import('./backgrounds/thumbs.js')).hubCoverThumb(key, reader);
 
 // Always rebuilt from fresh API lists (nothing is cached between calls), so items deleted on the hub vanish at once.
 // A newer call supersedes an older one still in flight.
-export async function initHomeNews() {
+export async function initHomeNews({ cover = defaultCover, fetchFn } = {}) {
   const mine = ++generation;
+  coverJob?.abort();
+  coverJob = null;
   const fresh = mergeEntries(await Promise.all([additions(), releases()]));
   if (mine !== generation) return;
   entries = fresh;
   layoutNews();
+  const ac = new AbortController();
+  coverJob = ac;
   // A map with no uploaded picture gets its drawn view (as in the Maps tab); an uploaded one stays.
-  for (const e of fresh) {
-    if (e.tag !== 'Map' || !e.id || e.image) continue;
-    const img = await mapThumbFor(e.id, { stamp: hubStamp(e.when) }).catch(() => null);
-    if (mine !== generation) return;
-    if (img) { e.image = img; layoutNews(); }
-  }
+  const mapPictures = async () => {
+    for (const e of fresh) {
+      if (e.tag !== 'Map' || !e.id || e.image) continue;
+      const img = await mapThumbFor(e.id, { stamp: hubStamp(e.when) }).catch(() => null);
+      if (mine !== generation) return;
+      if (img) { e.image = img; layoutNews(); }
+    }
+  };
+  // Entries with no picture whose first gallery file is a video get that video's cover / frame picture, one at a time, from
+  // the same cache (by hub key) the Community cards use. Aborted when the feed is rebuilt.
+  const videoCovers = async () => {
+    for (const e of fresh) {
+      if (!e.video || e.image) continue;
+      if (ac.signal.aborted || mine !== generation) return;
+      try {
+        const r = await cover(e.video.key, urlReader(e.video.url, fetchFn, { signal: ac.signal }));
+        if (ac.signal.aborted || mine !== generation) return;
+        if (r?.url) { e.cover = r.url; layoutNews(); }
+      } catch (err) {
+        if (!ac.signal.aborted) console.warn(`[news] no cover for ${e.title}: ${err?.message || err}`);
+      }
+    }
+  };
+  await Promise.all([mapPictures(), videoCovers()]);
 }
 
 export const refreshHomeNews = initHomeNews;

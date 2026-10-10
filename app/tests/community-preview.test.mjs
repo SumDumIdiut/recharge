@@ -12,7 +12,7 @@ test('preview html: images as <img>, videos as <video>, sounds as a button; vide
   assert.equal((html.match(/<img /g) || []).length, 1);
   assert.match(html, /<img [^>]*a\.png/);
   assert.equal((html.match(/<video /g) || []).length, 2);
-  assert.ok(/muted loop playsinline/.test(html));
+  assert.ok(/muted playsinline/.test(html));
   assert.ok(!/<img[^>]*\.(mp4|webm|mp3)/.test(html));
   assert.ok(!/background-image/.test(html));
   assert.match(html, /data-audio="[^"]*song\.mp3"/);
@@ -55,7 +55,7 @@ test('startPreview downloads each video into a blob (never a network src), then 
   startPreview(fakeGrid(vids, []), undefined, env);
   await tick();
   assert.deepEqual(env.fetched, ['u1', 'u2']);
-  for (const v of vids) { assert.equal(v.muted, true); assert.equal(v.loop, true); assert.equal(v.paused, false); assert.match(v.src, /^blob:/); }
+  for (const v of vids) { assert.equal(v.muted, true); assert.equal(v.loop, false); assert.equal(v.paused, false); assert.match(v.src, /^blob:/); }
 });
 
 test('release() never calls load() on a video that is still loading from the network, and aborts the download', async () => {
@@ -144,4 +144,21 @@ test('playlist cards: counts per kind, placeholder tile (never an image of the v
   assert.equal((html.match(/background-image/g) || []).length, 1);
   assert.ok(!/background-image[^>]*\.(mp4|mp3|ogg)/.test(html));
   assert.match(placeholderThumb([]), /browse-card-thumb"><\/div>/);
+});
+
+test('preview: EVERY picture tile gets its src (not just the first), a few at a time, and none after release', async () => {
+  const mkImg = (i) => { const l = {}; return { dataset: { src: `u/${i}.jpg` }, addEventListener(t, f) { l[t] = f; }, set src(v) { this._src = v; setTimeout(() => l.load?.(), 1); }, get src() { return this._src; } }; };
+  const imgs = Array.from({ length: 34 }, (_, i) => mkImg(i));
+  const grid = { innerHTML: 'x', querySelectorAll: (sel) => (sel.startsWith('img') ? imgs : []) };
+  const p = startPreview(grid, () => ({}), {});
+  assert.ok(imgs.filter((i) => i.src).length <= 4, 'pooled');
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(imgs.filter((i) => i.src === `u/${imgs.indexOf(i)}.jpg`).length, 34);
+  const more = Array.from({ length: 10 }, (_, i) => mkImg(i));
+  const g2 = { innerHTML: 'x', querySelectorAll: (sel) => (sel.startsWith('img') ? more : []) };
+  const p2 = startPreview(g2, () => ({}), {});
+  p2.release();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(more.filter((i) => i.src).length <= 4, 'released: no further pictures started');
+  p.release();
 });

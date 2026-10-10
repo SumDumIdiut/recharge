@@ -251,7 +251,7 @@ select.form-input, select.settings-input { cursor: pointer; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 
 /* tabs */
-.browser-subtabs { gap: 2px; padding: 0; background: none; box-shadow: none; }
+.browser-subtabs { gap: 2px; padding: 0; background: none; box-shadow: none; width: fit-content; max-width: 100%; align-self: flex-start; }
 .subtab-btn { background: none; border: none; border-radius: 0; color: var(--text-dim); padding: 7px 18px; transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
 .subtab-btn:hover { color: var(--text); }
 .subtab-btn.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--green); }
@@ -310,6 +310,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 /* short windows: tighter Home menu so Settings / Credits are not clipped */
 @media (max-height: 860px) {
   .home-header { margin-bottom: 14px; }
+  .home-title-left { padding: 8px 20px 8px 14px; }
   .home-logo { width: 96px; height: 96px; }
   .home-title { font-size: 62px; }
   #wave-banner { margin-top: 2px; height: 36px; }
