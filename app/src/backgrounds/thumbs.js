@@ -2,9 +2,11 @@
 // server once, shrunk to 480 px wide JPEG, and kept in IndexedDB (keyed by file + mtime + size), so the grid
 // never decodes full-size files while scrolling. Loading only starts near the viewport, a few at a time.
 import { mediaBase, mediaUrl } from '../bgmedia.js';
+import { releaseMedia } from '../releasemedia.js';
 import { thumbKey, thumbPrefix, thumbSize } from './media.js';
 
 const DB = 'rechargeBgThumbs';
+const IDB_TIMEOUT_MS = 4000;
 let dbp = null;
 function db() {
   if (!dbp) {
@@ -13,13 +15,15 @@ function db() {
         const req = indexedDB.open(DB, 1);
         req.onupgradeneeded = () => req.result.createObjectStore('thumbs');
         req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
+        req.onerror = req.onblocked = () => resolve(null);
       } catch (e) { resolve(null); }
+      setTimeout(() => resolve(null), IDB_TIMEOUT_MS); // a storage that never answers must not stall the thumbnails
     });
   }
   return dbp;
 }
 const idb = (mode, fn) => db().then((d) => (d ? new Promise((resolve) => {
+  setTimeout(() => resolve(null), IDB_TIMEOUT_MS);
   try {
     const tx = d.transaction('thumbs', mode);
     const r = fn(tx.objectStore('thumbs'));
@@ -67,30 +71,97 @@ async function shrinkImage(blob) {
     const ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(bmp, 0, 0, width, height);
-    return await toBlob(c);
+    try { return await toBlob(c); } finally { c.width = c.height = 0; } // release the canvas backing store right away
   } finally { bmp?.close?.(); }
 }
 
-function videoFrame(url) {
+// --- video still frames ---
+// WebKitGTK paints nothing for a <video> that is not in the document: drawImage() then returns a fully BLACK
+// frame although 'seeked' fired. So the grabber element lives in the document (tiny, almost transparent, behind
+// everything), waits until a frame was really presented, rejects all-black frames and retries at other times.
+// Every grab has an overall deadline so the (one at a time) queue can never stall, and the element is always released.
+export const GRAB_TIMEOUT_MS = 25000;
+export const grabConfig = { timeout: GRAB_TIMEOUT_MS }; // tests shorten it
+const STEP_TIMEOUT_MS = 8000;
+
+// Mean / max brightness of a canvas, or null when it can't be read (tainted by a cross-origin video without CORS).
+export function frameBrightness(ctx, w, h) {
+  try {
+    const d = ctx.getImageData(0, 0, w, h).data;
+    let sum = 0, max = 0;
+    for (let i = 0; i < d.length; i += 16) { const l = d[i] + d[i + 1] + d[i + 2]; sum += l; if (l > max) max = l; }
+    return { mean: sum / (d.length / 16) / 3, max: max / 3 };
+  } catch (e) { return null; }
+}
+export const isBlackFrame = (b) => !!b && b.max < 6;
+// Moments to try, in order: ~10 % in (a title card / fade-in at 0 s is common), 1 s, the middle, the very start.
+export function grabTimes(duration) {
+  const d = isFinite(duration) && duration > 0 ? duration : 2;
+  const t = [Math.min(d * 0.1, 8), Math.min(1, d / 2), d / 2, Math.min(0.1, d / 4)].map((x) => Math.max(0, Math.min(x, d - 0.05)));
+  return t.filter((x, i) => t.indexOf(x) === i);
+}
+
+export function videoFrame(url, { timeout = grabConfig.timeout, doc = document } = {}) {
   return new Promise((resolve) => {
-    const v = document.createElement('video');
-    v.muted = true;
-    v.preload = 'auto';
-    v.crossOrigin = 'anonymous';
-    const done = (r) => { v.removeAttribute('src'); v.load?.(); resolve(r); };
-    v.onerror = () => done(null);
-    v.onloadeddata = () => { v.currentTime = Math.min(1, (v.duration || 2) / 2); };
-    v.onseeked = async () => {
-      try {
-        const { width, height } = thumbSize(v.videoWidth, v.videoHeight);
-        const c = document.createElement('canvas');
-        c.width = width; c.height = height;
-        c.getContext('2d').drawImage(v, 0, 0, width, height);
-        done({ blob: await toBlob(c), duration: v.duration });
-      } catch (e) { done({ blob: null, duration: v.duration }); }
+    const v = doc.createElement('video');
+    let finished = false;
+    const timers = new Set();
+    const wait = (ms) => new Promise((r) => { const t = setTimeout(() => { timers.delete(t); r(); }, ms); timers.add(t); });
+    const once = (ev, ms) => new Promise((r) => {
+      let t = null;
+      const on = () => { clearTimeout(t); v.removeEventListener(ev, on); v.removeEventListener('error', onErr); r(true); };
+      const onErr = () => { clearTimeout(t); v.removeEventListener(ev, on); v.removeEventListener('error', onErr); r(false); };
+      t = setTimeout(() => { v.removeEventListener(ev, on); v.removeEventListener('error', onErr); r(false); }, ms);
+      timers.add(t);
+      v.addEventListener(ev, on);
+      v.addEventListener('error', onErr);
+    });
+    const done = (r) => {
+      if (finished) return;
+      finished = true;
+      timers.forEach(clearTimeout);
+      releaseMedia(v);
+      resolve(r);
     };
-    setTimeout(() => done(null), 15000);
-    v.src = url;
+    const failed = (reason, duration) => done({ blob: null, failed: true, reason, duration });
+    timers.add(setTimeout(() => failed('timeout'), timeout));
+    (async () => {
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.crossOrigin = 'anonymous';
+      v.style.cssText = 'position:fixed;left:0;top:0;width:16px;height:9px;opacity:0.01;pointer-events:none;z-index:2147483647;';
+      doc.body?.appendChild(v);
+      v.src = url;
+      if (!(v.readyState >= 2) && !(await once('loadeddata', STEP_TIMEOUT_MS))) return failed(v.error ? `decode error ${v.error.code}` : 'no data');
+      const duration = v.duration;
+      if (!(v.videoWidth > 0)) return failed('no video track', duration);
+      const { width, height } = thumbSize(v.videoWidth, v.videoHeight);
+      const c = doc.createElement('canvas');
+      c.width = width; c.height = height;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      let best = null, tainted = false;
+      for (const t of grabTimes(duration)) {
+        if (finished) return;
+        v.currentTime = t;
+        if (!(await once('seeked', STEP_TIMEOUT_MS))) continue;
+        // let the frame reach the compositor
+        if (v.requestVideoFrameCallback) await Promise.race([new Promise((r) => v.requestVideoFrameCallback(() => r())), wait(500)]);
+        else await wait(250);
+        ctx.drawImage(v, 0, 0, width, height);
+        const b = frameBrightness(ctx, width, height);
+        if (!b) { tainted = true; break; }
+        best = { b, t };
+        if (!isBlackFrame(b)) { best = { b, t }; break; }
+      }
+      if (finished) return;
+      if (tainted) return failed('cross-origin video (no CORS headers)', duration);
+      if (!best) return failed('could not seek', duration);
+      const blob = await toBlob(c);
+      c.width = c.height = 0;
+      if (!blob) return failed('could not encode frame', duration);
+      done({ blob, duration, black: isBlackFrame(best.b) });
+    })().catch((e) => failed(String(e?.message || e)));
   });
 }
 
@@ -117,7 +188,9 @@ export function loadThumb(invoke, file, kind) {
           if (!res.ok) return null;
           rec = { blob: await shrinkImage(await res.blob()) };
         }
+        if (rec?.failed) return { url: null, failed: true, reason: rec.reason, duration: rec.duration }; // kept in memo: no retry until the app restarts, never stored
         if (!rec?.blob) return rec ? { url: null, duration: rec.duration } : null;
+        if (rec.black) return { url: URL.createObjectURL(rec.blob), duration: rec.duration }; // a really black video: show it, but don't cache
         await putRec(file, key, rec);
         return { url: URL.createObjectURL(rec.blob), duration: rec.duration };
       });

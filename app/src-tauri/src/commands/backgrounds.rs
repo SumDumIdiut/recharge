@@ -794,10 +794,38 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+// CORS headers for an allowed page origin (tauri://localhost on Linux/macOS, http(s)://tauri.localhost on Windows).
+// Sent on EVERY response (200, 206, HEAD, errors, preflight): Chromium rejects a crossorigin <video> or taints the
+// canvas if any one of them lacks the header.
+fn cors_headers(origin: Option<&str>) -> Vec<tiny_http::Header> {
+    let h = |k: &str, v: &str| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap();
+    let Some(o) = origin.filter(|o| allowed_origin(o)) else { return Vec::new() };
+    vec![
+        h("Access-Control-Allow-Origin", o),
+        h("Vary", "Origin"),
+        h("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"),
+        h("Access-Control-Allow-Headers", "Range, If-Range, Content-Type"),
+        h("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Last-Modified, Content-Type"),
+        h("Access-Control-Allow-Private-Network", "true"),
+        h("Timing-Allow-Origin", o),
+        h("Cross-Origin-Resource-Policy", "cross-origin"),
+    ]
+}
+
 fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
     use std::io::{Read, Seek, SeekFrom};
     let h = |k: &str, v: &str| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap();
-    let plain = |code: u16| tiny_http::Response::from_string("").with_status_code(code);
+    let origin = request.headers().iter().find(|x| x.field.equiv("Origin")).map(|x| x.value.as_str().to_string());
+    let cors = cors_headers(origin.as_deref());
+    let plain = |code: u16| {
+        let mut r = tiny_http::Response::from_string("").with_status_code(code);
+        for c in &cors { r.add_header(c.clone()); }
+        r
+    };
+    if matches!(request.method(), tiny_http::Method::Options) {
+        let _ = request.respond(plain(204));
+        return;
+    }
     if !matches!(request.method(), tiny_http::Method::Get | tiny_http::Method::Head) {
         let _ = request.respond(plain(405));
         return;
@@ -811,7 +839,8 @@ fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
         return;
     };
     let size = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let range = request.headers().iter().find(|x| x.field.equiv("Range")).and_then(|x| parse_range(x.value.as_str(), size));
+    let range = request.headers().iter().find(|x| x.field.equiv("Range")).map(|x| x.value.as_str().to_string());
+    let range = range.as_deref().and_then(|r| parse_range(r, size));
     let mut headers = vec![
         h("Content-Type", mime_of(&path)),
         h("Accept-Ranges", "bytes"),
@@ -822,12 +851,7 @@ fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
     if let Some(secs) = file.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()) {
         headers.push(h("Last-Modified", &http_date(secs)));
     }
-    if let Some(o) = request.headers().iter().find(|x| x.field.equiv("Origin")) {
-        if allowed_origin(o.value.as_str()) {
-            headers.push(h("Access-Control-Allow-Origin", o.value.as_str()));
-            headers.push(h("Vary", "Origin"));
-        }
-    }
+    headers.extend(cors.iter().cloned());
     let (code, start, len) = match range {
         Some((a, b)) => {
             headers.push(h("Content-Range", &format!("bytes {a}-{b}/{size}")));
@@ -1109,6 +1133,32 @@ mod tests {
         assert_eq!(body, &bytes[990..]);
         let (head, body) = fetch("HEAD", "");
         assert!(head.starts_with("http/1.1 200") && head.contains("content-length: 1000"), "{head}");
+        assert!(head.contains("access-control-allow-origin: http://tauri.localhost"), "HEAD: {head}");
         assert!(body.is_empty());
+        // CORS on 206 and on a preflight, for every origin a webview uses (Windows: http/https tauri.localhost).
+        for origin in ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"] {
+            let fetch_o = |method: &str, extra: &str| {
+                let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+                write!(s, "{method} /tok/song.ogg HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\n{extra}Connection: close\r\n\r\n").unwrap();
+                let mut raw = Vec::new();
+                s.read_to_end(&mut raw).unwrap();
+                let at = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+                String::from_utf8_lossy(&raw[..at]).to_ascii_lowercase()
+            };
+            let want = format!("access-control-allow-origin: {origin}");
+            let head = fetch_o("GET", "Range: bytes=10-19\r\n");
+            assert!(head.starts_with("http/1.1 206") && head.contains(&want), "206 {origin}: {head}");
+            assert!(head.contains("access-control-expose-headers") && head.contains("content-range"), "{head}");
+            let head = fetch_o("HEAD", "Range: bytes=0-\r\n");
+            assert!(head.contains(&want), "HEAD {origin}: {head}");
+            let head = fetch_o("OPTIONS", "Access-Control-Request-Method: GET\r\nAccess-Control-Request-Headers: range\r\nAccess-Control-Request-Private-Network: true\r\n");
+            assert!(head.starts_with("http/1.1 204") && head.contains(&want) && head.contains("access-control-allow-headers: range") && head.contains("access-control-allow-private-network: true"), "OPTIONS {origin}: {head}");
+        }
+        // A foreign origin gets no CORS header at all.
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(s, "GET /tok/song.ogg HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nConnection: close\r\n\r\n").unwrap();
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).to_ascii_lowercase().contains("access-control-allow-origin"));
     }
 }

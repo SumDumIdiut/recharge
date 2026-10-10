@@ -252,3 +252,25 @@
 .bg-preview-box { border: 0; border-radius: calc(var(--radius) + 2px); overflow: hidden; box-shadow: var(--hl), 0 8px 20px rgba(0, 0, 0, 0.4); }
 .bg-preview-head { border-bottom: 0; }
 .bg-preview-grid img { border: 0; border-radius: var(--radius-sm); }
+
+#view-backgrounds .dd-btn:focus { outline: none; }
+#view-backgrounds .dd-btn:focus-visible { outline: none; background-color: var(--bgp-hi); }
+
+/* Community preview: looping videos + sound tiles, and the "can't preview" tile */
+.bg-preview-grid .bg-prev-tile { position: relative; aspect-ratio: 16 / 10; background: #000; border-radius: var(--radius-sm); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.bg-prev-video video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bg-prev-audio { flex-direction: column; gap: 6px; color: var(--text-dim, #aaa); background: var(--panel-2, #1c1c22); }
+.bg-prev-play { all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.08); color: inherit; }
+.bg-prev-play:hover, .bg-prev-play:focus-visible { background: rgba(255, 255, 255, 0.16); }
+.bg-prev-play svg { width: 26px; height: 26px; }
+.bg-prev-play.is-playing .bg-prev-play-icon { visibility: hidden; }
+.bg-prev-play.is-playing .bg-prev-play-icon::after { visibility: visible; content: '\275A\275A'; position: absolute; margin-left: -12px; font-size: 11px; }
+.bg-prev-name { font-size: 11px; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-strip-thumb.is-failed, .browse-card-thumb.is-failed { background: repeating-linear-gradient(45deg, #1b1b20, #1b1b20 8px, #202027 8px, #202027 16px) !important; display: flex; align-items: center; justify-content: center; }
+.bg-strip-thumb.is-failed::after, .browse-card-thumb.is-failed::after { content: "can't preview"; font-size: 11px; color: var(--text-dim, #9a9aa5); text-align: center; padding: 0 4px; }
+
+/* playlist with no picture: an icon instead of a black box; preview video tiles while their file downloads */
+#view-backgrounds .browse-card-thumb.bg-thumb-ph { display: flex; align-items: center; justify-content: center; color: var(--text-dim, #9a9aa5); background: var(--panel-2, #1c1c22); }
+#view-backgrounds .browse-card-thumb.bg-thumb-ph svg { width: 34px; height: 34px; opacity: 0.7; }
+.bg-prev-video.is-loading::after { content: "loading..."; position: absolute; font-size: 11px; color: var(--text-dim, #9a9aa5); }
+.bg-prev-video.is-failed::after { content: "can't preview"; position: absolute; font-size: 11px; color: var(--text-dim, #9a9aa5); }

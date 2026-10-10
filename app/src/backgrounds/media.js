@@ -12,6 +12,25 @@ export function mediaKind(name) {
   return null;
 }
 
+const IMG_NAME = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
+export const fileKind = (name) => (IMG_NAME.test(String(name || '')) ? 'image' : mediaKind(name));
+
+// "34 pictures, 2 videos, 1 sound" (zero kinds left out; "empty" when nothing is playable). Same text on hub cards and local playlists.
+export function countsText(files) {
+  const c = { image: 0, video: 0, audio: 0 };
+  for (const f of Array.isArray(files) ? files : []) { const k = fileKind(f); if (k) c[k]++; }
+  const part = (n, one, many) => (n ? [`${n} ${n === 1 ? one : many}`] : []);
+  const parts = [...part(c.image, 'picture', 'pictures'), ...part(c.video, 'video', 'videos'), ...part(c.audio, 'sound', 'sounds')];
+  return parts.length ? parts.join(' \u00b7 ') : 'empty';
+}
+
+// What a thumbnail shows when a playlist has no picture: 'video' (play icon), 'audio' (note) or null.
+export function placeholderKind(files) {
+  const ks = (Array.isArray(files) ? files : []).map(fileKind);
+  if (ks.includes('image')) return null;
+  return ks.includes('video') ? 'video' : ks.includes('audio') ? 'audio' : null;
+}
+
 export function formatDuration(sec) {
   if (!isFinite(sec) || sec < 0) return '';
   const s = Math.round(sec);
