@@ -666,13 +666,18 @@ pub fn hub_delete_submission(token: &str, id: &str) -> Result<(), String> {
     }
 }
 
-pub fn hub_submit_background(token: &str, name: &str, author: &str, path: &std::path::Path) -> Result<String, String> {
+pub fn hub_submit_background(token: &str, name: &str, author: &str, path: &std::path::Path, poster: Option<&std::path::Path>) -> Result<String, String> {
     let form = ureq::unversioned::multipart::Form::new()
         .text("kind", "background")
         .text("name", name)
         .text("author", author)
         .file("file", path)
         .map_err(|e| e.to_string())?;
+    // the poster picture of a video travels as the optional `poster` field
+    let form = match poster {
+        Some(p) => form.file("poster", p).map_err(|e| e.to_string())?,
+        None => form,
+    };
     let res: SubmitResult = ureq::post(&format!("{HUB_BASE}/api/submit"))
         .header("Authorization", format!("Bearer {token}"))
         .send(form)
@@ -683,6 +688,36 @@ pub fn hub_submit_background(token: &str, name: &str, author: &str, path: &std::
         .read_json()
         .map_err(|e| format!("bad response from library: {e}"))?;
     Ok(res.id)
+}
+
+// `posters` of a hub row ({ original file name: poster file name }); empty when the hub has none. kind_path: "playlists" | "backgrounds".
+pub fn hub_row_posters(kind_path: &str, id: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    sanitize_id(id)?;
+    let row: serde_json::Value = call_json_retry(&format!("{HUB_BASE}/api/{kind_path}/{id}"))?;
+    Ok(row
+        .get("posters")
+        .and_then(|p| p.as_object())
+        .map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+        .unwrap_or_default())
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+// One poster picture from the item's gallery route (<= 2 MB).
+pub fn hub_download_poster(kind_path: &str, id: &str, file: &str) -> Result<Vec<u8>, String> {
+    sanitize_id(id)?;
+    let mut res = ureq::get(&format!("{HUB_BASE}/api/{kind_path}/{id}/gallery/{}", percent_encode(file))).call().map_err(|e| playlist_err("poster download", e))?;
+    res.body_mut().with_config().limit(2 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())
 }
 
 pub fn hub_download_background(id: &str) -> Result<Vec<u8>, String> {
@@ -722,10 +757,33 @@ pub async fn fetch_changelog_cmd(channel: String) -> Result<serde_json::Value, S
     .map_err(|e| format!("task panicked: {e}"))?
 }
 
-pub fn hub_download_playlist_zip(id: &str) -> Result<Vec<u8>, String> {
+// Streams the playlist zip (up to ~95 MB of media on a slow server can take minutes), reporting (done, total) bytes.
+// `total` is 0 when the server sent no length. Generous but finite timeouts so a dead connection ends with a message.
+pub fn hub_download_playlist_zip(id: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
     sanitize_id(id)?;
-    let mut res = ureq::get(&format!("{HUB_BASE}/api/playlists/{id}/file")).call().map_err(|e| playlist_err("download", e))?;
-    res.body_mut().with_config().limit(MAX_PACKAGE_BYTES).read_to_vec().map_err(|e| e.to_string())
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
+        .build()
+        .into();
+    let mut res = agent.get(&format!("{HUB_BASE}/api/playlists/{id}/file")).call().map_err(|e| playlist_err("download", e))?;
+    let total = res.body().content_length().unwrap_or(0);
+    let mut reader = res.body_mut().with_config().limit(MAX_PACKAGE_BYTES).reader();
+    let mut out = Vec::with_capacity(total.min(MAX_PACKAGE_BYTES) as usize);
+    let mut buf = vec![0u8; 64 * 1024];
+    progress(0, total);
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("download interrupted after {} MB: {e}", out.len() / 1024 / 1024))?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+        progress(out.len() as u64, total);
+    }
+    if total > 0 && (out.len() as u64) < total {
+        return Err(format!("download cut short ({} of {} MB)", out.len() / 1024 / 1024, total / 1024 / 1024));
+    }
+    Ok(out)
 }
 
 #[tauri::command]

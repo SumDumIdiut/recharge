@@ -3,11 +3,11 @@ import { getToken, getUsername, isLoggedIn } from '../auth.js';
 import { openAccount } from '../login-prompt.js';
 import { recheckBackground, applySoundSetting } from '../theme.js';
 import { getAudioPrefs, saveAudioPrefs } from '../bgmedia.js';
-import { lazyThumb, loadThumb } from './thumbs.js';
-import { mediaKind, countsText, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, activeTarget, soundOptions, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB } from './media.js';
+import { lazyThumb, loadThumb, hubCoverThumb, schedulePosters, forgetPoster } from './thumbs.js';
+import { mediaKind, countsText, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, addingText, errText, activeTarget, soundOptions, PLAY_OVERLAY, MAY_NOT_PLAY_TEXT, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB, withoutPosters } from './media.js';
 
 import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, LIMITS_TEXT } from './editor.js';
-import { loadCommunity, imageCardsHtml, playlistCardsHtml, previewTilesHtml, startPreview, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
+import { loadCommunity, imageCardsHtml, playlistCardsHtml, previewTilesHtml, startPreview, fillHubCovers, applyCover, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
 
 const INTERVALS = [
   [0, 'Every launch'],
@@ -49,7 +49,7 @@ function clearError() {
 
 async function refreshImages() {
   const { invoke } = window.__TAURI__.core;
-  images = await invoke('list_background_images').catch(() => []);
+  images = withoutPosters(await invoke('list_background_images').catch(() => [])); // poster sidecars are never items
   const config = await invoke('get_backgrounds_config').catch(() => ({}));
   imagePublic = config.image_public || {};
 }
@@ -70,7 +70,10 @@ function fillThumb(invoke, el, file) {
     if (kind === 'video') {
       // a video the engine could not decode / read: say so instead of leaving a black tile
       el.classList.toggle('is-failed', !t?.url);
-      if (!t?.url) el.title = `Can't preview this video${t?.reason ? ` (${t.reason})` : ''}`;
+      el.classList.toggle('has-cover', !!t?.cover);
+      el.classList.toggle('may-not-play', !!t?.mayNotPlay);
+      if (!t?.url) el.title = `Can't preview this video${t?.reason ? ` (${t.reason})` : ''}${t?.mayNotPlay ? ` - ${MAY_NOT_PLAY_TEXT}` : ''}`;
+      else if (t.mayNotPlay) el.title = `This video ${MAY_NOT_PLAY_TEXT}`;
       const badge = el.parentElement?.querySelector('[data-duration]') || el.querySelector('[data-duration]');
       if (badge) badge.textContent = formatDuration(t?.duration) || 'video';
     }
@@ -103,7 +106,7 @@ function renderBrowse() {
       return `
     <div class="browse-card" data-file="${escapeHtml(file)}" data-kind="${kind}">
       <div class="browse-card-media">
-        <div class="browse-card-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}</div>
+        <div class="browse-card-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? PLAY_OVERLAY : ''}</div>
         ${kind === 'video' ? '<span class="bg-duration" data-duration></span>' : ''}
         ${shared ? '<span class="badge-shared">Shared</span>' : ''}
       </div>
@@ -148,7 +151,8 @@ function renderBrowse() {
           return;
         }
       }
-      await invoke('delete_background_image', { fileName: file });
+      await invoke('delete_background_image', { fileName: file }); // the backend removes the poster too
+      forgetPoster(file);
       await refreshImages();
       renderBrowse();
     };
@@ -307,7 +311,12 @@ window.__bgSubtab = function (tab) {
   else renderCommunity();
 };
 
+let hubCovers = null; // the running "pictures for video cards" job; aborted when the grid is redrawn or the tab changes
+const coverEnv = { cover: (key, reader) => hubCoverThumb(key, reader) };
+
 async function renderCommunity() {
+  hubCovers?.abort();
+  hubCovers = null;
   const { invoke } = window.__TAURI__.core;
   const grid = document.getElementById('bg-community-grid');
   document.querySelectorAll('#bg-community-view [data-csection]').forEach((el) => el.classList.toggle('active', el.dataset.csection === communitySection));
@@ -315,6 +324,7 @@ async function renderCommunity() {
   const data = await loadCommunity(invoke);
   if (communitySection === 'images') {
     grid.innerHTML = imageCardsHtml(data.images, data.myImages, data.imageAdded);
+    hubCovers = fillHubCovers(grid, coverEnv);
     grid.querySelectorAll('.browse-card').forEach((card) => {
       const row = data.images.rows.find((r) => r.id === card.dataset.id);
       card.querySelector('[data-act=add-image]').onclick = async (e) => {
@@ -325,18 +335,20 @@ async function renderCommunity() {
         btn.textContent = 'Adding...';
         try {
           await invoke('download_hub_background', { id: row.id, name: row.name });
+          postersSoon();
           btn.textContent = 'Added';
           await refreshImages();
         } catch (err) {
           btn.disabled = false;
           btn.textContent = 'Add';
-          showError(String(err));
+          showError(`Couldn't add "${row.name}": ${errText(err)}`);
         }
       };
     });
     return;
   }
   grid.innerHTML = playlistCardsHtml(data.playlists, data.myPlaylists, data.playlistAdded);
+  hubCovers = fillHubCovers(grid, coverEnv);
   grid.querySelectorAll('.browse-card').forEach((card) => {
     card.onclick = () => openPreview(data.playlists.rows.find((r) => r.id === card.dataset.id), data.playlistAdded);
   });
@@ -361,7 +373,7 @@ function openPreview(row, isAdded = () => false) {
   previewMedia?.release();
   const grid = document.getElementById('bg-preview-grid');
   grid.innerHTML = previewTilesHtml(row);
-  previewMedia = startPreview(grid);
+  previewMedia = startPreview(grid, undefined, coverEnv);
   const add = document.getElementById('bg-preview-add');
   const already = isAdded(row);
   add.disabled = already;
@@ -371,15 +383,25 @@ function openPreview(row, isAdded = () => false) {
     clearError();
     add.disabled = true;
     add.textContent = 'Adding...';
+    // the download can take minutes on a slow connection: show the percentage the backend reports
+    let unlisten = null;
+    try {
+      unlisten = await window.__TAURI__.event?.listen?.('hub-download-progress', (e) => {
+        if (e.payload?.id === row.id) add.textContent = addingText(e.payload.percent, e.payload.total);
+      });
+    } catch (e) {}
     try {
       await invoke('download_hub_playlist', { id: row.id, name: row.name, author: row.author || '' });
+      postersSoon();
       await refreshImages();
       closePreview();
       window.__bgSubtab('playlists');
     } catch (err) {
       add.disabled = false;
       add.textContent = 'Add to my playlists';
-      showError(String(err));
+      showError(`Couldn't add "${row.name}": ${errText(err)}`);
+    } finally {
+      try { unlisten?.(); } catch (e) {}
     }
   };
   document.getElementById('bg-preview-close').onclick = closePreview;
@@ -448,7 +470,7 @@ function renderEditor(invoke) {
       const kind = mediaKind(file);
       return `<div class="bg-strip-item" draggable="true" data-i="${i}" data-kind="${kind}">
       <button class="bg-strip-remove" data-act="remove" title="Remove from playlist" aria-label="Remove ${escapeHtml(file)}">x</button>
-      <div class="bg-strip-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? '<span class="bg-badge" data-duration>video</span>' : ''}</div>
+      <div class="bg-strip-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? PLAY_OVERLAY + '<span class="bg-badge" data-duration>video</span>' : ''}</div>
       <div class="bg-strip-name" title="${escapeHtml(file)}">${escapeHtml(file)}</div>
       <div class="bg-strip-ctl"><button data-act="left" title="Move earlier" aria-label="Move earlier"${i === 0 ? ' disabled' : ''}>&larr;</button><button data-act="right" title="Move later" aria-label="Move later"${i === n - 1 ? ' disabled' : ''}>&rarr;</button></div>
     </div>`;
@@ -501,6 +523,7 @@ async function importPaths(invoke, paths, extra = {}) {
   }
   const { added, skipped } = summarizeImport(results);
   addItems(draft, added);
+  postersSoon();
   await refreshImages();
   importing = false;
   setProgress(`Added ${added.length} of ${paths.length}.`);
@@ -520,7 +543,7 @@ function openPicker(invoke) {
         const inList = draft.items.includes(file);
         return `<label class="bg-pick" data-file="${escapeHtml(file)}">
         <input type="checkbox" ${inList ? 'checked disabled' : ''} aria-label="${escapeHtml(file)}" />
-        <div class="bg-strip-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? '<span class="bg-badge" data-duration>video</span>' : ''}${kind === 'audio' ? '<span class="bg-badge">sound</span>' : ''}</div>
+        <div class="bg-strip-thumb${kind === 'audio' ? ' bg-audio-thumb' : ''}" data-thumb="${escapeHtml(file)}">${kind === 'audio' ? NOTE_ICON : ''}${kind === 'video' ? PLAY_OVERLAY + '<span class="bg-badge" data-duration>video</span>' : ''}${kind === 'audio' ? '<span class="bg-badge">sound</span>' : ''}</div>
         <div class="bg-strip-name" title="${escapeHtml(file)}">${escapeHtml(file)}${inList ? ' (in playlist)' : ''}</div>
       </label>`;
       })
@@ -616,6 +639,11 @@ function wireEditor(invoke) {
   };
 }
 
+// New videos entered the library (added, imported, downloaded): their posters are made in the background, one at a time.
+function postersSoon() {
+  try { schedulePosters(window.__TAURI__.core.invoke, { delay: 300 }); } catch (e) {}
+}
+
 export async function init() {
   const { invoke } = window.__TAURI__.core;
   await refreshImages();
@@ -623,6 +651,7 @@ export async function init() {
 
   // A background or playlist was beamed in from the site.
   window.addEventListener('backgrounds-changed', async () => {
+    postersSoon();
     await refreshImages();
     window.__bgSubtab(currentSubtab === 'community' ? 'playlists' : currentSubtab);
   });
@@ -643,6 +672,7 @@ export async function init() {
     if (!chosen) return;
     try {
       await invoke('upload_background_image', { path: chosen });
+      postersSoon();
       await refreshImages();
       renderBrowse();
     } catch (err) {

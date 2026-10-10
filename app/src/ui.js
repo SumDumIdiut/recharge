@@ -97,4 +97,4 @@ export const ICON_SPINNER = '<svg class="spinner" viewBox="0 0 24 24" fill="none
 // through GStreamer into a ~11 GB GPU pool, so only these extensions ever reach an image slot.
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
 export const isImageName = (name) => IMAGE_EXT.test(String(name || ''));
-export const galleryImages = (gallery) => (Array.isArray(gallery) ? gallery : []).filter(isImageName);
+export const galleryImages = (gallery) => (Array.isArray(gallery) ? gallery : []).filter((n) => isImageName(n) && !/\.poster\.(jpe?g|png)$/i.test(n)); // a poster is a picture of a video, not a gallery picture

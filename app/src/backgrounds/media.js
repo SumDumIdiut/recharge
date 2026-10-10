@@ -4,7 +4,26 @@ export const VIDEO_EXTS = ['mp4', 'webm'];
 export const AUDIO_EXTS = ['mp3', 'ogg', 'wav'];
 export const LIMITS_MB = { image: 15, video: 90, audio: 20 };
 
+// --- poster sidecars: "<video file name>.poster.jpg|png" next to a video. Pictures OF a video, never library items. ---
+export const POSTER_RE = /\.poster\.(jpe?g|png)$/i;
+export const isPosterName = (name) => POSTER_RE.test(String(name || ''));
+export const posterNameFor = (video) => `${video}.poster.jpg`;
+// The video a poster file belongs to ("clip.mp4.poster.jpg" -> "clip.mp4"), or null.
+export const posterOwner = (name) => (isPosterName(name) ? String(name).replace(POSTER_RE, '') : null);
+// A listing without the sidecars.
+export const withoutPosters = (names) => (Array.isArray(names) ? names : []).filter((n) => !isPosterName(n));
+// A video was renamed / deleted: where its poster goes (null = nothing to do or remove).
+export function posterRename(oldName, newName, has) {
+  const from = posterNameFor(oldName);
+  if (!has(from)) return null;
+  return newName ? { from, to: posterNameFor(newName) } : { from, to: null };
+}
+export const POSTER_WIDTH = 1280;
+export const POSTER_QUALITY = 0.82;
+export const MAX_POSTER_BYTES = 2 * 1024 * 1024;
+
 export function mediaKind(name) {
+  if (isPosterName(name)) return null;
   const ext = String(name || '').split('.').pop().toLowerCase();
   if (IMAGE_EXTS.includes(ext)) return 'image';
   if (VIDEO_EXTS.includes(ext)) return 'video';
@@ -13,7 +32,7 @@ export function mediaKind(name) {
 }
 
 const IMG_NAME = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
-export const fileKind = (name) => (IMG_NAME.test(String(name || '')) ? 'image' : mediaKind(name));
+export const fileKind = (name) => (isPosterName(name) ? null : IMG_NAME.test(String(name || '')) ? 'image' : mediaKind(name));
 
 // "34 pictures, 2 videos, 1 sound" (zero kinds left out; "empty" when nothing is playable). Same text on hub cards and local playlists.
 export function countsText(files) {
@@ -111,4 +130,37 @@ export const thumbPrefix = (file) => `${file}|`;
 export function thumbSize(w, h, max = THUMB_WIDTH) {
   const width = Math.max(1, Math.min(max, Math.round(w) || max));
   return { width, height: Math.max(1, Math.round(width * ((Number(h) || 1) / (Number(w) || 1)))) };
+}
+
+// --- "may not play": codecs the web engine often lacks (AV1 / HEVC / VP9 depend on the installed decoders) ---
+const CODEC_TYPES = {
+  av01: 'video/mp4; codecs="av01.0.05M.08"',
+  hvc1: 'video/mp4; codecs="hvc1.1.6.L93.B0"',
+  hev1: 'video/mp4; codecs="hev1.1.6.L93.B0"',
+  vp09: 'video/mp4; codecs="vp09.00.10.08"',
+};
+export const codecLabel = (fourcc) => ({ av01: 'AV1', hvc1: 'HEVC', hev1: 'HEVC', vp09: 'VP9', avc1: 'H.264' }[fourcc] || fourcc || '');
+// canPlay: (mimeType) => '' | 'maybe' | 'probably' (a <video>.canPlayType); frameReason: why grabbing a frame failed, if it did.
+export function mayNotPlay({ codec, frameReason, canPlay }) {
+  if (codec && CODEC_TYPES[codec] && typeof canPlay === 'function' && !canPlay(CODEC_TYPES[codec])) return true;
+  return /decode|no data|no video/.test(String(frameReason || ''));
+}
+export const MAY_NOT_PLAY_TEXT = "may not play on this computer";
+
+// Where a video tile's picture comes from, best first: a grabbed frame, the cover embedded in the file, nothing (plain play tile).
+export function pictureSource({ frame, cover }) {
+  if (frame) return 'frame';
+  if (cover) return 'cover';
+  return 'none';
+}
+
+export const PLAY_OVERLAY = '<span class="bg-play" aria-hidden="true"></span>';
+
+// "Adding... 40%" (just "Adding..." until the size is known)
+export const addingText = (percent, total) => (total > 0 && Number.isFinite(percent) ? `Adding... ${Math.max(0, Math.min(100, Math.round(percent)))}%` : 'Adding...');
+// The message of a failed invoke (a string, an Error or { message }), never "[object Object]".
+export function errText(err) {
+  if (!err) return 'something went wrong';
+  if (typeof err === 'string') return err;
+  return err.message || err.error || JSON.stringify(err);
 }

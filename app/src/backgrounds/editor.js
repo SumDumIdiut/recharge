@@ -1,5 +1,5 @@
 // Pure logic of the playlist editor (no DOM, tested under node).
-import { mediaKind, LIMITS_MB } from './media.js';
+import { mediaKind, isPosterName, LIMITS_MB } from './media.js';
 
 export const MAX_FOLDER_FILES = 500;
 
@@ -24,7 +24,7 @@ export const baseName = (path) => String(path || '').split(/[\\/]/).pop();
 export function addItems(draft, files) {
   let added = 0;
   for (const f of files) {
-    if (!f || draft.items.includes(f)) continue;
+    if (!f || isPosterName(f) || draft.items.includes(f)) continue;
     draft.items.push(f);
     added++;
   }
@@ -66,7 +66,7 @@ export function validateDraft(draft) {
 // What gets sent to the backend on Save.
 export function savePayload(draft) {
   const sound = draft.sound === 'auto' || draft.sound === 'off' || draft.sound === 'own' || draft.items.includes(draft.sound) ? draft.sound : 'auto';
-  return { id: draft.id, name: draft.name.trim(), images: [...draft.items], interval: Number(draft.interval) || 0, sound };
+  return { id: draft.id, name: draft.name.trim(), images: draft.items.filter((f) => !isPosterName(f)), interval: Number(draft.interval) || 0, sound };
 }
 
 // Import results -> { added: [library names], skipped: [{ name, reason }] }
