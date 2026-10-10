@@ -37,8 +37,42 @@ fn media_kind(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn is_image(path: &Path) -> bool {
-    media_kind(path).is_some()
+// Poster sidecars: "<video file name>.poster.jpg" (or .png) next to the video. Never library items.
+const MAX_POSTER_BYTES: usize = 2 * 1024 * 1024;
+
+fn is_poster_name(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l.ends_with(".poster.jpg") || l.ends_with(".poster.png")
+}
+
+fn poster_name_for(video: &str) -> String {
+    format!("{video}.poster.jpg")
+}
+
+// The poster file of a video that exists in `dir` (".jpg" first, then ".png").
+fn existing_poster(dir: &Path, video: &str) -> Option<String> {
+    [poster_name_for(video), format!("{video}.poster.png")].into_iter().find(|n| dir.join(n).is_file())
+}
+
+fn remove_posters(dir: &Path, video: &str) {
+    for n in [poster_name_for(video), format!("{video}.poster.png")] {
+        let _ = std::fs::remove_file(dir.join(n));
+    }
+}
+
+fn poster_ext_of(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() > 8 && bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.len() > 8 && bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("png")
+    } else {
+        None
+    }
+}
+
+// Any file the backgrounds support: picture, video or sound (poster sidecars are not items).
+fn is_media(path: &Path) -> bool {
+    media_kind(path).is_some() && !path.file_name().map_or(false, |n| is_poster_name(&n.to_string_lossy()))
 }
 
 fn max_bytes_for(path: &Path) -> u64 {
@@ -64,7 +98,7 @@ pub fn list_background_images(app: AppHandle) -> Vec<String> {
     let mut rows: Vec<(std::time::SystemTime, String)> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| is_image(p))
+        .filter(|p| is_media(p))
         .filter_map(|p| {
             let name = p.file_name()?.to_string_lossy().into_owned();
             let modified = p.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
@@ -95,7 +129,7 @@ pub fn upload_background_image(app: AppHandle, path: String) -> Result<String, S
     if !src.is_file() {
         return Err(format!("'{path}' not found"));
     }
-    if !is_image(&src) {
+    if !is_media(&src) {
         return Err("only png, jpg, webp or gif images, mp4 or webm videos, or mp3, ogg or wav audio can be added".to_string());
     }
     let size = std::fs::metadata(&src).map_err(|e| e.to_string())?.len();
@@ -113,6 +147,7 @@ pub fn delete_background_image(app: AppHandle, file_name: String) -> Result<(), 
     sanitize_segment(&file_name)?;
     let dir = images_dir(&app)?;
     std::fs::remove_file(dir.join(&file_name)).map_err(|e| e.to_string())?;
+    remove_posters(&dir, &file_name);
 
     // Drop it from every playlist that referenced it too, so nothing dangles.
     let mut config = load_config(&app);
@@ -127,6 +162,78 @@ pub fn delete_background_image(app: AppHandle, file_name: String) -> Result<(), 
         save_config(&app, &config)?;
     }
     Ok(())
+}
+
+// Saves the poster picture (a JPEG, <= 2 MB) of a video of the library as "<video>.poster.jpg". The name must be an
+// existing video directly inside the images dir. Returns the poster file name.
+fn write_poster_into(dir: &Path, name: &str, bytes: &[u8]) -> Result<String, String> {
+    sanitize_segment(name)?;
+    if name.contains('\0') || is_poster_name(name) || media_kind(Path::new(name)) != Some("video") {
+        return Err("posters are only made for videos".to_string());
+    }
+    let video = dir.join(name);
+    let meta = std::fs::symlink_metadata(&video).map_err(|_| "that video is not in the library".to_string())?;
+    if !meta.is_file() {
+        return Err("that video is not in the library".to_string());
+    }
+    if bytes.is_empty() || bytes.len() > MAX_POSTER_BYTES {
+        return Err("the poster must be a picture of at most 2 MB".to_string());
+    }
+    if poster_ext_of(bytes) != Some("jpg") {
+        return Err("the poster must be a JPEG".to_string());
+    }
+    let file = poster_name_for(name);
+    let tmp = dir.join(format!(".{file}.tmp"));
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::rename(&tmp, dir.join(&file)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    let _ = std::fs::remove_file(dir.join(format!("{name}.poster.png")));
+    Ok(file)
+}
+
+#[tauri::command]
+pub fn write_poster(app: AppHandle, name: String, bytes: Vec<u8>) -> Result<String, String> {
+    write_poster_into(&images_dir(&app)?, &name, &bytes)
+}
+
+// { video file name: poster file name } for every video of the library that has a poster.
+fn video_posters_in(dir: &Path) -> (std::collections::BTreeMap<String, String>, Vec<String>) {
+    let mut have = std::collections::BTreeMap::new();
+    let mut missing = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return (have, missing) };
+    let mut names: Vec<String> = rd.flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    for n in names {
+        if is_poster_name(&n) || media_kind(Path::new(&n)) != Some("video") {
+            continue;
+        }
+        match existing_poster(dir, &n) {
+            Some(p) => {
+                have.insert(n, p);
+            }
+            None => missing.push(n),
+        }
+    }
+    (have, missing)
+}
+
+#[derive(Serialize)]
+pub struct VideoPosters {
+    pub have: std::collections::BTreeMap<String, String>,
+    pub missing: Vec<String>,
+}
+
+#[tauri::command]
+pub fn list_video_posters(app: AppHandle) -> VideoPosters {
+    match images_dir(&app) {
+        Ok(dir) => {
+            let (have, missing) = video_posters_in(&dir);
+            VideoPosters { have, missing }
+        }
+        Err(_) => VideoPosters { have: Default::default(), missing: Vec::new() },
+    }
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -289,36 +396,96 @@ fn build_playlist_zip(dir: &Path, names: &[String]) -> Result<Vec<u8>, String> {
         let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         writer.start_file(name.as_str(), options).map_err(|e| e.to_string())?;
         writer.write_all(&bytes).map_err(|e| e.to_string())?;
+        // a video's poster rides along as "<video>.poster.jpg|png" (not an item)
+        if media_kind(Path::new(name)) == Some("video") {
+            if let Some(poster) = existing_poster(dir, name) {
+                if let Ok(pb) = std::fs::read(dir.join(&poster)) {
+                    if !pb.is_empty() && pb.len() <= MAX_POSTER_BYTES {
+                        writer.start_file(poster.as_str(), options).map_err(|e| e.to_string())?;
+                        writer.write_all(&pb).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        }
     }
     Ok(writer.finish().map_err(|e| e.to_string())?.into_inner())
 }
 
-// Saves the images of a playlist zip into `dir` (flat, no name clashes), returns the new file names.
+// Playlist zip limits: the same per-file caps as uploads, and 95 MB for the whole set.
+const MAX_PLAYLIST_TOTAL_BYTES: u64 = 95 * 1024 * 1024;
+
+// Saves the pictures, videos and sounds of a playlist zip into `dir` (flat, no name clashes), returns the new file names.
+// Nothing is left behind when it fails half way.
+#[cfg(test)]
 fn extract_playlist_zip(bytes: &[u8], dir: &Path) -> Result<Vec<String>, String> {
+    Ok(extract_playlist_zip_mapped(bytes, dir)?.into_iter().map(|(_, saved)| saved).collect())
+}
+
+// Same, but returns (name inside the zip, saved name) pairs. Poster entries ("<entry>.poster.jpg|png") are saved as sidecars of
+// their (possibly renamed) video; they are not items and don't count toward the file limit.
+fn extract_playlist_zip_mapped(bytes: &[u8], dir: &Path) -> Result<Vec<(String, String)>, String> {
     use std::io::Read;
+    let mut posters: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("bad playlist zip: {e}"))?;
-    let mut saved = Vec::new();
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total = 0u64;
     for i in 0..archive.len() {
-        if saved.len() >= MAX_PLAYLIST_IMAGES {
-            break;
-        }
-        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let entry = archive.by_index(i).map_err(|e| format!("bad playlist zip: {e}"))?;
         if !entry.is_file() {
             continue;
         }
         let Some(base) = entry.name().rsplit(['/', '\\']).next().map(str::to_string) else { continue };
-        if base.starts_with('.') || !is_image(Path::new(&base)) {
+        if base.starts_with('.') {
             continue;
         }
-        let mut data = Vec::new();
+        if is_poster_name(&base) {
+            if posters.len() < MAX_PLAYLIST_IMAGES {
+                let mut data = Vec::new();
+                if entry.take(MAX_POSTER_BYTES as u64 + 1).read_to_end(&mut data).is_ok() && data.len() <= MAX_POSTER_BYTES && poster_ext_of(&data).is_some() {
+                    posters.insert(base.to_ascii_lowercase(), data);
+                }
+            }
+            continue;
+        }
+        if files.len() >= MAX_PLAYLIST_IMAGES {
+            continue;
+        }
+        if !is_media(Path::new(&base)) {
+            continue;
+        }
         let cap = max_bytes_for(Path::new(&base));
-        entry.take(cap + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
+        let mut data = Vec::new();
+        entry.take(cap + 1).read_to_end(&mut data).map_err(|e| format!("{base}: {e}"))?;
         if data.len() as u64 > cap {
             continue;
         }
+        total += data.len() as u64;
+        if total > MAX_PLAYLIST_TOTAL_BYTES {
+            return Err(format!("that playlist is too big (max {} MB in total)", MAX_PLAYLIST_TOTAL_BYTES / 1024 / 1024));
+        }
+        files.push((base, data));
+    }
+    let mut saved: Vec<(String, String)> = Vec::new();
+    for (base, data) in files {
         let name = unique_name(dir, &base);
-        std::fs::write(dir.join(&name), &data).map_err(|e| e.to_string())?;
-        saved.push(name);
+        if let Err(e) = std::fs::write(dir.join(&name), &data) {
+            let _ = std::fs::remove_file(dir.join(&name));
+            for (_, done) in &saved {
+                let _ = std::fs::remove_file(dir.join(done));
+                remove_posters(dir, done);
+            }
+            return Err(format!("couldn't save {name}: {e}"));
+        }
+        if media_kind(Path::new(&name)) == Some("video") {
+            // best effort: a poster that can't be written is simply regenerated later
+            for ext in ["jpg", "png"] {
+                if let Some(pb) = posters.get(&format!("{base}.poster.{ext}").to_ascii_lowercase()) {
+                    let _ = std::fs::write(dir.join(format!("{name}.poster.{}", poster_ext_of(pb).unwrap_or(ext))), pb);
+                    break;
+                }
+            }
+        }
+        saved.push((base, name));
     }
     Ok(saved)
 }
@@ -382,7 +549,7 @@ fn import_one(dir: &Path, path: &str) -> Result<String, String> {
     if !meta.is_file() {
         return Err("not a file".to_string());
     }
-    let Some(kind) = media_kind(&src) else {
+    let Some(kind) = media_kind(&src).filter(|_| is_media(&src)) else {
         return Err("unsupported type (png, jpg, webp, gif, mp4, webm, mp3, ogg, wav only)".to_string());
     };
     let limit = max_bytes_for(&src);
@@ -468,7 +635,7 @@ fn list_folder(root: &Path, recursive: bool, cap: usize) -> Result<FolderListing
                     subdirs.push((path, depth + 1));
                 }
             } else if ft.is_file() {
-                if media_kind(&path).is_some() {
+                if is_media(&path) {
                     if out.files.len() >= cap {
                         out.truncated = true;
                     } else {
@@ -529,23 +696,75 @@ pub fn install_hub_background(app: &AppHandle, id: &str, name: &str) -> Result<S
     let dir = images_dir(app)?;
     let file = unique_name(&dir, &background_file_name(name, ext));
     std::fs::write(dir.join(&file), &bytes).map_err(|e| e.to_string())?;
+    if media_kind(Path::new(&file)) == Some("video") {
+        fetch_hub_posters(&dir, "backgrounds", id, &[("file".to_string(), file.clone())]);
+    }
     let mut config = load_config(app);
     config.image_hub.insert(file.clone(), id.to_string());
     save_config(app, &config)?;
     Ok(file)
 }
 
+// One playlist install at a time (a second click while the first still downloads must not race on the config file).
+static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn install_hub_playlist(app: &AppHandle, id: &str, name: &str, author: &str) -> Result<String, String> {
-    let bytes = super::hub::hub_download_playlist_zip(id)?;
-    let images = extract_playlist_zip(&bytes, &images_dir(app)?)?;
-    if images.is_empty() {
-        return Err("that playlist has no usable images".to_string());
+    use tauri::Emitter;
+    let _guard = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if load_config(app).playlists.iter().any(|p| p.hub_id.as_deref() == Some(id)) {
+        return Err("you already added that playlist".to_string());
     }
+    let last = std::cell::Cell::new(u64::MAX);
+    let emit = |done: u64, total: u64| {
+        let pct = if total > 0 { done * 100 / total } else { 0 };
+        if pct != last.get() || total == 0 {
+            last.set(pct);
+            let _ = app.emit("hub-download-progress", serde_json::json!({ "id": id, "done": done, "total": total, "percent": pct }));
+        }
+    };
+    let bytes = super::hub::hub_download_playlist_zip(id, &emit)?;
+    let dir = images_dir(app)?;
+    let mapped = extract_playlist_zip_mapped(&bytes, &dir)?;
+    let images: Vec<String> = mapped.iter().map(|(_, saved)| saved.clone()).collect();
+    if images.is_empty() {
+        return Err("that playlist has no usable pictures, videos or sounds".to_string());
+    }
+    // videos whose zip had no poster entry (items retrofitted on the hub): the poster comes from the API row
+    fetch_hub_posters(&dir, "playlists", id, &mapped);
     let mut config = load_config(app);
     let label = if author.trim().is_empty() { name.to_string() } else { format!("{name} (by {author})") };
-    config.playlists.push(Playlist { id: new_id(), name: label.clone(), images, interval: 0, public_id: None, sound: default_sound(), hub_id: Some(id.to_string()) });
-    save_config(app, &config)?;
+    config.playlists.push(Playlist { id: new_id(), name: label.clone(), images: images.clone(), interval: 0, public_id: None, sound: default_sound(), hub_id: Some(id.to_string()) });
+    if let Err(e) = save_config(app, &config) {
+        for f in &images {
+            let _ = std::fs::remove_file(dir.join(f));
+            remove_posters(&dir, f);
+        }
+        return Err(e);
+    }
     Ok(label)
+}
+
+// For each (name on the hub, saved file name) video without a poster: fetch posters[hub name] from the API row and save it
+// as a sidecar. Best effort - a hub without posters, or any failure, just leaves the poster to the local generator.
+fn fetch_hub_posters(dir: &Path, kind_path: &str, id: &str, items: &[(String, String)]) {
+    let wanted: Vec<&(String, String)> = items
+        .iter()
+        .filter(|(_, saved)| media_kind(Path::new(saved)) == Some("video") && existing_poster(dir, saved).is_none())
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let Ok(map) = super::hub::hub_row_posters(kind_path, id) else { return };
+    for (orig, saved) in wanted {
+        let Some(file) = map.get(orig) else { continue };
+        if let Ok(bytes) = super::hub::hub_download_poster(kind_path, id, file) {
+            if bytes.len() <= MAX_POSTER_BYTES {
+                if let Some(ext) = poster_ext_of(&bytes) {
+                    let _ = std::fs::write(dir.join(format!("{saved}.poster.{ext}")), &bytes);
+                }
+            }
+        }
+    }
 }
 
 // Community "Add" for one image: saved into the library, returns the file name.
@@ -567,7 +786,9 @@ pub async fn publish_background_image(app: AppHandle, token: String, file_name: 
             return Err(format!("public {} can be at most {} MB", match media_kind(&path) { Some("video") => "videos", Some("audio") => "audio files", _ => "images" }, max_bytes_for(&path) / 1024 / 1024));
         }
         let label = Path::new(&file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| file_name.clone());
-        let new_id = super::hub::hub_submit_background(&token, &label, &author, &path)?;
+        let poster = if media_kind(&path) == Some("video") { existing_poster(&images_dir(&app)?, &file_name).map(|p| images_dir(&app).map(|d| d.join(p))) } else { None };
+        let poster = poster.transpose()?.filter(|p| p.metadata().map_or(false, |m| m.len() as usize <= MAX_POSTER_BYTES));
+        let new_id = super::hub::hub_submit_background(&token, &label, &author, &path, poster.as_deref())?;
         let mut config = load_config(&app);
         let old = config.image_public.insert(file_name, new_id.clone());
         save_config(&app, &config)?;
@@ -1024,6 +1245,127 @@ mod tests {
     }
 
     #[test]
+    fn playlist_zip_keeps_videos_and_sounds() {
+        use std::io::Write;
+        let dst = tmp("zipmedia");
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default();
+        for (n, d) in [("clip.mp4", &b"\0\0\0\x18ftypmp42"[..]), ("song.mp3", b"ID3"), ("pic.png", b"x"), ("notes.txt", b"no")] {
+            w.start_file(n, o).unwrap();
+            w.write_all(d).unwrap();
+        }
+        let bytes = w.finish().unwrap().into_inner();
+        let saved = extract_playlist_zip(&bytes, &dst).unwrap();
+        assert_eq!(saved, vec!["clip.mp4".to_string(), "song.mp3".to_string(), "pic.png".to_string()]);
+        assert!(dst.join("clip.mp4").exists());
+    }
+
+    fn jpeg_bytes() -> Vec<u8> {
+        let mut v = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        v.extend_from_slice(&[7u8; 40]);
+        v
+    }
+
+    const MP4: &[u8] = b"\0\0\0\x18ftypmp42xxxxxxxx";
+
+    #[test]
+    fn write_poster_validates_name_and_bytes() {
+        let dir = tmp("poster-write");
+        std::fs::write(dir.join("clip.mp4"), MP4).unwrap();
+        std::fs::write(dir.join("pic.png"), png_bytes()).unwrap();
+        assert_eq!(write_poster_into(&dir, "clip.mp4", &jpeg_bytes()).unwrap(), "clip.mp4.poster.jpg");
+        assert!(dir.join("clip.mp4.poster.jpg").is_file());
+        // overwrite works, no temp file left behind
+        write_poster_into(&dir, "clip.mp4", &jpeg_bytes()).unwrap();
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".tmp")));
+        for bad in ["../clip.mp4", "..", "", "sub/clip.mp4", "a\\clip.mp4", "missing.mp4", "pic.png", "clip.mp4.poster.jpg", "song.mp3"] {
+            assert!(write_poster_into(&dir, bad, &jpeg_bytes()).is_err(), "{bad}");
+        }
+        assert!(write_poster_into(&dir, "clip.mp4", b"").is_err());
+        assert!(write_poster_into(&dir, "clip.mp4", &png_bytes()).is_err());
+        assert!(write_poster_into(&dir, "clip.mp4", b"not a picture at all").is_err());
+        let mut big = jpeg_bytes();
+        big.resize(MAX_POSTER_BYTES + 1, 0);
+        assert!(write_poster_into(&dir, "clip.mp4", &big).is_err());
+        // a directory called x.mp4 is not a video
+        std::fs::create_dir(dir.join("d.mp4")).unwrap();
+        assert!(write_poster_into(&dir, "d.mp4", &jpeg_bytes()).is_err());
+        assert!(!dir.join("../escape.poster.jpg").exists());
+    }
+
+    #[test]
+    fn posters_are_not_items_and_listing_maps_them() {
+        assert!(is_poster_name("a.mp4.poster.jpg") && is_poster_name("A.MP4.POSTER.PNG") && !is_poster_name("poster.jpg"));
+        assert!(!is_media(Path::new("a.mp4.poster.jpg")) && is_media(Path::new("a.jpg")) && is_media(Path::new("a.mp4")));
+        let dir = tmp("poster-list");
+        std::fs::write(dir.join("a.mp4"), MP4).unwrap();
+        std::fs::write(dir.join("b.webm"), b"x").unwrap();
+        std::fs::write(dir.join("p.png"), png_bytes()).unwrap();
+        write_poster_into(&dir, "a.mp4", &jpeg_bytes()).unwrap();
+        let (have, missing) = video_posters_in(&dir);
+        assert_eq!(have.get("a.mp4").map(String::as_str), Some("a.mp4.poster.jpg"));
+        assert_eq!(missing, vec!["b.webm".to_string()]);
+        // folder import listing skips sidecars
+        let l = list_folder(&dir, false, 500).unwrap();
+        assert_eq!(l.files.len(), 3);
+        assert!(l.files.iter().all(|f| !f.contains(".poster.")));
+        // importing a poster file directly is refused
+        let r = import_files_into(&tmp("poster-import"), &[dir.join("a.mp4.poster.jpg").to_string_lossy().into_owned()]);
+        assert!(r[0].error.is_some());
+        remove_posters(&dir, "a.mp4");
+        assert!(!dir.join("a.mp4.poster.jpg").exists());
+    }
+
+    #[test]
+    fn zip_carries_posters_and_does_not_count_them_as_items() {
+        let src = tmp("pz-src");
+        let dst = tmp("pz-dst");
+        std::fs::write(src.join("clip.mp4"), MP4).unwrap();
+        std::fs::write(src.join("other.mp4"), MP4).unwrap();
+        std::fs::write(src.join("pic.png"), png_bytes()).unwrap();
+        write_poster_into(&src, "clip.mp4", &jpeg_bytes()).unwrap();
+        let zip_bytes = build_playlist_zip(&src, &["clip.mp4".to_string(), "other.mp4".to_string(), "pic.png".to_string()]).unwrap();
+        let names: Vec<String> = {
+            let mut a = zip::ZipArchive::new(std::io::Cursor::new(&zip_bytes)).unwrap();
+            (0..a.len()).map(|i| a.by_index(i).unwrap().name().to_string()).collect()
+        };
+        assert!(names.contains(&"clip.mp4.poster.jpg".to_string()));
+        assert!(!names.contains(&"other.mp4.poster.jpg".to_string()));
+        // download into a library that already has clip.mp4: the poster follows the renamed video
+        std::fs::write(dst.join("clip.mp4"), b"old").unwrap();
+        let mapped = extract_playlist_zip_mapped(&zip_bytes, &dst).unwrap();
+        assert_eq!(mapped, vec![("clip.mp4".into(), "clip-2.mp4".into()), ("other.mp4".into(), "other.mp4".into()), ("pic.png".into(), "pic.png".into())]);
+        assert!(dst.join("clip-2.mp4.poster.jpg").is_file());
+        assert!(!dst.join("clip.mp4.poster.jpg").exists());
+        assert!(!dst.join("other.mp4.poster.jpg").exists());
+        let (have, missing) = video_posters_in(&dst);
+        assert_eq!(have.len(), 1);
+        assert_eq!(missing, vec!["clip.mp4".to_string(), "other.mp4".to_string()]);
+    }
+
+    #[test]
+    fn many_posters_do_not_eat_the_item_limit() {
+        use std::io::Write;
+        let dst = tmp("pz-many");
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default();
+        for i in 0..MAX_PLAYLIST_IMAGES {
+            w.start_file(format!("v{i}.mp4.poster.jpg"), o).unwrap();
+            w.write_all(&jpeg_bytes()).unwrap();
+        }
+        for i in 0..MAX_PLAYLIST_IMAGES {
+            w.start_file(format!("v{i}.mp4"), o).unwrap();
+            w.write_all(MP4).unwrap();
+        }
+        w.start_file("evil.txt.poster.jpg", o).unwrap();
+        w.write_all(b"not a picture").unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let saved = extract_playlist_zip(&bytes, &dst).unwrap();
+        assert_eq!(saved.len(), MAX_PLAYLIST_IMAGES);
+        assert_eq!(video_posters_in(&dst).0.len(), MAX_PLAYLIST_IMAGES);
+    }
+
+    #[test]
     fn media_kinds_and_sniffing() {
         assert_eq!(media_kind(Path::new("a.MP4")), Some("video"));
         assert_eq!(media_kind(Path::new("a.webm")), Some("video"));
@@ -1162,3 +1504,4 @@ mod tests {
         assert!(!String::from_utf8_lossy(&raw).to_ascii_lowercase().contains("access-control-allow-origin"));
     }
 }
+

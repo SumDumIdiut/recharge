@@ -13,7 +13,7 @@ test('galleryImages keeps only pictures', () => {
 
 test('a playlist whose gallery is a video gets no background-image', () => {
   const html = playlistCardsHtml({ state: 'ok', rows: [{ id: 'p', name: 'v', author: 'a', gallery: ['gallery_01.mp4'] }] }, new Set());
-  assert.ok(!/background-image/.test(html) && !/\.mp4/.test(html));
+  assert.ok(!/background-image/.test(html) && !/src=|url\(/.test(html)); // the mp4 url may only sit in data-cover-url (read for its cover picture, never displayed)
   const html2 = playlistCardsHtml({ state: 'ok', rows: [{ id: 'p', name: 'v', author: 'a', gallery: ['gallery_01.mp4', 'g2.png'] }] }, new Set());
   assert.ok(/g2\.png/.test(html2) && !/\.mp4/.test(html2));
 });

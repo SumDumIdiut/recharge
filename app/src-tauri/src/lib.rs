@@ -140,6 +140,8 @@ pub fn run() {
             backgrounds::set_playlist_interval,
             backgrounds::set_playlist_sound,
             backgrounds::background_media_base,
+            backgrounds::write_poster,
+            backgrounds::list_video_posters,
             play::media_log,
             backgrounds::publish_playlist,
             backgrounds::unpublish_playlist,

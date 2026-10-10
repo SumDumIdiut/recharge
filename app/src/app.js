@@ -90,10 +90,18 @@ async function refreshTab(tab) {
   if (tab === curTab) await ensureTab(tab);
 }
 
+// Poster retrofit: once the window has been idle for a while, every library video without a poster gets one (one at a time).
+setTimeout(() => {
+  const go = () => import('/backgrounds/thumbs.js').then((m) => m.schedulePosters(window.__TAURI__.core.invoke)).catch(() => {});
+  if (window.requestIdleCallback) window.requestIdleCallback(go, { timeout: 20000 });
+  else go();
+}, 6000);
+
 window.__TAURI__.event.listen('hub-beam-installed', (event) => {
   const { kind, name } = event.payload;
   showToast(`Installed <strong>${name}</strong> from the Recharge Library`);
   if (kind === 'background' || kind === 'playlist') {
+    import('/backgrounds/thumbs.js').then((m) => m.schedulePosters(window.__TAURI__.core.invoke, { delay: 500 })).catch(() => {});
     window.dispatchEvent(new Event('backgrounds-changed'));
     return;
   }
