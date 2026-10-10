@@ -1,6 +1,5 @@
 import {
-  PRESETS, ATTRS, getColors, applyColors, applyPreset,
-  getBgTexture, applyBgTexture, getCustomCss, applyCustomCss,
+  getBgTexture, applyBgTexture,
   getWaveSettings, saveWaveSettings,
 } from '/theme.js';
 import { startWaveform } from '/home.js';
@@ -8,40 +7,6 @@ import { runMigrate } from '/migrate-ui.js';
 import { confirmDestructive } from '/ui.js';
 import { renderInstallList } from '/install-list.js';
 import { loadChangelog, resolveVersion, cleanVersion } from '/whatsnew.js';
-
-function renderAppearance() {
-  const presetsEl = document.getElementById('theme-presets');
-  const colorsEl = document.getElementById('theme-colors');
-  if (!presetsEl || !colorsEl) return;
-  const current = getColors();
-
-  presetsEl.innerHTML = PRESETS.map((p) => {
-    const swatch = [p.bg, p.panel, p.accent, p.accent2].map((c) => `<span style="background:${c}"></span>`).join('');
-    return `<button class="preset-option" data-preset-id="${p.id}">
-      <div class="theme-swatch">${swatch}</div>
-      ${p.name}
-    </button>`;
-  }).join('');
-  presetsEl.querySelectorAll('.preset-option').forEach((btn) => {
-    btn.onclick = () => {
-      applyPreset(btn.dataset.presetId);
-      renderAppearance();
-    };
-  });
-
-  colorsEl.innerHTML = ATTRS.map(
-    (a) => `<label class="color-field">
-      <input type="color" data-attr="${a.key}" value="${current[a.key]}" />
-      ${a.label}
-    </label>`
-  ).join('');
-  colorsEl.querySelectorAll('input[type=color]').forEach((input) => {
-    input.oninput = () => {
-      const colors = { ...getColors(), [input.dataset.attr]: input.value };
-      applyColors(colors);
-    };
-  });
-}
 
 function readFileAs(file, method) {
   return new Promise((resolve, reject) => {
@@ -82,45 +47,6 @@ function initTexture() {
   removeBtn.onclick = () => {
     applyBgTexture('');
     renderTexturePreview();
-  };
-}
-
-function initCustomCss() {
-  const textarea = document.getElementById('custom-css-textarea');
-  const fileInput = document.getElementById('css-file-input');
-  const clearBtn = document.getElementById('css-clear-btn');
-  const errorEl = document.getElementById('css-error');
-
-  textarea.value = getCustomCss();
-
-  const apply = () => {
-    errorEl.hidden = true;
-    try {
-      applyCustomCss(textarea.value);
-    } catch (err) {
-      errorEl.textContent = 'Could not save custom CSS: ' + (err?.message || err);
-      errorEl.hidden = false;
-    }
-  };
-
-  textarea.oninput = apply;
-
-  fileInput.onchange = async () => {
-    const file = fileInput.files?.[0];
-    fileInput.value = '';
-    if (!file) return;
-    try {
-      textarea.value = await readFileAs(file, 'readAsText');
-      apply();
-    } catch (err) {
-      errorEl.textContent = 'Could not read that file: ' + (err?.message || err);
-      errorEl.hidden = false;
-    }
-  };
-
-  clearBtn.onclick = () => {
-    textarea.value = '';
-    apply();
   };
 }
 
@@ -555,8 +481,6 @@ export async function init() {
   });
   refreshStatus();
   refreshLauncherStatus();
-  renderAppearance();
   initTexture();
   initWaveform();
-  initCustomCss();
 }

@@ -1,4 +1,5 @@
 import { initHome, refreshInstallStatus } from './home.js';
+import './dropdown.js';
 import './live-update.js';
 import { maybeShowUpdatedBanner } from './whatsnew-banner.js';
 import { startBackgroundTimer } from './theme.js';

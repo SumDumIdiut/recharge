@@ -237,14 +237,14 @@
 .progress-fill { border-radius: 0; }
 
 /* fields */
-.form-input, .settings-input, .browser-search, .css-textarea, .form-browse-path {
+.form-input, .settings-input, .browser-search, .form-browse-path {
   background: var(--field); border: none; border-radius: var(--radius-sm); color: var(--text);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
   transition: box-shadow 140ms ease, background 140ms ease;
 }
 .browser-search { padding: 9px 16px; border-radius: var(--radius-sm); }
 .form-input:hover, .settings-input:hover, .browser-search:hover { background: var(--field-hi); }
-.form-input:focus, .settings-input:focus, .browser-search:focus, .css-textarea:focus { outline: none; border: none; box-shadow: inset 0 0 0 1.5px var(--green); background: var(--field-hi); }
+.form-input:focus, .settings-input:focus, .browser-search:focus { outline: none; border: none; box-shadow: inset 0 0 0 1.5px var(--green); background: var(--field-hi); }
 select.form-input, select.settings-input { cursor: pointer; }
 .toggle { border: none; border-radius: 999px; background: var(--field-hi); position: relative; }
 .toggle.is-on { background: var(--green); }
@@ -296,14 +296,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .list-row, .dep-list li { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
 
 /* settings */
-.preset-option { border: none; border-radius: var(--radius); background: var(--field); box-shadow: var(--hl); transition: background 140ms ease, box-shadow 140ms ease; }
-.preset-option:hover { background: var(--field-hi); }
-.theme-swatch { border: none; border-radius: var(--radius-sm); }
-.color-field input[type="color"] { border: none; border-radius: var(--radius-sm); overflow: hidden; }
 .texture-preview { border: none; border-radius: var(--radius-sm); }
 .whatsnew-panel { border: none; border-radius: var(--radius-sm); background: var(--field); }
 .wn-entry { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
-.theme-colors { border-top-color: color-mix(in srgb, var(--text) 9%, transparent); }
 #view-settings .page-header { background: transparent; }
 :root.has-bg #view-settings .page-header { background: var(--glass); border-radius: var(--radius-sm); padding: 4px 12px; margin: 0 0 20px; position: static; display: inline-block; }
 :root.has-bg #view-settings .page { padding-top: 0; }
@@ -328,3 +323,39 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .toggle.is-on::after { left: 21px; background: var(--bg); }
 :root.has-bg .browser-search { background: var(--glass); }
 :root.has-bg .browser-search:focus { background: var(--glass-hi); }
+
+/* ---- themed dropdown (dropdown.js): the real <select> stays but is hidden; a button + list panel replace it ---- */
+select[data-dd] {
+  position: absolute !important; opacity: 0; pointer-events: none; width: 1px; height: 1px;
+  margin: 0; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0);
+}
+.dd-btn {
+  display: inline-flex; align-items: center; gap: 8px; text-align: left; cursor: pointer;
+  font: inherit; line-height: inherit; min-width: 0; box-sizing: border-box;
+  padding-right: 26px; position: relative;
+}
+.dd-btn::after {
+  content: ''; position: absolute; right: 9px; top: 50%; width: 5px; height: 5px; margin-top: -4px;
+  border-right: 1.5px solid var(--text-dim); border-bottom: 1.5px solid var(--text-dim); transform: rotate(45deg); pointer-events: none;
+}
+.dd-btn[hidden] { display: none; }
+.dd-btn:disabled { cursor: default; opacity: 0.55; }
+.dd-btn .dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-list {
+  position: fixed; z-index: 100000; box-sizing: border-box; overflow-y: auto; overflow-x: hidden;
+  padding: 4px 0; background: var(--panel); color: var(--text); border-radius: var(--radius-sm);
+  box-shadow: var(--hl), 0 6px 18px rgba(0, 0, 0, 0.35); font-size: 17px;
+}
+.dd-list[hidden] { display: none; }
+.dd-opt {
+  padding: 6px 14px 6px 12px; cursor: pointer; white-space: nowrap; box-shadow: inset 3px 0 0 transparent;
+  background: var(--panel); color: var(--text);
+}
+.dd-opt.is-active { background: color-mix(in srgb, var(--text) 9%, var(--panel)); }
+.dd-opt.is-selected { box-shadow: inset 3px 0 0 var(--green); }
+.dd-opt.is-disabled { opacity: 0.4; cursor: default; }
+.dd-group { padding: 8px 12px 3px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+
+/* safety net for any select left native */
+select option, select optgroup { background-color: var(--panel); color: var(--text); }
+select { color-scheme: dark; }
