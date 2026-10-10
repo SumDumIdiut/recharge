@@ -322,10 +322,44 @@ async function fetchBase() {
   } else text = await res.text();
   base = JSON.parse(text);
   gridCache = null;
-  try { plantList = await (await fetch('/maps/plants/plants.json')).json(); } catch { plantList = []; }
+  try { plantList = await (await fetch('/maps/plants/plants.json')).json(); } catch (e) { plantList = []; assetLog.set('/maps/plants/plants.json', { ok: false, tries: 1, err: String(e) }); }
   await preloadImages();
   applyBaseState();
+  baseSettled = true;
   startTileWorkers();
+}
+let baseSettled = false;
+
+// Every image the editor loads is logged here (kept even with the debug strip off) so a missing one shows in the debug report.
+const assetLog = new Map();
+// Loads an image, retrying with a cache-buster; resolves null once it has failed `tries` times (never a broken Image).
+function loadImage(src, tries = 3) {
+  return new Promise((ok) => {
+    let n = 0;
+    const go = () => {
+      n++;
+      const i = new Image();
+      const fail = (err) => {
+        assetLog.set(src, { ok: false, tries: n, err });
+        if (n < tries) setTimeout(go, 300 * n); else ok(null);
+      };
+      i.onload = () => { if (i.naturalWidth) { assetLog.set(src, { ok: true, tries: n }); ok(i); } else fail('empty image'); };
+      i.onerror = () => fail('load error');
+      i.src = n > 1 ? src + (src.includes('?') ? '&' : '?') + 'r=' + n : src;
+    };
+    go();
+  });
+}
+// An image the level lazily wants (atlas, scene): loaded once at a time, keep() runs on success; a failure tells the user.
+const lazyLoading = new Set();
+function loadLazy(src, keep, what) {
+  if (lazyLoading.has(src)) return;
+  lazyLoading.add(src);
+  loadImage(src, 5).then((i) => {
+    lazyLoading.delete(src);
+    if (i) { keep(i); return; }
+    if (!IN_WORKER) flash(what + ' could not load (see the debug log)', true);
+  });
 }
 
 function preloadImages() {
@@ -341,8 +375,8 @@ function preloadImages() {
   let done = 0;
   const seen = new Map();
   return Promise.all(jobs.map(([src, keep]) => {
-    if (!seen.has(src)) seen.set(src, new Promise((ok) => { const i = new Image(); i.onload = i.onerror = () => ok(i); i.src = src; }));
-    return seen.get(src).then((i) => { keep(i); setLoading(0.5 + (0.2 * ++done) / jobs.length, `Images ${done} / ${jobs.length}`); });
+    if (!seen.has(src)) seen.set(src, loadImage(src));
+    return seen.get(src).then((i) => { if (i) keep(i); setLoading(0.5 + (0.2 * ++done) / jobs.length, `Images ${done} / ${jobs.length}`); });
   }));
 }
 
@@ -1527,6 +1561,7 @@ function itemAtAny(wx, wy) {
     if (bo) return { kind: 'base', id: bo.id };
     const bc = baseCellsAt(c.cx, c.cy);
     if (bc) return bc;
+    if (v && !v.own) return { kind: 'basecells', cells: [v.k], what: 'Vine', vine: true };
     const dt = decoAt(wx, wy);
     if (dt) return dt;
     const sp = sceneSpriteAt(wx, wy);
@@ -1618,13 +1653,105 @@ function decoAt(wx, wy) {
   return null;
 }
 
+// The level's decoration tiles by cell: layer -> Map(cell key -> [tile name, matrix]).
+let decoTileCache = null;
+function decoTiles(name) {
+  if (!decoTileCache || decoTileCache.state !== draft.baseState || decoTileCache.base !== base) decoTileCache = { state: draft.baseState, base, maps: new Map(), names: null };
+  if (!decoTileCache.names) {
+    decoTileCache.names = new Map();
+    for (const [n, sp] of Object.entries(base.art.tiles)) if (!decoTileCache.names.has(sp)) decoTileCache.names.set(sp, n);
+  }
+  let m = decoTileCache.maps.get(name);
+  if (!m) {
+    m = new Map();
+    for (const l of base.art.layers) {
+      if (l.name !== name || (l.state !== 'always' && l.state !== draft.baseState)) continue;
+      for (let i = 0; i < l.runs.length; i += 5) for (let n = 0; n < l.runs[i + 2]; n++) m.set((l.runs[i + 1] + n) + ',' + l.runs[i], [decoTileCache.names.get(l.runs[i + 3]), base.mats[l.runs[i + 4]] || [1, 0, 0, 1]]);
+    }
+    decoTileCache.maps.set(name, m);
+  }
+  return m;
+}
+// Level decoration whose tile centre sits in the cell box: [{ layer, cells }].
+function decoInRegion(r) {
+  const a = cellWorld(r.x0, r.y0), b = cellWorld(r.x1 + 1, r.y1 + 1), out = [];
+  if (!base?.art) return out;
+  for (const name of DECO_LAYERS) {
+    const g = layerGrid(name), cells = [];
+    for (const k of decoCells(name)) {
+      if (removedDeco.has(name + '|' + k)) continue;
+      const [gx, gy] = unkey(k), x = g.ox + (gx + 0.5) * g.size, y = g.oy + (gy + 0.5) * g.size;
+      if (x >= a.x && x < b.x && y >= a.y && y < b.y) cells.push(k);
+    }
+    if (cells.length) out.push({ layer: name, cells });
+  }
+  return out;
+}
+// Moving a bit of the level: it is erased from the level and an own copy of it appears (cells dx, dy over). Returns the keys of the copies by kind.
+function liftBase(keys, dx = 0, dy = 0) {
+  const out = { blocks: [], spikes: [], vines: [] };
+  const shift = (k) => { const [x, y] = unkey(k); return key(x + dx, y + dy); };
+  for (const k of keys) {
+    const h = baseHaz?.get(k);
+    if (h && h.kind === 'vine') {
+      if (removedVines.has(k)) continue;
+      removedVines.add(k);
+      const nk = shift(k);
+      vines.set(nk, { s: base.defs[h.d].sprite, q: h.q });
+      out.vines.push(nk);
+      continue;
+    }
+    if (removed.has(k)) continue;
+    const nk = shift(k);
+    if (h) {
+      removed.add(k);
+      spikes.set(nk, { c: h.c === 'spike' && DARK_SPIKE_TILES.has(base.defs[h.d].tile) ? 'dark' : h.c, q: h.q });
+      out.spikes.push(nk);
+      continue;
+    }
+    const kind = blueSet.has(k) ? 'blue' : orangeSet.has(k) ? 'orange' : (mossSet.has(k) || groundSet.has(k)) ? 'ground' : null;
+    if (!kind) continue;
+    removed.add(k);
+    blocks.set(nk, kind);
+    spikes.delete(nk);
+    out.blocks.push(nk);
+  }
+  return out;
+}
+// Decoration tiles moved: erased from the level, placed as your own tiles.
+function liftDeco(layer, cells, dx, dy) {
+  const map = decoTiles(layer), out = [];
+  for (const k of cells) {
+    const id = layer + '|' + k;
+    if (removedDeco.has(id)) continue;
+    const t = map.get(k);
+    removedDeco.add(id);
+    if (!t || !t[0]) continue;
+    const c = tileCenter(layer, id), nk = tileKeyAt(layer, c.x + dx * CELL, c.y + dy * CELL);
+    tiles.set(nk, { layer, tile: t[0], m: t[1] });
+    out.push(nk);
+  }
+  return out;
+}
+// Every cell of the level's own in a box: ground, moss, coloured blocks, spikes and vines.
+function baseKeysIn(x0, y0, x1, y1) {
+  const out = [];
+  if (!baseOn()) return out;
+  for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) {
+    const k = key(cx, cy);
+    if (baseHaz.has(k) || groundSet.has(k) || mossSet.has(k) || blueSet.has(k) || orangeSet.has(k)) out.push(k);
+  }
+  return out;
+}
+
 // Moss first: it grows over the ground's edge cells, and a click there means the moss.
 const BASE_SETS = () => [['Moss', mossSet], ['Ground', groundSet], ['Blue blocks', blueSet], ['Orange blocks', orangeSet]];
 function baseCellsAt(cx, cy) {
   const k0 = key(cx, cy);
-  if (removed.has(k0)) return null;
   const h = baseHaz.get(k0);
+  if (h?.kind === 'vine' ? removedVines.has(k0) : removed.has(k0)) return null;
   if (h && h.kind !== 'vine') return { kind: 'basecells', cells: [k0], what: 'Spike' };
+  if (h && !removedVines.has(k0)) return { kind: 'basecells', cells: [k0], what: 'Vine', vine: true };
   const hit = BASE_SETS().find(([, set]) => set?.has(k0));
   if (!hit) return null;
   // The patch around the click, spreading outward (moss counts corners), up to a bunch's worth: the level's moss and ground are mostly one connected mass.
@@ -1982,6 +2109,7 @@ function turnSomething(dir, flip = false) {
 }
 
 // Moves one selected thing (dx, dy in cells for cell content and markers, snap steps for placed things); false for the level's own things.
+let extraTiles = [];
 function shiftTarget(sel, dx, dy, fine) {
   const shiftKey = (k) => { const [x, y] = unkey(k); return key(x + dx, y + dy); };
   const moveArrow = (id) => { const a = arrows.find((x) => x.id === id); if (a) a.cells = a.cells.map(([x, y]) => [x + dx, y + dy]); };
@@ -2005,7 +2133,19 @@ function shiftTarget(sel, dx, dy, fine) {
     const step = fine ? 1 : snapV();
     return moveLevelThing(sel, dx * step, dy * step);
   } else if (sel.kind === 'basecells') {
-    return false;
+    // The level's own cells can't be dragged in place: they're lifted out of the level into your map.
+    const lifted = liftBase(sel.cells, dx, dy), n = lifted.blocks.length + lifted.spikes.length + lifted.vines.length;
+    if (!n) return false;
+    if (lifted.blocks.length) Object.assign(sel, { kind: 'blocks', what: sel.what, cells: lifted.blocks });
+    else if (lifted.spikes.length) Object.assign(sel, { kind: 'cell', k: lifted.spikes[0] });
+    else Object.assign(sel, { kind: 'cell', k: lifted.vines[0], vine: true });
+    if (sel.kind !== 'blocks') { delete sel.cells; delete sel.what; }
+  } else if (sel.kind === 'decotiles') {
+    const ks = liftDeco(sel.layer, sel.cells, dx, dy);
+    if (!ks.length) return false;
+    Object.assign(sel, { kind: 'tile', key: ks[0] });
+    delete sel.cells; delete sel.layer;
+    extraTiles.push(...ks.slice(1));
   } else if (sel.kind === 'sign') {
     const sg = signs[sel.index], step = fine ? 1 : snapV();
     if (!sg) return false;
@@ -2021,6 +2161,9 @@ function shiftTarget(sel, dx, dy, fine) {
     if (sel.which === 'spawn') draft.spawn = moved; else courseById(sel.course)[sel.which] = moved;
   } else {
     const inR = (cx, cy) => cx >= sel.x0 && cx <= sel.x1 && cy >= sel.y0 && cy <= sel.y1;
+    // The level's own cells and decoration in the box go with it: lifted out of the level, shifted as your own.
+    if (baseOn()) liftBase(baseKeysIn(sel.x0, sel.y0, sel.x1, sel.y1), 0, 0);
+    const decoMoving = baseOn() ? decoInRegion(sel) : [];
     for (const m of [blocks, spikes, vines]) {
       const moving = cellsIn(m, sel.x0, sel.y0, sel.x1, sel.y1);
       for (const [k] of moving) m.delete(k);
@@ -2036,6 +2179,7 @@ function shiftTarget(sel, dx, dy, fine) {
     for (const [, t, c] of movingTiles) tiles.set(tileKeyAt(t.layer, c.x + dx * CELL, c.y + dy * CELL), t);
     ids.forEach(moveArrow);
     if (ids.size) rebuildArrowTiles();
+    for (const d of decoMoving) liftDeco(d.layer, d.cells, dx, dy);
     const shiftG = (m) => { if (!m) return m; const c = cellOf(m.x, m.y); return inR(c.cx, c.cy) ? { ...m, x: m.x + dx * CELL, y: m.y + dy * CELL } : m; };
     if (!sel.cellsOnly) {
       draft.spawn = shiftG(draft.spawn);
@@ -2092,7 +2236,11 @@ function moveTargets(targets, wx, wy, cx, cy, fine) {
       if (shiftTarget(t, cx, cy, fine)) moved = true; else fixed = true;
     }
   }
-  if (fixed) flash('The level\'s own ground stays put - erase it and place your own blocks.');
+  if (fixed) flash('That can\'t be moved.');
+  if (extraTiles.length) {
+    setSelection([...targets, ...extraTiles.map((k) => ({ kind: 'tile', key: k }))]);
+    extraTiles = [];
+  }
   return moved;
 }
 function nudgeSelection(dx, dy, fine) {
@@ -2172,7 +2320,7 @@ function deleteOne() {
   else if (selection.kind === 'base') removedObjects.add(selection.id);
   else if (selection.kind === 'blocks') selection.cells.forEach((k) => blocks.delete(k));
   else if (selection.kind === 'moss') selection.cells.forEach((k) => mossCells.delete(k));
-  else if (selection.kind === 'basecells') selection.cells.forEach((k) => removed.add(k));
+  else if (selection.kind === 'basecells') selection.cells.forEach((k) => (selection.vine ? removedVines : removed).add(k));
   else if (selection.kind === 'scene') removeScene(selection.id);
   else if (selection.kind === 'decotiles') selection.cells.forEach((k) => removedDeco.add(selection.layer + '|' + k));
   else if (selection.kind === 'tile') { const id = tiles.get(selection.key)?.arrow; if (id) removeArrow(id); else tiles.delete(selection.key); }
@@ -2191,6 +2339,7 @@ function deleteOne() {
       if (baseOn() && (groundSet.has(k) || mossSet.has(k) || blueSet.has(k) || orangeSet.has(k) || (baseHaz.get(k) && baseHaz.get(k).kind !== 'vine'))) removed.add(k);
       if (baseOn() && baseHaz.get(k)?.kind === 'vine') removedVines.add(k);
     }
+    if (baseOn()) for (const d of decoInRegion(selection)) d.cells.forEach((k) => removedDeco.add(d.layer + '|' + k));
     tool = saveTool;
   }
 }
@@ -2879,8 +3028,10 @@ function renderConfig() {
     if (selection.kind === 'blocks') html += sec('group', 'Group', groupRow());
   } else if (selection.kind === 'decotiles') {
     html += `<div class="mm-config-title">Level decoration<span>${selection.cells.length} tile${selection.cells.length === 1 ? '' : 's'} · ${layerLabel(selection.layer)}</span></div>`;
+    html += `<div class="mm-actions"><button class="mm-act mm-act-danger" data-act="delete" title="Delete (Del)">✕</button></div><div class="mm-config-sub">Drag or arrow keys to move: it becomes your own tiles.</div>`;
   } else if (selection.kind === 'basecells') {
     html += `<div class="mm-config-title">${selection.what}<span>level · ${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'}</span></div>`;
+    html += `<div class="mm-actions"><button class="mm-act mm-act-danger" data-act="delete" title="Delete (Del)">✕</button></div><div class="mm-config-sub">Drag or arrow keys to move: it leaves the level and becomes your own ${selection.what === 'Spike' ? 'spike' : selection.vine ? 'vine' : 'blocks'}.</div>`;
   } else if (selection.kind === 'scene') {
     const p = sceneList?.items.find((x) => x.id === selection.id);
     if (!p || removedScene.has(p.id)) { selection = null; el.hidden = true; return; }
@@ -4048,11 +4199,7 @@ function buildArtIndex() {
   artCache.clear();
   artIndex = null;
   if (!base?.art) return;
-  if (!atlasImg) {
-    atlasImg = new Image();
-    atlasImg.onload = () => { artCache.clear(); invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); };
-    atlasImg.src = '/maps/' + base.art.atlas;
-  }
+  if (!atlasImg) loadLazy('/maps/' + base.art.atlas, (i) => { atlasImg = i; artCache.clear(); invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); }, 'Level art');
   const layers = base.art.layers
     .filter((l) => l.state === 'always' || l.state === draft.baseState)
     .sort((a, b) => (a.order ?? artRank(a.name)) - (b.order ?? artRank(b.name)));
@@ -4215,7 +4362,18 @@ function drawTileArt(cx, cy, tileName, m) {
 
 const bgImages = {};
 function bgImage(src) {
-  if (!bgImages[src]) { const img = new Image(); img.onload = invalidateBase; img.src = '/maps/' + src; bgImages[src] = img; }
+  if (!bgImages[src]) {
+    const img = new Image();
+    img.onload = () => { img.failed = false; assetLog.set('/maps/' + src, { ok: true, tries: (img.tries || 0) + 1 }); invalidateBase(); };
+    img.onerror = () => {
+      img.failed = true;
+      img.tries = (img.tries || 0) + 1;
+      assetLog.set('/maps/' + src, { ok: false, tries: img.tries, err: 'load error' });
+      if (img.tries <= 5) setTimeout(() => { img.src = '/maps/' + src + '?r=' + img.tries; }, 400 * img.tries);
+    };
+    img.src = '/maps/' + src;
+    bgImages[src] = img;
+  }
   return bgImages[src];
 }
 
@@ -4407,11 +4565,7 @@ function buildScene() {
   sceneList = null;
   const sc = base?.scene;
   if (!sc) return;
-  if (!sceneImg) {
-    sceneImg = new Image();
-    sceneImg.onload = () => { invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); };
-    sceneImg.src = '/maps/' + sc.atlas;
-  }
+  if (!sceneImg) loadLazy('/maps/' + sc.atlas, (i) => { sceneImg = i; invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); }, 'Level scenery');
   const pick = (byState) => [...(byState.always || []), ...(byState[draft.baseState] || [])];
   const all = pick(sc.placements).map((p) => {
     const [, , sw, sh] = sc.sprites[p.s];
@@ -5233,7 +5387,7 @@ function pumpPrefetch(workers) {
   return true;
 }
 
-const pool = { workers: [], ready: 0, failed: false, inflight: new Map(), version: -1 };
+const pool = { workers: [], ready: 0, failed: false, inflight: new Map(), version: -1, err: '', why: '' };
 
 function startTileWorkers() {
   let off = false;
@@ -5247,11 +5401,11 @@ function startTileWorkers() {
     worker.jobs = 0;
     worker.ready = false;
     worker.onmessage = (e) => onWorkerMessage(worker, e.data);
-    worker.onerror = () => failWorkers();
+    worker.onerror = (e) => { pool.err = String(e?.message || 'worker error'); dbgLog('worker error: ' + pool.err); failWorkers(); };
     worker.postMessage({ type: 'init', state: workerState() });
     pool.workers.push(worker);
   }
-  setTimeout(() => { if (!pool.ready && pool.workers.length) failWorkers(); }, 5000);
+  setTimeout(() => { if (!pool.ready && pool.workers.length) { pool.why = 'timeout 5s'; dbgLog('workers: timeout 5s'); failWorkers(); } }, 5000);
 }
 
 function failWorkers() {
@@ -5269,7 +5423,7 @@ function workerState() {
 
 function onWorkerMessage(worker, m) {
   if (m.type === 'ready') { worker.ready = true; pool.ready++; requestDraw(); return; }
-  if (m.type === 'unsupported') { failWorkers(); return; }
+  if (m.type === 'unsupported') { pool.err = String(m.error || 'unsupported'); dbgLog('workers unsupported: ' + pool.err); failWorkers(); return; }
   if (m.type !== 'tile') return;
   worker.jobs--;
   pool.inflight.delete(m.key);
@@ -5297,10 +5451,13 @@ function requestTile(key, z, tx, ty, part = null) {
   free.postMessage({ type: 'tile', key, z, tx, ty, part, gen: stateVersion });
 }
 
+const workerWarn = (m) => { try { console.warn('[tile-worker] ' + m); } catch { /* none */ } };
 export async function workerInit(state) {
   if (typeof OffscreenCanvas === 'undefined' || !new OffscreenCanvas(1, 1).getContext('2d')) throw new Error('no OffscreenCanvas 2D');
   const bitmap = async (url) => {
-    const img = await createImageBitmap(await (await fetch(url)).blob());
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(url + ': HTTP ' + res.status);
+    const img = await createImageBitmap(await res.blob());
     img.complete = true;
     img.naturalWidth = img.width;
     img.naturalHeight = img.height;
@@ -5313,7 +5470,7 @@ export async function workerInit(state) {
   [atlasImg, sceneImg] = await Promise.all([bitmap('/maps/' + base.art.atlas), bitmap('/maps/' + base.scene.atlas)]);
   const fonts = await Promise.all((base.scene.fonts || []).map((f) => (f ? bitmap('/maps/' + f.atlas) : null)));
   fonts.forEach((f, n) => { fontImages[n] = f; });
-  const vineBitmaps = await Promise.all(vines.map((v) => bitmap('/maps/vines/' + encodeURIComponent(v) + '.png').catch(() => null)));
+  const vineBitmaps = await Promise.all(vines.map((v) => bitmap('/maps/vines/' + encodeURIComponent(v) + '.png').catch((e) => { workerWarn(String(e?.message || e)); return null; })));
   vines.forEach((v, n) => { if (vineBitmaps[n]) vineImages[v] = vineBitmaps[n]; });
   draft.useBase = true;
   workerSetState(state);
@@ -5396,7 +5553,8 @@ export async function workerRenderMapView(map, W = 960, H = 540) {
   const g = out.getContext('2d');
   g.imageSmoothingQuality = 'high';
   g.drawImage(cv, 0, 0, W, H);
-  return out.convertToBlob({ type: 'image/png' });
+  cv.width = cv.height = 0; // the 2x scratch picture is not needed any more
+  try { return await out.convertToBlob({ type: 'image/png' }); } finally { out.width = out.height = 0; }
 }
 
 // Your tiles, blocks, spikes, vines and moss over the current view, back to front; keyed by cell so only the view's range is visited. `tileMargin` is how far past the view a tile's centre may be and still draw.
@@ -5580,6 +5738,12 @@ function dbgReport() {
   return [
     'Amplifier debug log ' + new Date().toISOString(),
     'userAgent: ' + navigator.userAgent,
+    'page: ' + location.protocol + '//' + location.host + ' Worker=' + (typeof Worker !== 'undefined') + ' OffscreenCanvas=' + (typeof OffscreenCanvas !== 'undefined') + ' createImageBitmap=' + (typeof createImageBitmap !== 'undefined'),
+    'art: ready=' + artReady() + ' sceneReady=' + sceneReady() + ' atlas=' + (atlasImg ? atlasImg.naturalWidth + 'x' + atlasImg.naturalHeight : 'none') + ' scene=' + (sceneImg ? sceneImg.naturalWidth + 'x' + sceneImg.naturalHeight : 'none') + ' plants=' + (plantList?.length ?? 'none'),
+    'draft: useBase=' + draft.useBase + ' baseOn=' + baseOn() + ' state=' + draft.baseState + ' bg=' + JSON.stringify(draft.background ?? null) + ' layers=' + JSON.stringify(draft.layers || {}) + ' hiddenGroups=' + (draft.hiddenGroups || []).length + ' moss=' + mossCells.size,
+    'workers: n=' + pool.workers.length + ' ready=' + pool.ready + ' failed=' + pool.failed + ' why=' + (pool.why || '-') + ' err=' + (pool.err || '-') + ' noWorkers=' + (() => { try { return !!localStorage.getItem('mapMakerNoWorkers'); } catch { return '?'; } })(),
+    'assets: ' + [...assetLog].filter(([, v]) => v.ok).length + ' ok; failed: ' + ([...assetLog].filter(([, v]) => !v.ok).map(([k, v]) => k + ' x' + v.tries + ' ' + v.err).join('; ') || 'none'),
+    'bgImages: ' + Object.entries(bgImages).map(([k, v]) => k + (v.complete && v.naturalWidth ? ' ok' : v.failed ? ' FAILED' : ' pending')).join(', '),
     'devicePixelRatio: ' + window.devicePixelRatio + ' screen ' + screen.width + 'x' + screen.height,
     'canvases: visible ' + sz(visCanvas) + ' (' + (visCanvas ? r(visCanvas) : '?') + '), back ' + sz(backCanvas),
     'caches: tiles ' + tileCache.size + '/' + maxTiles() + ', chunks ' + cellCache.chunks.size + ' (pool ' + cellCache.pool.length + '), tileJobs ' + tileJobs.size + ', ahead ' + aheadQueue.size + ', ~' + mb + ' MB, lostCanvases ' + lostCanvases.size + ', cacheScale ' + cacheScale.toFixed(2),
@@ -5640,10 +5804,18 @@ function dbgFrame(ms, err) {
   dbg.cur = {};
 }
 
+let artRetryAt = 0;
 function draw() {
   const t0 = dbg.on ? performance.now() : 0;
   let err = null;
   purgeLost();
+  // The level's art is missing (a failed load): try again now and then rather than drawing without it for good.
+  if (base?.art && baseSettled && !loading && !IN_WORKER && (!atlasImg || !sceneImg) && performance.now() > artRetryAt) {
+    artRetryAt = performance.now() + 5000;
+    if (!atlasImg) buildArtIndex();
+    if (!sceneImg && base.scene) loadLazy('/maps/' + base.scene.atlas, (i) => { sceneImg = i; invalidateBase(); }, 'Level scenery');
+    flash('Level art failed to load - retrying', true);
+  }
   const vis = visCanvas;
   if (vis && vis.isConnected !== false && vis.width && vis.height) {
     if (!backCanvas) { backCanvas = makeCanvas(); backCanvas.addEventListener('contextlost', () => { backCtx = null; }); backCanvas.addEventListener('contextrestored', () => { backCtx = null; requestDraw(); }); }
@@ -6376,7 +6548,7 @@ const plantImages = new Map();
 function csImage(cs) {
   if (!cs.game) return assetImage(cs.image);
   let img = plantImages.get(cs.game);
-  if (!img) { const pl = plantOf(cs); img = new Image(); img.onload = () => requestDraw(); if (pl) img.src = '/maps/plants/' + pl.file; plantImages.set(cs.game, img); }
+  if (!img) { const pl = plantOf(cs); img = new Image(); img.onload = () => requestDraw(); img.onerror = () => assetLog.set('/maps/plants/' + (pl?.file || cs.game), { ok: false, tries: 1, err: 'load error' }); if (pl) img.src = '/maps/plants/' + pl.file; plantImages.set(cs.game, img); }
   return img;
 }
 function customSpriteSize(cs) {
@@ -6736,6 +6908,11 @@ function transformRegion(mode) {
   if (!sel || sel.kind !== 'region') return;
   pushUndo();
   const { x0, y0, x1, y1 } = sel, inR = (cx, cy) => cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+  // The level's own cells in the box turn with it, as your own.
+  if (baseOn()) {
+    liftBase(baseKeysIn(x0, y0, x1, y1), 0, 0);
+    for (const d of decoInRegion(sel)) liftDeco(d.layer, d.cells, 0, 0);
+  }
   const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
   const mapCell = (x, y) => (mode === 'x' ? [x0 + x1 - x, y] : mode === 'y' ? [x, y0 + y1 - y] : [Math.round(mx - (y - my)), Math.round(my + (x - mx))]);
   const M = mode === 'x' ? [-1, 0, 0, 1] : mode === 'y' ? [1, 0, 0, -1] : [0, -1, 1, 0];
@@ -7225,10 +7402,21 @@ function updateStatus() {
     + (hover ? `<span class="mm-coord">${hover.cx}, ${hover.cy}</span>` : '');
 }
 
+// How many edits to the level the map holds (loaded or not).
+function baseEditCount() {
+  return removed.size + removedVines.size + removedObjects.size + removedScene.size + removedDeco.size + movedScene.size + movedObjects.size
+    + levelTf.size + levelOrder.size + levelGroups.size + Object.keys(draft.baseEdits || {}).length;
+}
 function syncBaseUi() {
   const on = baseOn();
   const btn = root.querySelector('#mm-base');
   btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', String(on));
+  const st = root.querySelector('#mm-base-state');
+  if (st) st.textContent = on ? 'Loaded' : 'Unloaded';
+  const edits = baseEditCount();
+  btn.title = on ? 'Base game is loaded into this map. Click to unload it (your changes to it are kept' + (edits ? ': ' + edits + ' edits' : '') + ').'
+    : 'Base game is unloaded. Click to load the real level into this map' + (edits ? ' (your ' + edits + ' changes to it come back)' : '') + '.';
   root.querySelector('#mm-jump').hidden = !on;
   root.querySelector('#mm-state').hidden = !on;
   root.querySelectorAll('[data-state]').forEach((b) => b.classList.toggle('active', b.dataset.state === draft.baseState));
@@ -7237,6 +7425,8 @@ function syncBaseUi() {
 async function toggleBase() {
   if (baseOn()) {
     draft.useBase = false;
+    selection = selection && ['base', 'basecells', 'scene', 'decotiles'].includes(selection.kind) ? null : selection;
+    flash('Base game unloaded.' + (baseEditCount() ? ' Your changes to it are kept and come back when you load it.' : ''));
   } else {
     const btn = root.querySelector('#mm-base');
     btn.disabled = true;
@@ -7252,6 +7442,8 @@ async function toggleBase() {
     }
     draft.useBase = true;
     fillJumpList();
+    if (baseEditCount()) { lastLevelEdits = levelEditSets(); invalidateBase(); }
+    flash('Base game loaded' + (baseEditCount() ? ' with your changes to it.' : '.'));
     if (!blocks.size && !spikes.size && !courses().length && base.courses[0]) jumpTo(base.courses[0].start.x, base.courses[0].start.y);
   }
   saveDraft();
@@ -7432,7 +7624,8 @@ function fillJumpList() {
 }
 
 function flash(msg, isError) {
-  const el = root.querySelector('#mm-flash');
+  const el = root?.querySelector('#mm-flash');
+  if (!el) return;
   el.textContent = msg;
   el.classList.toggle('error', !!isError);
   el.classList.remove('mm-out');
@@ -7778,7 +7971,7 @@ export async function mountEditor(container) {
           <select class="mm-input mm-snap" id="mm-snap" title="Snap for placed things - objects, decorations, text, free spikes (Shift: 1 unit). Blocks and grid spikes always fill whole cells"><option value="32">▦ Cell</option><option value="16">▦ ½</option><option value="8">▦ ¼</option><option value="4">▦ ⅛</option><option value="1">▦ Free</option></select>
         </div>
         <div class="mm-group" aria-label="View">
-          <button class="mm-tool mm-icon" id="mm-base" title="Base map: show the real Overworld under your map; the area around your edits is exported with it">${icon('basemap')}</button>
+          <button class="mm-tool mm-base-toggle" id="mm-base" aria-pressed="false" title="Base game: load the real level into this map, or unload it. Your changes to it are kept while it is unloaded.">${icon('basemap')}<span class="mm-base-label">Base game</span><span class="mm-base-state" id="mm-base-state">Loaded</span></button>
           <div class="mm-tools" id="mm-state" hidden>
             <button class="mm-tool" data-state="start" title="Area 1 as it is at the start of the game">Start</button>
             <button class="mm-tool" data-state="overgrown" title="Area 1 after the breaker is tripped">Overgrown</button>
@@ -7905,3 +8098,25 @@ export async function mountEditor(container) {
   resize();
   updateStatus();
 }
+
+// Test hooks (tests/amp-base.test.mjs drives the editor headlessly through these).
+export const __test = {
+  fetchBase, loadImage, assetLog,
+  open: (d) => { loadDraftFrom(d); if (base) applyBaseState(); },
+  save: () => { syncDraft(); return JSON.parse(JSON.stringify(editorState())); },
+  buildMap: () => buildMap(),
+  setBaseOn: (on) => { draft.useBase = on; saveDraft(); },
+  baseEditCount: () => baseEditCount(),
+  get base() { return base; },
+  get objects() { return baseObjects; },
+  get scene() { return sceneList; },
+  get sets() { return { ground: groundSet, moss: mossSet, blue: blueSet, orange: orangeSet, haz: baseHaz }; },
+  get own() { return { blocks, spikes, vines, tiles, moss: mossCells }; },
+  get gone() { return { removed, removedVines, removedObjects, removedScene, removedDeco, movedScene, movedObjects, levelTf, baseEdits: draft.baseEdits }; },
+  get selection() { return selection; },
+  set selection(v) { selection = v; },
+  itemAt, marqueeTargets, setSelection, baseCellsAt, decoAt, cellWorld, cellOf, key,
+  deleteSelection, nudgeSelection, undo, redo, pushUndo,
+  editBaseUpgrade: (id, field, raw) => { selection = { kind: 'base', id }; applyBaseUpgrade(field, raw); },
+  get baseOn() { return baseOn(); },
+};

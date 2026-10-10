@@ -4,8 +4,10 @@
   --mm-h: 30px;
   --mm-gap: 6px;
   --mm-panel-w: 290px;
-  --mm-panel-bg: color-mix(in oklab, var(--bg) 97%, transparent);
-  --mm-font: 12px;
+  --mm-panel-bg: color-mix(in srgb, var(--panel) 96%, transparent);
+  --mm-font: 15px;
+  --mm-small: 13px;
+  --mm-tiny: 12px;
   display: flex; flex-direction: column; gap: var(--mm-gap);
   height: calc(100vh - 222px); min-height: 440px;
   font-size: var(--mm-font);
@@ -60,26 +62,26 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
 .mm-cat[data-tool] { padding: 0 8px; }
 .mm-cat-thumb { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; background: var(--bg); }
 .mm-cat-text { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
-.mm-cat-label { font-weight: bold; }
-.mm-cat-item { font-size: 10px; opacity: 0.8; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mm-caret { font-size: 9px; opacity: 0.7; }
-.mm-cat kbd, .mm-item kbd { font: inherit; font-size: 10px; padding: 0 4px; border: 1px solid var(--line); opacity: 0.75; }
+.mm-cat-label { font-weight: normal; }
+.mm-cat-item { font-size: var(--mm-tiny); opacity: 0.8; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-caret { font-size: var(--mm-tiny); opacity: 0.7; }
+.mm-cat kbd, .mm-item kbd { font: inherit; font-size: var(--mm-tiny); padding: 0 4px; border: 1px solid var(--line); opacity: 0.75; }
 
 /* ---- the palette popover ---- */
 .mm-pop { position: absolute; top: 100%; z-index: 20; margin-top: 4px; width: min(520px, 92vw); max-height: 460px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); }
 .mm-pop[hidden] { display: none; }
 .mm-pop-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.mm-pop-title { font-weight: bold; color: var(--text); letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px; }
+.mm-pop-title { font-weight: bold; color: var(--text); letter-spacing: 0.04em; text-transform: uppercase; font-size: var(--mm-small); }
 .mm-pop-search { flex: 1; min-width: 0; }
 .mm-pop-close { margin-left: auto; background: transparent; border: none; color: var(--text-dim); cursor: pointer; font: inherit; padding: 2px 6px; }
 .mm-pop-close:hover { color: var(--text); }
 .mm-pop-body { overflow-y: auto; padding: 4px 10px 10px; }
 .mm-pop-group, .mm-section {
-  margin: 10px 0 4px; padding-bottom: 3px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  margin: 10px 0 4px; padding-bottom: 3px; font-size: var(--mm-tiny); letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--text-dim); border-bottom: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
 }
 .mm-pop-grid { display: grid; grid-template-columns: repeat(auto-fill, 92px); gap: 6px; }
-.mm-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; width: 92px; padding: 6px 4px 5px; background: color-mix(in oklab, var(--text) 2%, transparent); border: 1px solid transparent; color: var(--text-dim); cursor: pointer; font: inherit; font-size: 10px; }
+.mm-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; width: 92px; padding: 6px 4px 5px; background: color-mix(in oklab, var(--text) 2%, transparent); border: 1px solid transparent; color: var(--text-dim); cursor: pointer; font: inherit; font-size: var(--mm-tiny); }
 .mm-item:hover { border-color: var(--line); color: var(--text); background: color-mix(in oklab, var(--text) 5%, transparent); }
 .mm-item.active { border-color: var(--green); color: var(--green); background: color-mix(in oklab, var(--green) 6%, transparent); }
 .mm-item-thumb { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; background: var(--bg); border: 1px solid color-mix(in oklab, var(--text) 5%, transparent); }
@@ -88,21 +90,21 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
 .mm-thumb { display: inline-flex; align-items: center; justify-content: center; }
 .mm-thumb-img { display: inline-block; background-repeat: no-repeat; image-rendering: pixelated; }
 .mm-thumb-swatch { display: inline-block; width: 70%; height: 70%; }
-.mm-pop-empty { padding: 14px 4px; font-size: 11px; color: var(--text-dim); }
-.mm-pop-foot { padding: 6px 10px; border-top: 1px solid var(--line); font-size: 10px; color: var(--text-dim); }
-.mm-pop-foot kbd { font: inherit; font-size: 10px; padding: 0 4px; border: 1px solid var(--line); }
+.mm-pop-empty { padding: 14px 4px; font-size: var(--mm-small); color: var(--text-dim); }
+.mm-pop-foot { padding: 6px 10px; border-top: 1px solid var(--line); font-size: var(--mm-tiny); color: var(--text-dim); }
+.mm-pop-foot kbd { font: inherit; font-size: var(--mm-tiny); padding: 0 4px; border: 1px solid var(--line); }
 
 /* ---- the canvas and what floats on it ---- */
 .mm-canvas-wrap { position: relative; flex: 1; min-height: 0; border: 1px solid var(--line); overflow: hidden; background: var(--bg); }
 .mm-canvas-wrap canvas { position: absolute; inset: 0; display: block; }
-.mm-hint { position: absolute; right: 10px; bottom: 8px; color: var(--text-dim); font-size: 11px; opacity: 0.7; pointer-events: none; }
+.mm-hint { position: absolute; right: 10px; bottom: 8px; color: var(--text-dim); font-size: var(--mm-small); opacity: 0.7; pointer-events: none; }
 .mm-flash {
   position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 15;
   background: var(--panel); border: 1px solid var(--green-dim); color: var(--text);
-  padding: 7px 14px; font-size: 13px; white-space: nowrap;
+  padding: 7px 14px; font-size: 16px; white-space: nowrap;
 }
 .mm-flash.error { border-color: var(--magenta); }
-.mm-status { display: block; } /* TEMPORARY: was none, so the debug readout was invisible */
+.mm-status { display: block; }
 
 /* ---- panels: the selection on the right, the rest docked on the left ---- */
 .mm-config {
@@ -117,12 +119,12 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
 .mm-config-title {
   display: flex; justify-content: space-between; align-items: baseline; gap: 8px; overflow: hidden;
   padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line);
-  font-weight: bold; font-size: 13px; color: var(--green);
+  font-weight: normal; font-size: 17px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green);
 }
-.mm-config-title span { font-weight: normal; font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-config-sub { font-size: 11px; line-height: 1.35; color: var(--text-dim); }
+.mm-config-title span { font-weight: normal; font-size: var(--mm-small); color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-config-sub { font-size: var(--mm-small); line-height: 1.35; color: var(--text-dim); }
 .mm-config-row { display: flex; gap: var(--mm-gap); flex-wrap: wrap; }
-.mm-config-row label { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 100px; color: var(--text-dim); font-size: 11px; }
+.mm-config-row label { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 100px; color: var(--text-dim); font-size: var(--mm-small); }
 .mm-config-row label.mm-check { flex-direction: row; align-items: center; gap: 6px; }
 .mm-config-row label.mm-check input { margin: 0; }
 .mm-config-row .mm-input { width: 100%; }
@@ -143,21 +145,21 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
 
 /* Keys */
 .mm-keys { width: 360px; }
-.mm-keys-group { margin-top: 8px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green); }
-.mm-keys-row { display: grid; grid-template-columns: 132px 1fr; gap: 8px; align-items: baseline; color: var(--text-dim); font-size: 11px; }
-.mm-keys-row kbd { font: inherit; font-size: 10px; color: var(--text); border: 1px solid var(--line); padding: 1px 4px; justify-self: start; white-space: nowrap; }
+.mm-keys-group { margin-top: 8px; font-size: var(--mm-tiny); letter-spacing: 0.06em; text-transform: uppercase; color: var(--green); }
+.mm-keys-row { display: grid; grid-template-columns: 132px 1fr; gap: 8px; align-items: baseline; color: var(--text-dim); font-size: var(--mm-small); }
+.mm-keys-row kbd { font: inherit; font-size: var(--mm-tiny); color: var(--text); border: 1px solid var(--line); padding: 1px 4px; justify-self: start; white-space: nowrap; }
 
 /* Map: installed maps */
 .mm-load-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
 .mm-load-list[hidden] { display: none; }
 .mm-load-item { justify-content: space-between; text-transform: none; height: auto; min-height: var(--mm-h); padding: 4px 10px; }
-.mm-load-item span { color: var(--text-dim); font-size: 10px; margin-left: 8px; }
+.mm-load-item span { color: var(--text-dim); font-size: var(--mm-tiny); margin-left: 8px; }
 
 /* ---- loading ---- */
 .mm-loading { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; background: var(--bg); transition: opacity 0.25s; }
 .mm-loading.done { opacity: 0; pointer-events: none; }
 .mm-loading-box { width: min(360px, 80%); display: flex; flex-direction: column; gap: 8px; }
-.mm-loading-title { font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text); }
+.mm-loading-title { font-size: 18px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green); }
 .mm-loading-track { height: 6px; background: color-mix(in oklab, var(--text) 8%, transparent); overflow: hidden; }
 .mm-loading-bar { width: 0; height: 100%; background: var(--green); transition: width 0.15s linear; }
 .mm-loading-label { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
@@ -186,7 +188,7 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
 .mm-sec { border-top: 1px solid color-mix(in oklab, var(--text) 7%, transparent); padding-top: 4px; }
 .mm-sec > summary {
   list-style: none; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px;
-  padding: 3px 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim);
+  padding: 3px 0; font-size: var(--mm-tiny); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim);
   transition: color 0.12s;
 }
 .mm-sec > summary::-webkit-details-marker { display: none; }
@@ -242,3 +244,139 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
 .mm-cat { padding: 0 7px 0 4px; gap: 5px; }
 @keyframes mm-spin { to { transform: rotate(360deg); } }
 .mm-busy svg { animation: mm-spin 1s linear infinite; opacity: 0.7; }
+
+/* ==== The app's flat dark look (see ../style.css tokens): see-through panels with one faint 1px edge, 4/6px corners, no glow
+   and no blurred shadows (the panels scroll; WebKitGTK repaints them per step). Green = titles and the selected thing only. ==== */
+.map-maker {
+  --mm-field: var(--field, color-mix(in srgb, var(--text) 8%, transparent));
+  --mm-field-hi: var(--field-hi, color-mix(in srgb, var(--text) 14%, transparent));
+  --mm-edge: color-mix(in srgb, var(--text) 8%, transparent);
+  font-family: 'VT323', ui-monospace, monospace;
+  color: var(--text);
+}
+.map-maker.mm-full { background: var(--bg); }
+.mm-full > .mm-bar { background: var(--glass-hi); border: none; border-radius: var(--radius); box-shadow: var(--hl); }
+.mm-group + .mm-group { border-left-color: color-mix(in srgb, var(--text) 10%, transparent); }
+
+/* buttons: quiet field fill, selected = text colour + 2px green underline, primary = solid green */
+.mm-tool, .mm-cat {
+  background: var(--mm-field); border: none; border-radius: var(--radius-sm); box-shadow: var(--hl);
+  color: var(--text-dim);
+  transition: color 0.12s, background-color 0.12s, box-shadow 0.12s, transform 0.08s;
+}
+.mm-cat { background: var(--mm-field); }
+.mm-tool:hover, .mm-cat:hover { color: var(--text); background: var(--mm-field-hi); border-color: transparent; }
+.mm-tool.active, .mm-cat.active, .mm-act.active, .mm-item.active {
+  color: var(--text); background: var(--mm-field-hi); border-color: transparent; box-shadow: var(--hl), inset 0 -2px 0 var(--green);
+}
+.mm-tools .mm-tool { border-radius: 0; }
+.mm-tools .mm-tool:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.mm-tools .mm-tool:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.mm-tools .mm-tool + .mm-tool { box-shadow: inset 1px 0 0 var(--mm-edge), var(--hl); }
+.mm-tools .mm-tool.active { box-shadow: var(--hl), inset 0 -2px 0 var(--green); }
+.mm-tool:disabled { opacity: 0.45; }
+.mm-primary, .mm-primary:hover { background: var(--green); color: var(--bg); box-shadow: none; }
+.mm-primary:hover { background: color-mix(in srgb, var(--green) 85%, var(--text)); }
+.mm-danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.mm-danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 22%, transparent); border-color: transparent; }
+.mm-cat-thumb { background: color-mix(in srgb, var(--bg) 70%, transparent); border-radius: 3px; }
+.mm-cat kbd, .mm-item kbd, .mm-pop-foot kbd, .mm-keys-row kbd {
+  border: none; border-radius: 3px; background: var(--mm-field); box-shadow: none; opacity: 1; color: var(--text-dim);
+}
+.mm-keys-row kbd { color: var(--text); padding: 1px 5px; }
+
+/* fields */
+.mm-input {
+  background: var(--mm-field); border: none; border-radius: var(--radius-sm); color: var(--text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+  transition: box-shadow 0.14s, background-color 0.14s;
+}
+.mm-input:hover { background: var(--mm-field-hi); }
+.mm-input:focus { outline: none; border: none; background: var(--mm-field-hi); box-shadow: inset 0 0 0 1.5px var(--green); }
+.mm-input::placeholder { color: var(--text-dim); opacity: 0.7; }
+.map-maker input[type="checkbox"], .map-maker input[type="radio"], .mm-range { accent-color: var(--green); }
+.map-maker :focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.mm-range { height: 16px; margin: 0; }
+
+/* panels and the palette popover: flat, see-through, 6px, one 1px ring */
+.mm-config, .mm-pop {
+  background: var(--mm-panel-bg); border: none; border-radius: var(--radius); box-shadow: var(--hl);
+}
+.mm-pop { box-shadow: var(--hl), 0 0 0 transparent; background: var(--panel); }
+.mm-pop-head { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.mm-pop-foot { border-top-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.mm-pop-search { height: 26px; }
+.mm-pop-close { border-radius: var(--radius-sm); }
+.mm-pop-close:hover { background: var(--mm-field); }
+.mm-config-title { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.mm-pop-group, .mm-section { border-bottom-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.mm-sec { border-top-color: color-mix(in srgb, var(--text) 9%, transparent); }
+.mm-keys-group { color: var(--green); letter-spacing: 0.08em; }
+.mm-config-sub.mm-warn, .mm-warn { color: var(--danger); }
+
+/* palette items */
+.mm-item { background: var(--mm-field); border: none; border-radius: var(--radius-sm); box-shadow: var(--hl); transition: color 0.12s, background-color 0.12s, box-shadow 0.12s, transform 0.08s; }
+.mm-item:hover { background: var(--mm-field-hi); border-color: transparent; }
+.mm-item-thumb { background: color-mix(in srgb, var(--bg) 70%, transparent); border: none; border-radius: 3px; }
+
+/* inspector action icons */
+.mm-act { border: none; border-radius: var(--radius-sm); background: var(--mm-field); box-shadow: var(--hl); }
+.mm-act:hover { background: var(--mm-field-hi); border-color: transparent; }
+.mm-act-danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 18%, transparent); border-color: transparent; }
+
+/* the installed-map list in the Map panel, Base game first */
+.mm-load-list { padding: 4px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg) 55%, transparent); box-shadow: var(--hl); }
+.mm-load-item { justify-content: space-between; text-align: left; box-shadow: none; background: transparent; position: relative; }
+.mm-load-item:hover { background: var(--mm-field-hi); box-shadow: none; }
+.mm-load-item[data-base] { color: var(--text); }
+.mm-load-item span { color: var(--text-dim); font-size: var(--mm-small); }
+
+/* canvas frame, toast, hint */
+.mm-canvas-wrap { border: none; border-radius: var(--radius); box-shadow: var(--hl); }
+.mm-full .mm-canvas-wrap { border-radius: 0; box-shadow: none; }
+.mm-flash { background: var(--panel); border: none; border-radius: var(--radius); box-shadow: var(--hl), inset 3px 0 0 var(--green); }
+.mm-flash.error { box-shadow: var(--hl), inset 3px 0 0 var(--danger); }
+.mm-hint { font-size: var(--mm-small); }
+.mm-loading { background: var(--bg); }
+.mm-loading-track { border-radius: 2px; background: var(--mm-field); }
+
+/* status bar: a flat chip along the bottom edge (it sits under the canvas inline, over it when fullscreen) */
+.mm-status {
+  display: flex; flex-wrap: wrap; gap: 0 14px; align-items: center; min-height: 22px; padding: 2px 10px;
+  font-size: var(--mm-small); letter-spacing: 0.03em; color: var(--text-dim);
+  background: var(--glass-hi); border-radius: var(--radius-sm); box-shadow: var(--hl);
+}
+.mm-status:empty { display: none; }
+.mm-status .mm-coord { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+.mm-status .mm-warn { color: var(--danger); }
+.mm-full > .mm-status {
+  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 6;
+  max-width: calc(100% - 700px); min-width: 260px; flex-wrap: nowrap; overflow: hidden; white-space: nowrap;
+}
+
+/* Ctrl+Shift+D debug strip: its JS styles it inline, so the theme wins with !important */
+.mm-canvas-wrap > div[style*="z-index: 50"] { left: 8px !important; bottom: 8px !important; gap: 6px !important; }
+.mm-canvas-wrap > div[style*="z-index: 50"] pre {
+  font: var(--mm-small) 'VT323', ui-monospace, monospace !important; color: var(--text-dim) !important;
+  background: var(--glass-hi) !important; border-radius: var(--radius-sm); box-shadow: var(--hl); padding: 4px 8px !important;
+}
+.mm-canvas-wrap > div[style*="z-index: 50"] button {
+  font: var(--mm-small) 'VT323', ui-monospace, monospace !important; text-transform: uppercase; letter-spacing: 0.3px;
+  color: var(--text-dim) !important; background: var(--mm-field) !important; border: none !important;
+  border-radius: var(--radius-sm) !important; box-shadow: var(--hl); padding: 4px 10px !important; height: 26px;
+}
+.mm-canvas-wrap > div[style*="z-index: 50"] button:hover { color: var(--text) !important; background: var(--mm-field-hi) !important; }
+.mm-canvas-wrap > textarea[style*="z-index: 9999"], .map-maker textarea[readonly] {
+  font: var(--mm-small) ui-monospace, monospace !important; color: var(--text) !important; background: var(--panel) !important;
+  border: none !important; border-radius: var(--radius) !important; box-shadow: var(--hl);
+}
+.mm-config-title { white-space: nowrap; font-size: 16px; }
+.mm-canvas-wrap > div[style*="z-index: 50"] { bottom: 40px !important; }
+
+/* Base game toggle: name plus a Loaded / Unloaded state, readable at a glance */
+.mm-base-toggle { gap: 6px; padding: 0 10px; }
+.mm-base-label { color: inherit; }
+.mm-base-state { font-size: var(--mm-small); letter-spacing: 0.04em; color: var(--text-dim); opacity: 0.8; }
+.mm-base-toggle.active { color: var(--text); }
+.mm-base-toggle.active .mm-base-state { color: var(--green); opacity: 1; }
+.mm-base-toggle.active svg { color: var(--green); }
