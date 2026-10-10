@@ -1,5 +1,5 @@
 // "What's new": the newest Library additions plus Recharge releases.
-import { escapeHtml } from './ui.js';
+import { escapeHtml, galleryImages } from './ui.js';
 import { mapThumbFor, hubStamp } from './maps/mapthumb.js';
 
 const HUB = 'https://codecade.co.za/recharge';
@@ -41,7 +41,7 @@ async function additions() {
           title: row.name,
           by: row.author,
           body: row.description || '',
-          image: row.gallery?.length ? `${HUB}/api/${kind.path}/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
+          image: galleryImages(row.gallery).length ? `${HUB}/api/${kind.path}/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
         }));
       } catch {
         return [];

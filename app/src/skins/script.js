@@ -1,6 +1,6 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
 import { requireLogin } from '../login-prompt.js';
-import { escapeHtml, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -43,8 +43,8 @@ async function loadCatalog() {
       name: row.name,
       author: row.author,
       description: row.description || '',
-      images: (row.gallery || []).map((f) => `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(f)}`),
-      image: row.gallery?.length ? `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}` : null,
+      images: galleryImages(row.gallery).map((f) => `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(f)}`),
+      image: galleryImages(row.gallery).length ? `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
     }));
     catalogError = false;
   } catch (err) {

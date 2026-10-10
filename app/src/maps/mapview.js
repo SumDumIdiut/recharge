@@ -1,5 +1,5 @@
-// Draws a map's view picture (Amplifier zoomed out over the whole map) by handing the map to the editor's tile worker (editor.js workerRenderMapView). One worker, started on first use and dropped after a quiet spell (it holds the 9.5MB level data).
-const IDLE_MS = 30000;
+// Draws a map's view picture (Amplifier zoomed out over the whole map) by handing the map to the editor's tile worker (editor.js workerRenderMapView). One worker, started on first use and dropped a few seconds after the last picture (it holds the 9.5MB level data).
+const IDLE_MS = 4000;
 let worker = null, ready = null, idle = 0, seq = 0;
 const pending = new Map();
 

@@ -1,5 +1,5 @@
 import { getToken, getUsername, isAdmin, clearSession, isLoggedIn } from '../auth.js';
-import { escapeHtml, thumb, openModal, closeModal, confirmDestructive, ICON_TRASH, ICON_EDIT } from '../ui.js';
+import { escapeHtml, galleryImages, thumb, openModal, closeModal, confirmDestructive, ICON_TRASH, ICON_EDIT } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -7,9 +7,10 @@ let myUploads = [];
 let editingId = null;
 
 function galleryUrl(row) {
-  if (!row.gallery?.length) return null;
+  const first = galleryImages(row.gallery)[0];
+  if (!first) return null;
   const kindPath = row.kind === 'mod' ? 'mods' : row.kind === 'map' ? 'maps' : 'skins';
-  return `${HUB_BASE}/api/${kindPath}/${row.id}/gallery/${encodeURIComponent(row.gallery[0])}`;
+  return `${HUB_BASE}/api/${kindPath}/${row.id}/gallery/${encodeURIComponent(first)}`;
 }
 
 function renderUploads() {
