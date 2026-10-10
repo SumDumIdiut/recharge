@@ -4,10 +4,10 @@ import { openAccount } from '../login-prompt.js';
 import { recheckBackground, applySoundSetting } from '../theme.js';
 import { getAudioPrefs, saveAudioPrefs } from '../bgmedia.js';
 import { lazyThumb, loadThumb } from './thumbs.js';
-import { mediaKind, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, activeTarget, soundOptions, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB } from './media.js';
+import { mediaKind, countsText, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, activeTarget, soundOptions, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB } from './media.js';
 
 import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, LIMITS_TEXT } from './editor.js';
-import { loadCommunity, imageCardsHtml, playlistCardsHtml, playlistGalleryUrl as galleryUrl, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
+import { loadCommunity, imageCardsHtml, playlistCardsHtml, previewTilesHtml, startPreview, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
 
 const INTERVALS = [
   [0, 'Every launch'],
@@ -68,7 +68,10 @@ function fillThumb(invoke, el, file) {
       invoke('read_background_image', { fileName: file }).then((url) => { el.style.backgroundImage = `url("${url}")`; }).catch(() => {});
     }
     if (kind === 'video') {
-      const badge = el.parentElement?.querySelector('[data-duration]');
+      // a video the engine could not decode / read: say so instead of leaving a black tile
+      el.classList.toggle('is-failed', !t?.url);
+      if (!t?.url) el.title = `Can't preview this video${t?.reason ? ` (${t.reason})` : ''}`;
+      const badge = el.parentElement?.querySelector('[data-duration]') || el.querySelector('[data-duration]');
       if (badge) badge.textContent = formatDuration(t?.duration) || 'video';
     }
   });
@@ -229,7 +232,7 @@ async function renderPlaylists() {
       (p) => `
     <div class="bg-playlist-row ${p.id === config.active_playlist ? 'is-active' : ''}" data-id="${p.id}">
       <div class="bg-playlist-name">${escapeHtml(p.name)}</div>
-      <div class="bg-playlist-count">${p.images.length} image${p.images.length === 1 ? '' : 's'}</div>
+      <div class="bg-playlist-count">${escapeHtml(countsText(p.images))}</div>
       <span class="bg-playlist-status" data-status></span>
       <select class="settings-input bg-interval" data-act="interval" title="Change background">
         ${INTERVALS.map(([sec, label]) => `<option value="${sec}"${(p.interval || 0) === sec ? ' selected' : ''}>${label}</option>`).join('')}
@@ -344,7 +347,10 @@ window.__bgCommunity = function (section) {
   renderCommunity();
 };
 
+let previewMedia = null;
 function closePreview() {
+  previewMedia?.release(); // videos paused + emptied, sound stopped
+  previewMedia = null;
   document.getElementById('bg-preview').hidden = true;
 }
 
@@ -352,9 +358,10 @@ function openPreview(row, isAdded = () => false) {
   const { invoke } = window.__TAURI__.core;
   const box = document.getElementById('bg-preview');
   document.getElementById('bg-preview-title').textContent = `${row.name} - by ${row.author || '?'}`;
-  document.getElementById('bg-preview-grid').innerHTML = (row.gallery || [])
-    .map((f) => `<img loading="lazy" decoding="async" src="${galleryUrl(row, f)}" alt="">`)
-    .join('');
+  previewMedia?.release();
+  const grid = document.getElementById('bg-preview-grid');
+  grid.innerHTML = previewTilesHtml(row);
+  previewMedia = startPreview(grid);
   const add = document.getElementById('bg-preview-add');
   const already = isAdded(row);
   add.disabled = already;

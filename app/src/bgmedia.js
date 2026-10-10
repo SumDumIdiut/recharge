@@ -1,5 +1,7 @@
 // Video + audio backgrounds: a fixed muted looping <video> behind the UI, optional sound (the video's own or an audio file).
 // Pauses when the window is hidden/minimised and while the game runs; sound is off unless the user switches it on.
+import { releaseMedia } from './releasemedia.js';
+
 const PREFS_KEY = 'rechargeBgAudio';
 const FADE_MS = 1000;
 
@@ -166,12 +168,17 @@ export function setSound(sound, base) {
 }
 
 function stopAudio() {
-  if (state.audio) { state.audio.pause(); state.audio.removeAttribute('src'); state.audio.load?.(); }
+  if (state.audio) { if (!releaseMedia(state.audio)) state.audio = null; } // still loading: its release is deferred, so never reuse that element
   state.audioFile = null;
 }
 
+// Fully lets go of a <video>: stops the decoder and drops its buffers (remove() alone can leave them to the GC).
+function releaseVideo(v) {
+  releaseMedia(v);
+}
+
 export function clearVideo() {
-  if (state.video) { state.video.pause(); state.video.remove(); }
+  if (state.video) releaseVideo(state.video);
   state.video = null;
 }
 
@@ -191,7 +198,7 @@ export function showVideo(url) {
       'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;pointer-events:none;opacity:0;' +
       `transition:opacity ${FADE_MS}ms ease;`;
     let done = false;
-    const fail = () => { if (done) return; done = true; video.remove(); resolve(null); };
+    const fail = () => { if (done) return; done = true; releaseVideo(video); resolve(null); };
     video.addEventListener('error', () => { mlog(`video ERROR code=${video.error?.code} msg=${video.error?.message || ''} src=${url}`); fail(); });
     video.addEventListener('playing', () => mlog(`video playing: ${elState(video)}`));
     video.addEventListener('loadeddata', () => {
@@ -201,7 +208,7 @@ export function showVideo(url) {
       state.video = video;
       applyPlayback();
       requestAnimationFrame(() => requestAnimationFrame(() => { video.style.opacity = '1'; }));
-      if (old) setTimeout(() => { old.pause(); old.remove(); }, FADE_MS + 60);
+      if (old) setTimeout(() => releaseVideo(old), FADE_MS + 60);
       resolve(video);
     });
     video.src = url;
