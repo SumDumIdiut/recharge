@@ -1,6 +1,6 @@
 // Video + audio backgrounds: a fixed muted looping <video> behind the UI, optional sound (the video's own or an audio file).
 // Pauses when the window is hidden/minimised and while the game runs; sound is off unless the user switches it on.
-import { releaseMedia } from './releasemedia.js';
+import { releaseMedia, manualLoop } from './releasemedia.js';
 
 const PREFS_KEY = 'rechargeBgAudio';
 const FADE_MS = 1000;
@@ -148,7 +148,7 @@ export function setSound(sound, base) {
       // One element for good: WebKit remembers a user gesture per element, so a fresh one per track would be blocked again.
       const a = state.audio || document.createElement('audio');
       if (!state.audio) {
-        a.loop = true;
+        manualLoop(a);
         a.preload = 'auto';
         a.addEventListener('error', () => {
           mlog(`audio ERROR code=${a.error?.code} msg=${a.error?.message || ''} src=${a.src} ${elState(a)}`);
@@ -189,10 +189,10 @@ export function showVideo(url) {
     const video = document.createElement('video');
     video.className = 'bg-video-layer';
     video.muted = true;
-    video.loop = true;
+    manualLoop(video); // never the loop attribute: see releasemedia.js
     video.autoplay = true;
     video.playsInline = true;
-    video.crossOrigin = 'anonymous';
+    // no crossOrigin: nothing reads this layer's pixels, and a CORS fetch fails from the live page origin
     video.preload = 'auto';
     video.style.cssText =
       'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;pointer-events:none;opacity:0;' +
