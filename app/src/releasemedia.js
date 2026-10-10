@@ -22,3 +22,17 @@ export function releaseMedia(el, { setTimer = (f, ms) => setTimeout(f, ms)?.unre
   finish();
   return true; // false: the source is dropped later, so the caller must not reuse the element
 }
+
+// Loops a <video>/<audio> by hand instead of with the `loop` attribute. WebKitGTK's native looping leaves the
+// GStreamer pipeline in a state where the next pause()/remove()/load() blocks the page for ~35 s on a long
+// clip (a 60 s+ 1080p AV1 background froze every button on Activate); restarting from 'ended' does not.
+export function manualLoop(el) {
+  el.loop = false;
+  el.addEventListener?.('ended', () => {
+    try {
+      el.currentTime = 0;
+      el.play?.()?.catch?.(() => {});
+    } catch (e) {}
+  });
+  return el;
+}
