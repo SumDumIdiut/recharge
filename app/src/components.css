@@ -107,6 +107,10 @@
 .browse-card-thumb-empty svg { width: 30px; height: 30px; opacity: 0.6; }
 
 .browse-card-media { position: relative; }
+/* Every card's picture is the same 16:9 box, so cards in a row line up whatever size the map / mod / skin picture is: wide
+   pictures are cropped to fill it, skins (character sprites) are shown whole on a dark backdrop. */
+.browse-card-media > .browse-card-thumb { aspect-ratio: 16 / 9; height: auto; object-fit: cover; object-position: center; background: color-mix(in srgb, var(--bg) 70%, transparent); }
+#view-skins .browse-card-media > .browse-card-thumb { object-fit: contain; }
 .browse-card-info { min-width: 0; }
 .browse-card-actions-right { display: flex; align-items: center; gap: 8px; }
 .browse-card-name-protected, .detail-name-protected { color: var(--green); }
@@ -264,6 +268,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .btn:disabled:not(.btn-primary) { opacity: 0.55; }
 .icon-btn { border: none; border-radius: var(--radius-sm); background: var(--field); transition: background 140ms ease, color 140ms ease; }
 .icon-btn:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+/* the second step of a delete (armConfirm): the button itself asks */
+.icon-btn.is-armed, .btn.is-armed { padding: 5px 10px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; white-space: nowrap; }
+.icon-btn.is-armed:hover, .btn.is-armed:hover { background: color-mix(in srgb, var(--danger) 85%, #fff); color: #fff; }
 
 /* browse cards: glass, rounded, green bar + tint on hover */
 .browser-grid { gap: 22px; }

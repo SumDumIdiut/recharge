@@ -19,6 +19,11 @@ on:
     branches: [master, dev]
     paths:
       - 'app/**'
+      # Amplifier-only pushes are published by amp-hub.yml and must not cut a Recharge version. GitHub evaluates paths
+      # patterns in order, a later "!" pattern un-matches files an earlier pattern matched; the push runs only if at
+      # least one changed file still matches. So a push touching only app/src/maps/** is skipped, while one that also
+      # touches anything else under app/** (or loader/, ...) still runs. Keep this "!" line right after 'app/**'.
+      - '!app/src/maps/**'
       - 'loader/**'
       - 'electron/**'
       - 'content/**'

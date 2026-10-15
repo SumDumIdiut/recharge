@@ -7,6 +7,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+use super::safe_fs;
 use super::settings;
 use super::steam;
 
@@ -226,10 +227,12 @@ fn deploy_build(game_dir: &Path, modded: bool) -> Result<(), String> {
         );
     }
     if source.is_file() {
-        std::fs::copy(source, &deployed).map_err(|e| {
+        // A loaded Assembly-CSharp.dll can't be overwritten on Windows; safe_replace renames it aside if it must.
+        safe_fs::safe_replace(&safe_fs::RealFs, source, &deployed, &safe_fs::BACKOFF_MS).map_err(|e| {
             format!(
-                "Failed to switch to the {} build: {e}",
-                if modded { "modded" } else { "vanilla" }
+                "Failed to switch to the {} build: {}",
+                if modded { "modded" } else { "vanilla" },
+                e.message(&safe_fs::holders_of(&e.path))
             )
         })?;
         if let Some(stamp) = fnv1a_file(&deployed) {
@@ -515,6 +518,37 @@ fn close_game_processes(exe_name: &str, game_dir: &Path) -> Result<bool, String>
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     Err("The running game wouldn't close - close it yourself and try again.".into())
+}
+
+/// Is the game for this install running right now (precise process match on Linux, image name on Windows)?
+pub(crate) fn game_running_in(game_dir: &Path) -> bool {
+    let Some(exe) = find_exe(game_dir) else { return false };
+    #[cfg(windows)]
+    {
+        is_process_running(&exe.file_name())
+    }
+    #[cfg(not(windows))]
+    {
+        !game_pids(&exe.file_name(), game_dir).is_empty()
+    }
+}
+
+/// Error for the loader commands while the game is up; the UI keys on the prefix to offer "Close game and install".
+pub(crate) fn game_running_error() -> String {
+    format!("{} IGTAP is running - close the game before installing.", safe_fs::GAME_RUNNING_PREFIX)
+}
+
+/// Settings > RechargeLoader "Close game and install": end IGTAP (same code as Test in game) and wait until it is gone. Ok(true) if something was closed.
+#[tauri::command]
+pub async fn close_game_and_wait(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(game_path) = settings::get_game_path(app) else { return Ok(false) };
+        let game_dir = PathBuf::from(game_path);
+        let Some(exe) = find_exe(&game_dir) else { return Ok(false) };
+        close_game_processes(&exe.file_name(), &game_dir)
+    })
+    .await
+    .map_err(|e| format!("close task panicked: {e}"))?
 }
 
 /// "Test in game": close any running IGTAP first (emits `test-game-status` {phase:"closing"} only if one was running, then {phase:"launching"}), then launch modded; blocking.

@@ -212,6 +212,15 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
     }
     let appid = info.and_then(|i| i.appid);
 
+    // A running game has Assembly-CSharp.dll / ModApi.dll mapped (Windows error 1224 on overwrite); the UI offers to close it.
+    if super::play::game_running_in(std::path::Path::new(&game_path)) {
+        return Err(super::play::game_running_error());
+    }
+    // Leftovers from earlier replaces that were locked at the time.
+    if let Some(managed) = super::steam::managed_dir(std::path::Path::new(&game_path)) {
+        super::safe_fs::sweep_install(std::path::Path::new(&game_path), &managed);
+    }
+
     let status_file = std::env::temp_dir().join(format!("recharge-install-{}.status", std::process::id()));
     let _ = std::fs::remove_file(&status_file);
     let log_file = std::env::temp_dir().join(format!("recharge-install-{}.log", std::process::id()));
@@ -275,6 +284,11 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
             last_status
         };
         let _ = std::fs::remove_file(&log_file);
+        // Locked file: name the process holding it; with no marker, a mapped-section error while the game runs is still "close the game".
+        let err = super::safe_fs::explain_script_failure(&err, &super::safe_fs::holders_of);
+        if err.contains("user-mapped section") && super::play::game_running_in(std::path::Path::new(&game_path)) {
+            return Err(super::play::game_running_error());
+        }
         return Err(err);
     }
     let _ = std::fs::remove_file(&log_file);
@@ -285,6 +299,7 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
         return Err("Install script exited cleanly but Recharge.ModApi.dll wasn't deployed.".into());
     }
     super::play::refresh_deploy_stamp(&managed);
+    super::safe_fs::sweep_install(std::path::Path::new(&game_path), &managed);
 
     if let Some(stamp) = loader_stamp(app) {
         let path = stamp_path(&game_path);
@@ -304,18 +319,23 @@ pub fn uninstall_loader(app: AppHandle) -> Result<(), String> {
     let managed = super::steam::managed_dir(std::path::Path::new(&game_path))
         .ok_or_else(|| "Couldn't find the game's Managed folder.".to_string())?;
 
+    use super::safe_fs::{safe_remove, safe_replace, holders_of, RealFs, BACKOFF_MS};
     let backup = managed.join("Assembly-CSharp.ORIGINAL.dll");
     if backup.is_file() {
-        std::fs::copy(&backup, managed.join("Assembly-CSharp.dll"))
-            .map_err(|e| format!("Failed to restore the original assembly: {e}"))?;
+        // The game may have Assembly-CSharp.dll loaded: safe_replace renames it aside rather than failing with error 1224.
+        safe_replace(&RealFs, &backup, &managed.join("Assembly-CSharp.dll"), &BACKOFF_MS)
+            .map_err(|e| format!("Failed to restore the original assembly: {}", e.message(&holders_of(&e.path))))?;
         let _ = std::fs::remove_file(&backup);
     }
-    let _ = std::fs::remove_file(managed.join("Assembly-CSharp.RECHARGE.dll"));
-    let _ = std::fs::remove_file(managed.join("Recharge.ModApi.dll"));
+    for name in ["Assembly-CSharp.RECHARGE.dll", "Recharge.ModApi.dll"] {
+        let _ = safe_remove(&RealFs, &managed.join(name), &BACKOFF_MS);
+    }
 
     let mods_dir = PathBuf::from(&game_path).join("Recharge").join("Mods");
-    if mods_dir.is_dir() {
-        std::fs::remove_dir_all(&mods_dir).map_err(|e| format!("Failed to remove deployed mods: {e}"))?;
+    if mods_dir.is_dir() && std::fs::remove_dir_all(&mods_dir).is_err() {
+        // Some mod DLL is loaded: move the whole folder aside (renaming is allowed) and let a later run sweep it.
+        let aside = super::safe_fs::aside_name(&mods_dir, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+        std::fs::rename(&mods_dir, &aside).map_err(|e| format!("Failed to remove deployed mods: {e} - close the game and try again."))?;
     }
 
     // Drop the loader's stamps too, or a later launch reads them as state that's no longer there.

@@ -1,5 +1,5 @@
 // Video + audio backgrounds: a fixed muted looping <video> behind the UI, optional sound (the video's own or an audio file).
-// Pauses when the window is hidden/minimised and while the game runs; sound is off unless the user switches it on.
+// Pauses the picture when backgrounded (minimised/hidden/unfocused/game running); sound follows the "keep playing" pref. Sound is off unless the user switches it on.
 import { releaseMedia, manualLoop } from './releasemedia.js';
 
 const PREFS_KEY = 'rechargeBgAudio';
@@ -25,13 +25,28 @@ export function saveAudioPrefs(prefs) {
 
 // What should be running right now? Pure, so it can be tested.
 // sound: null | 'own' | an audio file name.
-export function playbackPlan({ hidden, gameRunning, prefs, sound, hasVideo }) {
-  const video = hasVideo && !hidden && !gameRunning;
-  const audioAllowed = !!sound && prefs.enabled && !gameRunning && (!hidden || prefs.keepPlaying);
+// Background = the document is hidden, the window is minimised / not visible / not focused, or the game runs.
+// keepPlaying keeps the SOUND going in every background case; the picture is paused (and hidden) whenever backgrounded,
+// except a video whose own sound is the chosen sound: that element must keep playing for its audio (CPU trade-off).
+export function backgroundReason({ hidden, minimised, invisible, unfocused, gameRunning }) {
+  if (gameRunning) return 'game';
+  if (minimised) return 'minimised';
+  if (invisible || hidden) return 'hidden';
+  if (unfocused) return 'unfocused';
+  return null;
+}
+
+export function playbackPlan({ hidden, minimised, invisible, unfocused, gameRunning, prefs, sound, hasVideo }) {
+  const background = !!backgroundReason({ hidden, minimised, invisible, unfocused, gameRunning });
+  const audioAllowed = !!sound && prefs.enabled && (!background || prefs.keepPlaying);
+  const ownSound = sound === 'own' && audioAllowed;
+  const picture = hasVideo && !background;
   return {
-    video,
-    // The video's own sound is carried by the video element itself, so it also needs the video to be playing.
-    videoMuted: !(sound === 'own' && audioAllowed && video),
+    background,
+    // The video's own sound is carried by the video element itself, so it keeps playing (hidden) while it is the sound.
+    video: hasVideo && (picture || ownSound),
+    videoHidden: hasVideo && !picture,
+    videoMuted: !ownSound,
     audio: audioAllowed && sound !== 'own',
     volume: prefs.volume,
   };
@@ -58,7 +73,7 @@ function elState(el) {
   return el ? `readyState=${el.readyState} networkState=${el.networkState} muted=${el.muted} volume=${el.volume} paused=${el.paused} err=${el.error?.code ?? 'none'}` : 'no element';
 }
 
-const state = { base: null, video: null, audio: null, audioFile: null, sound: null, gameRunning: false };
+const state = { base: null, video: null, audio: null, audioFile: null, sound: null, gameRunning: false, win: { minimised: false, invisible: false, unfocused: false }, lastReason: null };
 
 export async function mediaBase(invoke) {
   if (!state.base) state.base = await invoke('background_media_base');
@@ -108,18 +123,27 @@ function tryPlay(el, what) {
 }
 
 export function applyPlayback() {
+  const hidden = typeof document !== 'undefined' && !!document.hidden;
+  const prefs = getAudioPrefs();
   const plan = playbackPlan({
-    hidden: typeof document !== 'undefined' && document.hidden,
+    hidden,
+    ...state.win,
     gameRunning: state.gameRunning,
-    prefs: getAudioPrefs(),
+    prefs,
     sound: state.sound,
     hasVideo: !!state.video,
   });
-  mlog(`applyPlayback sound=${state.sound} enabled=${getAudioPrefs().enabled} volume=${plan.volume} plan=${JSON.stringify({ video: plan.video, videoMuted: plan.videoMuted, audio: plan.audio })} hidden=${typeof document !== 'undefined' && document.hidden} game=${state.gameRunning}`);
+  const reason = backgroundReason({ hidden, ...state.win, gameRunning: state.gameRunning });
+  if (reason !== state.lastReason) {
+    state.lastReason = reason;
+    mlog(`background ${reason ? `ON (${reason})` : 'OFF (foreground)'} keepPlaying=${prefs.keepPlaying}`);
+  }
+  mlog(`applyPlayback sound=${state.sound} enabled=${prefs.enabled} volume=${plan.volume} plan=${JSON.stringify({ video: plan.video, videoMuted: plan.videoMuted, audio: plan.audio })} reason=${reason} game=${state.gameRunning}`);
   const v = state.video;
   if (v) {
     v.muted = plan.videoMuted;
     v.volume = plan.volume;
+    if (v.style) v.style.visibility = plan.videoHidden ? 'hidden' : '';
     if (plan.video) tryPlay(v, 'video'); else v.pause?.();
   }
   const a = state.audio;
@@ -217,6 +241,40 @@ export function showVideo(url) {
   });
 }
 
+// Window state from Tauri: document.hidden / visibilitychange never fire on minimise or a workspace switch in the webview.
+// win: a Tauri window (onFocusChanged, onResized, isMinimized, isVisible, isFocused). Focus flaps are debounced.
+export function watchWindow(win, { debounceMs = 300, pollMs = 2000 } = {}) {
+  let timer = null;
+  const commit = (next) => {
+    const w = state.win;
+    if (w.minimised === next.minimised && w.invisible === next.invisible && w.unfocused === next.unfocused) return;
+    state.win = next;
+    applyPlayback();
+  };
+  const read = async () => {
+    try {
+      const [minimised, visible, focused] = await Promise.all([win.isMinimized?.(), win.isVisible?.(), win.isFocused?.()]);
+      const next = { minimised: !!minimised, invisible: visible === false, unfocused: focused === false };
+      clearTimeout(timer);
+      timer = setTimeout(() => commit(next), debounceMs);
+    } catch (e) {}
+  };
+  try { win.onFocusChanged?.(({ payload }) => {
+    const next = { ...state.win, unfocused: !payload };
+    clearTimeout(timer);
+    timer = setTimeout(() => { commit(next); read(); }, debounceMs);
+  })?.catch?.(() => {}); } catch (e) {}
+  try { win.onResized?.(read)?.catch?.(() => {}); } catch (e) {}
+  try { win.onMoved?.(read)?.catch?.(() => {}); } catch (e) {}
+  const poll = pollMs ? setInterval(read, pollMs) : null;
+  poll?.unref?.();
+  read();
+  return () => { clearTimeout(timer); if (poll) clearInterval(poll); };
+}
+
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', applyPlayback);
+}
+if (typeof window !== 'undefined') {
+  try { const w = window.__TAURI__?.window?.getCurrentWindow?.(); if (w) watchWindow(w); } catch (e) {}
 }

@@ -1,0 +1,45 @@
+name: Publish Amplifier to update hub
+
+# Publishes only the Amplifier (map editor, app/src/maps/**) as its own component, so a fix reaches users without a new Recharge version.
+# master -> stable, dev -> beta. The app (commands/amp.rs) checks /update/amp/<channel>/manifest.json and downloads newer versions whose apiLevel (app/src/maps/amp.json) it supports.
+# Pushes that touch only app/src/maps/** are excluded from update-hub.yml, so this is the only workflow they trigger.
+#
+# REQUIRED REPO SECRET:  UPDATE_KEY   - same as update-hub.yml.
+# Optional repo variable: UPDATE_BASE - hub base URL, default https://codecade.co.za/recharge
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, dev]
+    paths:
+      - 'app/src/maps/**'
+      - '.github/workflows/amp-hub.yml'
+
+# One publish at a time per channel; a newer push supersedes a running one.
+concurrency:
+  group: amp-hub-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Publish
+        env:
+          UPDATE_KEY: ${{ secrets.UPDATE_KEY }}
+          BASE: ${{ vars.UPDATE_BASE || 'https://codecade.co.za/recharge' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [ -n "$UPDATE_KEY" ] || { echo "repo secret UPDATE_KEY is not set" >&2; exit 1; }
+          case "$REF_NAME" in
+            dev) channel=beta ;;
+            master) channel=stable ;;
+            *) echo "unsupported branch $REF_NAME" >&2; exit 1 ;;
+          esac
+          # Version is amp-<run number> (set by the publisher); apiLevel comes from app/src/maps/amp.json.
+          node tools/publish-update.mjs --base "$BASE" --component amp --channel "$channel" \
+            --build "${{ github.run_number }}" --maps-dir app/src/maps

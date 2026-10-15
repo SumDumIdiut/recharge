@@ -10,6 +10,10 @@
 //     [--commit <git sha>] [--changes-file <file, one change per line>] [--changes "<text, lines split on \n>"]
 //   node tools/publish-update.mjs --launcher windows-x64=<file> --launcher linux-x64=<file> \
 //     --launcher-version 1.0.0 [--base ...] [--key-env ...] [--dry-run]
+//   node tools/publish-update.mjs --component amp --channel stable|beta --build 123 [--maps-dir app/src/maps] [--api-level N] \
+//     [--base ...] [--key-env ...] [--dry-run]
+//     Publishes only the Amplifier (map editor): every file under --maps-dir (default app/src/maps) is hashed, missing ones uploaded, then PUT /update/amp/<channel>/manifest.json
+//     with version "amp-<build>" and apiLevel from <maps-dir>/amp.json (override: --api-level). Paths are relative to the maps dir.
 //   (launcher and build options may be combined in one call)
 //
 // Each platform dir is walked and sha256-hashed; the component comes from the top-level folder (src/ screens, loader/, content/, electron/, else app), overridable with --components-map (longest prefix wins). The launch file and, off Windows, exec-bit files get "exec": true. Only hashes the server lacks are uploaded, then the manifest is PUT.
@@ -40,8 +44,10 @@ const base = (opt.base || 'https://codecade.co.za/recharge').replace(/\/+$/, '')
 const keyEnv = opt.keyEnv || 'UPDATE_KEY';
 const key = process.env[keyEnv];
 if (!opt.dryRun && !key) die(`env ${keyEnv} not set`);
+const doAmp = opt.component === 'amp';
+if (opt.component !== undefined && !doAmp) die('--component must be amp');
 const doBuild = opt.platform.length > 0;
-if (!doBuild && !opt.launcher.length) die('nothing to do: give --platform and/or --launcher');
+if (!doBuild && !doAmp && !opt.launcher.length) die('nothing to do: give --platform, --component amp and/or --launcher');
 
 function splitKV(s) { const i = s.indexOf('='); if (i < 1) die(`expected name=path, got ${s}`); return [s.slice(0, i), s.slice(i + 1)]; }
 const KNOWN = ['windows-x64', 'linux-x64'];
@@ -160,6 +166,29 @@ if (doBuild) {
     console.log(`${name}: ${files.length} files`);
   }
 }
+let ampManifest = null;
+if (doAmp) {
+  for (const k of ['channel', 'build']) if (opt[k] === undefined) die(`--${k} required`);
+  if (!['stable', 'beta'].includes(opt.channel)) die('--channel must be stable or beta');
+  if (!/^\d+$/.test(String(opt.build))) die('--build must be a non-negative integer');
+  const dir = opt.mapsDir || 'app/src/maps';
+  if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) die(`not a directory: ${dir}`);
+  let api = opt.apiLevel;
+  if (api === undefined) {
+    try { api = JSON.parse(fs.readFileSync(path.join(dir, 'amp.json'), 'utf8')).apiLevel; } catch (e) { die(`cannot read ${dir}/amp.json: ${e.message}`); }
+  }
+  if (!Number.isInteger(Number(api))) die('apiLevel must be an integer (amp.json or --api-level)');
+  const files = [];
+  for (const rel of walk(dir)) {
+    const abs = path.join(dir, rel);
+    const st = fs.statSync(abs);
+    const sha = await sha256File(abs);
+    files.push({ path: rel, size: st.size, sha256: sha });
+    if (!store.has(sha)) store.set(sha, { file: abs, size: st.size, label: `amp/${rel}` });
+  }
+  ampManifest = { format: 1, component: 'amp', channel: opt.channel, version: `amp-${opt.build}`, build: Number(opt.build), apiLevel: Number(api), published: new Date().toISOString(), files };
+  console.log(`amp: ${files.length} files`);
+}
 if (opt.launcher.length) {
   if (!opt.launcherVersion) die('--launcher-version required');
   for (const spec of opt.launcher) {
@@ -177,12 +206,17 @@ try {
   await uploadMissing(store);
   if (opt.dryRun) {
     if (manifest) console.log(JSON.stringify(manifest, null, 2));
+    if (ampManifest) console.log(JSON.stringify(ampManifest, null, 2));
     if (Object.keys(launchers).length) console.log(JSON.stringify(launchers, null, 2));
     console.log('(dry run: nothing sent)');
   } else {
     for (const [name, l] of Object.entries(launchers)) {
       await request('PUT', `/update/launcher/${name}`, { body: l });
       console.log(`launcher ${name} ${l.version} published`);
+    }
+    if (ampManifest) {
+      await request('PUT', `/update/amp/${ampManifest.channel}/manifest.json`, { body: ampManifest });
+      console.log(`amp manifest ${ampManifest.channel} ${ampManifest.version} (apiLevel ${ampManifest.apiLevel}) published`);
     }
     if (manifest) {
       await request('PUT', `/update/${manifest.channel}/manifest.json`, { body: manifest });

@@ -271,7 +271,7 @@ body::before {
 .news-cover { position: relative; display: block; }
 .news-cover .bg-play { width: 30px; height: 30px; margin: -15px 0 0 -15px; }
 .news-cover .bg-play::after { left: 12px; top: 8px; border-width: 7px 0 7px 11px; }
-.news-img-crop { width: 124px; height: 124px; margin: 0 auto; background-repeat: no-repeat; background-color: transparent; border-radius: var(--radius-sm); display: block; }
+.news-img-crop { width: 124px; height: 124px; margin: 0 auto; border-radius: var(--radius-sm); display: block; }
 .news-body { font-size: 13px; line-height: 1.45; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
 .home-launch-row { display: flex; gap: 16px; }

@@ -1,7 +1,7 @@
 mod commands;
 mod vdf;
 
-use commands::{backgrounds, games, hub, launcher, live, loader, maps, migrate, mods, play, repos, settings, skins, steam, updater};
+use commands::{amp, backgrounds, games, hub, launcher, live, loader, maps, migrate, mods, play, repos, settings, skins, steam, updater};
 
 #[cfg(target_os = "linux")]
 fn apply_nvidia_webkit_workarounds() {
@@ -50,6 +50,7 @@ pub fn run() {
             hub::start_beam_server(app.handle().clone());
             live::init(app.handle());
             updater::init(app.handle());
+            amp::init(app.handle()); // after updater::init: the channel comes from its state
             #[cfg(target_os = "linux")]
             allow_media_without_gesture(app.handle());
             Ok(())
@@ -67,6 +68,9 @@ pub fn run() {
             mods::uninstall_mod,
             mods::export_example_mod,
             repos::pull_mod_repo,
+            amp::amp_status,
+            amp::amp_mark_bad,
+            amp::amp_check_now,
             live::live_status,
             live::live_get_channel,
             live::live_set_channel,
@@ -124,6 +128,7 @@ pub fn run() {
             launcher::install_launcher_update,
             play::launch_game,
             play::is_game_running,
+            play::close_game_and_wait,
             play::restore_vanilla_build,
             backgrounds::list_background_images,
             backgrounds::upload_background_image,

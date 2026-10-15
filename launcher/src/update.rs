@@ -1,4 +1,5 @@
 //! Staged update: diff manifest, build a complete app.new/ (hard links for unchanged files, hash-verified downloads for the rest), swap it in, keep app.old for rollback.
+use crate::holders;
 use crate::log;
 use crate::manifest::{self, FileEntry, Manifest, Plan, Platform};
 use crate::run;
@@ -324,17 +325,110 @@ fn discard_staged(ctx: &Ctx) {
     let _ = fs::remove_file(ctx.staged_marker());
 }
 
-/// app -> app.old, app.new -> app. On failure the previous app is put back.
+fn unix_ms() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+}
+
+/// Delete `p`, retrying while Windows AV/helpers hold files. True when it is gone.
+fn clear_path(p: &Path) -> bool {
+    let gone = || p.symlink_metadata().is_err();
+    if gone() {
+        return true;
+    }
+    let tries = rename_tries().min(6);
+    for i in 1..=tries {
+        rm_rf(p);
+        if gone() {
+            return true;
+        }
+        if i == 1 {
+            log!("could not delete {} yet", p.display());
+            holders::log_holders(p);
+        }
+        if i < tries {
+            std::thread::sleep(Duration::from_millis(RENAME_WAIT_MS));
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+thread_local! { static TEST_TRIES: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) }; }
+#[cfg(test)]
+thread_local! { static NO_ASIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+fn rename_aside(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if NO_ASIDE.with(|c| c.get()) {
+        return Err(std::io::Error::other("test: rename aside blocked"));
+    }
+    fs::rename(from, to)
+}
+
+/// Make `p` not exist: delete it, else move it to `<name>.trash-<ms>` (swept on later runs). Err if neither works.
+fn make_room(root: &Path, p: &Path) -> Result<(), String> {
+    if clear_path(p) {
+        return Ok(());
+    }
+    let trash = root.join(format!("app.trash-{}", unix_ms()));
+    match rename_aside(p, &trash) {
+        Ok(()) => {
+            log!("{} is locked: moved aside to {}", p.display(), trash.display());
+            Ok(())
+        }
+        Err(e) => Err(format!("{} cannot be removed or moved aside: {e}", p.display())),
+    }
+}
+
+/// Delete `app.trash-*`, stale `app.old-*` (not the backup recorded in state) and `app.bad` left by earlier runs; quiet unless something goes.
+pub fn sweep_leftovers(root: &Path, st: &State) {
+    let Ok(rd) = fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let stale = name.starts_with("app.trash-")
+            || name == "app.bad"
+            || (name.starts_with("app.old-") && st.prev_dir.as_deref() != Some(name.as_str()));
+        if !stale {
+            continue;
+        }
+        let p = e.path();
+        rm_rf(&p);
+        if p.symlink_metadata().is_err() {
+            log!("removed leftover {}", p.display());
+        }
+    }
+}
+
+/// app -> app.old (or a unique app.old-<ms> if app.old is stuck), app.new -> app. On failure the previous app is put back.
 pub fn swap_in(ctx: &Ctx, st: &mut State, snap: Snapshot) -> Result<(), String> {
     let (app, new, old) = (ctx.app(), ctx.app_new(), ctx.app_old());
-    rm_rf(&old);
     let had_app = app.exists();
-    if had_app {
-        rename_retry(&app, &old).map_err(|e| format!("app -> app.old: {e}"))?;
+    // Nothing may still run from the app folders (Windows: leftover Recharge/WebView2-host exes of an old run).
+    holders::terminate_in_folders(&[app.clone(), old.clone()]);
+    let backup = if had_app {
+        let b = if make_room(&ctx.root, &old).is_ok() {
+            old.clone()
+        } else {
+            let u = ctx.root.join(format!("app.old-{}", unix_ms()));
+            log!("app.old is stuck; using {} as the backup", u.display());
+            u
+        };
+        rename_retry(&app, &b).map_err(|e| format!("app -> {}: {e}", b.file_name().unwrap().to_string_lossy()))?;
+        Some(b)
+    } else {
+        None
+    };
+    if app.exists() {
+        if let Err(e) = make_room(&ctx.root, &app) {
+            if let Some(b) = &backup {
+                let _ = rename_retry(b, &app);
+            }
+            return Err(format!("app is in the way: {e}"));
+        }
     }
     if let Err(e) = rename_retry(&new, &app) {
-        if had_app {
-            let _ = rename_retry(&old, &app);
+        if let Some(b) = &backup {
+            let _ = rename_retry(b, &app);
         }
         return Err(format!("app.new -> app: {e}"));
     }
@@ -342,17 +436,22 @@ pub fn swap_in(ctx: &Ctx, st: &mut State, snap: Snapshot) -> Result<(), String> 
     log!("swapped in build {} ({})", snap.build, snap.version);
     st.pending = Some(snap.build);
     st.prev = st.current.replace(snap);
+    st.prev_dir = backup.filter(|b| *b != old).map(|b| b.file_name().unwrap().to_string_lossy().into_owned());
     st.save(&ctx.root).map_err(|e| format!("save state: {e}"))
 }
 
-/// Put app.old back after a failed first launch; remember the bad build.
+/// Put the backup (app.old, or the unique name in state) back after a failed first launch; remember the bad build.
 pub fn rollback(ctx: &Ctx, st: &mut State) -> Result<(), String> {
-    let (app, old) = (ctx.app(), ctx.app_old());
+    let app = ctx.app();
+    let old = match &st.prev_dir {
+        Some(n) => ctx.root.join(n),
+        None => ctx.app_old(),
+    };
     if st.prev.is_none() || !old.is_dir() {
         return Err("no previous version to roll back to".into());
     }
     let bad = ctx.root.join("app.bad");
-    rm_rf(&bad);
+    make_room(&ctx.root, &bad)?;
     rename_retry(&app, &bad).map_err(|e| format!("app -> app.bad: {e}"))?;
     if let Err(e) = rename_retry(&old, &app) {
         let _ = rename_retry(&bad, &app);
@@ -363,9 +462,10 @@ pub fn rollback(ctx: &Ctx, st: &mut State) -> Result<(), String> {
         st.bad_builds.push(b.build);
     }
     st.current = st.prev.take();
+    st.prev_dir = None;
     st.pending = None;
     st.save(&ctx.root).map_err(|e| format!("save state: {e}"))?;
-    rm_rf(&bad);
+    let _ = make_room(&ctx.root, &bad); // leftovers are swept on later runs
     Ok(())
 }
 
@@ -431,11 +531,16 @@ fn rename_retry(a: &Path, b: &Path) -> std::io::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(RENAME_WAIT_MS));
     }
+    holders::log_holders(a);
     Err(last.unwrap())
 }
 
 const RENAME_WAIT_MS: u64 = 500;
 fn rename_tries() -> u32 {
+    #[cfg(test)]
+    if let Some(n) = TEST_TRIES.with(|c| c.get()) {
+        return n;
+    }
     std::env::var("RECHARGE_RENAME_TRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(20)
 }
 
@@ -546,5 +651,88 @@ mod tests {
         fs::create_dir_all(c.app_new()).unwrap();
         swap_in(&c, &mut st, snap(1)).unwrap();
         assert!(c.app().is_dir() && st.prev.is_none());
+    }
+
+    fn lock_dir(d: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(d, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    fn unlock_dir(d: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(d, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fn setup_stuck_old(c: &Ctx) {
+        fs::create_dir_all(c.app()).unwrap();
+        fs::write(c.app().join("v"), "1").unwrap();
+        fs::create_dir_all(c.app_old()).unwrap();
+        fs::write(c.app_old().join("stuck"), "x").unwrap();
+        lock_dir(&c.app_old()); // files inside cannot be deleted -> app.old cannot be removed
+        fs::create_dir_all(c.app_new()).unwrap();
+        fs::write(c.app_new().join("v"), "2").unwrap();
+        TEST_TRIES.with(|t| t.set(Some(1)));
+    }
+    fn names(root: &Path, prefix: &str) -> Vec<String> {
+        fs::read_dir(root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(prefix)).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stuck_app_old_is_moved_to_trash_and_swap_succeeds() {
+        let root = tmp("trash");
+        let c = ctx(&root);
+        let mut st = State { current: Some(snap(1)), ..Default::default() };
+        setup_stuck_old(&c);
+        swap_in(&c, &mut st, snap(2)).unwrap();
+        assert_eq!(fs::read_to_string(c.app().join("v")).unwrap(), "2");
+        assert_eq!(fs::read_to_string(c.app_old().join("v")).unwrap(), "1");
+        let trash = names(&root, "app.trash-");
+        assert_eq!(trash.len(), 1);
+        assert!(st.prev_dir.is_none());
+        // later run: still locked -> stays; unlocked -> swept
+        sweep_leftovers(&root, &st);
+        assert_eq!(names(&root, "app.trash-").len(), 1);
+        unlock_dir(&root.join(&trash[0]));
+        sweep_leftovers(&root, &st);
+        assert!(names(&root, "app.trash-").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unmovable_app_old_uses_unique_backup_name_and_rollback_uses_it() {
+        let root = tmp("unique");
+        let c = ctx(&root);
+        let mut st = State { current: Some(snap(1)), ..Default::default() };
+        setup_stuck_old(&c);
+        NO_ASIDE.with(|n| n.set(true));
+        swap_in(&c, &mut st, snap(2)).unwrap();
+        NO_ASIDE.with(|n| n.set(false));
+        let name = st.prev_dir.clone().expect("unique backup recorded");
+        assert!(name.starts_with("app.old-"));
+        assert_eq!(fs::read_to_string(root.join(&name).join("v")).unwrap(), "1");
+        assert!(c.app_old().join("stuck").exists(), "stuck app.old untouched");
+        // the recorded backup is not swept; other app.old-* are
+        fs::create_dir_all(root.join("app.old-1")).unwrap();
+        sweep_leftovers(&root, &st);
+        assert!(root.join(&name).is_dir() && !root.join("app.old-1").exists());
+        rollback(&c, &mut st).unwrap();
+        assert_eq!(fs::read_to_string(c.app().join("v")).unwrap(), "1");
+        assert!(st.prev_dir.is_none() && st.bad_builds == [2]);
+        unlock_dir(&c.app_old());
+    }
+
+    #[test]
+    fn rollback_with_non_default_backup_name_and_stale_app_bad() {
+        let root = tmp("rbname");
+        let c = ctx(&root);
+        fs::create_dir_all(c.app()).unwrap();
+        fs::write(c.app().join("v"), "2").unwrap();
+        fs::create_dir_all(root.join("app.old-77")).unwrap();
+        fs::write(root.join("app.old-77").join("v"), "1").unwrap();
+        fs::create_dir_all(root.join("app.bad")).unwrap(); // stale from an earlier run
+        let mut st = State { current: Some(snap(2)), prev: Some(snap(1)), prev_dir: Some("app.old-77".into()), ..Default::default() };
+        rollback(&c, &mut st).unwrap();
+        assert_eq!(fs::read_to_string(c.app().join("v")).unwrap(), "1");
+        assert!(!root.join("app.old-77").exists() && !root.join("app.bad").exists());
+        assert!(State::load(&root).prev_dir.is_none());
     }
 }

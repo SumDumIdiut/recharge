@@ -58,6 +58,8 @@ let oldAmplifierRoot = null;
 window.chooseAmplifier = () => openOldAmplifier();
 window.__amplifierOldClose = () => {
   if (oldAmplifierRoot) { oldAmplifierRoot.remove(); oldAmplifierRoot = null; }
+  document.querySelectorAll('link[data-amp-style]').forEach((l) => l.remove());
+  window.__amplifierRelease?.(); // the editor lets go of its tile workers and picture caches
 };
 async function openOldAmplifier() {
   if (oldAmplifierRoot && oldAmplifierRoot.isConnected) return;
@@ -66,8 +68,21 @@ async function openOldAmplifier() {
   root.dataset.amplifier = 'old';
   document.body.appendChild(root);
   oldAmplifierRoot = root;
-  const m = await import('/maps/editor.js');
-  await m.mountEditor(root);
+  // The downloaded Amplifier (Rust: commands/amp.rs) when there is one, else the built-in; see amp-loader.js.
+  const { openAmplifier } = await import('/amp-loader.js');
+  await openAmplifier(root, {
+    invoke: window.__TAURI__.core.invoke,
+    importModule: (url) => import(url),
+    addStyle: (href) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      link.dataset.ampStyle = '1';
+      document.head.appendChild(link);
+      return () => link.remove();
+    },
+    warn: (msg) => console.warn('[amplifier]', msg),
+  });
 }
 
 function showToast(html) {

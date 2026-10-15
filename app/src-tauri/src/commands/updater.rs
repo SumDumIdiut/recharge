@@ -397,6 +397,12 @@ fn info_from(m: &Managed, ready: Option<u64>) -> LauncherInfo {
     }
 }
 
+/// The launcher-managed install's channel (channel.txt wins; it can change while we run), None when not launcher-managed.
+pub fn managed_channel(app: &AppHandle) -> Option<String> {
+    let m = managed(app)?;
+    Some(info_from(&m, None).channel).filter(|c| c == "beta" || c == "stable")
+}
+
 #[tauri::command]
 pub fn launcher_info(app: AppHandle) -> LauncherInfo {
     match managed(&app) {

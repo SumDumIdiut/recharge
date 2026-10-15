@@ -4,6 +4,7 @@ import { mapThumbFor, hubStamp } from './maps/mapthumb.js';
 import { hubVideoSource, rowPicture } from './backgrounds/community.js';
 import { mediaKind } from './backgrounds/media.js';
 import { urlReader } from './backgrounds/cover.js';
+import { applySkinThumb } from './skin-thumb.js';
 
 const HUB = 'https://codecade.co.za/recharge';
 const MAX_ENTRIES = 10;
@@ -99,20 +100,6 @@ export function mergeEntries(lists, max = MAX_ENTRIES) {
     .filter((e) => e.when && !isNaN(new Date(e.when)))
     .sort((a, b) => new Date(b.when) - new Date(a.when))
     .slice(0, max);
-}
-
-// A skin's own image is the Unity animator sheet: 6 rows in fixed order (Idle, run, Fall, Jump, wallPose, Dash; see TemplateGrid.cs in recharge-skins), so crop row 0's leftmost frame, assuming roughly square cells.
-function applySkinThumb(el, src) {
-  const probe = new Image();
-  probe.onload = () => {
-    const cellH = probe.naturalHeight / 6;
-    const scale = el.clientHeight / cellH;
-    el.style.backgroundImage = `url("${src}")`;
-    el.style.backgroundSize = `${probe.naturalWidth * scale}px ${probe.naturalHeight * scale}px`;
-    el.style.backgroundPosition = '0 0';
-  };
-  probe.onerror = () => el.remove();
-  probe.src = src;
 }
 
 export function renderNews(entries) {
