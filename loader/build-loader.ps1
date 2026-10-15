@@ -16,6 +16,12 @@ $ErrorActionPreference = 'Continue'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+# No build servers or reused MSBuild nodes outliving this script: they keep the
+# Managed reference DLLs (Recharge.ModApi.dll, Assembly-CSharp.dll) mapped, and
+# Windows then refuses to overwrite them (error 1224, user-mapped section open).
+$env:MSBUILDDISABLENODEREUSE = '1'
+$env:UseSharedCompilation = 'false'
+$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'
 
 # A path saved in its Windows extended-length form (\\?\C:\...) makes Windows
 # PowerShell's Join-Path/Test-Path fail with 'the value of argument "drive" is
@@ -37,6 +43,66 @@ $TempDir = [System.IO.Path]::GetTempPath()
 function Set-Status([string]$text) {
     Write-Host $text
     if ($StatusFile) { Set-Content -Path $StatusFile -Value $text -Force }
+}
+
+# Errors that mean "something still has this file open or mapped".
+function Test-LockError($ex) {
+    return ("$($ex.Message)" -match 'user-mapped|being used by another|sharing violation|used by another process|Access to the path|denied|in use')
+}
+
+# Replace $Dest with $Source safely: write "$Dest.new", swap it in with a few
+# retries (antivirus scans), and if the file is loaded/mapped by a process move
+# the old one aside as "$Dest.old-<ms>" (Windows allows renaming a loaded DLL).
+# The app sweeps *.old-* leftovers on later runs. A still-locked file throws
+# "LOCKED<<path>> reason", which the app turns into a message naming the holder.
+function Copy-FileSafe([string]$Source, [string]$Dest) {
+    $new = "$Dest.new"
+    $delays = 150, 300, 600, 1200
+    $err = $null
+    for ($i = 0; $i -le $delays.Count; $i++) {
+        try {
+            Copy-Item -LiteralPath $Source -Destination $new -Force -ErrorAction Stop
+            Move-Item -LiteralPath $new -Destination $Dest -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            $err = $_.Exception
+            if ($i -lt $delays.Count) { Start-Sleep -Milliseconds $delays[$i] }
+        }
+    }
+    if (-not (Test-LockError $err)) {
+        Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+        throw $err
+    }
+    $aside = "$Dest.old-" + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    try {
+        Copy-Item -LiteralPath $Source -Destination $new -Force -ErrorAction Stop
+        Move-Item -LiteralPath $Dest -Destination $aside -Force -ErrorAction Stop
+        try { Move-Item -LiteralPath $new -Destination $Dest -Force -ErrorAction Stop }
+        catch { Move-Item -LiteralPath $aside -Destination $Dest -Force -ErrorAction SilentlyContinue; throw }
+    }
+    catch {
+        Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+        throw "LOCKED<<$Dest>> $($err.Message)"
+    }
+}
+
+# Helpers of ours (decompiler, dotnet/MSBuild children of this or a crashed
+# earlier run) must be gone before files in Managed are rewritten.
+function Stop-OurHelpers {
+    if (-not $IsWindowsPlatform) { return }
+    try {
+        $mine = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ProcessId -ne $PID -and $_.CommandLine -and $_.Name -match '^(dotnet|ilspycmd|VBCSCompiler|MSBuild)' -and
+            $_.CommandLine -match 'recharge-loader-(build|copies)|ilspycmd\.dll|recharge-ilspycmd'
+        })
+        foreach ($p in $mine) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        $deadline = (Get-Date).AddSeconds(10)
+        while ($mine.Count -gt 0 -and (Get-Date) -lt $deadline -and @($mine | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -gt 0) {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    catch { }
 }
 
 function Invoke-LoggedBuild([string]$LogPath, [string]$Exe, $ExeArgs) {
@@ -152,6 +218,7 @@ try {
     }
 
     Get-Ilspycmd | Out-Null
+    Stop-OurHelpers
 
     $gameDir = $GameDir
 
@@ -201,7 +268,8 @@ try {
     if ($modApiResult.ExitCode -ne 0) { throw (Format-BuildFailure "Recharge.ModApi build failed" $modApiResult) }
     $modApiBuilt = Join-Path $modApiWorkDir 'bin/Release/netstandard2.1/Recharge.ModApi.dll'
     if (-not (Test-Path $modApiBuilt)) { throw "Recharge.ModApi.dll not found after build." }
-    Copy-Item $modApiBuilt $managed -Force
+    Stop-OurHelpers
+    Copy-FileSafe $modApiBuilt (Join-Path $managed 'Recharge.ModApi.dll')
 
     Set-Status "2/$($totalPhases): Decompiling the game's original assembly..."
     $work = Join-Path $TempDir "recharge-loader-build-$PID"
@@ -268,8 +336,9 @@ $refXml
     if (-not (Test-Path $built)) { throw "Assembly-CSharp build reported success but $built is missing." }
 
     Set-Status "5/$($totalPhases): Deploying the patched game assembly..."
-    Copy-Item $built $deployed -Force
-    Copy-Item $built $rechargeCache -Force
+    Stop-OurHelpers
+    Copy-FileSafe $built $deployed
+    Copy-FileSafe $built $rechargeCache
     # This script writes the dll straight into Managed, bypassing the app's deploy_build.
     # Without refreshing the stamp the next launch sees a stale one, reads it as a game
     # update, and overwrites ORIGINAL with our patched build - losing the only vanilla copy.
@@ -314,7 +383,8 @@ $refXml
 
         $deployModDir = Join-Path $gameDir "Recharge/Mods/$($manifest.id)"
         New-Item -ItemType Directory -Force -Path $deployModDir | Out-Null
-        Copy-Item $modBuilt $deployModDir -Force
+        Stop-OurHelpers
+        Copy-FileSafe $modBuilt (Join-Path $deployModDir (Split-Path $modBuilt -Leaf))
         $deployedManifestPath = Join-Path $deployModDir 'mod.json'
         if (Test-Path $deployedManifestPath) {
             $deployedManifest = Get-Content $deployedManifestPath -Raw | ConvertFrom-Json

@@ -41,6 +41,10 @@ fn main() {
     )
     .expect("failed to run tauri-build");
     println!("cargo:rerun-if-changed=src/lib.rs");
+    // tauri-build copies the bundled resources (incl. the loader sources the game redeploy builds from) only when this script runs, so re-run it when they change.
+    for r in ["../../loader/ModApi", "../../loader/Runtime", "../../loader/tools", "../../loader/build-loader.ps1", "../../electron/main.js", "../../electron/package.json"] {
+        println!("cargo:rerun-if-changed={r}");
+    }
 
     // Watch HEAD so a plain rebuild re-embeds the commit SHA (see launcher.rs) instead of a stale one.
     let git_dir = std::path::Path::new("../../.git");

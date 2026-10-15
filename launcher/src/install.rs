@@ -528,10 +528,10 @@ pub fn close_app(root: &Path) {
     {
         // Own windows first (graceful), then force; WebView2 helpers are matched by user-data folder so other apps' are never touched.
         let script = format!(
-            "$r='{root}\\app\\*'; \
-             Get-Process | Where-Object {{ $_.Path -like $r }} | ForEach-Object {{ [void]$_.CloseMainWindow() }}; \
+            "$r='{root}\\app\\*'; $r2='{root}\\app.old*'; \
+             Get-Process | Where-Object {{ $_.Path -like $r -or $_.Path -like $r2 }} | ForEach-Object {{ [void]$_.CloseMainWindow() }}; \
              Start-Sleep -Milliseconds 1500; \
-             Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -like $r -or ($_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -like '*{id}\\EBWebView*') }} | \
+             Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -like $r -or $_.ExecutablePath -like $r2 -or ($_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -like '*{id}\\EBWebView*') }} | \
              ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
             root = ps_quote(root),
             id = APP_IDENTIFIER

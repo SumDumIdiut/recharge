@@ -80,8 +80,9 @@ await test('playback plan: pause when hidden / game running; sound off by defaul
   assert.equal(playbackPlan(aud).audio, true);
   assert.equal(playbackPlan({ ...aud, hidden: true }).audio, false);
   assert.equal(playbackPlan({ ...aud, hidden: true, prefs: { ...aud.prefs, keepPlaying: true } }).audio, true);
-  assert.equal(playbackPlan({ ...aud, gameRunning: true, prefs: { ...aud.prefs, keepPlaying: true } }).audio, false);
+  assert.equal(playbackPlan({ ...aud, gameRunning: true, prefs: { ...aud.prefs, keepPlaying: true } }).audio, true); // keepPlaying survives the game
   assert.equal(playbackPlan({ ...aud, sound: null }).audio, false);
+  assert.equal(playbackPlan({ ...aud, gameRunning: true }).audio, false);
 });
 
 await test('thumbnail cache key: file + mtime + size, new mtime/size = new key', () => {

@@ -25,6 +25,8 @@ namespace Recharge.ModApi
             public float TopY;
             public float RowSpacing;
             public float PanelTopY;
+            public float BackgroundScaleY = 1f;
+            public bool ChildBackground;
             public float BottomMargin;
             public float QuitY;
             public GameObject PageButton;
@@ -172,6 +174,21 @@ namespace Recharge.ModApi
             float originalQuitY = quit.anchoredPosition.y;
 
             var background = mainBitGo.GetComponent<RectTransform>();
+            // The title-screen panel is itself the background image. The in-game
+            // pause panel is a bare container whose background is a child Image,
+            // so resizing the container did nothing and Main Menu hung off the end.
+            bool childBackground = false;
+            float backgroundScaleY = 1f;
+            if (mainBitGo.GetComponent<Graphic>() == null)
+            {
+                var childBg = FindBackgroundChild(mainBitGo.transform);
+                if (childBg != null)
+                {
+                    background = childBg;
+                    childBackground = true;
+                    backgroundScaleY = Mathf.Max(0.0001f, Mathf.Abs(childBg.localScale.y));
+                }
+            }
             float panelTopY = 0f, bottomMargin = 0f;
             if (background != null)
             {
@@ -179,9 +196,13 @@ namespace Recharge.ModApi
                 // clip the extra row, so the vertical fit is handed to us here.
                 var fitter = background.GetComponent<ContentSizeFitter>();
                 if (fitter != null) fitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
-                panelTopY = TopEdge(background);
-                var panelBottomEdge = BottomEdge(background);
-                bottomMargin = originalQuitY - panelBottomEdge + 20f;
+                panelTopY = TopEdge(background, backgroundScaleY);
+                var panelBottomEdge = BottomEdge(background, backgroundScaleY);
+                // Title panel keeps its 20 extra; the pause panel's own bottom edge already
+                // matches vanilla (about 13 below the Quit row), so adding 20 left a wide empty band.
+                bottomMargin = originalQuitY - panelBottomEdge + (childBackground ? 0f : 20f);
+                if (childBackground)
+                    Debug.Log("[Recharge] MenuPager pause bottomMargin=" + bottomMargin + " (quitY=" + originalQuitY + " panelBottom=" + panelBottomEdge + " panelTop=" + panelTopY + " scaleY=" + backgroundScaleY + ")");
             }
 
             HideVanillaDividersInPagerRegion(mainBitGo.transform, topY, originalQuitY, out var dividerTemplate);
@@ -198,6 +219,8 @@ namespace Recharge.ModApi
             rt.TopY = topY;
             rt.RowSpacing = rowSpacing;
             rt.PanelTopY = panelTopY;
+            rt.BackgroundScaleY = backgroundScaleY;
+            rt.ChildBackground = childBackground;
             rt.BottomMargin = bottomMargin;
             rt.CurrentPage = 0;
 
@@ -205,7 +228,7 @@ namespace Recharge.ModApi
             quit.anchoredPosition = new Vector2(quit.anchoredPosition.x, quitY);
             rt.QuitY = quitY;
             rt.QuitTargetY = quitY;
-            ResizeBackgroundToFit(background, panelTopY, quitY, bottomMargin);
+            ResizeBackgroundToFit(background, panelTopY, quitY, bottomMargin, backgroundScaleY, childBackground);
 
             CreateDividers(dividerTemplate, topY, rowSpacing);
             rt.Slots = CreateSlots(quit, settings);
@@ -232,15 +255,40 @@ namespace Recharge.ModApi
             }
         }
 
-        private static float TopEdge(RectTransform rt) => rt.anchoredPosition.y + (1f - rt.pivot.y) * rt.sizeDelta.y;
-        private static float BottomEdge(RectTransform rt) => rt.anchoredPosition.y - rt.pivot.y * rt.sizeDelta.y;
+        // Edges in the parent's space; the local scale matters for the child
+        // background of the pause panel (1 for the title-screen panel).
+        private static float TopEdge(RectTransform rt, float scaleY) => rt.anchoredPosition.y + (1f - rt.pivot.y) * rt.sizeDelta.y * scaleY;
+        private static float BottomEdge(RectTransform rt, float scaleY) => rt.anchoredPosition.y - rt.pivot.y * rt.sizeDelta.y * scaleY;
+
+        // The biggest plain Image directly under the pause panel (not a button row or divider).
+        private static RectTransform FindBackgroundChild(Transform panel)
+        {
+            RectTransform best = null;
+            float bestArea = 0f;
+            foreach (Transform child in panel)
+            {
+                var r = child as RectTransform;
+                if (r == null || child.GetComponent<Image>() == null || child.GetComponent<Button>() != null) continue;
+                if (child.name.StartsWith("Line") || child.name.StartsWith("ModsPager")) continue;
+                float area = r.rect.width * r.rect.height;
+                if (area > bestArea) { bestArea = area; best = r; }
+            }
+            return best;
+        }
 
         // Anchors and pivots vary between menus, so set the height and then place
         // the rect from its own pivot instead of assuming a centered one.
-        private static void ResizeBackgroundToFit(RectTransform background, float panelTopY, float quitY, float bottomMargin)
+        private static void ResizeBackgroundToFit(RectTransform background, float panelTopY, float quitY, float bottomMargin, float scaleY, bool child)
         {
             if (background == null) return;
             float bottomEdge = quitY - bottomMargin;
+            if (child)
+            {
+                float height = (panelTopY - bottomEdge) / scaleY;
+                background.sizeDelta = new Vector2(background.sizeDelta.x, background.sizeDelta.y + (height - background.rect.height));
+                background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * height * scaleY);
+                return;
+            }
             background.sizeDelta = new Vector2(background.sizeDelta.x, panelTopY - bottomEdge);
             background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * background.sizeDelta.y);
         }
@@ -314,7 +362,7 @@ namespace Recharge.ModApi
                 rt.Quit.anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY);
                 rt.QuitTargetY = bottomY;
                 if (paged) ((RectTransform)rt.PageButton.transform).anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY + rt.RowSpacing);
-                ResizeBackgroundToFit(rt.Background, rt.PanelTopY, bottomY, rt.BottomMargin);
+                ResizeBackgroundToFit(rt.Background, rt.PanelTopY, bottomY, rt.BottomMargin, rt.BackgroundScaleY, rt.ChildBackground);
             }
 
             if (page == 0) ShowVanillaPage(rt);

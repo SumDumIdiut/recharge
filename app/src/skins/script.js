@@ -1,6 +1,6 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
 import { requireLogin } from '../login-prompt.js';
-import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -111,7 +111,7 @@ function renderInstalled() {
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="icon-btn" title="Delete" onclick="event.stopPropagation(); window.__skinConfirmDelete('${escapeHtml(s.folderName)}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Delete" onclick="event.stopPropagation(); window.__skinConfirmDelete('${escapeHtml(s.folderName)}', this)">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`
@@ -207,7 +207,7 @@ window.__skinOpenDetail = function (key) {
     <div class="detail-actions">
       ${installedSkin
         ? `<span class="browse-card-meta">Installed</span>
-           <button class="btn btn-danger" onclick="window.__skinConfirmDelete('${escapeHtml(installedSkin.folderName)}')">Delete</button>`
+           <button class="btn btn-danger" onclick="window.__skinConfirmDelete('${escapeHtml(installedSkin.folderName)}', this)">Delete</button>`
         : entry ? `<button class="btn btn-primary" onclick="window.__skinInstall('${escapeHtml(entry.id)}', this)">Install</button>` : ''}
       ${mine ? `<button class="btn btn-danger" onclick="window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">Remove from Library</button>` : ''}
     </div>
@@ -233,20 +233,13 @@ window.__skinsSearch = function (value) {
   render();
 };
 
-window.__skinConfirmDelete = async function (folderName) {
-  const entry = installedCache.find((s) => s.folderName === folderName);
-  const name = displayName(entry || folderName);
-  const ok = await confirmDestructive({
-    title: 'Delete skin',
-    body: `"${name}" and its art and sounds will be deleted from your installed skins. This can't be undone.`,
-    confirmLabel: 'Delete',
-    name,
-  });
-  if (!ok) return;
+window.__skinConfirmDelete = function (folderName, btn) {
+  if (!armConfirm(btn)) return;
+  btn.disabled = true;
   const { invoke } = window.__TAURI__.core;
   invoke('delete_skin', { folderName })
     .then(refresh)
-    .catch((err) => alert(String(err)));
+    .catch((err) => { btn.disabled = false; alert(String(err)); });
 };
 
 window.__skinInstall = async function (id, btn) {

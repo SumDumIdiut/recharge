@@ -22,7 +22,7 @@ globalThis.requestAnimationFrame = () => 0;
 
 globalThis.Image = class { constructor() { this.complete = true; this.naturalWidth = 8; this.naturalHeight = 8; } set src(v) { this._s = v; setTimeout(() => this.onload?.(), 0); } get src() { return this._s; } };
 globalThis.fetch = async (url) => {
-  const file = path.join(mapsDir, String(url).replace(/^\/maps\//, '').split('?')[0]);
+  const file = path.join(mapsDir, String(url).replace(/^.*\/maps\//, '').split('?')[0]);
   if (!fs.existsSync(file)) return { ok: false, status: 404, headers: { get: () => null }, text: async () => '', json: async () => { throw new Error('404'); } };
   const text = fs.readFileSync(file, 'utf8');
   return { ok: true, status: 200, headers: { get: () => null }, body: null, text: async () => text, json: async () => JSON.parse(text) };
@@ -46,6 +46,51 @@ const lonelyGround = () => firstOf(T.sets.ground, (k) => !T.sets.moss.has(k) && 
 const spikeK = () => [...T.sets.haz].find(([, h]) => h.kind === 'spike')[0];
 const vineK = () => [...T.sets.haz].find(([, h]) => h.kind === 'vine')[0];
 const selectCells = (what, k) => { T.selection = T.baseCellsAt(...k.split(',').map(Number)); assert.ok(T.selection, what + ' selectable at ' + k); return T.selection; };
+
+await test('all imported checkpoints can be deleted by coordinate', () => {
+  blank();
+  const checkpoints = T.objects.filter((o) => o.checkpoint);
+  assert.equal(checkpoints.length, base.scene.checkpoints.length);
+  assert.equal(new Set(checkpoints.map((o) => o.id)).size, checkpoints.length, 'checkpoint ids are unique');
+  const groundPoint = [...T.sets.ground].map((k) => {
+    const [cx, cy] = k.split(',').map(Number), w = T.cellWorld(cx, cy);
+    return { x: w.x + 16, y: w.y + 16 };
+  }).find((p) => checkpoints.some((o) => o.state === 'always' && Math.abs(p.x - o.hitX) <= o.w / 2 && Math.abs(p.y - o.hitY) <= o.h / 2));
+  assert.ok(groundPoint, 'ground overlaps at least one imported checkpoint hitbox');
+  const checkpoint = checkpoints.find((o) => o.state === 'always' && Math.abs(groundPoint.x - o.hitX) <= o.w / 2 && Math.abs(groundPoint.y - o.hitY) <= o.h / 2);
+  assert.equal(T.itemAt(groundPoint.x, groundPoint.y).kind, 'basecells', 'the ground under a checkpoint box wins over the box');
+  const badgeX = checkpoint.hitX;
+  const badgeY = checkpoint.hitY + checkpoint.h / 2 + 14 / 0.75;
+  assert.equal(T.checkpointHitAt(badgeX, badgeY), checkpoint.id, 'visible checkpoint badge is within the selection target');
+  assert.equal(T.selectCanvasTargetAt(badgeX, badgeY), true, 'canvas click selects the checkpoint without entering drag selection');
+  assert.deepEqual(T.selection, { kind: 'base', id: checkpoint.id });
+  const cp = checkpoints.find((o) => !o.path);
+  assert.ok(cp, 'pathless checkpoint target exists');
+  T.selection = { kind: 'base', id: cp.id };
+  T.pushUndo();
+  T.deleteSelection();
+  assert.ok(T.buildMap().groups[0].objects.some((o) => o.type === 'hideCheckpoint' && o.x === cp.srcX && o.y === cp.srcY));
+  T.undo();
+  T.selection = { kind: 'base', id: cp.id };
+  assert.equal(T.nudgeSelection(1, 0, false), false, 'checkpoints are deletable but not movable');
+});
+
+await test('triggers are selectable where nothing else is, and by their edge / badge', () => {
+  blank();
+  const k = lonelyGround(), [x, y] = k.split(',').map(Number), w = T.cellWorld(x, y), g = { x: w.x + 16, y: w.y + 16 };
+  let spot;
+  for (let r = 32; r <= 192 && !spot; r += 32) for (const [dx, dy] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) if (!spot && T.itemAt(g.x + dx, g.y + dy) === null) spot = { x: g.x + dx, y: g.y + dy };
+  assert.ok(spot, 'empty air near the ground cell');
+  const trigger = { kind: 'swapBlocks', x: (spot.x + g.x) / 2, y: (spot.y + g.y) / 2, w: 640, h: 640 };
+  T.open({ name: 't', useBase: true, baseState: 'start', triggers: [trigger] });
+  assert.equal(T.itemAt(g.x, g.y).kind, 'basecells', 'ground inside the zone wins over the zone');
+  assert.deepEqual(T.itemAt(spot.x, spot.y), { kind: 'mtrig', index: 0 }, 'empty air inside the zone is the zone');
+  T.setTool('ground');
+  assert.equal(T.clickSelectsAt(spot.x, spot.y), true, 'click selects the trigger instead of placing ground');
+  assert.equal(T.selectTriggerAt(spot.x, spot.y), true, 'trigger click immediately enters selection');
+  assert.deepEqual(T.selection, { kind: 'mtrig', index: 0 });
+  T.setTool('select');
+});
 
 await test('ground: select, delete, undo, redo, save and reload', () => {
   blank();
@@ -124,6 +169,10 @@ await test('spikes: select, move (keeps direction), delete', () => {
 await test('vines: selectable, delete, move', () => {
   blank();
   const k = vineK();
+  const [vx, vy] = k.split(',').map(Number), vw = T.cellWorld(vx, vy);
+  const hit = T.itemAt(vw.x + 16, vw.y + 16);
+  assert.equal(hit?.kind, 'basecells', 'base vine sprite is selectable');
+  assert.equal(hit?.vine, true, 'vine hit wins over the underlying base cell');
   const sel = selectCells('vine', k);
   assert.equal(sel.vine, true);
   T.pushUndo();
@@ -178,6 +227,16 @@ await test('marquee region: delete and move take the level\'s cells with it', ()
   assert.ok(T.gone.removed.has(k));
 });
 
+await test('a level checkpoint with a scene path moves through the game\'s move field, hit box and badge going with it', () => {
+  blank();
+  const o = T.objects.find((x) => x.checkpoint && x.path), before = { x: o.hitX, y: o.hitY };
+  T.selection = { kind: 'base', id: o.id };
+  assert.ok(T.nudgeSelection(1, 0, true));
+  assert.ok(o.hitX !== before.x, 'hit centre follows');
+  assert.ok(T.checkpointHitAt(o.hitX, o.hitY + o.h / 2 + 14 / 0.75));
+  assert.ok(T.buildMap().groups[0].objects.some((e) => e.type === 'move' && e.path === o.path));
+});
+
 const upgradeBox = () => T.objects.find((o) => o.kind === 'upgrade' && o.box);
 
 await test('level objects (upgrade boxes, doors, triggers): delete / move / edit, save, reload, undo', () => {
@@ -190,11 +249,18 @@ await test('level objects (upgrade boxes, doors, triggers): delete / move / edit
     T.pushUndo();
     T.deleteSelection();
     assert.ok(T.gone.removedObjects.has(o.id), kind + ' deleted');
-    assert.ok(T.buildMap().groups[0].objects.some((e) => e.type === 'hide' && e.path === o.path), kind + ' exports a hide');
+    assert.ok(T.buildMap().groups[0].objects.some((e) => o.checkpoint
+      ? e.type === 'hideCheckpoint' && e.x === o.srcX && e.y === o.srcY
+      : e.type === 'hide' && e.path === o.path), kind + ' exports a hide');
     reload();
     assert.ok(T.gone.removedObjects.has(o.id), kind + ' removal reloads');
     T.undo();
     assert.ok(!T.gone.removedObjects.has(o.id));
+    if (o.checkpoint && !o.path) {
+      T.selection = { kind: 'base', id: o.id };
+      assert.equal(T.nudgeSelection(1, 0, false), false, kind + ' without a scene path cannot be moved');
+      continue;
+    }
     T.selection = { kind: 'base', id: o.id };
     assert.ok(T.nudgeSelection(1, 0, true));
     const d = T.gone.movedObjects.get(o.id);
@@ -205,13 +271,17 @@ await test('level objects (upgrade boxes, doors, triggers): delete / move / edit
   }
   const box = upgradeBox();
   blank();
-  T.editBaseUpgrade(box.id, 'price', '777');
+  T.editBaseUpgrade(box.id, 'baseCost', '123');
+  T.editBaseUpgrade(box.id, 'cost', '777');
   const mod = T.buildMap().groups[0].objects.find((e) => e.type === 'modify' && e.path === box.path);
+  assert.equal(mod.upgrade.baseCost, 123);
+  assert.equal(mod.upgrade.cost, 777);
   assert.equal(mod.upgrade.prices[0], 777);
   reload();
-  assert.equal(T.gone.baseEdits[box.id].price, 777, 'upgrade edit reloads');
+  assert.equal(T.gone.baseEdits[box.id].baseCost, 123, 'base cost edit reloads independently');
+  assert.equal(T.gone.baseEdits[box.id].cost, 777, 'current cost edit reloads independently');
   T.undo();
-  assert.ok(!T.gone.baseEdits[box.id]?.price || T.gone.baseEdits[box.id].price !== 777, 'edit undone');
+  assert.notEqual(T.gone.baseEdits[box.id]?.cost, 777, 'current cost edit undone independently');
 });
 
 await test('level scenery (sprites, plants, signs): delete / move, save, reload', () => {

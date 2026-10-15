@@ -132,12 +132,29 @@ function setProgress(text) {
   }
 }
 
+// The backend fails an install with this prefix while IGTAP is running (it has Assembly-CSharp.dll mapped, so Windows refuses the overwrite).
+const GAME_RUNNING = 'IGTAP_RUNNING:';
+
+window.__setKeepModded = function (on) {
+  try { localStorage.setItem('keep-game-modded', on ? '1' : '0'); } catch { /* storage unavailable */ }
+};
+
+function initKeepModded() {
+  const box = document.getElementById('keep-modded-toggle');
+  if (!box) return;
+  let on = true;
+  try { on = localStorage.getItem('keep-game-modded') !== '0'; } catch { /* default on */ }
+  box.checked = on;
+}
+
 window.__loaderInstall = async function () {
   const { invoke } = window.__TAURI__.core;
   const btn = document.getElementById('loader-install-btn');
+  const closeBtn = document.getElementById('loader-close-install-btn');
   const track = document.getElementById('loader-progress-track');
   const fill = document.getElementById('loader-progress-fill');
   btn.disabled = true;
+  if (closeBtn) closeBtn.hidden = true;
   fill.style.width = '0%';
   track.hidden = false;
   try {
@@ -145,11 +162,38 @@ window.__loaderInstall = async function () {
     setProgress('Done.');
   } catch (err) {
     track.hidden = true;
-    document.getElementById('loader-progress').textContent = String(err);
+    const msg = String(err);
+    if (msg.includes(GAME_RUNNING) && closeBtn) {
+      document.getElementById('loader-progress').textContent = msg.slice(msg.indexOf(GAME_RUNNING) + GAME_RUNNING.length).trim();
+      closeBtn.hidden = false;
+    } else {
+      document.getElementById('loader-progress').textContent = msg;
+    }
   } finally {
     btn.disabled = false;
     refreshStatus();
   }
+};
+
+// "IGTAP is running - Close game and install": end the game, wait for it to exit, then run the install again.
+window.__loaderCloseAndInstall = async function () {
+  const { invoke } = window.__TAURI__.core;
+  const closeBtn = document.getElementById('loader-close-install-btn');
+  const btn = document.getElementById('loader-install-btn');
+  closeBtn.disabled = true;
+  btn.disabled = true;
+  document.getElementById('loader-progress').textContent = 'Closing IGTAP…';
+  try {
+    await invoke('close_game_and_wait');
+  } catch (err) {
+    document.getElementById('loader-progress').textContent = String(err);
+    closeBtn.disabled = false;
+    btn.disabled = false;
+    return;
+  }
+  closeBtn.hidden = true;
+  closeBtn.disabled = false;
+  await window.__loaderInstall();
 };
 
 window.__loaderUninstall = async function () {
@@ -181,6 +225,7 @@ async function refreshInstallList() {
 
 async function refreshStatus() {
   const { invoke } = window.__TAURI__.core;
+  initKeepModded();
   const status = document.getElementById('loader-status');
   const pathInput = document.getElementById('settings-game-path');
   try {

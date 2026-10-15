@@ -1,7 +1,7 @@
 import { getToken, getUsername, isLoggedIn } from '../auth.js';
 import { requireLogin } from '../login-prompt.js';
 import { hubStamp, cardImage, needsView } from './mapthumb.js';
-import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
 const HUB_BASE = 'https://codecade.co.za/recharge';
 
@@ -82,7 +82,7 @@ function renderInstalled() {
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="icon-btn" title="Uninstall" onclick="event.stopPropagation(); window.__mapConfirmUninstall('${escapeHtml(m.id)}', '${escapeHtml(shownName(m)).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Delete" onclick="event.stopPropagation(); window.__mapConfirmUninstall('${escapeHtml(m.id)}', this)">${ICON_TRASH}</button>
         </div>
       </div>
     </div>`;
@@ -170,18 +170,13 @@ window.__mapInstall = async function (id, btn) {
   }
 };
 
-window.__mapConfirmUninstall = async function (id, name) {
-  const ok = await confirmDestructive({
-    title: 'Delete map',
-    body: `"${name}" will be deleted from your installed maps. This can't be undone from here - you'd need to reinstall it.`,
-    confirmLabel: 'Delete',
-    name,
-  });
-  if (!ok) return;
+window.__mapConfirmUninstall = function (id, btn) {
+  if (!armConfirm(btn)) return;
+  btn.disabled = true;
   const { invoke } = window.__TAURI__.core;
   invoke('uninstall_map', { id })
     .then(refresh)
-    .catch((err) => alert(String(err)));
+    .catch((err) => { btn.disabled = false; alert(String(err)); });
 };
 
 window.__mapOpenUpload = function () {

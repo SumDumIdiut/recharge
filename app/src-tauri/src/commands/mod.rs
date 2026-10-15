@@ -1,3 +1,4 @@
+pub mod amp;
 pub mod backgrounds;
 pub mod games;
 pub mod hub;
@@ -7,6 +8,7 @@ pub mod loader;
 pub mod migrate;
 pub mod maps;
 pub mod mods;
+pub mod safe_fs;
 pub mod play;
 pub mod repos;
 pub mod settings;

@@ -24,6 +24,9 @@ pub struct State {
     pub current: Option<Snapshot>,
     /// Version in app.old/, restored by rollback.
     pub prev: Option<Snapshot>,
+    /// Folder name (under root) holding `prev`; None = the default app.old (set when app.old was locked and a unique name was used).
+    #[serde(default)]
+    pub prev_dir: Option<String>,
     /// Build just swapped in and not yet confirmed by started-<build>.ok.
     pub pending: Option<u64>,
     /// Builds that failed the health check; skipped until a different build is published.

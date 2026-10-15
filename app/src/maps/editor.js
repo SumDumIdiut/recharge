@@ -1,6 +1,25 @@
 import { isV2, toV1State } from './fromv2.js';
 import { TileIndex, TrackedMap, TrackedSet, TrackedTiles } from './tileindex.js';
+import { pickPieces, connector, connectorRoles } from './tiling.js';
+import { EDGE_PROFILE } from './edgeprofiles.js';
+import { checkpointExport } from './checkpoint.js';
+import { solidGroup, outlineLoops } from './hitboxes.js';
 
+// Where this editor's own files live (art, level data, plants, fonts, tile worker): the folder of this module, so a downloaded Amplifier (served from its own address, see commands/amp.rs) uses its own files and the built-in one /maps/.
+const MAPS = new URL('./', import.meta.url).href;
+// A downloaded editor is on another origin: images must be requested with CORS or drawing them would taint the canvases.
+const MAPS_CROSS = (() => { try { return new URL(MAPS).origin !== self.location.origin; } catch { return false; } })();
+// A worker can't load its script from another origin directly, so a downloaded editor starts it through a same-origin blob that just imports the real one (the server allows our origin through CORS).
+function newTileWorker() {
+  const url = new URL('./tile-worker.js', import.meta.url).href;
+  if (!MAPS_CROSS) return new Worker(url, { type: 'module' });
+  const blobUrl = URL.createObjectURL(new Blob([`import ${JSON.stringify(url)};`], { type: 'text/javascript' }));
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+  return new Worker(blobUrl, { type: 'module' });
+}
+// "amp-12" for a downloaded Amplifier (its folder name), else "built-in".
+function editorVersion() { return /\/(amp-[0-9A-Za-z._-]+)\/$/.exec(MAPS)?.[1] || 'built-in'; }
+function newMapImage() { const i = new Image(); if (MAPS_CROSS) i.crossOrigin = 'anonymous'; return i; }
 const DRAFT_KEY = 'rechargeMapMakerDraft';
 const START_BOX = { dx: 0, dy: 0, w: 60, h: 250 };
 const END_BOX = { dx: 0, dy: -26, w: 240, h: 13 };
@@ -99,8 +118,9 @@ let movedScene = new Map(), movedObjects = new Map();
 let levelOrder = new Map(), levelTf = new Map(), levelGroups = new Map();
 const levelKey = (t) => (t.kind === 'base' ? 'o:' + t.id : t.id);
 let removedPaths = [];
-const syncRemovedPaths = () => { removedPaths = baseObjects.filter((o) => removedObjects.has(o.id)).map((o) => o.path); };
+const syncRemovedPaths = () => { removedPaths = baseObjects.filter((o) => removedObjects.has(o.id) && o.path).map((o) => o.path); };
 let baseObjects = [];
+const baseObjectVisible = (o) => !o.checkpoint || !o.state || o.state === 'always' || o.state === draft.baseState;
 
 const key = (cx, cy) => cx + ',' + cy;
 const unkey = (k) => k.split(',').map(Number);
@@ -304,7 +324,7 @@ async function loadBase(show = false) {
 }
 
 async function fetchBase() {
-  const res = await fetch('/maps/basemap.json');
+  const res = await fetch(MAPS + 'basemap.json');
   if (!res.ok) throw new Error('basemap.json: ' + res.status);
   const total = Number(res.headers.get('content-length')) || 5e6;
   let text;
@@ -321,14 +341,19 @@ async function fetchBase() {
     text = await new Blob(chunks).text();
   } else text = await res.text();
   base = JSON.parse(text);
+  baseFp = fnv(text);
   gridCache = null;
-  try { plantList = await (await fetch('/maps/plants/plants.json')).json(); } catch (e) { plantList = []; assetLog.set('/maps/plants/plants.json', { ok: false, tries: 1, err: String(e) }); }
+  try { plantList = await (await fetch(MAPS + 'plants/plants.json')).json(); } catch (e) { plantList = []; assetLog.set(MAPS + 'plants/plants.json', { ok: false, tries: 1, err: String(e) }); }
   await preloadImages();
   applyBaseState();
   baseSettled = true;
-  startTileWorkers();
+  // The workers only draw the level's tiles ahead of the view (~200 MB each in the page), so a map with the base game unloaded doesn't start them:
+  // loading the base game later does, from tileWorkersReady() on its first tile.
+  if (draft.useBase) startTileWorkers();
 }
 let baseSettled = false;
+let baseFp = '';
+function fnv(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); }
 
 // Every image the editor loads is logged here (kept even with the debug strip off) so a missing one shows in the debug report.
 const assetLog = new Map();
@@ -338,7 +363,7 @@ function loadImage(src, tries = 3) {
     let n = 0;
     const go = () => {
       n++;
-      const i = new Image();
+      const i = newMapImage();
       const fail = (err) => {
         assetLog.set(src, { ok: false, tries: n, err });
         if (n < tries) setTimeout(go, 300 * n); else ok(null);
@@ -365,13 +390,13 @@ function loadLazy(src, keep, what) {
 function preloadImages() {
   const sc = base.scene, jobs = [];
   const add = (src, keep) => jobs.push([src, keep]);
-  add('/maps/' + base.art.atlas, (i) => { atlasImg = i; });
+  add(MAPS + base.art.atlas, (i) => { atlasImg = i; });
   if (sc) {
-    add('/maps/' + sc.atlas, (i) => { sceneImg = i; });
-    for (const b of sc.backgrounds || []) add('/maps/' + b.img, (i) => { bgImages[b.img] = i; });
-    (sc.fonts || []).forEach((f, n) => { if (f) add('/maps/' + f.atlas, (i) => { fontImages[n] = i; }); });
+    add(MAPS + sc.atlas, (i) => { sceneImg = i; });
+    for (const b of sc.backgrounds || []) add(MAPS + b.img, (i) => { bgImages[b.img] = i; });
+    (sc.fonts || []).forEach((f, n) => { if (f) add(MAPS + f.atlas, (i) => { fontImages[n] = i; }); });
   }
-  for (const v of new Set(base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite))) add('/maps/vines/' + encodeURIComponent(v) + '.png', (i) => { vineImages[v] = i; });
+  for (const v of new Set(base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite))) add(MAPS + 'vines/' + encodeURIComponent(v) + '.png', (i) => { vineImages[v] = i; });
   let done = 0;
   const seen = new Map();
   return Promise.all(jobs.map(([src, keep]) => {
@@ -410,6 +435,7 @@ function applyBaseState() {
   if (!base) return;
   stageMask = null;
   baseMossGrid = null;
+  levelJoinCache = null;
   const st = base.states[draft.baseState] || base.states.start;
   const both = (kind) => [base.always[kind], st[kind]];
   layer = { ground: both('ground'), moss: both('moss'), blue: both('blue'), orange: both('orange') };
@@ -426,6 +452,20 @@ function applyBaseState() {
   buildScene();
   baseVersion++;
   baseObjects = [...(base.always.objects || []), ...(st.objects || [])].map((o) => ({ ...o, id: o.path + '@' + o.x + ',' + o.y }));
+  const checkpointPlacements = base.scene?.placements || {};
+  for (const cp of base.scene?.checkpoints || []) {
+    const at = cp.at || [], source = (checkpointPlacements[cp.state || 'always'] || []).find((p) => Math.abs(p.x - at[0]) < 0.1 && Math.abs(p.y - at[1]) < 0.1);
+    if (at.length !== 2) continue;
+    const id = (source?.p || 'checkpoint') + '@' + at[0] + ',' + at[1] + ':' + (cp.state || 'always');
+    if (baseObjects.some((o) => o.path === source?.p && o.x === at[0] && o.y === at[1])) continue;
+    const box = cp.box || {};
+    baseObjects.push({
+      kind: 'checkpoint', cls: 'checkpointScript', label: cp.course ? 'Course checkpoint' : 'Checkpoint',
+      path: source?.p || null, x: at[0], y: at[1], srcX: at[0], srcY: at[1],
+      hitX: at[0] + (box.dx || 0), hitY: at[1] + (box.dy || 0),
+      w: box.w || CELL, h: box.h || CELL, checkpoint: true, state: cp.state, id,
+    });
+  }
   syncRemovedPaths();
   applyBaseMoves();
   baseHaz = new Map();
@@ -595,13 +635,18 @@ function autotilePick(table, has, x, y) {
 
 const PANEL = { TL: 1, T: 2, TR: 3, L: 9, C: 10, R: 11, BL: 17, B: 18, BR: 19 };
 // The ground sheets' panel set: a lone cell, a 1-wide column and a 1-high row each have their own pieces.
-const PANEL_SET = { ...PANEL, single: 0, v: [8, 16, 26], h: [27, 28, 29] };
-const GRATE_SET = { ...PANEL, single: 0, v: [8, 16, 24], h: [25, 26, 27] };
+// The sheets' own inside-corner tiles, named for the corner the empty diagonal is at: the level puts one on a cell with all
+// four sides solid and one diagonal empty. A number, or { id, m } for a piece that is another one turned by matrix m.
+// `rail` sheets (a rail / bevel / bar along the top) never get a generated connector: a mitred rail looks wrong.
+const INNER_BEVEL = { NE: 14, SE: 6, SW: 7, NW: 15 };
+const INNER_PLATE = { NE: 66, SE: 59, SW: 60, NW: 67 };
+const INNER_GRATE = { NE: 12, SE: 4, SW: 5, NW: 13 };
+const INNER_TURNED = (id) => ({ SE: id, NE: { id, m: [1, 0, 0, -1] }, SW: { id, m: [-1, 0, 0, 1] }, NW: { id, m: [-1, 0, 0, -1] } });
+const PANEL_SET = { ...PANEL, single: 0, v: [8, 16, 26], h: [27, 28, 29], style: 'rail', rail: true, inner: INNER_BEVEL };
+const GRATE_SET = { ...PANEL, single: 0, v: [8, 16, 24], h: [25, 26, 27], inner: INNER_GRATE };
 function colouredTile(kind, cx, cy) {
   if (!base?.art) return null;
-  const set = kind === 'blue' ? blueSet : orangeSet;
-  const has = (x, y) => { const k = key(x, y); return blocks.get(k) === kind || (baseOn() && !!set?.has(k) && !removed.has(k)); };
-  return plateTile(kind === 'blue' ? 'blueBlocks' : 'orangeBlocks', kind + '_ground_tileset_', PANEL_SET, has, cx, cy);
+  return plateTile(kind === 'blue' ? 'blueBlocks' : 'orangeBlocks', kind + '_ground_tileset_', PANEL_SET, joinSolid(kind), cx, cy, joinStyle(kind));
 }
 
 let mossCells = new TrackedMap();
@@ -660,7 +705,7 @@ function categoryItems(cat) {
       { tool: 'blueSpike', label: 'Blue spike', group: 'Spikes', thumb: { art: spikeTile('blue', 0).tile } },
       { tool: 'orangeSpike', label: 'Orange spike', group: 'Spikes', thumb: { art: spikeTile('orange', 0).tile } },
       { tool: 'trueSpike', label: 'True spike', group: 'Spikes', thumb: { trueSpike: true, color: COLORS.true } },
-      ...vineSprites().filter((v) => base.catalog?.vineNames?.[v] !== null).map((v) => ({ tool: 'vine', vine: v, group: 'Thorn vines', label: base.catalog?.vineNames?.[v] || prettySprite(v), thumb: { img: '/maps/vines/' + encodeURIComponent(v) + '.png' } })),
+      ...vineSprites().filter((v) => base.catalog?.vineNames?.[v] !== null).map((v) => ({ tool: 'vine', vine: v, group: 'Thorn vines', label: base.catalog?.vineNames?.[v] || prettySprite(v), thumb: { img: MAPS + 'vines/' + encodeURIComponent(v) + '.png' } })),
     ];
     case 'objects':
       return (base.catalog?.objects || []).map((o, i) => ({ tool: 'object', i, label: o.name, group: 'Gameplay', thumb: /^Long fall/.test(o.name) ? { icon: 'fall', color: COLORS.fall } : { scene: mainSprite(o) } }))
@@ -691,6 +736,7 @@ const TRIGGER_KINDS = {
   move: { icon: 'move', label: 'Move group', group: 'Groups', color: '#6aa8e0', about: 'slides a group by an offset' },
   teleport: { icon: 'portal', label: 'Teleport', group: 'Player', color: '#b07bff', about: 'sends the player to the marker' },
   kill: { icon: 'skull', label: 'Kill zone', group: 'Player', color: '#ff4f6d', about: 'kills the player like a spike' },
+  swapBlocks: { icon: 'toggle', label: 'Swap block colours', group: 'Player', color: '#e0c36a', about: 'swaps blue and orange blocks' },
   respawn: { icon: 'respawn', label: 'Set respawn', group: 'Player', color: '#41f88d', about: 'the player respawns at the marker' },
   zoom: { icon: 'zoom', label: 'Camera zoom', group: 'Camera', color: '#7ad7f0', about: 'zooms the camera while inside' },
   message: { icon: 'message', label: 'Message', group: 'Camera', color: '#f0f07a', about: 'shows text on screen' },
@@ -716,7 +762,7 @@ let plantList = [];
 const PLANT_DECOR = /trunk|glow/i;
 function plantItems() {
   const count = {};
-  return plantList.map((pl, pi) => ({ tool: 'gsprite', pi, label: `${pl.kind} ${(count[pl.kind] = (count[pl.kind] || 0) + 1)}`, group: 'Plants', thumb: { img: '/maps/plants/' + pl.file } }));
+  return plantList.map((pl, pi) => ({ tool: 'gsprite', pi, label: `${pl.kind} ${(count[pl.kind] = (count[pl.kind] || 0) + 1)}`, group: 'Plants', thumb: { img: MAPS + 'plants/' + pl.file } }));
 }
 const plantOf = (cs) => plantList.find((p) => p.sprite === cs.game);
 
@@ -886,7 +932,7 @@ function thumbHtml(th, size = 32) {
   const sheet = (atlas, img, rect) => {
     if (!img?.naturalWidth || !rect) return null;
     const [x, y, w, h] = rect, k = size / Math.max(w, h, 1);
-    return `<span class="mm-thumb-img" style="width:${Math.round(w * k)}px;height:${Math.round(h * k)}px;background-image:url('/maps/${atlas}');background-size:${img.naturalWidth * k}px ${img.naturalHeight * k}px;background-position:${-x * k}px ${-y * k}px"></span>`;
+    return `<span class="mm-thumb-img" style="width:${Math.round(w * k)}px;height:${Math.round(h * k)}px;background-image:url('${MAPS}${atlas}');background-size:${img.naturalWidth * k}px ${img.naturalHeight * k}px;background-position:${-x * k}px ${-y * k}px"></span>`;
   };
   let inner = null;
   if (th.art && base?.art?.tiles[th.art] !== undefined) inner = sheet(base.art.atlas, atlasImg, base.art.sprites[base.art.tiles[th.art]]);
@@ -1228,6 +1274,13 @@ function drawPlacedObject(o, alpha = 1) {
     ctx.save();
     ctx.globalAlpha = alpha;
     drawGate(o, { dx: t.dx, dy: t.dy, w: t.w, h: t.h }, col, item.name.toUpperCase() + (isLinked(o.course) ? ' · ' + linkLabel(o.course).toUpperCase() : cc ? ' · ANY COURSE' : ''));
+    if (isCheckpoint(item)) {
+      // The flag and respawn point: where the game puts them, standing in the box.
+      const f = checkpointExport(o.x, o.y, t), p = toScreen(f.x, f.y);
+      ctx.fillStyle = col; ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y - 22); ctx.lineTo(p.x + 14, p.y - 16); ctx.lineTo(p.x, p.y - 10); ctx.stroke(); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
     ctx.restore();
   }
 }
@@ -1476,11 +1529,14 @@ function stampThumb(si) {
   return url;
 }
 
-function objectHit(o, wx, wy) {
+// pass 'art': only the object's real sprite parts; 'area': only its trigger-zone box; default: either.
+function objectHit(o, wx, wy, pass = 'any') {
   const item = catalogItem(o);
   if (!item) return false;
-  const box = objectBox(o, item);
-  if (box && (isSizable(item) || !item.parts.length) && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3]) return true;
+  const box = objectBox(o, item), inBox = !!box && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3];
+  const zone = isSizable(item) || !item.parts.length;
+  if (pass !== 'art' && zone && inBox) return true;
+  if (pass === 'area') return !objectHasArt(o, item) && inBox;
   let shown = false;
   for (const p of objectParts(o, item)) {
     if (HIDDEN_PART(p)) continue;
@@ -1492,9 +1548,10 @@ function objectHit(o, wx, wy) {
     const lx = (p.m[3] * dx - p.m[1] * dy) / det, ly = (-p.m[2] * dx + p.m[0] * dy) / det;
     if (lx >= -pvx * W && lx <= (1 - pvx) * W && ly >= -pvy * H && ly <= (1 - pvy) * H) return true;
   }
-  if (!shown && box && wx >= o.x + box[0] && wx <= o.x + box[2] && wy >= o.y + box[1] && wy <= o.y + box[3]) return true;
-  return !shown && Math.hypot(wx - o.x, wy - o.y) < CELL / 2;
+  if (!shown && inBox) return pass !== 'art';
+  return !shown && !(pass === 'art' && zone) && Math.hypot(wx - o.x, wy - o.y) < CELL / 2;
 }
+const objectHasArt = (o, item) => objectParts(o, item).some((p) => !HIDDEN_PART(p));
 function tileAt(wx, wy) {
   let best = null, bo = 0;
   for (const layer of tiles.layers.keys()) {
@@ -1533,42 +1590,115 @@ function worldAt(e) {
   return toWorld(e.clientX - r.left, e.clientY - r.top);
 }
 
+// The topmost selectable thing under the point that sits on an open (not hidden / locked) layer; a closed layer's
+// item is skipped, so the click falls through to what is below instead of selecting nothing.
 function itemAt(wx, wy) {
-  const t = itemAtAny(wx, wy);
-  return t && layerOpen(targetLayer(t)) ? t : null;
-}
-function itemAtAny(wx, wy) {
-  // A trigger zone wins on its edge; inside, anything else there comes first.
-  const ti = layerHidden('course') ? -1 : triggerAt(wx, wy), tg = triggers[ti];
-  if (tg && (Math.abs(Math.abs(wx - tg.x) - tg.w / 2) * cam.scale < 8 || Math.abs(Math.abs(wy - tg.y) - tg.h / 2) * cam.scale < 8)) return { kind: 'mtrig', index: ti };
-  const xi = layerHidden('course') ? -1 : xspawnAt(wx, wy);
-  if (xi >= 0) return { kind: 'xspawn', index: xi };
-  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy) : e.kind === 'csprite' ? customSpriteHit(e.it, wx, wy) : e.kind === 'sign' ? Math.abs(wx - e.it.x) <= e.it.w / 2 && Math.abs(wy - e.it.y) <= e.it.h / 2 : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
-  if (top) return { kind: top.kind, index: top.index };
-  const m = markerAt(wx, wy);
-  if (m) return { kind: 'gate', ...m };
-  const c = cellOf(wx, wy), k = key(c.cx, c.cy);
-  if (spikes.has(k)) return { kind: 'cell', k };
-  if (blocks.has(k)) return ownBlocksAt(c.cx, c.cy);
-  const mk = mossKeyAt(wx, wy);
-  if (mossCells.has(mk)) return ownMossAt(mk);
-  const t = tileAt(wx, wy);
-  if (t) return { kind: 'tile', key: t[0] };
-  const v = vineAt(wx, wy);
-  if (v?.own) return { kind: 'cell', k: v.k, vine: true };
-  if (baseOn()) {
-    const bo = baseObjects.findLast((o) => !removedObjects.has(o.id) && Math.abs(wx - o.x) <= o.w / 2 && Math.abs(wy - o.y) <= o.h / 2);
-    if (bo) return { kind: 'base', id: bo.id };
-    const bc = baseCellsAt(c.cx, c.cy);
-    if (bc) return bc;
-    if (v && !v.own) return { kind: 'basecells', cells: [v.k], what: 'Vine', vine: true };
-    const dt = decoAt(wx, wy);
-    if (dt) return dt;
-    const sp = sceneSpriteAt(wx, wy);
-    if (sp) return { kind: 'scene', id: sp.id };
-  }
-  if (ti >= 0) return { kind: 'mtrig', index: ti };
+  for (const t of itemsAtAny(wx, wy)) if (layerOpen(targetLayer(t))) return t;
   return null;
+}
+// Scenery drawn behind the playfield (wall decoration, background tiles / panels, pipes): art with a draw order under
+// the level's (LEVEL_CUT), and the decoration tile layers. Not gameplay things, so a trigger area under it wins the click.
+const GAMEPLAY_PATH = /teleporter|door|zipmover|upgrade|checkpoint|long ?fall|platform|gate/i;
+const isBackgroundScene = (p) => (p.o ?? 0) < LEVEL_CUT && !GAMEPLAY_PATH.test(p.p || '');
+function itemAtAny(wx, wy) { for (const t of itemsAtAny(wx, wy)) return t; return null; }
+// What is under (wx, wy), best first. The foreground wins: your own placed things, then the level's real, interactive
+// things (objects, blocks, spikes, vines, foreground sprites). Then trigger areas (checkpoints, course gates, long-fall
+// zones, triggers; of several, the smallest), which beat background scenery (decoration, wall art). A trigger area's
+// badge beats everything.
+function* itemsAtAny(wx, wy) {
+  const badges = areaHits(wx, wy, true);
+  for (const h of badges) yield h.target;
+  // A placed checkpoint's flag pin is its art: clicking it selects the checkpoint.
+  for (const t of checkpointPinHits(wx, wy)) yield t;
+  // The selected trigger zone's edge handles stay grabbable.
+  const sel = selection?.kind === 'mtrig' ? triggers[selection.index] : null;
+  if (sel && !layerHidden('course') && (Math.abs(Math.abs(wx - sel.x) - sel.w / 2) * cam.scale < 8 || Math.abs(Math.abs(wy - sel.y) - sel.h / 2) * cam.scale < 8)
+    && Math.abs(wx - sel.x) <= sel.w / 2 + 8 / cam.scale && Math.abs(wy - sel.y) <= sel.h / 2 + 8 / cam.scale) yield { kind: 'mtrig', index: selection.index };
+  const top = stack().findLast((e) => (e.kind === 'object' ? objectHit(e.it, wx, wy, 'art') : e.kind === 'csprite' ? customSpriteHit(e.it, wx, wy) : e.kind === 'sign' ? Math.abs(wx - e.it.x) <= e.it.w / 2 && Math.abs(wy - e.it.y) <= e.it.h / 2 : Math.abs(wx - e.it.x) <= CELL / 2 && Math.abs(wy - e.it.y) <= CELL / 2));
+  if (top) yield { kind: top.kind, index: top.index };
+  const c = cellOf(wx, wy), k = key(c.cx, c.cy);
+  if (spikes.has(k)) yield { kind: 'cell', k };
+  if (blocks.has(k)) yield ownBlocksAt(c.cx, c.cy);
+  const mk = mossKeyAt(wx, wy);
+  if (mossCells.has(mk)) yield ownMossAt(mk);
+  const t = tileAt(wx, wy);
+  if (t) yield { kind: 'tile', key: t[0] };
+  const v = vineAt(wx, wy);
+  if (v?.own) yield { kind: 'cell', k: v.k, vine: true };
+  let sp = null;
+  if (baseOn()) {
+    const bo = baseObjects.findLast((o) => !isBaseArea(o) && baseObjectVisible(o) && !removedObjects.has(o.id) && Math.abs(wx - (o.hitX ?? o.x)) <= o.w / 2 && Math.abs(wy - (o.hitY ?? o.y)) <= o.h / 2);
+    if (bo) yield { kind: 'base', id: bo.id };
+    if (v && !v.own) yield { kind: 'basecells', cells: [v.k], what: 'Vine', vine: true };
+    const bc = baseCellsAt(c.cx, c.cy);
+    if (bc) yield bc;
+    // Inside a checkpoint's box wins over scenery art (arrows, decoration) but not over blocks, spikes or objects above.
+    for (const h of areaHits(wx, wy, false)) if (isCheckpointTarget(h.target)) yield h.target;
+    sp = sceneSpriteAt(wx, wy);
+    if (sp && !isBackgroundScene(sp)) {
+      // A level checkpoint's own flag art selects the checkpoint, as a placed checkpoint's art does.
+      const cpArt = baseObjects.find((o) => o.checkpoint && o.path && baseObjectVisible(o) && !removedObjects.has(o.id) && (sp.p === o.path || sp.p.startsWith(o.path + '/')));
+      yield cpArt ? { kind: 'base', id: cpArt.id } : { kind: 'scene', id: sp.id };
+    }
+  }
+  for (const h of areaHits(wx, wy, false)) yield h.target;
+  if (baseOn()) {
+    const dt = decoAt(wx, wy);
+    if (dt) yield dt;
+    if (sp && isBackgroundScene(sp)) yield { kind: 'scene', id: sp.id };
+  }
+}
+// The level's yellow trigger zones carry a badge like a checkpoint's: shown from this zoom, with its name from 0.2.
+const AREA_BADGE_MIN = 0.05, AREA_LABEL_MIN = 0.2;
+const ZONE_NAMES = { TutorialTextTrigger: 'TEXT TRIGGER', EndCreditsTrigger: 'END CREDITS', FakeCreditsControlScript: 'FAKE CREDITS', tripBreakerScript: 'TRIP BREAKER', SceneTransitionObject: 'SCENE CHANGE' };
+function areaBadge(o) {
+  if (o.checkpoint) return { icon: 'checkpoint', text: o.label.toUpperCase() };
+  if (o.cls === 'longFallColliderController') return { icon: 'fall', text: String(o.label).toUpperCase() };
+  const credits = o.cls === 'EndCreditsTrigger' || o.cls === 'FakeCreditsControlScript';
+  return { icon: credits ? CREDIT_ICON : 'cursor', text: (ZONE_NAMES[o.cls] || String(o.label || 'ZONE').toUpperCase()) + (credits ? (draft.simulate ? ' ▶ PLAYING' : ' · SIMULATE (T) TO PLAY') : '') };
+}
+// Imported level objects that are only a trigger area (checkpoints, long-fall zones, credits / tutorial / trip triggers).
+const isBaseArea = (o) => !!o.checkpoint || o.kind === 'trigger';
+// The trigger areas under the point, smallest first. badgeOnly: just those whose badge (the label above the box) is under it.
+function areaHits(wx, wy, badgeOnly) {
+  const out = [], ppu = Math.max(cam.scale, 0.001), hidden = layerHidden('course');
+  const add = (target, x, y, w, h) => {
+    const inBox = Math.abs(wx - x) <= w / 2 && Math.abs(wy - y) <= h / 2;
+    const labelRight = cam.scale >= AREA_LABEL_MIN ? 110 : 13, by = y + h / 2 + 14 / ppu;
+    const onBadge = cam.scale >= AREA_BADGE_MIN && wx >= x - 13 / ppu && wx <= x + labelRight / ppu && Math.abs(wy - by) <= 13 / ppu;
+    if (badgeOnly ? onBadge : inBox) out.push({ target, size: w * h });
+  };
+  if (baseOn() && !layerHidden('level')) {
+    for (const o of baseObjects) if (isBaseArea(o) && baseObjectVisible(o) && !removedObjects.has(o.id)) add({ kind: 'base', id: o.id }, o.hitX ?? o.x, o.hitY ?? o.y, o.w || CELL, o.h || CELL);
+  }
+  placed.forEach((o, index) => {
+    const item = catalogItem(o);
+    if (!item || !(isSizable(item) || !item.parts.length)) return;
+    const t = trigOf(o, item);
+    add({ kind: 'object', index }, o.x + t.dx, o.y + t.dy, t.w, t.h);
+  });
+  if (!hidden) {
+    triggers.forEach((t, index) => add({ kind: 'mtrig', index }, t.x, t.y, t.w, t.h));
+    xspawns.forEach((s, index) => add({ kind: 'xspawn', index }, s.x, s.y + SPAWN_BOX.dy, SPAWN_BOX.w + 8, SPAWN_BOX.h + 8));
+  }
+  for (const m of markerList()) add(m.target, m.g.x + m.b.dx, m.g.y + m.b.dy, Math.max(m.b.w, CELL), Math.max(m.b.h, CELL));
+  return out.sort((a, b) => a.size - b.size);
+}
+const isCheckpointTarget = (t) => t.kind === 'base' ? !!baseObjects.find((o) => o.id === t.id)?.checkpoint : t.kind === 'object' && isCheckpoint(catalogItem(placed[t.index]));
+// The flag pin drawn on each placed checkpoint (drawPlacedObject): a small screen-sized box around the pole and flag.
+function checkpointPinHits(wx, wy) {
+  const out = [], ppu = Math.max(cam.scale, 0.001);
+  placed.forEach((o, index) => {
+    const item = catalogItem(o);
+    if (!item || !isCheckpoint(item)) return;
+    const f = checkpointExport(o.x, o.y, trigOf(o, item));
+    if (wx >= f.x - 6 / ppu && wx <= f.x + 16 / ppu && wy >= f.y - 6 / ppu && wy <= f.y + 24 / ppu) out.push({ kind: 'object', index });
+  });
+  return out;
+}
+function baseCheckpointAt(wx, wy, badgeOnly = false) {
+  const hit = areaHits(wx, wy, badgeOnly).find((h) => h.target.kind === 'base' && baseObjects.find((o) => o.id === h.target.id)?.checkpoint);
+  return hit ? baseObjects.find((o) => o.id === hit.target.id) : null;
 }
 const xspawnAt = (wx, wy) => xspawns.findLastIndex((s) => Math.abs(wx - s.x) <= SPAWN_BOX.w / 2 + 4 && Math.abs(wy - (s.y + SPAWN_BOX.dy)) <= SPAWN_BOX.h / 2 + 4);
 
@@ -1808,7 +1938,7 @@ function drawTarget(t) {
     else { const [cx, cy] = unkey(t.k), w = cellWorld(cx, cy); rectW(w.x, w.y, w.x + CELL, w.y + CELL); }
   } else if (t.kind === 'base') {
     const o = baseObjects.find((x) => x.id === t.id);
-    if (o) rectW(o.x - o.w / 2, o.y - o.h / 2, o.x + o.w / 2, o.y + o.h / 2);
+    if (o) { const x = o.hitX ?? o.x, y = o.hitY ?? o.y; rectW(x - o.w / 2, y - o.h / 2, x + o.w / 2, y + o.h / 2); }
   } else if (t.kind === 'blocks') {
     outlineCells(t.cells, cellRect);
   } else if (t.kind === 'moss') {
@@ -1854,6 +1984,36 @@ function grabsSelection(wp) {
   if (targets.some((t) => t.kind === 'region' && c.cx >= t.x0 && c.cx <= t.x1 && c.cy >= t.y0 && c.cy <= t.y1)) return true;
   const hit = itemAt(wp.x, wp.y);
   return !!hit && targets.some((t) => sameTarget(t, hit));
+}
+function clickSelects(wp) {
+  const hit = itemAt(wp.x, wp.y);
+  return tool === 'select' || hit?.kind === 'mtrig' || (tool !== 'paste' && grabsSelection(wp));
+}
+function selectTriggerAt(wp) {
+  const hit = itemAt(wp.x, wp.y);
+  if (hit?.kind !== 'mtrig') return false;
+  selection = hit;
+  showInDropdown(hit);
+  renderConfig();
+  requestDraw();
+  return true;
+}
+function selectCheckpointAt(wp) {
+  // Painting tools only grab a checkpoint by its badge; Select takes it wherever it is the thing under the cursor.
+  const top = itemAt(wp.x, wp.y);
+  const hit = top?.kind === 'base' ? baseObjects.find((o) => o.id === top.id && o.checkpoint) : null;
+  if (!hit || (tool !== 'select' && baseCheckpointAt(wp.x, wp.y, true)?.id !== hit.id)) return false;
+  selection = { kind: 'base', id: hit.id };
+  showInDropdown(selection);
+  renderConfig();
+  requestDraw();
+  return true;
+}
+function selectCanvasTarget(wp, e) {
+  if (selectCheckpointAt(wp)) return true;
+  if (selectTriggerAt(wp)) { selectDown(e); return true; }
+  if (clickSelects(wp)) { selectDown(e); return true; }
+  return false;
 }
 
 // A selected trigger zone's or checkpoint's box, in world units, to size by its edges.
@@ -2228,6 +2388,7 @@ function moveTargets(targets, wx, wy, cx, cy, fine) {
       const c = courseById(t.course), at = courseScreen(c);
       if (c && at) { c.screen = { x: at.x + sx, y: at.y + sy }; moved = true; }
     } else if (t.kind === 'base' || t.kind === 'scene') {
+      if (t.kind === 'base' && (() => { const o = baseObjects.find((x) => x.id === t.id); return o?.checkpoint && !o.path; })()) { fixed = true; continue; }
       if (sx || sy) { moveLevelThing(t, sx, sy); moved = true; }
     } else if (t.kind === 'moss') {
       const g = layerGrid('moss').size, mx = Math.round((cx * CELL) / g), my = Math.round((cy * CELL) / g);
@@ -2265,7 +2426,12 @@ function marqueeTargets(r) {
   if (layerOpen('course')) xspawns.forEach((t, i) => { if (inside(t)) out.push({ kind: 'xspawn', index: i }); });
   if (layerOpen('tiles')) tileIndex.forEachInRect(tiles, a.x - 1, a.y - 1, b.x + 1, b.y + 1, (t, k) => { if (!t.arrow && inside(tileCenter(t.layer, k))) out.push({ kind: 'tile', key: k }); });
   if (baseOn() && layerOpen('level')) {
-    for (const o of baseObjects) if (!removedObjects.has(o.id) && inside(o)) out.push({ kind: 'base', id: o.id });
+    for (const o of baseObjects) {
+      if (!baseObjectVisible(o) || removedObjects.has(o.id)) continue;
+      const x = o.hitX ?? o.x, y = o.hitY ?? o.y;
+      // A trigger area goes with the marquee only when its whole box is inside; everything else by its centre.
+      if (isBaseArea(o) ? inside({ x: x - o.w / 2, y: y - o.h / 2 }) && inside({ x: x + o.w / 2 - 0.01, y: y + o.h / 2 - 0.01 }) : inside({ x, y })) out.push({ kind: 'base', id: o.id });
+    }
     for (const p of sceneList?.items || []) if (p.id && !p.group && p.a !== 0 && !removedScene.has(p.id) && p.reach < 400 && inside(p)) out.push({ kind: 'scene', id: p.id });
   }
   if (!layerLocked('course')) {
@@ -2658,6 +2824,7 @@ const UPGRADE_KINDS = [
   { id: 'zipMovers', label: 'Zip movers' },
   { id: 'refreshers', label: 'Refreshers' },
   { id: 'clones', label: 'Clones', multi: true, local: true },
+  { id: 'teleporters', label: 'Teleporters' },
   { id: 'baseReward', label: 'Base reward', multi: true, local: true },
   { id: 'cloneMult', label: 'Clone reward multiplier', multi: true, local: true },
   { id: 'fastClone', label: 'Fast clone chance', multi: true, local: true },
@@ -2676,7 +2843,7 @@ function upgradeConfig(o) {
 }
 function upgradePrices(u, n = u.max) {
   const out = [];
-  let c = u.price;
+  let c = u.cost ?? u.price;
   for (let i = 0; i < n; i++) {
     if (i < u.prices.length) c = u.prices[i];
     else if (i > 0) c = Math.ceil(Math.pow(c + u.add, u.power) * u.scale);
@@ -2702,6 +2869,7 @@ const BOX_TEXT = {
   omniDash: { name: '-1 Midair jump.\n\nDash in any direction' },
   zipMovers: { name: 'Activate zip movers' },
   refreshers: { name: 'Enable Jump and Dash refresh orbs' },
+  teleporters: { name: 'Activate teleporters' },
   clones: { name: '0 Clones', effect: '[+1 Per use]' },
   baseReward: { name: '1x base reward', effect: '[+1x  Per use]' },
   cloneMult: { name: '0.1x clone reward multiplier', effect: '[+0.1x  Per use]' },
@@ -2768,7 +2936,7 @@ function drawBoxTexts(o, alpha) {
 function editedBoxText(t) {
   for (const [id, e] of Object.entries(draft.baseEdits || {})) {
     const o = baseObjects.find((x) => x.id === id);
-    if (!o || Math.abs(t.x - o.x) > o.w / 2 || Math.abs(t.y - o.y) > o.h / 2) continue;
+    if (!o || o.checkpoint || Math.abs(t.x - o.x) > o.w / 2 || Math.abs(t.y - o.y) > o.h / 2) continue;
     const u = baseUpgradeConfig(o);
     if (t.f === 1) return { ...t, t: gameCost(upgradePrices(u, 1)[0], u.currency), c: CURRENCY_COLOUR[u.currency] || t.c };
     if (e.label && !t.t.startsWith('[')) return { ...t, t: e.label };
@@ -2804,7 +2972,7 @@ function upgradeConfigHtml(o, num) {
   html += `<div class="mm-config-row"><label>Label<input class="mm-input" type="text" data-cfg="up:label" value="${u.label.replace(/"/g, '&quot;')}" placeholder="${kind?.label || ''}"></label></div>`;
   html += `<div class="mm-config-row">${num('up:price', 'Price', u.price, 1)}${kind?.multi ? num('up:max', 'Max buys', u.max, 1) : ''}</div>`;
   if (kind?.multi && u.max > 1) {
-    html += `<div class="mm-config-sub">Each next price = ((last + add) ^ power) × scale</div>`;
+  html += `<div class="mm-config-sub">Base cost is the game's base upgrade cost. Cost is the first price; each next price = ((last + add) ^ power) × scale.</div>`;
     html += `<div class="mm-config-row">${num('up:scale', '× Scale', u.scale, 0.1)}${num('up:add', '+ Add', u.add, 1)}${num('up:power', '^ Power', u.power, 0.05)}</div>`;
     html += `<div class="mm-config-row"><label>Set prices (comma list, overrides the curve)<input class="mm-input" type="text" data-cfg="up:prices" value="${u.prices.join(', ')}" placeholder="e.g. 10, 25, 60"></label></div>`;
     html += `<div class="mm-config-sub">Prices: ${upgradePrices(u, Math.min(u.max, 12)).map(shortNumber).join(', ')}${u.max > 12 ? ' …' : ''}</div>`;
@@ -2830,14 +2998,17 @@ function boxKindName(o) {
 const CURRENCY_ENUM = ['Cash', 'GreenPower', 'AtomicPower', 'regularNumber', 'CloneDust', 'RedPower', 'BluePower'];
 function baseUpgradeConfig(o) {
   const b = o.box || {};
-  return { currency: CURRENCY_ENUM[b.currency] || 'Cash', price: b.price ?? 10, scale: b.scale ?? 1.5, add: b.add ?? 0, power: b.power ?? 1, max: b.max ?? 1, prices: [], label: '', ...(draft.baseEdits?.[o.id] || {}) };
+  const edits = draft.baseEdits?.[o.id] || {};
+  const baseCost = edits.baseCost ?? edits.basecost ?? b.baseCost ?? b.basecost ?? b.baseUpgradeCost ?? b.price ?? 10;
+  const cost = edits.cost ?? edits.price ?? b.cost ?? b.upgradeCost ?? b.price ?? baseCost;
+  return { currency: CURRENCY_ENUM[b.currency] || 'Cash', baseCost, cost, price: cost, scale: b.scale ?? 1.5, add: b.add ?? 0, power: b.power ?? 1, max: b.max ?? 1, prices: [], label: '', ...edits, baseCost: edits.baseCost ?? edits.basecost ?? baseCost, cost: edits.cost ?? edits.price ?? cost };
 }
 function baseUpgradeHtml(o, num) {
   const u = baseUpgradeConfig(o), edited = !!draft.baseEdits?.[o.id];
   const sel = (id, label, options, value) => `<label>${label}<select class="mm-input" data-cfg="${id}">${options.map(([v, t]) => `<option value="${v}"${v === value ? ' selected' : ''}>${t}</option>`).join('')}</select></label>`;
   let html = `<div class="mm-config-row"><label>Label<input class="mm-input" type="text" data-cfg="bu:label" value="${u.label.replace(/"/g, '&quot;')}" placeholder="the game's own"></label>${sel('bu:currency', 'Paid in', CURRENCIES, u.currency)}</div>`;
-  html += `<div class="mm-config-row">${num('bu:price', 'Price', u.price, 1)}${num('bu:max', 'Max buys', u.max, 1)}</div>`;
-  html += `<div class="mm-config-sub">Each next price = ((last + add) ^ power) × scale</div>`;
+  html += `<div class="mm-config-row">${num('bu:baseCost', 'Base cost', u.baseCost, 1)}${num('bu:cost', 'Cost', u.cost, 1)}${num('bu:max', 'Max buys', u.max, 1)}</div>`;
+    html += `<div class="mm-config-sub">Each next price = ((last + add) ^ power) × scale</div>`;
   html += `<div class="mm-config-row">${num('bu:scale', '× Scale', u.scale, 0.1)}${num('bu:add', '+ Add', u.add, 1)}${num('bu:power', '^ Power', u.power, 0.005)}</div>`;
   html += `<div class="mm-config-row"><label>Set prices (comma list, overrides the curve)<input class="mm-input" type="text" data-cfg="bu:prices" value="${u.prices.join(', ')}" placeholder="e.g. 10, 25, 60"></label></div>`;
   html += `<div class="mm-config-sub">Prices: ${upgradePrices(u, Math.min(u.max, 10)).map(shortNumber).join(', ')}${u.max > 10 ? ' …' : ''}</div>`;
@@ -2853,7 +3024,7 @@ function applyBaseUpgrade(field, raw) {
   else {
     const v = Number(raw);
     if (!Number.isFinite(v)) return;
-    u[field] = field === 'max' ? Math.max(1, Math.round(v)) : field === 'price' || field === 'add' ? Math.max(0, v) : Math.max(0.001, v);
+    u[field] = field === 'max' ? Math.max(1, Math.round(v)) : field === 'baseCost' || field === 'cost' || field === 'add' ? Math.max(0, v) : Math.max(0.001, v);
   }
   pushUndo();
   draft.baseEdits = { ...(draft.baseEdits || {}), [o.id]: u };
@@ -2983,10 +3154,10 @@ function renderConfig() {
       more += `<div class="mm-config-row">${sel('up')}</div><div class="mm-config-row">${sel('down')}</div>`;
       more += `<div class="mm-config-sub">Links go both ways. In the game a teleporter works once you've touched the one you're going to.</div>`;
     }
-    if (isCourseCheckpoint(item)) {
-      more += `<div class="mm-config-row"><label>Belongs to<select class="mm-input" data-cfg="link"><option value="">Any course</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
-      more += `<div class="mm-config-sub">The game's own course checkpoint, working exactly as in the game. "Belongs to" files it under that course.</div>`;
-    } else if (LINKABLE(item)) more += `<div class="mm-config-row"><label>Course<select class="mm-input" data-cfg="link"><option value="">None</option>${courses().map((c) => `<option value="${c.id}"${o.course === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')}${baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${o.course === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : ''}</select></label></div>`;
+    if (isCheckpoint(item)) {
+      more += `<div class="mm-config-row"><label>Belongs to<select class="mm-input" data-cfg="link">${courseLinkOptions(o.course, 'Any course')}</select></label></div>`;
+      more += `<div class="mm-config-sub">${isCourseCheckpoint(item) ? 'The game\'s own course checkpoint. ' : ''}Filed under a course, this checkpoint only counts during that course's run; "Any course" always counts.</div>`;
+    } else if (LINKABLE(item)) more += `<div class="mm-config-row"><label>Course<select class="mm-input" data-cfg="link">${courseLinkOptions(o.course, 'None')}</select></label></div>`;
     const zip = zipConfig(o, item);
     if (item.upgradeBox) more += upgradeConfigHtml(o, num);
     else if (zip) {
@@ -3018,10 +3189,16 @@ function renderConfig() {
   } else if (selection.kind === 'base') {
     const o = baseObjects.find((x) => x.id === selection.id);
     if (!o || removedObjects.has(o.id)) { selection = null; el.hidden = true; return; }
-    html += `<div class="mm-config-title">${o.kind === 'upgrade' ? boxKindName(o) : o.label}<span>level ${o.kind === 'upgrade' ? 'upgrade box' : 'object'}</span></div>`;
+    html += `<div class="mm-config-title">${o.kind === 'upgrade' ? boxKindName(o) : o.kind === 'trigger' ? areaBadge(o).text.split(' · ')[0].replace(/ ▶.*/, '') : o.label}<span>level ${o.kind === 'upgrade' ? 'upgrade box' : o.kind === 'trigger' ? 'trigger zone' : 'object'}</span></div>`;
     html += actionBar();
-    if (o.box) html += sec('settings', 'Upgrade', baseUpgradeHtml(o, num) + (o.box.door ? `<div class="mm-config-sub" style="display:block">Opens ${o.box.door.path.includes('Atom') ? 'the atom room\'s gate' : 'the door to the facility\'s lower section'} (the yellow line) - shut until this box is bought, in custom maps too.</div>` : ''));
-    html += transformSection() + sec('group', 'Group & layer', groupRow() + levelOrderRow() + stackButtons());
+    if (o.checkpoint) {
+      html += `<div class="mm-config-sub">The game's own checkpoint (trigger ${Math.round(o.w)} x ${Math.round(o.h)}): touching this box sets where the player respawns. ${o.path ? 'Drag it to move it (the flag goes with it); ' : 'This one can\'t be moved; '}its size can't be changed in the game. Delete it to remove it from this map.</div>`;
+      html += `<div class="mm-config-row"><label>Belongs to<select class="mm-input" data-cfg="blink">${courseLinkOptions(baseCheckpointCourse(o), 'Any course')}</select></label></div><div class="mm-config-sub">Filed under a course, this checkpoint only counts during that course's run (Navigator).</div>`;
+    }
+    else {
+      if (o.box) html += sec('settings', 'Upgrade', baseUpgradeHtml(o, num) + (o.box.door ? `<div class="mm-config-sub" style="display:block">Opens ${o.box.door.path.includes('Atom') ? 'the atom room\'s gate' : 'the door to the facility\'s lower section'} (the yellow line) - shut until this box is bought, in custom maps too.</div>` : ''));
+      html += transformSection() + sec('group', 'Group & layer', groupRow() + levelOrderRow() + stackButtons());
+    }
   } else if (selection.kind === 'blocks' || selection.kind === 'moss') {
     html += `<div class="mm-config-title">${selection.what}<span>${selection.cells.length} cell${selection.cells.length === 1 ? '' : 's'} - drag or arrow keys to move</span></div>`;
     html += actionBar();
@@ -3212,6 +3389,7 @@ function applyConfig(inp) {
   if (id.startsWith('up:')) return applyUpgradeConfig(id.slice(3), inp.value);
   if (id.startsWith('bu:')) return applyBaseUpgrade(id.slice(3), inp.value);
   if (id.startsWith('tp:')) return applyTeleport(id.slice(3), inp.value);
+  if (id === 'blink') return applyBaseCheckpointLink(inp.value);
   if (id === 'link' || id === 'gatecourse' || id.startsWith('reward:')) return applyCourseConfig(id, inp.value);
   if (id === 'tilelayer') {
     const t = tiles.get(selection.key);
@@ -3274,6 +3452,15 @@ function applyUpgradeConfig(field, raw) {
   requestDraw();
 }
 
+function applyBaseCheckpointLink(raw) {
+  const o = baseObjects.find((x) => x.id === selection?.id);
+  if (!o?.checkpoint) return;
+  pushUndo();
+  const edits = { ...(draft.baseEdits || {}) };
+  if (raw) edits[o.id] = { course: raw }; else delete edits[o.id];
+  draft.baseEdits = edits;
+  saveDraft(); renderConfig(); requestDraw();
+}
 function applyCourseConfig(id, raw) {
   pushUndo();
   if (id === 'link') {
@@ -3466,11 +3653,7 @@ async function toggleInstalledList() {
   const list = root.querySelector('#mm-load-list');
   if (!list.hidden) { list.hidden = true; return; }
   list.hidden = false;
-  // The base game is always the first entry: it starts a fresh map on the level.
-  const show = (html) => {
-    list.innerHTML = '<button class="mm-tool mm-load-item" data-base="1" title="Start a new map on the base game level">Base game<span>level</span></button>' + html;
-    list.querySelector('[data-base]').addEventListener('click', async () => { if (await newMapOnBase()) list.hidden = true; });
-  };
+  const show = (html) => { list.innerHTML = html; };
   show('<div class="mm-config-sub">Loading…</div>');
   let maps = [];
   try { maps = await window.__TAURI__.core.invoke('list_maps'); } catch (e) { show(`<div class="mm-config-sub mm-warn">Couldn't list installed maps: ${e}</div>`); return; }
@@ -3564,29 +3747,34 @@ function autoSpikeTurn(cx, cy) {
   return options[0];
 }
 
-const PLATE = { TL: 56, T: 57, TR: 58, L: 63, C: 64, R: 65, BL: 70, B: 71, BR: 72 };
+const PLATE = { TL: 56, T: 57, TR: 58, L: 63, C: 64, R: 65, BL: 70, B: 71, BR: 72, style: 'plate', inner: INNER_PLATE };
 const PLATE3 = { TL: 0, T: 1, TR: 2, L: 3, C: 4, R: 5, BL: 6, B: 7, BR: 8 };
+const PLATE3_RAIL = { ...PLATE3, rail: true }; // FLOOR V2: a bar along the top
 // The level's other block tilesets, each autotiled on its own game tilemap like ground is.
-const ASSET_PLATE = (tl, l, bl, bar) => ({ TL: tl, T: tl + 1, TR: tl + 2, L: l, C: l + 1, R: l + 2, BL: bl, B: bl + 1, BR: bl + 2, ...(bar ? { h: [bar, bar + 1, bar + 2] } : {}) });
+// footTiles: where a rail meets a wall going up, the level uses the ground sheet's rail-end / rounded-rim pieces (22 for a wall
+// to the north-east, 23 to the north-west) on the cell at the wall's foot. The Asset floors use their own inside-corner tile there:
+// the ground sheet's pieces are a different art and drew a flat square where a Light floor pillar meets a floor.
+const FOOT = (family) => ({ NE: family + '22', NW: family + '23' });
+const ASSET_PLATE = (tl, l, bl, bar, inner, foot) => ({ TL: tl, T: tl + 1, TR: tl + 2, L: l, C: l + 1, R: l + 2, BL: bl, B: bl + 1, BR: bl + 2, ...(bar ? { h: [bar, bar + 1, bar + 2], ...(tl < 200 ? { rail: true } : {}) } : {}), ...(inner ? { inner: INNER_TURNED(inner) } : {}), ...(foot ? { foot: FOOT(foot) } : {}) });
 const BLOCK_SETS = {
   panel: { label: 'Panel', group: 'Solid', layer: 'ground', family: 'ground1_tileset_', plate: PANEL_SET, thumb: 'ground1_tileset_6', color: '#55584f' },
   darkpanel: { label: 'Dark panel', group: 'Solid', layer: 'ground', family: 'dark_ground_tileset_', plate: PANEL_SET, thumb: 'dark_ground_tileset_6', color: '#3a3c40' },
   grate: { label: 'Grate', group: 'Solid', layer: 'ground', family: 'gril_tileset_', plate: GRATE_SET, thumb: 'gril_tileset_0', color: '#5d6160' },
   plate: { label: 'Plate', group: 'Solid', layer: 'ground', family: 'TILE V2 Tileset_', plate: PLATE3, thumb: 'TILE V2 Tileset_4', color: '#50534c' },
-  floorplate: { label: 'Floor plate', group: 'Solid', layer: 'ground', family: 'FLOOR V2 Tileset_', plate: PLATE3, thumb: 'FLOOR V2 Tileset_1', color: '#50534c' },
-  lightplate: { label: 'Light plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(241, 253, 265, 186), thumb: 'Asset_Sheet_254', color: '#6a6c68' },
-  lightfloor: { label: 'Light floor plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(192, 211, 226, 186), thumb: 'Asset_Sheet_193', color: '#6a6c68' },
-  darkplate: { label: 'Dark plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(238, 250, 262, 235), thumb: 'Asset_Sheet_251', color: '#35373a' },
-  darkfloor: { label: 'Dark floor plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(189, 207, 223, 235), thumb: 'Asset_Sheet_190', color: '#35373a' },
-  blueplate: { label: 'Blue plate', group: 'Colour swap', layer: 'blueBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(229, 244, 256, 220), thumb: 'Asset_Sheet_245', color: COLORS.blue },
-  bluefloor: { label: 'Blue floor plate', group: 'Colour swap', layer: 'blueBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(180, 196, 214, 220), thumb: 'Asset_Sheet_181', color: COLORS.blue },
-  orangeplate: { label: 'Orange plate', group: 'Colour swap', layer: 'orangeBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(232, 247, 259, 203), thumb: 'Asset_Sheet_248', color: COLORS.orange },
-  orangefloor: { label: 'Orange floor plate', group: 'Colour swap', layer: 'orangeBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(183, 200, 217, 203), thumb: 'Asset_Sheet_184', color: COLORS.orange },
+  floorplate: { label: 'Floor plate', group: 'Solid', layer: 'ground', family: 'FLOOR V2 Tileset_', plate: PLATE3_RAIL, thumb: 'FLOOR V2 Tileset_1', color: '#50534c' },
+  lightplate: { label: 'Light plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(241, 253, 265, 186, 210), thumb: 'Asset_Sheet_254', color: '#6a6c68' },
+  lightfloor: { label: 'Light floor plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(192, 211, 226, 186, 210), thumb: 'Asset_Sheet_193', color: '#6a6c68' },
+  darkplate: { label: 'Dark plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(238, 250, 262, 235, 206), thumb: 'Asset_Sheet_251', color: '#35373a' },
+  darkfloor: { label: 'Dark floor plate', group: 'Solid', layer: 'ground', family: 'Asset_Sheet_', plate: ASSET_PLATE(189, 207, 223, 235, 206), thumb: 'Asset_Sheet_190', color: '#35373a' },
+  blueplate: { label: 'Blue plate', group: 'Colour swap', layer: 'blueBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(229, 244, 256, 220, 195), thumb: 'Asset_Sheet_245', color: COLORS.blue },
+  bluefloor: { label: 'Blue floor plate', group: 'Colour swap', layer: 'blueBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(180, 196, 214, 220, 195), thumb: 'Asset_Sheet_181', color: COLORS.blue },
+  orangeplate: { label: 'Orange plate', group: 'Colour swap', layer: 'orangeBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(232, 247, 259, 203, 199), thumb: 'Asset_Sheet_248', color: COLORS.orange },
+  orangefloor: { label: 'Orange floor plate', group: 'Colour swap', layer: 'orangeBlocks', family: 'Asset_Sheet_', plate: ASSET_PLATE(183, 200, 217, 203, 199), thumb: 'Asset_Sheet_184', color: COLORS.orange },
   breakable: { label: 'Breakable ground', group: 'Overgrowth', layer: 'OvergrowthDestroyedGround', family: 'ground1_tileset_', plate: PLATE, thumb: 'ground1_tileset_59', color: '#6b5d48' },
   illusory: { label: 'Illusory wall', group: 'Walk-through', layer: 'Ilusorywalls', family: 'ground1_tileset_', plate: PLATE, thumb: 'ground1_tileset_59', color: 'rgba(74, 77, 68, 0.55)' },
   bgwall: { label: 'Background wall', group: 'Walk-through', layer: 'Background', family: 'TILE V2 Tileset_', plate: PLATE3, thumb: 'TILE V2 Tileset_4', color: '#26282b' },
-  bgfloor: { label: 'Background floor plate', group: 'Walk-through', layer: 'Background', family: 'FLOOR V2 Tileset_', plate: PLATE3, thumb: 'FLOOR V2 Tileset_1', color: '#26282b' },
-  bgplate: { label: 'Background dark plate', group: 'Walk-through', layer: 'Background', family: 'Asset_Sheet_', plate: ASSET_PLATE(238, 250, 262, 235), thumb: 'Asset_Sheet_251', color: '#1d1e21' },
+  bgfloor: { label: 'Background floor plate', group: 'Walk-through', layer: 'Background', family: 'FLOOR V2 Tileset_', plate: PLATE3_RAIL, thumb: 'FLOOR V2 Tileset_1', color: '#26282b' },
+  bgplate: { label: 'Background dark plate', group: 'Walk-through', layer: 'Background', family: 'Asset_Sheet_', plate: ASSET_PLATE(238, 250, 262, 235, 206), thumb: 'Asset_Sheet_251', color: '#1d1e21' },
   bglight: { label: 'Background ground', group: 'Walk-through', layer: 'Background', family: 'ground1_tileset_', plate: PLATE, thumb: 'ground1_tileset_59', color: '#2c2e2a' },
   bgdark: { label: 'Dark background ground', group: 'Walk-through', layer: 'Background', family: 'dark_ground_tileset_', plate: PLATE, thumb: 'dark_ground_tileset_59', color: '#1d1e21' },
 };
@@ -3594,15 +3782,14 @@ const blockName = (kind) => BLOCK_NAMES[kind] || BLOCK_SETS[kind]?.label || 'Blo
 function blockArt(kind, cx, cy) {
   if (isGround(kind)) return groundTile(cx, cy, kind === 'dark');
   const set = BLOCK_SETS[kind];
-  if (set) return base?.art ? plateTile(set.layer, set.family, set.plate, (x, y) => blocks.get(key(x, y)) === kind, cx, cy) : null;
+  if (set) return base?.art ? plateTile(set.layer, set.family, set.plate, joinSolid(kind), cx, cy, joinStyle(kind)) : null;
   return colouredTile(kind, cx, cy);
 }
 const isGround = (kind) => kind === 'ground' || kind === 'dark';
 
 function groundTile(cx, cy, dark = false) {
   if (!base?.art) return null;
-  const solid = (x, y) => { const k = key(x, y); return isGround(blocks.get(k)) || (baseOn() && groundSet.has(k) && !removed.has(k)); };
-  return plateTile('ground', dark ? 'dark_ground_tileset_' : 'ground1_tileset_', PLATE, solid, cx, cy);
+  return plateTile('ground', dark ? 'dark_ground_tileset_' : 'ground1_tileset_', PLATE, joinSolid(dark ? 'dark' : 'ground'), cx, cy, joinStyle(dark ? 'dark' : 'ground'));
 }
 
 function usedPiece(layer, family, plate, piece) {
@@ -3615,29 +3802,251 @@ function usedPiece(layer, family, plate, piece) {
   return { tile: name(piece), matrix: [1, 0, 0, 1] };
 }
 
-function plateTile(layer, family, plate, solid, cx, cy) {
-  const n = solid(cx, cy + 1), e = solid(cx + 1, cy), s = solid(cx, cy - 1), w = solid(cx - 1, cy);
+// What a kind of block joins with: the level's cells of the same tileset in the same tilemap, and your own blocks of
+// any kind on that tileset (ground and panel are both ground1, so they run together; ground and dark do not, like in
+// the level, where a grate or a dark block next to ground gets an edge). The Asset_Sheet plates are one set each.
+// MERGE tiles: the ground sheets (ground1, dark) hold pieces where a riveted-plate edge (tiles 56-72, 'plate') turns into
+// a rail / bevel edge (tiles 1-19, 'rail') along the same side. Read off the level: 73 sits between a plate top edge on
+// its west and a rail top edge on its east, 74 the other way round; 77/78 the same on a bottom edge (78: rail west, plate
+// east); 75/76 on a left / right edge with the plate above and the rail below, 79/80 with the rail above. So a rail edge
+// cell with a plate edge cell beside it along the edge is drawn as the merge tile that starts with that plate.
+const MERGE = {
+  'ground1_tileset_': { T: { W: 73, E: 74 }, B: { W: 77, E: 78 }, L: { N: 75, S: 79 }, R: { N: 76, S: 80 } },
+  'dark_ground_tileset_': { T: { W: 73, E: 74 }, B: { W: 77, E: 78 }, L: { N: 75, S: 79 }, R: { N: 76, S: 80 } },
+};
+const MERGE_STEP = { W: [-1, 0], E: [1, 0], N: [0, 1], S: [0, -1] };
+const OPEN_SIDE = { T: [0, 1], B: [0, -1], L: [-1, 0], R: [1, 0] };
+const tileStyle = (id) => (id >= 56 && id <= 72 ? 'plate' : id >= 1 && id <= 19 ? 'rail' : null);
+const joinInfos = new Map();
+function joinInfo(kind) {
+  let j = joinInfos.get(kind);
+  if (j) return j;
+  const set = BLOCK_SETS[kind];
+  if (kind === 'ground' || kind === 'dark') j = { layer: 'ground', family: kind === 'dark' ? 'dark_ground_tileset_' : 'ground1_tileset_' };
+  else if (kind === 'blue' || kind === 'orange') j = { layer: kind + 'Blocks', family: kind + '_ground_tileset_' };
+  else if (set) j = { layer: set.layer, family: set.family, ...(set.family === 'Asset_Sheet_' ? { only: kind, names: new Set(Object.values(set.plate).flatMap((v) => (Array.isArray(v) ? v : v && typeof v === 'object' ? Object.values(v).map((p) => (typeof p === 'object' ? p.id : p)) : [v])).map((id) => set.family + id)) } : {}) };
+  else j = { layer: 'ground', family: kind };
+  j.id = j.layer + '|' + (j.only || j.family);
+  joinInfos.set(kind, j);
+  return j;
+}
+// The level's cells (editor cell keys) of a tileset in a tilemap, from its drawn tiles; built once per base state.
+let levelJoinCache = null;
+function levelJoinCells(j) {
+  if (!levelJoinCache) levelJoinCache = new Map();
+  let cells = levelJoinCache.get(j.id);
+  if (cells) return cells;
+  cells = new Set();
+  cells.ids = new Map(); // key -> the level tile's number in its sheet, for the merge pieces
+  cells.layers = new Map(); // key -> the level tilemap (art layer) the cell is on
+  cells.names = new Map(); // key -> the level tile's name
+  const names = tileNames();
+  const layerName = j.layer === 'ground' ? 'new awesome nikki ground' : j.layer;
+  // The block's own tilemap, and the level's decoration tilemaps: a rail strip or plate there is part of the same shape.
+  for (const l of base.art.layers || []) {
+    if ((l.name !== layerName && !ENV_LAYERS.includes(l.name)) || (l.state !== 'always' && l.state !== draft.baseState)) continue;
+    const shift = artShift(l);
+    for (let i = 0; i < l.runs.length; i += 5) {
+      const name = names[l.runs[i + 3]];
+      // On the ground tilemap every ground tileset is one shape with your blocks (a wall of the level beside your block is
+      // part of it, whatever sheet it is drawn from); elsewhere only the block's own sheet.
+      const anyGround = j.layer === 'ground' && l.name === layerName && GROUND_FAMILIES.some((f) => name?.startsWith(f));
+      if (!name || !(anyGround || (j.names ? j.names.has(name) : name.startsWith(j.family)))) continue;
+      for (let n = 0; n < l.runs[i + 2]; n++) {
+        const ck = key(l.runs[i + 1] + n + shift.x, l.runs[i] + shift.y);
+        if (cells.has(ck) && cells.layers.get(ck) === layerName) continue;
+        cells.add(ck); cells.ids.set(ck, +name.slice(name.lastIndexOf('_') + 1) || 0); cells.layers.set(ck, l.name); cells.names.set(ck, name);
+      }
+    }
+  }
+  levelJoinCache.set(j.id, cells);
+  return cells;
+}
+// An art layer's rows and columns are on its own grid (ground: origin (0, -23)); the editor's cells are on the 32px grid
+// shifted by OFFSET_Y, so a layer's cell (col, row) is the editor cell (col + shift.x, row + shift.y): one row lower on these.
+const artShift = (l) => ({ x: Math.floor((l.ox + CELL / 2) / CELL), y: Math.floor((l.oy + CELL / 2 - OFFSET_Y) / CELL) });
+// The plain pieces of the ground sheets: bevel / rail edges 1-3 9-11 17-19, centre 10, and the plate set 56-58 63-65 70-72.
+const PLAIN_PIECE = new Set([1, 2, 3, 9, 10, 11, 17, 18, 19, 56, 57, 58, 63, 64, 65, 70, 71, 72]);
+const GROUND_FAMILIES = ['ground1_tileset_', 'dark_ground_tileset_', 'gril_tileset_'];
+const ENV_LAYERS = ['Environmental objects', 'Environmental objects_back', 'environmentalObjects_front'];
+let tileNameList = null;
+const tileNames = () => { if (!tileNameList || tileNameList.of !== base) { const l = []; for (const [n, s] of Object.entries(base.art.tiles)) l[s] = n; l.of = base; tileNameList = l; } return tileNameList; };
+// The level's rail strips (the bar along a block's top, on the ground or a decoration tilemap), key -> layer: the level
+// sets plate blocks straight on them, with no bottom edge between, so a block of yours above one is joined to it.
+const RAIL_TOP = /^(?:(?:ground1|dark_ground|blue_ground|orange_ground)_tileset_[123]|Asset_Sheet_(?:18[0-9]|19[0-4]|203|204|205|22[0-2]|235|236|237)|FLOOR V2 Tileset_[012])$/;
+let railCache = null;
+function levelRails() {
+  if (railCache && railCache.of === base && railCache.state === draft.baseState) return railCache.cells;
+  const cells = new Map(), names = tileNames();
+  for (const l of base.art.layers || []) {
+    if ((l.name !== 'new awesome nikki ground' && !ENV_LAYERS.includes(l.name)) || (l.state !== 'always' && l.state !== draft.baseState)) continue;
+    const shift = artShift(l);
+    for (let i = 0; i < l.runs.length; i += 5) {
+      if (!RAIL_TOP.test(names[l.runs[i + 3]] || '')) continue;
+      for (let n = 0; n < l.runs[i + 2]; n++) cells.set(key(l.runs[i + 1] + n + shift.x, l.runs[i] + shift.y), l.name);
+    }
+  }
+  railCache = { of: base, state: draft.baseState, cells };
+  return cells;
+}
+// Is a level cell on `layerName` at key k erased by you?
+const levelCellGone = (layerName, k) => (layerName === 'new awesome nikki ground' || layerName === 'blueBlocks' || layerName === 'orangeBlocks' ? removed.has(k) : removedDeco.has(layerName + '|' + k));
+// (x, y) -> is that cell part of the same tileset as a `kind` block: yours or the level's. `below`: the cell is in the row under
+// the one being tiled, where a level rail strip also counts.
+function joinSolid(kind) {
+  const j = joinInfo(kind), level = baseOn() && base?.art ? levelJoinCells(j) : null;
+  const rails = level ? levelRails() : null;
+  return (x, y, below) => {
+    const k = key(x, y), own = blocks.get(k);
+    // Your blocks on the same tilemap are one shape whatever sheet each is drawn from (a rail-topped ledge with a plate block
+    // hanging under it is one block, not two).
+    if (own !== undefined) return joinInfo(own).layer === j.layer;
+    if (!level) return false;
+    if (level.has(k)) return !levelCellGone(level.layers.get(k), k);
+    return !!below && rails.has(k) && !levelCellGone(rails.get(k), k);
+  };
+}
+
+// The level's own cells within one cell of your blocks, re-tiled with the combined shape (level + yours) so the two read as
+// one block instead of two outlines at the seam. They are not your blocks: nothing lists or counts them, and they come and
+// go with the blocks beside them. Drawn over the level's baked art (which is hidden there) and exported as a tile painted
+// at that same cell, which the game puts in place of the level's own.
+let overrideCache = null, hiddenInWorker = null;
+// While a level cell is being re-tiled, any block of yours on its tilemap is part of its shape, whatever its sheet.
+let tilingLevelCell = false;
+// Cells of the level's art not drawn (replaced by a re-tiled one); a worker is told the set instead of working it out.
+const hiddenLevel = () => (!blocks.size && hiddenInWorker) || levelOverrides().hide;
+const NO_OVERRIDES = { cells: new Map(), hide: new Set() };
+function levelOverrides() {
+  if (!baseOn() || !base?.art || !blocks.size) return NO_OVERRIDES;
+  const c = overrideCache;
+  if (c && c.blocks === blocks && c.removed === removed && c.base === base && c.version === baseVersion && c.state === draft.baseState && c.rev === blocks.rev + '|' + removed.rev) return c.value;
+  const cells = new Map(), hide = new Set();
+  blocks.forEach((kind, k) => {
+    if (!isGround(kind) && !BLOCK_SETS[kind] && kind !== 'blue' && kind !== 'orange') return;
+    const j = joinInfo(kind), level = levelJoinCells(j), rails = levelRails();
+    const [cx, cy] = unkey(k);
+    for (const [dx, dy] of [[0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [1, -1], [-1, -1], [-1, 1]]) {
+      const nk = key(cx + dx, cy + dy);
+      if (blocks.has(nk) || cells.has(nk) || !level.has(nk) || levelCellGone(level.layers.get(nk), nk)) continue;
+      const isRail = dy === -1 && rails.has(nk); // a block set on a rail strip: the strip keeps its own art, unless buried
+      // keep the level cell's own style (plate or rail) where the sheet has both
+      const nm = level.names.get(nk) || '', fam = GROUND_FAMILIES.find((f) => nm.startsWith(f));
+      // Re-tiling must not make a level cell worse: its special pieces (a rail's end cap, a fillet, an inside corner, a merge
+      // piece, a decorated tile) keep their own art; only the plain edge / corner / centre pieces are re-tiled.
+      const special = isRail || (fam && !PLAIN_PIECE.has(level.ids.get(nk)));
+      const own = fam && fam !== 'gril_tileset_' ? tileStyle(level.ids.get(nk)) : null;
+      const as = fam === 'gril_tileset_' ? 'grate' : own ? (fam === 'dark_ground_tileset_' ? (own === 'plate' ? 'dark' : 'darkpanel') : (own === 'plate' ? 'ground' : 'panel')) : (fam ? (fam === 'dark_ground_tileset_' ? 'dark' : 'ground') : kind);
+      cells.set(nk, { kind: as, cx: cx + dx, cy: cy + dy, onLayer: level.layers.get(nk), special, fam, id: level.ids.get(nk) });
+    }
+  });
+  const rails = levelRails();
+  for (const [nk, o] of cells) {
+    tilingLevelCell = true;
+    try {
+      o.art = blockArt(o.kind, o.cx, o.cy);
+      // A special piece (rail strip, end cap, fillet) stays unless it is buried: all eight neighbours solid, then it is interior.
+      // A cell next to a rail with one corner open (where a rail runs out of the mass) gets the level's own foot piece, the
+      // rounded fillet 22 / 23, as the level does where a rail meets a wall; no other special cell is re-tiled.
+      const solid = joinSolid(o.kind);
+      const buried = [[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]].every(([ax, ay]) => solid(o.cx + ax, o.cy + ay, ay < 0));
+      const foot = (side, tileNo) => o.fam && solid(o.cx + side, o.cy, false) && rails.has(key(o.cx + side, o.cy)) && !solid(o.cx + side, o.cy + 1) && solid(o.cx, o.cy + 1) && solid(o.cx, o.cy - 1) && solid(o.cx - side, o.cy) && solid(o.cx - side, o.cy + 1) && solid(o.cx + side, o.cy - 1) && solid(o.cx - side, o.cy - 1) ? o.fam + tileNo : null;
+      const footTile = foot(1, 22) || foot(-1, 23);
+      // A rail's end cap (4 / 5, bevel 1 / 3) whose capped side now has something solid against it is no longer an end: the
+      // rail runs on into it, as a plain rail edge.
+      const id = o.id, capSide = id === 5 || id === 3 ? 1 : id === 4 || id === 1 ? -1 : 0;
+      const runsOn = o.fam && o.fam !== 'gril_tileset_' && capSide && solid(o.cx + capSide, o.cy, false) && !solid(o.cx, o.cy + 1, false);
+      if (runsOn) o.art = { layer: o.art?.layer || 'ground', tile: o.fam + '2', matrix: [1, 0, 0, 1], centre: true };
+      else if (footTile) o.art = { layer: o.art?.layer || 'ground', tile: footTile, matrix: [1, 0, 0, 1], centre: true };
+      else if (o.special && !buried) o.art = null;
+      else if (o.special) { o.kind = o.kind === 'panel' ? 'ground' : o.kind === 'darkpanel' ? 'dark' : o.kind; o.art = blockArt(o.kind, o.cx, o.cy); } // buried: the plate interior, like the mass around it
+    } finally { tilingLevelCell = false; }
+    // only where the combined shape makes the cell a centre (or an inside tile): the level's own edges stay as they are
+    if (!o.art || !o.art.centre) { cells.delete(nk); continue; }
+    // painted on the tilemap the level cell is on (a decoration tilemap, maybe), and its baked art hidden there
+    if (o.onLayer && !(o.onLayer === 'new awesome nikki ground' && o.art.layer === 'ground')) o.art = { ...o.art, layer: o.onLayer === 'new awesome nikki ground' ? 'ground' : o.onLayer };
+    hide.add(o.onLayer + '|' + nk);
+  }
+  const value = { cells, hide };
+  overrideCache = { blocks, removed, base, version: baseVersion, state: draft.baseState, rev: blocks.rev + '|' + removed.rev, value };
+  return value;
+}
+
+// (x, y) -> 'plate' | 'rail' | null: the style of the solid cell there, for a kind's tileset.
+function joinStyle(kind) {
+  const j = joinInfo(kind), level = baseOn() && base?.art && MERGE[j.family] ? levelJoinCells(j) : null;
+  return (x, y) => {
+    const k = key(x, y), own = blocks.get(k);
+    if (own !== undefined) return joinInfo(own).id === j.id ? ownStyle(own) : null;
+    return level?.has(k) && level.names.get(k)?.startsWith(j.family) ? tileStyle(level.ids.get(k)) : null;
+  };
+}
+const ownStyle = (kind) => (kind === 'ground' || kind === 'dark' ? 'plate' : BLOCK_SETS[kind]?.plate?.style || null);
+
+function plateTile(layer, family, plate, solid, cx, cy, styleAt) {
   const name = (piece) => family + plate[piece];
   const id = [1, 0, 0, 1];
-  if (!n && !e && !s && !w && plate.single != null) return { layer, tile: family + plate.single, matrix: id };
-  if (plate.v && (n || s) && !e && !w) return { layer, tile: family + plate.v[!n ? 0 : !s ? 2 : 1], matrix: id };
-  if (plate.h && (e || w) && !n && !s) return { layer, tile: family + plate.h[!w ? 0 : !e ? 2 : 1], matrix: id };
-  if ((n || s) && (e || w)) {
-    const row = !n ? 'T' : !s ? 'B' : '', col = !w ? 'L' : !e ? 'R' : '';
-    return { layer, ...usedPiece(layer, family, plate, row + col || 'C') };
+  const r = pickPieces(plate, (dx, dy) => solid(cx + dx, cy + dy, dy < 0));
+  if (styleAt && !tilingLevelCell && plate.style === 'rail' && MERGE[family] && /^[TBLR]$/.test(r.whole || '') && !r.holes) {
+    const [ox, oy] = OPEN_SIDE[r.whole];
+    for (const [dir, tileNo] of Object.entries(MERGE[family][r.whole])) {
+      const [dx, dy] = MERGE_STEP[dir], nx = cx + dx, ny = cy + dy, rx = cx - dx, ry = cy - dy;
+      // the level only has these where the rail continues on the far side (plate | merge | rail): a lone rail cell between
+      // plates, or at the end of a run, is an ordinary edge piece
+      if (solid(nx, ny) && styleAt(nx, ny) === 'plate' && !solid(nx + ox, ny + oy) && solid(rx, ry) && styleAt(rx, ry) === 'rail' && !solid(rx + ox, ry + oy)) return { layer, tile: family + tileNo, matrix: [1, 0, 0, 1], merge: dir };
+    }
   }
-  const corner = (v, h, vPiece, hPiece, both) => (!v && !h ? both : !v ? vPiece : !h ? hPiece : 'C');
-  const quarters = [
-    corner(n, w, 'T', 'L', 'TL'), corner(n, e, 'T', 'R', 'TR'),
-    corner(s, w, 'B', 'L', 'BL'), corner(s, e, 'B', 'R', 'BR'),
-  ].map(name);
+  const resolve = (piece) => {
+    if (piece[0] === 'v' && piece.length === 2 && plate.v) return { tile: family + plate.v[piece[1]], matrix: id };
+    if (piece[0] === 'h' && piece.length === 2 && plate.h) return { tile: family + plate.h[piece[1]], matrix: id };
+    if (piece === 'single') return { tile: family + plate.single, matrix: id };
+    return usedPiece(layer, family, plate, piece);
+  };
+  if (r.whole && r.holes) {
+    // An inside corner. The sheet's own tile where the level uses one (a cell with all four sides solid): that is the real
+    // art. Otherwise, where the sheet has nothing and a mitred band can't look wrong (not on rail sheets, not on corner
+    // pieces, which keep their rivets), a connector built from the pixels of the two edge pieces beside the gap.
+    const real = (d) => { if (plate.foot?.[d]) return { tile: plate.foot[d], matrix: id }; const p = plate.inner?.[d]; return p == null ? null : typeof p === 'number' ? { tile: family + p, matrix: id } : { tile: family + p.id, matrix: p.m }; };
+    // (On the plate sheets the level's own inside tiles are a 2x2-plate art that leaves cut lines against the 3x3 edge
+    // pieces, so there the connector is cleaner; on rail sheets the real tile is the one that fits.)
+    if (plate.rail && r.whole === 'C' && r.holes.length === 1 && real(r.holes[0])) return { layer, ...real(r.holes[0]), centre: true };
+    // A level cell is only ever re-tiled into the sheet's own centre or inside tile, as the level does it: no generated connector.
+    if (tilingLevelCell) return r.whole === 'C' && r.holes.length === 1 && real(r.holes[0]) ? { layer, ...real(r.holes[0]), centre: true } : { layer, ...resolve(r.whole) };
+    if (plate.rail || !/^[CTBLR]$/.test(r.whole)) return { layer, ...(r.whole === 'C' && real(r.holes[0]) ? real(r.holes[0]) : resolve(r.whole)) };
+    const baseTile = name(r.whole), parts = [], tokens = [];
+    for (const d of r.holes) {
+      const role = connectorRoles(d), vId = plate[role.v], hId = plate[role.h];
+      const vProf = EDGE_PROFILE[family + '|' + vId + '|' + role.v], hProf = EDGE_PROFILE[family + '|' + hId + '|' + role.h];
+      if (!vProf || !hProf) continue;
+      for (const [x, y, pid, sx, sy] of connector(d, vId, hId, vProf, hProf)) parts.push([x, y, family + pid, sx, sy]);
+      tokens.push(d + vId + '.' + hId);
+    }
+    if (!tokens.length) return { layer, ...resolve(r.whole) };
+    return { layer, tile: baseTile + '+' + tokens.join('+'), matrix: id, base: baseTile, parts, spriteFrom: { ref: baseTile, base: baseTile, pixels: parts } };
+  }
+  if (r.whole) return { layer, ...resolve(r.whole), ...(r.whole === 'C' ? { centre: true } : {}) };
+  if (r.quarters.every((q) => q === r.quarters[0])) return { layer, ...resolve(r.quarters[0]) };
+  // Quarters are cut from the pieces as they are (no turning of the stand-in), so the plain tile, not its flipped stand-in;
+  // an inside corner's quarter is turned by its flips instead.
+  const parts = r.quarters.map((q) => q.split('~'));
+  const quarters = parts.map(([p]) => name(p)), flips = parts.map(([, f]) => f || '');
   return {
-    layer, tile: family + 'q' + quarters.map((q) => q.slice(family.length)).join('_'), matrix: id, quarters,
-    spriteFrom: { ref: name('C'), quarters },
+    layer, tile: family + 'q' + quarters.map((q, i) => q.slice(family.length) + (flips[i] ? '~' + flips[i] : '')).join('_'), matrix: id, quarters, flips,
+    spriteFrom: { ref: name('C'), quarters, ...(flips.some(Boolean) ? { flips } : {}) },
   };
 }
 
 function drawGroundArt(cx, cy, art) {
+  if (art.parts) {
+    if (!drawTileArt(cx, cy, art.base, art.matrix)) return false;
+    const r = cellRect(cx, cy), px = r.w / 32, py = r.h / 32;
+    for (const [x, y, tile, sx, sy] of art.parts) {
+      const sp = base.art.sprites[base.art.tiles[tile]];
+      if (!sp) continue;
+      ctx.drawImage(atlasImg, sp[0] + sx, sp[1] + sy, 1, 1, r.x + x * px, r.y + y * py, px + 0.5, py + 0.5);
+    }
+    return true;
+  }
   if (!art.quarters) return drawTileArt(cx, cy, art.tile, art.matrix);
   if (!artReady() || art.quarters.some((q) => base.art.tiles[q] === undefined)) return false;
   const r = cellRect(cx, cy);
@@ -3648,7 +4057,8 @@ function drawGroundArt(cx, cy, art) {
     ctx.beginPath();
     ctx.rect(r.x + col * hw - (col ? 0.25 : 0), r.y + row * hh - (row ? 0.25 : 0), hw + 0.5, hh + 0.5);
     ctx.clip();
-    drawTileArt(cx, cy, q, art.matrix);
+    const f = art.flips?.[i] || '';
+    drawTileArt(cx, cy, q, f ? [f.includes('x') ? -1 : 1, 0, 0, f.includes('y') ? -1 : 1] : art.matrix);
     ctx.restore();
   });
   return true;
@@ -3660,6 +4070,11 @@ function objectTransformJson(cfg) {
   if (X !== 1 || Y !== 1 || cfg.fx || cfg.fy) out.scale = [X * (cfg.fx ? -1 : 1), Y * (cfg.fy ? -1 : 1)];
   if (cfg.alpha != null && cfg.alpha !== 1) out.alpha = cfg.alpha;
   return out;
+}
+// A clone's exported position: a checkpoint's flag and respawn point stand in its box (see checkpoint.js).
+function cloneAt(o, item, origin = { x: 0, y: 0 }) {
+  const a = isCheckpoint(item) && o.cfg?.trig ? checkpointExport(o.x, o.y, o.cfg.trig) : { x: o.x, y: o.y };
+  return { x: Math.round(a.x - origin.x), y: Math.round(a.y - origin.y) };
 }
 function cloneConfig(o, item) {
   const cfg = o.cfg || {}, out = {};
@@ -3678,7 +4093,7 @@ function cloneConfig(o, item) {
   if (zip) out.zip = { end: zip.end, time: zip.time, backTime: zip.backTime, size: zip.size, ...(zip.auto ? { auto: true, pauseMove: zip.pauseMove, pauseReturn: zip.pauseReturn } : {}), ...(cfg.zip?.cells ? { rects: platformRects(zipShape(o, item)) } : {}) };
   if (isLinked(o.course)) out.course = o.course;
   if (isCourseCheckpoint(item)) out.courseCheckpoint = true;
-  if (isSizable(item) && cfg.trig) out.trigger = { w: cfg.trig.w, h: cfg.trig.h, dx: cfg.trig.dx, dy: cfg.trig.dy };
+  if (isSizable(item) && cfg.trig) out.trigger = isCheckpoint(item) ? checkpointExport(o.x, o.y, cfg.trig).trigger : { w: cfg.trig.w, h: cfg.trig.h, dx: cfg.trig.dx, dy: cfg.trig.dy };
   if (isTeleporter(item)) {
     const ref = (r) => { const t = teleportTarget(r); return t ? (t.uid ? { uid: t.uid } : { path: t.path, x: t.x, y: t.y }) : null; };
     const zone = baseOn() ? Number(String(zoneAt(o.x, o.y)).replace(/\D+/g, '')) || 1 : 1;
@@ -3779,24 +4194,28 @@ function buildOverlayCore() {
     const h = baseHaz.get(k);
     if (h) objects.push({ type: 'erase', tilemap: base.defs[h.d].layer, ...at(k) });
   });
-  for (const o of baseObjects) if (removedObjects.has(o.id)) objects.push({ type: 'hide', path: o.path, srcX: o.x, srcY: o.y });
+  for (const o of baseObjects) if (removedObjects.has(o.id)) {
+    if (o.checkpoint) objects.push({ type: 'hideCheckpoint', x: o.srcX ?? o.x, y: o.srcY ?? o.y });
+    else objects.push({ type: 'hide', path: o.path, srcX: o.srcX ?? o.x, srcY: o.srcY ?? o.y });
+  }
   removedDeco.forEach((rk) => {
     const bar = rk.lastIndexOf('|'), layerName = rk.slice(0, bar), [gx, gy] = unkey(rk.slice(bar + 1)), g = layerGrid(layerName);
     objects.push({ type: 'erase', tilemap: layerName, x: g.ox + (gx + 0.5) * g.size, y: g.oy + (gy + 0.5) * g.size });
   });
   for (const p of sceneList?.items || []) if (p.id && removedScene.has(p.id)) objects.push({ type: 'hide', path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y, rendererOnly: true });
   // The level's own things, moved: the game moves the real object by the same amount.
-  for (const o of baseObjects) { const d = movedObjects.get(o.id); if (d && !removedObjects.has(o.id)) objects.push({ type: 'move', path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y, dx: d[0], dy: d[1] }); }
+  for (const o of baseObjects) { const d = movedObjects.get(o.id); if (d && (!o.checkpoint || o.path) && !removedObjects.has(o.id)) objects.push({ type: 'move', path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y, dx: d[0], dy: d[1] }); }
   for (const p of sceneList?.items || []) { const d = p.id && movedScene.get(p.id); if (d && !removedScene.has(p.id)) objects.push({ type: 'move', path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y, dx: d[0], dy: d[1] }); }
-  const levelAt = (k) => { if (k.startsWith('o:')) { const o = baseObjects.find((x) => x.id === k.slice(2)); return o && !removedObjects.has(o.id) ? { path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y } : null; } const p = sceneList?.items.find((x) => x.id === k); return p && !removedScene.has(p.id) ? { path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y } : null; };
+  const levelAt = (k) => { if (k.startsWith('o:')) { const o = baseObjects.find((x) => x.id === k.slice(2)); return o && !o.checkpoint && !removedObjects.has(o.id) ? { path: o.path, srcX: o.x0 ?? o.x, srcY: o.y0 ?? o.y } : null; } const p = sceneList?.items.find((x) => x.id === k); return p && !removedScene.has(p.id) ? { path: p.p, srcX: p.x0 ?? p.x, srcY: p.y0 ?? p.y } : null; };
   for (const [k, tf] of levelTf) { const at = levelAt(k); if (at) objects.push({ type: 'transform', ...at, rotation: tf.rot || 0, scale: [(tf.scale || 1) * (tf.sx || 1) * (tf.fx ? -1 : 1), (tf.scale || 1) * (tf.sy || 1) * (tf.fy ? -1 : 1)] }); }
   for (const [k, n] of levelOrder) { const at = levelAt(k); if (at) objects.push({ type: 'order', ...at, delta: n }); }
   for (const [k, g] of levelGroups) { const at = levelAt(k); if (at) objects.push({ type: 'group', ...at, group: g }); }
   for (const id of Object.keys(draft.baseEdits || {})) {
     const o = baseObjects.find((x) => x.id === id);
     if (!o || removedObjects.has(id)) continue;
+    if (o.checkpoint) { const c = baseCheckpointCourse(o); if (isLinked(c)) objects.push({ type: 'modify', checkpoint: true, x: o.srcX ?? o.x, y: o.srcY ?? o.y, course: c }); continue; }
     const u = baseUpgradeConfig(o);
-    objects.push({ type: 'modify', path: o.path, srcX: o.x, srcY: o.y, upgrade: { id: 'level:' + id, label: u.label, currency: u.currency, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } });
+    objects.push({ type: 'modify', path: o.path, srcX: o.srcX ?? o.x, srcY: o.srcY ?? o.y, upgrade: { id: 'level:' + id, label: u.label, currency: u.currency, baseCost: u.baseCost, cost: u.cost, prices: upgradePrices(u), scale: u.scale, add: u.add, power: u.power, max: u.max } });
   }
   blocks.forEach((kind, k) => {
     const [cx, cy] = unkey(k);
@@ -3808,6 +4227,8 @@ function buildOverlayCore() {
       objects.push(t ? { type: 'tile', tilemap: t.layer, tileName: t.tile, ...at(k), matrix: t.matrix, ...(t.spriteFrom ? { spriteFrom: t.spriteFrom } : {}) } : { type: 'coloredGround', color: kind, ...at(k) });
     }
   });
+  // The level's cells beside your blocks, re-tiled: painted over the level's own at the same cell.
+  for (const [k, o] of levelOverrides().cells) objects.push({ type: 'tile', tilemap: o.art.layer, tileName: o.art.tile, ...at(k), matrix: o.art.matrix, levelRetile: true, ...(o.art.spriteFrom ? { spriteFrom: o.art.spriteFrom } : {}) });
   mossCells.forEach((_, k) => { const c = mossCenter(k); objects.push({ type: 'tile', tilemap: 'moss', tileName: 'Moss', x: c.x, y: c.y, matrix: [1, 0, 0, 1] }); });
   const ranks = stackRank();
   for (const f of freeSpikes) objects.push({ ...freeSpikeJson(f), order: ranks.get(f), ...(f.behind ? { behind: true, ...(f.depth === 2 ? { depth: 2 } : {}) } : {}), ...(f.group ? { group: f.group } : {}) });
@@ -3830,7 +4251,7 @@ function buildOverlayCore() {
   });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x), y: Math.round(o.y), order: ranks.get(o), ...(o.behind ? { behind: true, ...(o.depth === 2 ? { depth: 2 } : {}) } : {}), ...(o.group ? { group: o.group } : {}), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, ...cloneAt(o, item), order: ranks.get(o), ...(o.behind ? { behind: true, ...(o.depth === 2 ? { depth: 2 } : {}) } : {}), ...(o.group ? { group: o.group } : {}), ...cloneConfig(o, item) });
   }
 
   const full = completeCourses(), first = full[0], hasGates = !!first;
@@ -3900,6 +4321,7 @@ function buildCustomMap() {
     else objects.push({ type: 'tile', tilemap: v.layer, tileName: v.tile, cellX, cellY, matrix: v.matrix });
   }
   if (baseOn()) for (const o of baseObjects) {
+    if (o.checkpoint) continue;
     const c = cellOf(o.x, o.y);
     if (removedObjects.has(o.id) || !inArea(c.cx, c.cy)) continue;
     const door = o.box?.door;
@@ -3926,7 +4348,7 @@ function buildCustomMap() {
   for (const cs of csprites) objects.push({ ...customSpriteJson(cs, origin.x, origin.y), order: ranks.get(cs), ...(cs.behind ? { behind: true, ...(cs.depth === 2 ? { depth: 2 } : {}) } : {}), ...(cs.group ? { group: cs.group } : {}) });
   for (const o of placed) {
     const item = catalogItem(o);
-    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, x: Math.round(o.x - origin.x), y: Math.round(o.y - origin.y), order: ranks.get(o), ...(o.behind ? { behind: true, ...(o.depth === 2 ? { depth: 2 } : {}) } : {}), ...(o.group ? { group: o.group } : {}), ...cloneConfig(o, item) });
+    if (item) objects.push({ type: 'clone', path: item.path, srcX: item.x, srcY: item.y, ...cloneAt(o, item, origin), order: ranks.get(o), ...(o.behind ? { behind: true, ...(o.depth === 2 ? { depth: 2 } : {}) } : {}), ...(o.group ? { group: o.group } : {}), ...cloneConfig(o, item) });
   }
 
   return {
@@ -4027,6 +4449,13 @@ function toWorld(sx, sy) {
 }
 
 const IN_WORKER = typeof document === 'undefined';
+// A dropped canvas or ImageBitmap keeps its pixels until the garbage collector gets round to it, and the collector pays no heed
+// to how big they are: zooming through a big map piled up gigabytes that way. Whatever a cache lets go of is released on the spot.
+function freeCanvas(c) {
+  if (!c) return;
+  if (typeof c.close === 'function') c.close();
+  else if (c.width) c.width = c.height = 0;
+}
 // Canvases whose backing store the browser dropped (Chromium GPU memory pressure) hold nothing, so every cache forgets them (purgeLost).
 const lostCanvases = new Set();
 let cacheScale = 1; // shrinks the cache caps after each loss
@@ -4055,6 +4484,9 @@ function purgeLost() {
   for (const k of Object.keys(scratchCanvas)) if (gone(scratchCanvas[k])) delete scratchCanvas[k];
   for (const [k, c] of [...tintCache]) if (gone(c)) tintCache.delete(k);
   for (const g of sceneList?.groups || []) if (g.canvas && gone(g.canvas.canvas)) g.canvas = null;
+  for (const [k, c] of [...bdCache]) if (gone(c)) { bdCache.delete(k); bdPx -= c.width * c.height; }
+  if (levelLayer.a && (gone(levelLayer.a.cv) || gone(levelLayer.b.cv))) { levelLayer.a = levelLayer.b = null; levelLayer.ok = false; }
+  if (worldCache.cv && gone(worldCache.cv)) { worldCache.cv = null; worldCache.ok = false; worldDirty = true; }
   lostCanvases.clear();
 }
 
@@ -4130,7 +4562,29 @@ function targetPoint(t) {
   return null;
 }
 
+// The world layer (background, level tiles, your blocks: the costly part of a frame) is kept as a picture and blitted back
+// while only the overlays change (the mouse moving over the map). Anything that asks for a draw the ordinary way marks it
+// stale; requestOverlayDraw is for the callers that know the world is untouched.
+const worldCache = { cv: null, key: '', ok: false };
+let worldDirty = true, drawPhase = 0, worldClean = true;
 function requestDraw() {
+  if (drawPhase !== 2) worldDirty = true;
+  if (IN_WORKER || frameQueued) return;
+  frameQueued = true;
+  requestAnimationFrame(() => { frameQueued = false; stepCamera(); draw(); });
+}
+
+// A camera drag: the world moved but nothing in it changed, so the level layer can be scrolled instead of redrawn (see drawLevelLayer).
+// While the zoom glides every frame is a new scale, so every image in it is resampled again: smoothing is off for those frames (the frame it lands on is drawn smooth).
+const zooming = () => camGoal.active && camGoal.scale != null;
+let panFrame = false;
+function requestPanDraw() {
+  panFrame = true;
+  if (IN_WORKER || frameQueued) return;
+  frameQueued = true;
+  requestAnimationFrame(() => { frameQueued = false; stepCamera(); draw(); });
+}
+function requestOverlayDraw() {
   if (IN_WORKER || frameQueued) return;
   frameQueued = true;
   requestAnimationFrame(() => { frameQueued = false; stepCamera(); draw(); });
@@ -4199,7 +4653,7 @@ function buildArtIndex() {
   artCache.clear();
   artIndex = null;
   if (!base?.art) return;
-  if (!atlasImg) loadLazy('/maps/' + base.art.atlas, (i) => { atlasImg = i; artCache.clear(); invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); }, 'Level art');
+  if (!atlasImg) loadLazy(MAPS + base.art.atlas, (i) => { atlasImg = i; artCache.clear(); invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); }, 'Level art');
   const layers = base.art.layers
     .filter((l) => l.state === 'always' || l.state === draft.baseState)
     .sort((a, b) => (a.order ?? artRank(a.name)) - (b.order ?? artRank(b.name)));
@@ -4260,6 +4714,8 @@ const ERASABLE = new Set(['new awesome nikki ground', 'OvergrowthDestroyedGround
   'Spikes', 'backgroundSpikes1', 'backgroundSpikes2', 'blueSpikes', 'orangeSpikes']);
 function erasedArt(l, col, row) {
   if (removedDeco.size && removedDeco.has(l.name + '|' + col + ',' + row)) return true;
+  const hid = hiddenLevel();
+  if (hid.size && l.size === CELL) { const c = cellOf(l.ox + col * l.size + CELL / 2, l.oy + row * l.size + CELL / 2); if (hid.has(l.name + '|' + key(c.cx, c.cy))) return true; }
   if (!removed.size || !ERASABLE.has(l.name)) return false;
   const n = Math.max(1, Math.round(l.size / CELL));
   const c = cellOf(l.ox + col * l.size + CELL / 2, l.oy + row * l.size + CELL / 2);
@@ -4363,15 +4819,15 @@ function drawTileArt(cx, cy, tileName, m) {
 const bgImages = {};
 function bgImage(src) {
   if (!bgImages[src]) {
-    const img = new Image();
-    img.onload = () => { img.failed = false; assetLog.set('/maps/' + src, { ok: true, tries: (img.tries || 0) + 1 }); invalidateBase(); };
+    const img = newMapImage();
+    img.onload = () => { img.failed = false; assetLog.set(MAPS + src, { ok: true, tries: (img.tries || 0) + 1 }); invalidateBase(); };
     img.onerror = () => {
       img.failed = true;
       img.tries = (img.tries || 0) + 1;
-      assetLog.set('/maps/' + src, { ok: false, tries: img.tries, err: 'load error' });
-      if (img.tries <= 5) setTimeout(() => { img.src = '/maps/' + src + '?r=' + img.tries; }, 400 * img.tries);
+      assetLog.set(MAPS + src, { ok: false, tries: img.tries, err: 'load error' });
+      if (img.tries <= 5) setTimeout(() => { img.src = MAPS + src + '?r=' + img.tries; }, 400 * img.tries);
     };
-    img.src = '/maps/' + src;
+    img.src = MAPS + src;
     bgImages[src] = img;
   }
   return bgImages[src];
@@ -4404,6 +4860,28 @@ function drawBackground(W, H) {
   try { drawBackdrop(W, H); if (!draft.background?.image) drawWorldBackdrops(W, H); } finally { ctx.restore(); }
   drawCredits(W, H, 'end');
 }
+// A backdrop image is the biggest single resample of a frame (a window's worth of it, every frame). Once the zoom has settled it is
+// scaled one time into a canvas of its final size and blitted 1:1 at whole pixels from then on (parallax steps by a pixel).
+const bdCache = new Map(), bdIds = new WeakMap();
+let bdPx = 0, bdNext = 1;
+const BD_MAX_PX = 24e6;
+const backdropPrescaleOff = () => { try { return localStorage.mapMakerNoBackdropCache === '1'; } catch { return false; } };
+function drawBackdropImage(img, x, y, dw, dh) {
+  const w = Math.ceil(dw), h = Math.ceil(dh);
+  if (IN_WORKER || w < 1 || h < 1 || w * h > 6e6 || backdropPrescaleOff()) { ctx.drawImage(img, x, y, dw, dh); return; }
+  if (!bdIds.has(img)) bdIds.set(img, bdNext++);
+  const k = bdIds.get(img) + '|' + w + 'x' + h;
+  let pre = bdCache.get(k);
+  if (pre) { bdCache.delete(k); bdCache.set(k, pre); }
+  else if (!zooming()) {
+    pre = makeCanvas();
+    pre.width = w; pre.height = h;
+    pre.getContext('2d').drawImage(img, 0, 0, w, h);
+    bdCache.set(k, pre); bdPx += w * h;
+    for (const [ok, oc] of bdCache) { if (bdPx <= BD_MAX_PX || ok === k) break; bdCache.delete(ok); bdPx -= oc.width * oc.height; oc.width = oc.height = 0; }
+  }
+  if (pre) ctx.drawImage(pre, Math.round(x), Math.round(y)); else ctx.drawImage(img, x, y, dw, dh);
+}
 function drawBackdrop(W, H) {
   if (draft.background?.image) return drawCustomBackground(W, H, draft.background);
   const sc = base.scene;
@@ -4421,8 +4899,8 @@ function drawBackdrop(W, H) {
     for (let tx = Math.floor((tl.x - ox) / w); ox + tx * w < br.x; tx++) {
       for (let ty = Math.floor((br.y - oy) / h); oy + ty * h < tl.y; ty++) {
         const a = toScreen(ox + tx * w, oy + (ty + 1) * h), sw = w * cam.scale, sh = h * cam.scale;
-        if (b.sx < 0) { ctx.setTransform(-1, 0, 0, 1, a.x + sw, a.y); ctx.drawImage(img, 0, 0, sw + 1, sh + 1); ctx.setTransform(1, 0, 0, 1, 0, 0); }
-        else ctx.drawImage(img, a.x, a.y, sw + 1, sh + 1);
+        if (b.sx < 0) { ctx.setTransform(-1, 0, 0, 1, Math.round(a.x + sw), Math.round(a.y)); drawBackdropImage(img, 0, 0, sw + 1, sh + 1); ctx.setTransform(1, 0, 0, 1, 0, 0); }
+        else drawBackdropImage(img, a.x, a.y, sw + 1, sh + 1);
       }
     }
   }
@@ -4547,7 +5025,7 @@ function drawCustomBackground(W, H, bg) {
   for (let tx = Math.floor((tl.x - ox) / w) - 1; ox + tx * w < br.x; tx++) {
     for (let ty = Math.floor((br.y - oy) / h) - 1; oy + ty * h < tl.y; ty++) {
       const a = toScreen(ox + tx * w, oy + (ty + 1) * h);
-      ctx.drawImage(img, a.x, a.y, w * cam.scale + 1, h * cam.scale + 1);
+      drawBackdropImage(img, a.x, a.y, w * cam.scale + 1, h * cam.scale + 1);
     }
   }
   ctx.restore();
@@ -4565,7 +5043,7 @@ function buildScene() {
   sceneList = null;
   const sc = base?.scene;
   if (!sc) return;
-  if (!sceneImg) loadLazy('/maps/' + sc.atlas, (i) => { sceneImg = i; invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); }, 'Level scenery');
+  if (!sceneImg) loadLazy(MAPS + sc.atlas, (i) => { sceneImg = i; invalidateBase(); if (!IN_WORKER) updateCategoryButtons(); }, 'Level scenery');
   const pick = (byState) => [...(byState.always || []), ...(byState[draft.baseState] || [])];
   const all = pick(sc.placements).map((p) => {
     const [, , sw, sh] = sc.sprites[p.s];
@@ -4804,9 +5282,9 @@ const fontImages = [];
 function fontImage(i) {
   if (!fontImages[i]) {
     if (IN_WORKER) return { complete: false };
-    const img = new Image();
+    const img = newMapImage();
     img.onload = () => { textCache.clear(); invalidateBase(); };
-    img.src = '/maps/' + base.scene.fonts[i].atlas;
+    img.src = MAPS + base.scene.fonts[i].atlas;
     fontImages[i] = img;
   }
   return fontImages[i];
@@ -4948,9 +5426,9 @@ const vineImages = {};
 function vineImage(name) {
   if (!vineImages[name]) {
     if (IN_WORKER) return { complete: false };
-    const img = new Image();
+    const img = newMapImage();
     img.onload = invalidateBase;
-    img.src = '/maps/vines/' + encodeURIComponent(name) + '.png';
+    img.src = MAPS + 'vines/' + encodeURIComponent(name) + '.png';
     vineImages[name] = img;
   }
   return vineImages[name];
@@ -4972,6 +5450,7 @@ function drawVine(cx, cy, sprite, m) {
 function drawGate(g, box, color, label) {
   const c = toScreen(g.x + box.dx, g.y + box.dy);
   const w = Math.max(4, box.w * cam.scale), h = Math.max(3, box.h * cam.scale);
+  if (c.x + w / 2 < -320 || c.x - w / 2 > canvas.width + 320 || c.y + h / 2 < -60 || c.y - h / 2 > canvas.height + 60) return; // off screen, badge included
   ctx.fillStyle = color;
   ctx.save();
   ctx.globalAlpha *= 0.18;
@@ -4988,6 +5467,15 @@ function drawGate(g, box, color, label) {
 const TILE_PX = 128;
 const TILE_BUDGET_MS = 6;
 const MAX_TILES = 3000;
+// Far-out level tiles (below MIP_Z) are made by shrinking their four finer tiles by half (4 image draws instead of thousands of sprites) whenever those are cached, e.g. when zooming out. Measured: drawing a far tile straight from the cells (17 ms at z-5) is 10x cheaper than rebuilding it from 64 detail tiles (2.5 ms each), so with no finer tiles it is still drawn from cells.
+const MIP_Z = -2;
+const OV_Z_MAX = -4; // the whole-map overview saved between sessions: these zooms and below
+let mipOn = true;
+const flagOn = (name) => { try { return localStorage.getItem(name) === '1'; } catch { return false; } };
+const mipsOff = () => flagOn('mapMakerNoMipmaps');
+const overviewOff = () => flagOn('mapMakerNoOverviewStore');
+const syncTiles = () => flagOn('mapMakerSyncTiles'); // old behaviour: every visible tile is drawn before the frame shows
+let viewMissing = false;
 // Cached canvases share a memory budget (Chromium drops canvas backings past its GPU limit): ~160 MB at full scale.
 const CANVAS_BUDGET_PX = 40e6;
 const maxTiles = () => Math.max(768, Math.min(MAX_TILES, Math.floor((CANVAS_BUDGET_PX * cacheScale - cellCache.chunks.size * CC_PX * CC_PX) / (TILE_PX * TILE_PX))));
@@ -5010,12 +5498,12 @@ function invalidateRegion(rects, belowZ = Infinity) {
     const x0 = tx * T, y0 = ty * T, x1 = x0 + T, y1 = y0 + T;
     return rects.some((r) => r[0] < x1 && r[2] > x0 && r[1] < y1 && r[3] > y0);
   };
-  for (const [k, c] of [...tileCache]) if (hits(k)) { tileCache.delete(k); c?.close?.(); dirtyGen.set(k, stateVersion); }
+  for (const [k, c] of [...tileCache]) if (hits(k)) { tileCache.delete(k); freeCanvas(c); dirtyGen.set(k, stateVersion); }
   for (const k of pool.inflight?.keys?.() || []) if (hits(k)) dirtyGen.set(k, stateVersion);
-  for (const k of [...tileJobs.keys()]) if (hits(k)) tileJobs.delete(k);
+  for (const [k, j] of [...tileJobs]) if (hits(k)) { tileJobs.delete(k); freeCanvas(j.cv); }
   requestDraw();
 }
-const levelEditSets = () => ({ removed: new Set(removed), removedVines: new Set(removedVines), removedScene: new Set(removedScene), removedObjects: new Set(removedObjects), removedDeco: new Set(removedDeco), movedScene: new Map([...movedScene].map(([k, d]) => [k, d.join(',')])), movedObjects: new Map([...movedObjects].map(([k, d]) => [k, d.join(',')])), levelTf: new Map([...levelTf].map(([k, v]) => [k, JSON.stringify(v)])), levelOrder: new Map([...levelOrder].map(([k, v]) => [k, String(v)])), baseEdits: new Map(Object.entries(draft.baseEdits || {}).map(([k, v]) => [k, JSON.stringify(v)])) });
+const levelEditSets = () => ({ levelHide: new Set(hiddenLevel()), removed: new Set(removed), removedVines: new Set(removedVines), removedScene: new Set(removedScene), removedObjects: new Set(removedObjects), removedDeco: new Set(removedDeco), movedScene: new Map([...movedScene].map(([k, d]) => [k, d.join(',')])), movedObjects: new Map([...movedObjects].map(([k, d]) => [k, d.join(',')])), levelTf: new Map([...levelTf].map(([k, v]) => [k, JSON.stringify(v)])), levelOrder: new Map([...levelOrder].map(([k, v]) => [k, String(v)])), baseEdits: new Map(Object.entries(draft.baseEdits || {}).map(([k, v]) => [k, JSON.stringify(v)])) });
 function changedKeys(a, b) {
   const out = [];
   if (a instanceof Map) { for (const [k, v] of a) if (b.get(k) !== v) out.push(k); for (const k of b.keys()) if (!a.has(k)) out.push(k); }
@@ -5040,6 +5528,7 @@ function redrawChangedLevel() {
   const rects = [], byId = new Map((sceneList?.items || []).filter((p) => p.id).map((p) => [p.id, p]));
   const cellRect = (k, m) => { const [cx, cy] = unkey(k), w = cellWorld(cx, cy); rects.push([w.x - m * CELL, w.y - m * CELL, w.x + (m + 1) * CELL, w.y + (m + 1) * CELL]); };
   changedKeys(was.removed, now.removed).forEach((k) => cellRect(k, 2));
+  changedKeys(was.levelHide, now.levelHide).forEach((k) => cellRect(k.slice(k.lastIndexOf('|') + 1), 2));
   changedKeys(was.removedVines, now.removedVines).forEach((k) => cellRect(k, 5));
   changedKeys(was.removedDeco, now.removedDeco).forEach((k) => { const layer = k.slice(0, k.lastIndexOf('|')), c = tileCenter(layer, k), g = layerGrid(layer).size * 2; rects.push([c.x - g, c.y - g, c.x + g, c.y + g]); });
   // A moved thing that only moved further is drawn live: only far zooms, where it's part of the cached level, redraw.
@@ -5066,6 +5555,7 @@ function applyBaseMoves() {
     o.x0 ??= o.x; o.y0 ??= o.y;
     const d = movedObjects.get(o.id) || [0, 0];
     o.x = o.x0 + d[0]; o.y = o.y0 + d[1];
+    if (o.hitX != null) { o.hitX0 ??= o.hitX; o.hitY0 ??= o.hitY; o.hitX = o.hitX0 + d[0]; o.hitY = o.hitY0 + d[1]; }
   }
   for (const p of sceneList.items) {
     if (!p.id) continue;
@@ -5184,10 +5674,10 @@ function renderRegion(cv, x, y, scale, part = null) {
   }
 }
 
-function renderTile(z, tx, ty, part = null) {
+function renderTile(z, tx, ty, part = null, into = null) {
   const s = Math.pow(2, z), T = TILE_PX / s;
-  const cv = makeCanvas();
-  cv.width = cv.height = TILE_PX;
+  const cv = into || makeCanvas();
+  if (cv.width !== TILE_PX) cv.width = cv.height = TILE_PX;
   renderRegion(cv, (tx + 0.5) * T, (ty + 0.5) * T, s, part);
   return cv;
 }
@@ -5228,26 +5718,53 @@ function coarserTile(z, tx, ty, part = null) {
   return null;
 }
 
-function drawFromFiner(z, tx, ty, x0, y0, w, h, part = null) {
+// What a missing tile can show meanwhile: its finer tiles (down to `depth` levels), whichever are cached.
+function drawFromFiner(z, tx, ty, x0, y0, w, h, part = null, depth = 2) {
   let any = false;
   for (let dy = 0; dy < 2; dy++) {
     for (let dx = 0; dx < 2; dx++) {
+      const px = x0 + (dx * w) / 2, py = y0 + ((1 - dy) * h) / 2;
       const c = tileCache.get(tileKey(z + 1, tx * 2 + dx, ty * 2 + dy, part));
-      if (!c) continue;
-      ctx.drawImage(c, x0 + (dx * w) / 2, y0 + ((1 - dy) * h) / 2, w / 2, h / 2);
-      any = true;
+      if (c) { ctx.drawImage(c, px, py, w / 2, h / 2); any = true; }
+      else if (depth > 0 && z + 1 < 1 && drawFromFiner(z + 1, tx * 2 + dx, ty * 2 + dy, px, py, w / 2, h / 2, part, depth - 1)) any = true;
     }
   }
   return any;
 }
 
 function storeTile(key, tile) {
+  const old = tileCache.get(key);
+  if (old && old !== tile) { tileCache.delete(key); freeCanvas(old); }
   tileCache.set(key, tile);
+  if (overview.on && +key.split('|')[2] <= OV_Z_MAX) overview.dirty = true;
   for (let cap = maxTiles(); tileCache.size > cap;) {
     const oldest = tileCache.keys().next().value;
-    tileCache.get(oldest)?.close?.();
+    freeCanvas(tileCache.get(oldest));
     tileCache.delete(oldest);
   }
+}
+
+const mipReady = (z, tx, ty, part) => mipOn && z < MIP_Z && [0, 1].every((dy) => [0, 1].every((dx) => tileCache.has(tileKey(z + 1, tx * 2 + dx, ty * 2 + dy, part))));
+// One unit of work towards a tile on the main thread (a piece of a drawn tile, or the shrinking of four finer ones, after those exist); true once it is cached.
+function stepMip(z, tx, ty, part = null) {
+  const key = tileKey(z, tx, ty, part);
+  if (tileCache.has(key)) return true;
+  if (mipReady(z, tx, ty, part)) {
+    const cv = makeCanvas();
+    cv.width = cv.height = TILE_PX;
+    const g = cv.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    const h = TILE_PX / 2;
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) g.drawImage(cachedTile(tileKey(z + 1, tx * 2 + dx, ty * 2 + dy, part)), dx * h, (1 - dy) * h, h, h);
+    storeTile(key, cv);
+    if (pool.inflight?.has(key)) dirtyGen.set(key, stateVersion + 1);
+    return true;
+  }
+  const job = tileJob(key, z);
+  if (!stepTileJob(job, z, tx, ty, part)) return false;
+  storeTile(key, job.cv); tileJobs.delete(key);
+  if (pool.inflight?.has(key)) dirtyGen.set(key, stateVersion + 1);
+  return true;
 }
 
 // Without workers: the tiles just outside the view, drawn in idle moments so panning finds them ready.
@@ -5256,12 +5773,10 @@ let aheadTimer = 0;
 function drawAhead() {
   aheadTimer = 0;
   const deadline = performance.now() + 6;
-  for (const [key, [z, tx, ty, part]] of aheadQueue) {
-    aheadQueue.delete(key);
-    if (tileCache.has(key) || !key.startsWith(baseVersion + '|')) continue;
-    const job = tileJob(key, z);
-    while (!stepTileJob(job, z, tx, ty, part)) { /* finish it */ }
-    storeTile(key, job.cv); tileJobs.delete(key);
+  for (const [key, [z, tx, ty, part]] of [...aheadQueue]) {
+    if (tileCache.has(key) || !key.startsWith(baseVersion + '|')) { aheadQueue.delete(key); continue; }
+    while (!stepMip(z, tx, ty, part)) if (performance.now() > deadline) break;
+    if (tileCache.has(key)) aheadQueue.delete(key);
     if (performance.now() > deadline) break;
   }
   if (aheadQueue.size) scheduleAhead();
@@ -5272,7 +5787,7 @@ function scheduleAhead() {
 }
 function drawBaseTiles(W, H, useArt, part = null) {
   aheadQueue.clear();
-  if (useArt && partRange(part)[0] === -Infinity) drawBackground(W, H);
+  ovEnsure(useArt);
   // While the camera glides, tiles are drawn once for the zoom it's heading to, not every zoom on the way.
   const z = lodFor(camGoal.active && camGoal.scale != null ? camGoal.scale : cam.scale), s = Math.pow(2, z), T = TILE_PX / s;
   const tl = toWorld(0, 0), br = toWorld(W, H);
@@ -5286,21 +5801,32 @@ function drawBaseTiles(W, H, useArt, part = null) {
   const dist = (t) => (t[2] ? 0 : 1e12) + Math.hypot((t[0] + 0.5) * T - cam.x, (t[1] + 0.5) * T - cam.y);
   tiles.sort((a, b) => dist(a) - dist(b));
   const workers = tileWorkersReady();
-  const deadline = performance.now() + (loading ? 40 : TILE_BUDGET_MS);
-  let missing = false, shown = 0, inView = 0;
+  mipOn = !mipsOff();
+  const sync = syncTiles();
+  const deadline = performance.now() + (sync ? 1e9 : loading ? 40 : TILE_BUDGET_MS);
+  const far = mipOn && z < MIP_Z;
+  let missing = false, shown = 0, inView = 0, spare = true;
   for (const [tx, ty, visible] of tiles) {
+    if (visible && stripClip) {
+      const a = toScreen(tx * T, (ty + 1) * T), b = toScreen((tx + 1) * T, ty * T);
+      if (!inStrips(Math.round(a.x), Math.round(a.y), Math.round(b.x), Math.round(b.y))) { inView++; shown++; continue; }
+    }
     const key = tileKey(z, tx, ty, part);
     let c = cachedTile(key);
-    let job = null;
     if (!c) {
-      // Every tile in view is drawn now, never left for later; the workers only draw ahead.
-      if (visible) {
-        job = tileJob(key, z);
-        while (!stepTileJob(job, z, tx, ty, part)) { /* finish it */ }
-        c = job.cv; storeTile(key, c); tileJobs.delete(key); job = null;
-        if (pool.inflight?.has(key)) dirtyGen.set(key, stateVersion + 1);
-      } else if (workers) requestTile(key, z, tx, ty, part);
-      else aheadQueue.set(key, [z, tx, ty, part]);
+      if (!visible) {
+        if (workers) requestTile(key, z, tx, ty, part);
+        else aheadQueue.set(key, [z, tx, ty, part]);
+      } else if (workers && far && !mipReady(z, tx, ty, part)) requestTile(key, z, tx, ty, part, true); // far tiles come from the workers; the view shows a coarser or finer picture meanwhile
+      else {
+        // Drawn here only within the frame's time budget (one step at least), the rest waits for the next frame and shows a coarser or finer tile meanwhile.
+        if (spare || performance.now() < deadline) {
+          spare = false;
+          while (!stepMip(z, tx, ty, part)) if (performance.now() >= deadline) break;
+          c = cachedTile(key);
+        }
+        if (!c && workers) requestTile(key, z, tx, ty, part, true);
+      }
     }
     if (!visible) continue;
     inView++;
@@ -5311,25 +5837,29 @@ function drawBaseTiles(W, H, useArt, part = null) {
     const coarse = coarserTile(z, tx, ty, part);
     if (coarse) ctx.drawImage(coarse[0], coarse[1], coarse[2], coarse[3], coarse[4], x0, y0, w, h);
     else drawFromFiner(z, tx, ty, x0, y0, w, h, part);
+    const job = tileJobs.get(key);
     if (job?.next) ctx.drawImage(job.cv, x0, y0, w, h);
   }
   if (tileJobs.size > 256) {
-    const current = baseVersion + '|' + draft.baseState + '|' + z + '|', coarse = baseVersion + '|' + draft.baseState + '|' + PRELOAD_Z + '|';
-    for (const k of tileJobs.keys()) if (!k.startsWith(current) && !k.startsWith(coarse)) tileJobs.delete(k);
+    const current = baseVersion + '|' + draft.baseState + '|' + z + '|', coarse = baseVersion + '|' + draft.baseState + '|' + preloadZ() + '|';
+    for (const [k, j] of [...tileJobs]) if (!k.startsWith(current) && !k.startsWith(coarse)) { tileJobs.delete(k); freeCanvas(j.cv); }
   }
-  if (loading?.render && !prefetch) planPrefetch(W, H, true);
+  if (loading?.render && !prefetch && !overview.restoring) planPrefetch(W, H, true);
   const pending = pumpPrefetch(workers);
+  if (missing) worldClean = false;
   if (loading?.render && !missing && !pending) hideLoading();
   if (!loading && !missing && !pending) {
     const at = z + '|' + Math.floor(cam.x / (T * 4)) + '|' + Math.floor(cam.y / (T * 4));
     if (at !== prefetchAt) { prefetchAt = at; planPrefetch(W, H, false); }
   }
   if (dbg.on) Object.assign(dbg.cur, { shown, inView, missing, z });
-  if (missing && !workers) requestDraw();
+  viewMissing = viewMissing || missing;
+  if (missing && (!workers || !pool.inflight.size)) requestDraw();
+  else if (!missing && !pending) ovTick();
   scheduleAhead();
 }
 
-const PRELOAD_Z = -4;
+const preloadZ = () => (mipsOff() ? -4 : -5);
 let prefetch = null;
 let prefetchAt = '';
 let boundsCache = null;
@@ -5347,44 +5877,193 @@ function levelBounds() {
   return (boundsCache = { state: draft.baseState, x0, y0, x1, y1 });
 }
 function planPrefetch(W, H, full) {
-  const q = [], seen = new Set();
+  const q = [], seen = new Set(), parts = levelParts();
   const add = (z, x0, y0, x1, y1) => {
     const T = TILE_PX / Math.pow(2, z);
     for (let ty = Math.floor(y0 / T); ty <= Math.floor(y1 / T); ty++) for (let tx = Math.floor(x0 / T); tx <= Math.floor(x1 / T); tx++) {
-      const k = z + ',' + tx + ',' + ty;
-      if (!seen.has(k)) { seen.add(k); q.push([z, tx, ty]); }
+      for (const part of parts) {
+        const k = z + ',' + tx + ',' + ty + ',' + part;
+        if (!seen.has(k)) { seen.add(k); q.push([z, tx, ty, part]); }
+      }
     }
   };
   const z = lodFor(cam.scale), tl = toWorld(0, 0), br = toWorld(W, H), wv = br.x - tl.x, hv = tl.y - br.y;
   const d = (t) => Math.hypot((t[1] + 0.5) * TILE_PX / Math.pow(2, t[0]) - cam.x, (t[2] + 0.5) * TILE_PX / Math.pow(2, t[0]) - cam.y);
   add(z, tl.x - wv * (full ? 1 : 0.6), br.y - hv * (full ? 1 : 0.6), br.x + wv * (full ? 1 : 0.6), tl.y + hv * (full ? 1 : 0.6));
   q.sort((a, b) => d(a) - d(b));
-  if (full && z > PRELOAD_Z) { const b = levelBounds(); if (Number.isFinite(b.x0)) add(PRELOAD_Z, b.x0, b.y0, b.x1, b.y1); }
+  if (full && z > preloadZ()) { const b = levelBounds(); if (Number.isFinite(b.x0)) add(preloadZ(), b.x0, b.y0, b.x1, b.y1); }
+  if (!full && pool.ready) {
+    // Then the view at the zoom either side, so crossing into it finds its tiles drawn instead of drawing them all on the spot (a stall of up to half a second per zoom step on a big map).
+    const mark = q.length;
+    if (z < 1) add(z + 1, tl.x, br.y, br.x, tl.y);
+    if (z > -8) add(z - 1, tl.x, br.y, br.x, tl.y);
+    q.push(...q.splice(mark).sort((a, b) => d(a) - d(b)));
+  }
   prefetch = { queue: q, total: q.length };
 }
 function pumpPrefetch(workers) {
   if (!prefetch) return false;
   // Walked in place, not rebuilt: this runs every frame and rebuilding the queue (a string key per entry) made panning stutter.
   const q = prefetch.queue, deadline = performance.now() + (loading ? 40 : 3);
+  if (workers && viewMissing && !loading) return true; // the view comes first
   let kept = 0, sent = 0;
   for (let n = 0; n < q.length; n++) {
-    const [z, tx, ty] = q[n];
-    const key = tileKey(z, tx, ty);
+    const [z, tx, ty, part] = q[n];
+    const key = tileKey(z, tx, ty, part);
     if (tileCache.has(key)) continue; // already drawn - drop it
     q[kept++] = q[n];
-    if (sent >= 64) continue; // the rest wait for the next frame
-    if (workers) { requestTile(key, z, tx, ty); sent++; continue; }
-    if (performance.now() > deadline) { for (let m = n; m < q.length; m++) q[kept++] = q[m]; break; }
-    const job = tileJob(key, z);
-    while (performance.now() < deadline) if (stepTileJob(job, z, tx, ty)) { storeTile(key, job.cv); tileJobs.delete(key); break; }
+    if (sent >= 64) { for (let m = n + 1; m < q.length; m++) q[kept++] = q[m]; break; } // the rest wait for the next frame, unchecked
+    if (workers) { requestTile(key, z, tx, ty, part); sent++; continue; }
+    if (performance.now() > deadline) { for (let m = n + 1; m < q.length; m++) q[kept++] = q[m]; break; } // q[n] is already kept above: copying it again from n let the write index overtake the read index, and the queue grew for ever
+    while (performance.now() < deadline) if (stepMip(z, tx, ty, part)) break;
     sent++;
   }
   q.length = kept;
   const left = q.length;
   if (loading?.render) setLoading(0.7 + 0.3 * (1 - left / Math.max(1, prefetch.total)), `Rendering the level ${prefetch.total - left} / ${prefetch.total}`);
   if (!left) { prefetch = null; return false; }
-  if (!workers) requestDraw();
+  // No workers: the main thread draws the prefetch in slices between frames. A redraw for each slice would throw the whole picture away
+  // every time (tiles drawn ahead change nothing on screen), so only the loading screen, which shows the progress, asks for one.
+  if (!workers) {
+    if (loading?.render) requestDraw();
+    else if (!pumpTimer) pumpTimer = setTimeout(() => { pumpTimer = 0; pumpPrefetch(false); }, 12);
+  }
   return true;
+}
+let pumpTimer = 0;
+
+// The level in the zoom-0 split by band: one string per part a tile is drawn in (null = the whole level).
+function levelParts() {
+  if (!(baseOn() && !layerHidden('level') && artReady())) return [null];
+  const behind = stack().filter((e) => e.it.behind);
+  if (!behind.length) return [null];
+  const cuts = [...new Set(behind.map((e) => cutOf(e.it)))].sort((a, b) => a - b);
+  const out = [];
+  let lo = -Infinity;
+  for (const cut of cuts) { out.push(lo + ':' + cut); lo = cut; }
+  out.push(lo + ':Infinity');
+  return out;
+}
+
+// ---- the far-out overview kept between sessions (IndexedDB): the whole map's tiles at OV_Z_MAX and below, keyed by the level's data, art state and edits. Every call is guarded; without storage nothing changes. ----
+const OV_DB = 'amplifier-overview', OV_STORE = 'tiles', OV_ART = 'a1';
+const overview = { on: !IN_WORKER, db: null, epoch: '', restoring: false, saving: false, dirty: false, timer: 0, persisted: new Set(), persistedSig: '' };
+function overviewSig() {
+  const st = workerState();
+  delete st.version;
+  return ['ov', OV_ART, baseFp, TILE_PX, MIP_Z, fnv(JSON.stringify(st))].join('.');
+}
+function ovDb() {
+  overview.db ||= new Promise((res) => {
+    try {
+      if (typeof indexedDB === 'undefined') return res(null);
+      const r = indexedDB.open(OV_DB, 1);
+      r.onupgradeneeded = () => { try { r.result.createObjectStore(OV_STORE); } catch { /* exists */ } };
+      r.onsuccess = () => res(r.result);
+      r.onerror = r.onblocked = () => res(null);
+    } catch { res(null); }
+  });
+  return overview.db;
+}
+function ovEnsure(useArt) {
+  if (IN_WORKER || !useArt || !baseFp || overviewOff() || loading?.render === false) return;
+  const ep = baseVersion + '|' + draft.baseState;
+  if (overview.epoch === ep) return;
+  overview.epoch = ep;
+  overview.restoring = true;
+  ovRestore(ep).then((n) => { if (n) requestDraw(); }, () => {}).finally(() => { overview.restoring = false; requestDraw(); });
+}
+async function ovRestore(ep) {
+  try {
+    const db = await ovDb();
+    if (!db) return 0;
+    const sig = overviewSig(), parts = new Set(levelParts().map((p) => p ?? ''));
+    // Keys sort by zoom, farthest first; only what takes a third of the tile cache is brought back (the rest is built when the view needs it).
+    const room = Math.max(64, Math.floor(maxTiles() / 3));
+    const rows = await new Promise((res) => {
+      const out = [];
+      try {
+        const r = db.transaction(OV_STORE, 'readonly').objectStore(OV_STORE).openCursor(IDBKeyRange.bound(sig + '|', sig + '|\uffff'));
+        r.onsuccess = () => {
+          const c = r.result;
+          if (!c || out.length >= room) return res(out);
+          const f = String(c.key).slice(sig.length + 1).split('|');
+          if (parts.has(f[3] || '')) out.push([c.key, c.value]);
+          c.continue();
+        };
+        r.onerror = () => res(out);
+      } catch { res(out); }
+    });
+    let n = 0;
+    for (const [k, blob] of rows) {
+      const f = String(k).slice(sig.length + 1).split('|');
+      const z = +f[0], tx = +f[1], ty = +f[2], part = f[3] || null;
+      if (!parts.has(part ?? '') || !(blob instanceof Blob)) continue;
+      const key = tileKey(z, tx, ty, part);
+      if (tileCache.has(key)) continue;
+      const bmp = await createImageBitmap(blob);
+      if (overview.epoch !== ep || tileCache.has(key)) { bmp.close?.(); continue; }
+      storeTile(key, bmp);
+      overview.persisted.add(key);
+      n++;
+    }
+    if (n) overview.persistedSig = sig;
+    return n;
+  } catch { return 0; }
+}
+function ovTick() {
+  if (IN_WORKER || !overview.dirty || overview.timer || overview.restoring || overview.saving || overviewOff() || !baseFp) return;
+  overview.timer = setTimeout(() => { overview.timer = 0; ovSave(); }, 3000);
+}
+async function ovSave() {
+  if (overview.saving || overviewOff()) return;
+  overview.saving = true;
+  overview.dirty = false;
+  try {
+    const db = await ovDb();
+    if (!db) return;
+    const sv = stateVersion, bv = baseVersion, sig = overviewSig();
+    if (overview.persistedSig !== sig) { overview.persistedSig = sig; overview.persisted = new Set(); }
+    const prefix = bv + '|' + draft.baseState + '|';
+    const todo = [];
+    for (const [k] of tileCache) {
+      if (!k.startsWith(prefix) || overview.persisted.has(k)) continue;
+      const f = k.slice(prefix.length).split('|');
+      if (+f[0] <= OV_Z_MAX) todo.push([k, f]);
+    }
+    todo.sort((a, b) => a[1][0] - b[1][0]);
+    todo.length = Math.min(todo.length, 1600);
+    if (!todo.length) return;
+    const sc = document.createElement('canvas');
+    sc.width = sc.height = TILE_PX;
+    const g = sc.getContext('2d');
+    let n = 0;
+    for (const [k, f] of todo) {
+      if (stateVersion !== sv || baseVersion !== bv) { overview.dirty = true; break; }
+      const tile = tileCache.get(k);
+      if (!tile) continue;
+      g.clearRect(0, 0, TILE_PX, TILE_PX);
+      g.drawImage(tile, 0, 0);
+      const blob = await new Promise((res) => { try { sc.toBlob(res, 'image/png'); } catch { res(null); } });
+      if (!blob) continue;
+      const ok = await new Promise((res) => { try { const t = db.transaction(OV_STORE, 'readwrite'); t.objectStore(OV_STORE).put(blob, sig + '|' + f[0] + '|' + f[1] + '|' + f[2] + '|' + (f[3] || '')); t.oncomplete = () => res(true); t.onerror = t.onabort = () => res(false); } catch { res(false); } });
+      if (!ok) break;
+      overview.persisted.add(k);
+      if (++n % 6 === 0) await new Promise((r) => setTimeout(r, 40));
+    }
+    sc.width = sc.height = 0;
+    // Only the two newest states are kept.
+    const meta = await new Promise((res) => { try { const r = db.transaction(OV_STORE, 'readonly').objectStore(OV_STORE).get('#sigs'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch { res(null); } });
+    const sigs = [sig, ...(Array.isArray(meta) ? meta.filter((x) => x !== sig) : [])];
+    await new Promise((res) => {
+      try {
+        const t = db.transaction(OV_STORE, 'readwrite'), os = t.objectStore(OV_STORE);
+        for (const d of sigs.slice(2)) os.delete(IDBKeyRange.bound(d + '|', d + '|\uffff'));
+        os.put(sigs.slice(0, 2), '#sigs');
+        t.oncomplete = t.onerror = t.onabort = () => res();
+      } catch { res(); }
+    });
+  } catch { /* no storage: nothing is kept */ } finally { overview.saving = false; }
 }
 
 const pool = { workers: [], ready: 0, failed: false, inflight: new Map(), version: -1, err: '', why: '' };
@@ -5393,11 +6072,12 @@ function startTileWorkers() {
   let off = false;
   try { off = !!localStorage.getItem('mapMakerNoWorkers'); } catch {}
   if (off || pool.workers.length || pool.failed || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return;
-  // One worker per physical core, bar one (max four): each parses its own 9.5MB basemap.json and holds the atlas, and hardwareConcurrency counts hyperthreads, so one per thread starved the main thread.
-  const count = Math.max(1, Math.min(4, Math.ceil((navigator.hardwareConcurrency || 4) / 2) - 1));
+  // One worker per physical core, bar one (max two): each parses its own 9.5MB basemap.json and holds the atlas, scenery and fonts (~250MB with what it draws, a third of a GB each) and hardwareConcurrency counts hyperthreads, so one per thread starved the main thread. The visible tiles are drawn on the main thread anyway; the workers only draw ahead.
+  let count = Math.max(1, Math.min(2, Math.ceil((navigator.hardwareConcurrency || 4) / 2) - 1));
+  try { const n = parseInt(localStorage.getItem('mapMakerWorkers'), 10); if (n >= 1 && n <= 8) count = n; } catch { /* default */ }
   for (let n = 0; n < count; n++) {
     let worker;
-    try { worker = new Worker(new URL('./tile-worker.js', import.meta.url), { type: 'module' }); } catch { pool.failed = true; return; }
+    try { worker = newTileWorker(); } catch { pool.failed = true; return; }
     worker.jobs = 0;
     worker.ready = false;
     worker.onmessage = (e) => onWorkerMessage(worker, e.data);
@@ -5418,7 +6098,7 @@ function failWorkers() {
 }
 
 function workerState() {
-  return { baseState: draft.baseState, removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], removedDeco: [...removedDeco], removedObjects: [...removedObjects], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], simulate: !!draft.simulate, baseEdits: draft.baseEdits || {}, version: baseVersion };
+  return { baseState: draft.baseState, levelHide: [...hiddenLevel()], removed: [...removed], removedVines: [...removedVines], removedScene: [...removedScene], removedDeco: [...removedDeco], removedObjects: [...removedObjects], movedScene: [...movedScene], movedObjects: [...movedObjects], levelOrder: [...levelOrder], levelTf: [...levelTf], simulate: !!draft.simulate, baseEdits: draft.baseEdits || {}, version: baseVersion };
 }
 
 function onWorkerMessage(worker, m) {
@@ -5427,11 +6107,19 @@ function onWorkerMessage(worker, m) {
   if (m.type !== 'tile') return;
   worker.jobs--;
   pool.inflight.delete(m.key);
-  if (m.bitmap && m.key.startsWith(baseVersion + '|') && (m.gen ?? 0) >= (dirtyGen.get(m.key) || 0)) { storeTile(m.key, m.bitmap); requestDraw(); }
+  if (m.bitmap && m.key.startsWith(baseVersion + '|') && (m.gen ?? 0) >= (dirtyGen.get(m.key) || 0) && !tileCache.has(m.key)) {
+    storeTile(m.key, m.bitmap);
+    if (viewMissing) requestDraw();
+    // Tiles in view are drawn on the spot, so one arriving changes nothing on screen: it only frees a worker for the next prefetch
+    // request. (A redraw per tile used to cost a whole frame each, for as long as the prefetch ran.)
+    if (loading?.render) requestDraw(); else if (prefetch) pumpPrefetch(tileWorkersReady());
+  }
   else m.bitmap?.close?.();
 }
 
+let workersAsked = false;
 function tileWorkersReady() {
+  if (!workersAsked && baseSettled && baseOn()) { workersAsked = true; startTileWorkers(); } // the base game was loaded after the editor opened
   if (!pool.ready) return false;
   if (pool.version !== baseVersion + '/' + stateVersion) {
     pool.version = baseVersion + '/' + stateVersion;
@@ -5442,10 +6130,11 @@ function tileWorkersReady() {
   return true;
 }
 
-function requestTile(key, z, tx, ty, part = null) {
+// urgent: a tile in view. The prefetch leaves a slot per worker free, so tiles in view never queue behind it.
+function requestTile(key, z, tx, ty, part = null, urgent = false) {
   if (pool.inflight.has(key)) return;
   const free = pool.workers.filter((w) => w.ready).sort((a, b) => a.jobs - b.jobs)[0];
-  if (!free || free.jobs >= 3) return;
+  if (!free || free.jobs >= (urgent ? 3 : 2)) return;
   free.jobs++;
   pool.inflight.set(key, free);
   free.postMessage({ type: 'tile', key, z, tx, ty, part, gen: stateVersion });
@@ -5463,14 +6152,14 @@ export async function workerInit(state) {
     img.naturalHeight = img.height;
     return img;
   };
-  base = await (await fetch('/maps/basemap.json')).json();
+  base = await (await fetch(MAPS + 'basemap.json')).json();
   gridCache = null;
   pieceStamps = null;
   const vines = [...new Set(base.defs.filter((d) => d.kind === 'vine').map((d) => d.sprite))];
-  [atlasImg, sceneImg] = await Promise.all([bitmap('/maps/' + base.art.atlas), bitmap('/maps/' + base.scene.atlas)]);
-  const fonts = await Promise.all((base.scene.fonts || []).map((f) => (f ? bitmap('/maps/' + f.atlas) : null)));
+  [atlasImg, sceneImg] = await Promise.all([bitmap(MAPS + base.art.atlas), bitmap(MAPS + base.scene.atlas)]);
+  const fonts = await Promise.all((base.scene.fonts || []).map((f) => (f ? bitmap(MAPS + f.atlas) : null)));
   fonts.forEach((f, n) => { fontImages[n] = f; });
-  const vineBitmaps = await Promise.all(vines.map((v) => bitmap('/maps/vines/' + encodeURIComponent(v) + '.png').catch((e) => { workerWarn(String(e?.message || e)); return null; })));
+  const vineBitmaps = await Promise.all(vines.map((v) => bitmap(MAPS + 'vines/' + encodeURIComponent(v) + '.png').catch((e) => { workerWarn(String(e?.message || e)); return null; })));
   vines.forEach((v, n) => { if (vineBitmaps[n]) vineImages[v] = vineBitmaps[n]; });
   draft.useBase = true;
   workerSetState(state);
@@ -5481,6 +6170,7 @@ export async function workerInit(state) {
 
 export function workerSetState(state) {
   removed = new Set(state.removed);
+  hiddenInWorker = new Set(state.levelHide || []);
   removedVines = new Set(state.removedVines);
   removedScene = new Set(state.removedScene || []);
   removedObjects = new Set(state.removedObjects || []);
@@ -5500,8 +6190,12 @@ export function workerSetState(state) {
   baseVersion = state.version;
 }
 
+// One canvas for every tile this worker draws: transferToImageBitmap hands the picture over and leaves it blank, ready for the next
+// (a canvas and context per tile left the worker's garbage to pile up in hundreds of MB between collections).
+let workerTileCanvas = null;
 export function workerRenderTile(z, tx, ty, part = null) {
-  return renderTile(z, tx, ty, part).transferToImageBitmap();
+  workerTileCanvas ||= new OffscreenCanvas(TILE_PX, TILE_PX);
+  return renderTile(z, tx, ty, part, workerTileCanvas).transferToImageBitmap();
 }
 
 // The map view picture: Amplifier zoomed out over the whole map (the level when the map uses it, then its tiles, blocks, spikes, vines, moss and spawns/gates), fitted into W x H. Runs in the tile worker, whose module state is its own, so a live editor is never touched. `map` is a map.json object (v2 maps are converted first). Returns a PNG Blob, or null when the map has no editor data.
@@ -5563,6 +6257,7 @@ function drawCellLayers(useArt, pad, tileMargin = CELL) {
   const tl = cellOf(toWorld(0, 0).x, toWorld(0, 0).y), br = cellOf(toWorld(W, H).x, toWorld(W, H).y);
   const minCx = tl.cx - 1, maxCx = br.cx + 1, minCy = br.cy - 1, maxCy = tl.cy + 1;
   if (useArt && !layerHidden('tiles')) drawPlacedTiles(false, tileMargin);
+  if (useArt && !layerHidden('blocks') && baseOn()) for (const [, o] of levelOverrides().cells) if (o.cx >= minCx && o.cx <= maxCx && o.cy >= minCy && o.cy <= maxCy) drawGroundArt(o.cx, o.cy, o.art);
   if (!layerHidden('blocks')) blocks.forEachIn(minCx, minCy, maxCx, maxCy, (k, kind, cx, cy) => {
     if (useArt) {
       const art = blockArt(kind, cx, cy);
@@ -5604,7 +6299,7 @@ const ccKey = (z, tx, ty) => z + '|' + tx + '|' + ty;
 function ccDropAll(hard) {
   if (dbg.on) { dbg.cur.drops = (dbg.cur.drops || 0) + 1; dbgLog('ccDropAll ' + (hard ? 'hard' : 'soft')); }
   if (hard) {
-    for (const c of cellCache.chunks.values()) cellCache.pool.push(c.cv);
+    for (const c of cellCache.chunks.values()) { if (cellCache.pool.length < 8) cellCache.pool.push(c.cv); else freeCanvas(c.cv); }
     cellCache.chunks.clear();
     cellCache.cold = true;
     return;
@@ -5656,11 +6351,25 @@ function ccRender(z, tx, ty, useArt, pad) {
   canvas = cv;
   ctx = g;
   cam = { x: (tx + 0.5) * span, y: (ty + 0.5) * span, scale: s };
-  try { drawCellLayers(useArt, pad, 4 * CELL); } finally { [canvas, ctx, cam] = saved; }
-  const c = { z, tx, ty, cv, stale: false };
+  // Whether anything was drawn at all: a chunk of empty ground is not blitted over the view (most far-out chunks are).
+  let drew = 0;
+  const names = ['drawImage', 'fillRect', 'fill', 'stroke', 'strokeRect', 'fillText', 'strokeText'];
+  const own = names.map((n) => (Object.prototype.hasOwnProperty.call(g, n) ? g[n] : undefined));
+  names.forEach((n) => { const f = g[n]; g[n] = function (...a) { drew++; return f.apply(this, a); }; });
+  try {
+    // Far out, a chunk is its four finer chunks shrunk by half when they are all there (zooming out), not the cells walked again.
+    const kids = z < CC_HIGH && !mipsOff() ? [0, 1].flatMap((b) => [0, 1].map((a) => { const k = cc.chunks.get(ccKey(z + 1, tx * 2 + a, ty * 2 + b)); return k && !k.stale ? [k, a, b] : null; })) : [];
+    if (kids.length === 4 && kids.every(Boolean)) {
+      for (const [k, a, b] of kids) if (!k.empty) { g.drawImage(k.cv, a * CC_PX / 2, (1 - b) * CC_PX / 2, CC_PX / 2, CC_PX / 2); drew++; }
+    } else drawCellLayers(useArt, pad, 4 * CELL);
+  } finally {
+    [canvas, ctx, cam] = saved;
+    names.forEach((n, i) => { if (own[i]) g[n] = own[i]; else delete g[n]; });
+  }
+  const c = { z, tx, ty, cv, stale: false, empty: drew === 0 };
   if (old) cc.chunks.delete(ccKey(z, tx, ty));
   cc.chunks.set(ccKey(z, tx, ty), c);
-  if (old && cc.pool.length < 8) cc.pool.push(old.cv);
+  if (old) { if (cc.pool.length < 8) cc.pool.push(old.cv); else freeCanvas(old.cv); }
   return c;
 }
 // Something to show in place of a chunk that isn't built: the same area from a coarser level, or four finer chunks.
@@ -5715,15 +6424,15 @@ function drawCellView(useArt, pad) {
   for (const v of view) {
     const p = toScreen(v.tx * span, (v.ty + 1) * span), q = toScreen((v.tx + 1) * span, v.ty * span);
     const x0 = Math.round(p.x), y0 = Math.round(p.y), x1 = Math.round(q.x), y1 = Math.round(q.y);
-    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
+    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H || !inStrips(x0, y0, x1, y1)) continue;
     const k = ccKey(z, v.tx, v.ty), c = cc.chunks.get(k);
-    if (c) { cc.chunks.delete(k); cc.chunks.set(k, c); ctx.drawImage(c.cv, x0, y0, x1 - x0, y1 - y0); }
+    if (c) { cc.chunks.delete(k); cc.chunks.set(k, c); if (!c.empty || c.stale) ctx.drawImage(c.cv, x0, y0, x1 - x0, y1 - y0); }
     else if (ccSubstitute(z, v.tx, v.ty, x0, y0, x1, y1)) dbg.cur.stand = (dbg.cur.stand || 0) + 1;
     else dbg.cur.none = (dbg.cur.none || 0) + 1;
   }
   // Oldest first out, but never what's in view.
   const cap = Math.max(Math.round(CC_MAX * cacheScale), view.length + 24);
-  for (const [k, c] of cc.chunks) { if (cc.chunks.size <= cap) break; cc.chunks.delete(k); if (cc.pool.length < 8) cc.pool.push(c.cv); }
+  for (const [k, c] of cc.chunks) { if (cc.chunks.size <= cap) break; cc.chunks.delete(k); if (cc.pool.length < 8) cc.pool.push(c.cv); else freeCanvas(c.cv); }
 }
 
 // Debug strip: localStorage.mapMakerDebug = '1' or Ctrl+Shift+D in the editor (release builds have no devtools).
@@ -5785,7 +6494,7 @@ function dbgFrame(ms, err) {
   if (!dbg.on || IN_WORKER) return;
   dbg.n++;
   const c = dbg.cur;
-  const line = `f${dbg.n} ${ms.toFixed(1)}ms ${canvas.width}x${canvas.height} tiles ${c.shown ?? '-'}/${c.inView ?? '-'} miss ${c.missing ? 'Y' : 'n'} z${c.z ?? '-'} | chunks built ${c.built ?? '-'} miss ${c.ccMissing ?? '-'} none ${c.none ?? 0} stand ${c.stand ?? 0} | bv${baseVersion} sv${stateVersion} drops ${c.drops || 0} | thr${flick.throws} skip${flick.skipped} mis${flick.mismatch} rs${flick.resizes} lost${flick.lost}/${flick.restored} purged${flick.purged} cp${flick.copies} cs${cacheScale.toFixed(2)}${err ? ' ERR ' + err : ''}`;
+  const line = `f${dbg.n} ${perf.fps.toFixed(0)}fps (draw ${perf.drawMs.toFixed(1)}ms avg, ${ms.toFixed(1)}ms now) ${canvas.width}x${canvas.height} tiles ${c.shown ?? '-'}/${c.inView ?? '-'} miss ${c.missing ? 'Y' : 'n'} z${c.z ?? '-'} | chunks built ${c.built ?? '-'} miss ${c.ccMissing ?? '-'} none ${c.none ?? 0} stand ${c.stand ?? 0} | bv${baseVersion} sv${stateVersion} drops ${c.drops || 0} | thr${flick.throws} skip${flick.skipped} mis${flick.mismatch} rs${flick.resizes} lost${flick.lost}/${flick.restored} purged${flick.purged} cp${flick.copies} cs${cacheScale.toFixed(2)}${err ? ' ERR ' + err : ''}`;
   if (err || ms > 40 || c.none || c.drops) dbgLog(line);
   if (!dbg.el) {
     dbg.el = document.createElement('div');
@@ -5805,15 +6514,30 @@ function dbgFrame(ms, err) {
 }
 
 let artRetryAt = 0;
+// Real frame rate: the gap between draws (what you see), apart from how long a draw takes (what the code costs).
+const perf = { reused: 0, scrolled: 0, last: 0, gaps: [], draws: [], fps: 0, drawMs: 0, n: 0, total: 0 };
+function perfFrame(t0, t1) {
+  if (perf.last) { perf.gaps.push(t0 - perf.last); if (perf.gaps.length > 60) perf.gaps.shift(); }
+  perf.last = t0;
+  perf.n++; perf.total += t1 - t0;
+  perf.draws.push(t1 - t0); if (perf.draws.length > 60) perf.draws.shift();
+  const g = perf.gaps.length ? perf.gaps.reduce((a, b) => a + b, 0) / perf.gaps.length : 0;
+  // A gap over half a second is the editor sitting idle, not a slow frame.
+  perf.fps = g && g < 500 ? 1000 / g : 0;
+  perf.drawMs = perf.draws.reduce((a, b) => a + b, 0) / perf.draws.length;
+}
+const worldCacheOff = () => { try { return localStorage.mapMakerNoWorldCache === '1'; } catch { return false; } };
 function draw() {
-  const t0 = dbg.on ? performance.now() : 0;
+  drawPhase = 0;
+  if (root && root.isConnected === false) return; // the editor was closed with a frame queued
+  const t0 = performance.now();
   let err = null;
   purgeLost();
   // The level's art is missing (a failed load): try again now and then rather than drawing without it for good.
   if (base?.art && baseSettled && !loading && !IN_WORKER && (!atlasImg || !sceneImg) && performance.now() > artRetryAt) {
     artRetryAt = performance.now() + 5000;
     if (!atlasImg) buildArtIndex();
-    if (!sceneImg && base.scene) loadLazy('/maps/' + base.scene.atlas, (i) => { sceneImg = i; invalidateBase(); }, 'Level scenery');
+    if (!sceneImg && base.scene) loadLazy(MAPS + base.scene.atlas, (i) => { sceneImg = i; invalidateBase(); }, 'Level scenery');
     flash('Level art failed to load - retrying', true);
   }
   const vis = visCanvas;
@@ -5832,19 +6556,85 @@ function draw() {
   } else {
     try { drawFrame(); drawFx(); } catch (e) { err = String(e && e.message || e); dbgLog('draw threw (direct): ' + (e && e.stack || e)); if (!dbg.on) throw e; }
   }
-  if (dbg.on) dbgFrame(performance.now() - t0, err);
+  drawPhase = 0;
+  const t1 = performance.now();
+  perfFrame(t0, t1);
+  if (dbg.on) dbgFrame(t1 - t0, err);
+}
+// The level layer: tiles, live things and your blocks on a transparent canvas of the window's size, drawn over the backdrop.
+// While the map is dragged (scroll = true) it is moved by whole pixels and only the strip that came into view is drawn, so a pan
+// costs a copy and a sliver of drawing instead of resampling every tile again; any other change redraws it whole.
+// While a pan frame redraws only the strips that came into view, whatever lies wholly outside them is not drawn at all.
+let stripClip = null;
+const inStrips = (x0, y0, x1, y1) => !stripClip || stripClip.some((r) => x1 > r[0] && x0 < r[0] + r[2] && y1 > r[1] && y0 < r[1] + r[3]);
+const levelLayer = { a: null, b: null, ax: 0, ay: 0, key: '', ok: false };
+const layerOff = () => { try { return localStorage.mapMakerNoLayer === '1'; } catch { return false; } };
+function layerSurface(W, H) {
+  const mk = () => { const cv = makeCanvas(); cv.width = W; cv.height = H; return { cv, g: guardCtx(cv.getContext('2d')) }; };
+  const L = levelLayer;
+  if (!L.a || L.a.cv.width !== W || L.a.cv.height !== H) { L.a = mk(); L.b = mk(); L.ok = false; }
+  return L;
+}
+function drawLevelLayer(W, H, key, scroll, content) {
+  const L = layerSurface(W, H), saved = [canvas, ctx];
+  let strips = null;
+  if (scroll && L.ok && L.key === key && !layerOff()) {
+    const dx = (L.ax - cam.x) * cam.scale, dy = (cam.y - L.ay) * cam.scale, rx = Math.round(dx), ry = Math.round(dy);
+    if (Math.abs(dx - rx) < 1e-3 && Math.abs(dy - ry) < 1e-3 && Math.abs(rx) < W && Math.abs(ry) < H) {
+      const t = L.b;
+      t.g.clearRect(0, 0, W, H);
+      t.g.drawImage(L.a.cv, rx, ry);
+      L.b = L.a; L.a = t;
+      strips = [];
+      if (rx > 0) strips.push([0, 0, rx, H]); else if (rx < 0) strips.push([W + rx, 0, -rx, H]);
+      if (ry > 0) strips.push([0, 0, W, ry]); else if (ry < 0) strips.push([0, H + ry, W, -ry]);
+    }
+  }
+  if (!strips) L.a.g.clearRect(0, 0, W, H);
+  canvas = L.a.cv; ctx = L.a.g;
+  ctx.imageSmoothingEnabled = !zooming();
+  try {
+    if (strips) {
+      stripClip = strips;
+      ctx.save();
+      ctx.beginPath();
+      for (const r of strips) ctx.rect(r[0], r[1], r[2], r[3]);
+      ctx.clip();
+      try { content(); } finally { ctx.restore(); stripClip = null; }
+      perf.scrolled++;
+    } else content();
+  } finally { [canvas, ctx] = saved; }
+  L.ax = cam.x; L.ay = cam.y; L.key = key;
+  L.ok = worldClean && !worldDirty && !cellCache.cold;
+  ctx.drawImage(L.a.cv, 0, 0);
 }
 function drawFrame() {
   if (!ctx) return;
+  viewMissing = false;
   if (loading?.render && !baseOn()) hideLoading();
   const W = canvas.width, H = canvas.height;
-  ctx.fillStyle = COLORS.bg;
-  ctx.fillRect(0, 0, W, H);
-
   const tl = cellOf(toWorld(0, 0).x, toWorld(0, 0).y);
   const br = cellOf(toWorld(W, H).x, toWorld(W, H).y);
   const minCx = tl.cx - 1, maxCx = br.cx + 1, minCy = br.cy - 1, maxCy = tl.cy + 1;
   const cellPx = CELL * cam.scale;
+  const pad = cellPx < 2 ? 0.6 : 0.5;
+  const useArt = artReady();
+
+  // The world layer: blitted from the last frame when nothing but overlays changed (see worldCache), else drawn and kept.
+  const fast = zooming();
+  const wkey = [fast, W, H, cam.x, cam.y, cam.scale, stateVersion, baseVersion, draft.baseState, useArt, baseOn(), draft.noGrid, platformEdit != null].join('|');
+  drawPhase = 1;
+  const pan = panFrame, dirty = worldDirty;
+  panFrame = false;
+  if (!dirty && worldCache.ok && worldCache.key === wkey && worldCache.cv.width === W && worldCache.cv.height === H && !worldCacheOff()) {
+    ctx.globalCompositeOperation = 'copy';
+    ctx.drawImage(worldCache.cv, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    perf.reused++;
+  } else {
+  worldDirty = false; worldClean = true; worldCache.ok = false;
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, W, H);
 
   if (cellPx >= 10 && !draft.noGrid) {
     ctx.strokeStyle = COLORS.grid;
@@ -5854,72 +6644,78 @@ function drawFrame() {
     for (let cy = minCy; cy <= maxCy; cy++) { const y = Math.round(cellRect(0, cy).y) + 0.5; ctx.moveTo(0, y); ctx.lineTo(W, y); }
     ctx.stroke();
   }
+  const levelOn = baseOn() && !layerHidden('level');
+  ctx.imageSmoothingEnabled = !fast;
+  if (levelOn && useArt) drawBackground(W, H);
+  ctx.imageSmoothingEnabled = true;
 
-  const pad = cellPx < 2 ? 0.6 : 0.5;
-  const drawRuns = (runs, color) => {
-    ctx.fillStyle = color;
-    for (let i = 0; i < runs.length; i += 3) {
-      const cy = runs[i], cx = runs[i + 1], len = runs[i + 2];
-      if (cy < minCy || cy > maxCy || cx + len < minCx || cx > maxCx) continue;
-      const r = cellRect(cx, cy, len);
-      const x0 = Math.floor(r.x), y0 = Math.floor(r.y);
-      ctx.fillRect(x0, y0, Math.ceil(r.x + r.w) - x0, Math.ceil(r.y + r.h) - y0);
+  // Everything over the backdrop: the level's tiles and live things, then your blocks.
+  drawLevelLayer(W, H, [fast, W, H, cam.scale, stateVersion, baseVersion, draft.baseState, useArt, levelOn, platformEdit != null].join('|'), pan && !dirty, () => {
+    if (levelOn) {
+      const behind = stack().filter((e) => e.it.behind);
+      if (behind.length && useArt) {
+        // The level in bands, split where things were put behind it, each thing between them.
+        const cuts = [...new Set(behind.map((e) => cutOf(e.it)))].sort((a, b) => a - b);
+        let lo = -Infinity;
+        for (const cut of cuts) {
+          drawBaseTiles(W, H, useArt, lo + ':' + cut);
+          drawStackEntries(behind.filter((e) => cutOf(e.it) === cut));
+          lo = cut;
+        }
+        drawBaseTiles(W, H, useArt, lo + ':Infinity');
+      } else drawBaseTiles(W, H, useArt);
+      if (useArt) drawLiveItems(W, H);
+      if (useArt) drawCredits(W, H, 'fake');
+      if (useArt && cam.scale >= LIVE_MIN_SCALE && sceneList?.texts?.some((t) => t.mover)) drawSceneText(toWorld(0, 0), toWorld(W, H), true);
+      ctx.save();
+      ctx.strokeStyle = COLORS.removed;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      removed.forEach((k) => {
+        if (blocks.has(k) || spikes.has(k)) return;
+        const [cx, cy] = unkey(k);
+        if (cx < minCx || cx > maxCx || cy < minCy || cy > maxCy) return;
+        const r = cellRect(cx, cy);
+        ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.round(r.w) - 1, Math.round(r.h) - 1);
+      });
+      ctx.restore();
+    } else {
+      const o = toScreen(0, OFFSET_Y);
+      ctx.strokeStyle = COLORS.grid.replace('0.05', '0.18');
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(o.x) + 0.5, 0); ctx.lineTo(Math.round(o.x) + 0.5, H);
+      ctx.moveTo(0, Math.round(o.y) + 0.5); ctx.lineTo(W, Math.round(o.y) + 0.5);
+      ctx.stroke();
     }
-  };
-  const useArt = artReady();
-  if (baseOn() && !layerHidden('level')) {
-    const behind = stack().filter((e) => e.it.behind);
-    if (behind.length && useArt) {
-      // The level in bands, split where things were put behind it, each thing between them.
-      const cuts = [...new Set(behind.map((e) => cutOf(e.it)))].sort((a, b) => a - b);
-      let lo = -Infinity;
-      for (const cut of cuts) {
-        drawBaseTiles(W, H, useArt, lo + ':' + cut);
-        drawStackEntries(behind.filter((e) => cutOf(e.it) === cut));
-        lo = cut;
-      }
-      drawBaseTiles(W, H, useArt, lo + ':Infinity');
-    } else drawBaseTiles(W, H, useArt);
-    if (useArt) drawLiveItems(W, H);
-    if (useArt) drawCredits(W, H, 'fake');
-    if (useArt && cam.scale >= LIVE_MIN_SCALE && sceneList?.texts?.some((t) => t.mover)) drawSceneText(toWorld(0, 0), toWorld(W, H), true);
-    ctx.save();
-    ctx.strokeStyle = COLORS.removed;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    removed.forEach((k) => {
-      if (blocks.has(k) || spikes.has(k)) return;
-      const [cx, cy] = unkey(k);
-      if (cx < minCx || cx > maxCx || cy < minCy || cy > maxCy) return;
-      const r = cellRect(cx, cy);
-      ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.round(r.w) - 1, Math.round(r.h) - 1);
-    });
-    ctx.restore();
-  } else {
-    const o = toScreen(0, OFFSET_Y);
-    ctx.strokeStyle = COLORS.grid.replace('0.05', '0.18');
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(Math.round(o.x) + 0.5, 0); ctx.lineTo(Math.round(o.x) + 0.5, H);
-    ctx.moveTo(0, Math.round(o.y) + 0.5); ctx.lineTo(W, Math.round(o.y) + 0.5);
-    ctx.stroke();
+    drawCellView(useArt, pad);
+  });
+  // Kept for the next frame unless the picture is still being built (missing tiles / chunks, a queued redraw).
+  if (worldClean && !worldDirty && !cellCache.cold) {
+    if (!worldCache.cv) worldCache.cv = makeCanvas();
+    if (worldCache.cv.width !== W || worldCache.cv.height !== H) { worldCache.cv.width = W; worldCache.cv.height = H; }
+    const wg = worldCache.cv.getContext('2d');
+    wg.globalCompositeOperation = 'copy';
+    wg.drawImage(canvas, 0, 0);
+    worldCache.key = wkey; worldCache.ok = true;
+  } else worldCache.ok = false;
   }
-
-  drawCellView(useArt, pad);
+  drawPhase = 2;
   // Course screens show in front of the walls, as in the game; placed objects still go over them.
   if (!layerHidden('course')) for (const c of courses()) drawCourseScreen(c, courseColor(c.id), courseNumber(c.id));
   // Things behind the level are drawn with it (above); without the level, before your blocks.
   if (!(baseOn() && !layerHidden('level') && useArt)) drawStackEntries(stack().filter((e) => e.it.behind));
   drawStackEntries(stack().filter((e) => !e.it.behind));
-  drawSelection();
   if (draft.hitboxes) drawHitboxes(minCx, maxCx, minCy, maxCy);
 
   if (baseOn()) for (const o of baseObjects) {
-    const c = toScreen(o.x, o.y);
+    if (!baseObjectVisible(o) || o.checkpoint) continue;
+    const c = toScreen(o.hitX ?? o.x, o.hitY ?? o.y);
     if (removedObjects.has(o.id)) continue;
     if (useArt && sceneReady() && o.kind === 'upgrade') continue;
-    if (o.kind === 'trigger' && cam.scale < (o.cls === 'EndCreditsTrigger' || o.cls === 'FakeCreditsControlScript' ? 0.03 : 0.15)) continue;
-    if (cam.scale < 0.1) {
+    if (o.kind === 'trigger' && cam.scale < AREA_BADGE_MIN) continue;
+    if (cam.scale < 0.1 && o.kind !== 'trigger') {
+      if (c.x < -3 || c.x > W + 3 || c.y < -3 || c.y > H + 3) continue;
       ctx.fillStyle = COLORS.upgrade;
       ctx.globalAlpha = 0.8;
       ctx.beginPath(); ctx.arc(c.x, c.y, 2.5, 0, Math.PI * 2); ctx.fill();
@@ -5936,15 +6732,14 @@ function drawFrame() {
     if (o.kind === 'trigger') ctx.setLineDash([5, 4]);
     else { ctx.fillStyle = color; ctx.globalAlpha = 0.18; ctx.fillRect(c.x - w / 2, c.y - h / 2, w, h); ctx.globalAlpha = 1; }
     ctx.strokeRect(c.x - w / 2, c.y - h / 2, w, h);
-    if (cam.scale >= 0.12 && !(useArt && sceneReady())) {
+    if (o.kind !== 'trigger' && cam.scale >= 0.12 && !(useArt && sceneReady())) {
       ctx.fillStyle = color;
       ctx.font = 'bold 11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(o.label, c.x, c.y - h / 2 - 4);
     }
     ctx.restore();
-    if (o.cls === 'longFallColliderController') drawBadge('fall', c.x, c.y - h / 2 - 14, color, cam.scale >= 0.2 ? o.label.toUpperCase() : '');
-    if (credits && cam.scale >= 0.03) drawBadge(CREDIT_ICON, c.x, c.y - h / 2 - 14, color, (o.cls === 'EndCreditsTrigger' ? 'END CREDITS' : 'FAKE CREDITS') + (draft.simulate ? ' ▶ PLAYING' : ' · SIMULATE (T) TO PLAY'));
+    if (o.kind === 'trigger') { const b = areaBadge(o); drawBadge(b.icon, c.x, c.y - h / 2 - 14, color, cam.scale >= AREA_LABEL_MIN ? b.text : ''); }
   }
 
   if (baseOn()) {
@@ -5959,9 +6754,11 @@ function drawFrame() {
     }
     ctx.globalAlpha = 1;
   }
+  if (baseOn() && !layerHidden('level')) drawBaseCheckpoints();
   if (baseOn() && base.scene && cam.scale >= 0.15 && !layerHidden('level')) drawMarkers();
   if (baseOn() && !layerHidden('level')) drawStageMask(minCx, maxCx, minCy, maxCy);
   if (!layerHidden('course')) { drawCourses(); triggers.forEach(drawTrigger); }
+  drawSelection();
   if (platformEdit != null) drawPlatformEdit();
   if (!layerHidden('objects')) drawTeleportLinks();
 
@@ -5974,6 +6771,7 @@ function drawFrame() {
     ctx.lineWidth = 1;
     ctx.strokeRect(a.x, a.y, b.x + b.w - a.x, b.y + b.h - a.y);
     ctx.setLineDash([]);
+    if (cam.scale >= AREA_BADGE_MIN) drawBadge('hitbox', a.x + 13, a.y - 14, COLORS.area, cam.scale >= AREA_LABEL_MIN ? 'EXPORT AREA' : '');
   }
 
   if (hover && !drag?.pan) {
@@ -6002,14 +6800,20 @@ function drawFrame() {
   }
 }
 
+// The level's own checkpoints, drawn exactly like one you place (same box, colour, badge), at their real trigger area.
+function drawBaseCheckpoints() {
+  for (const o of baseObjects) {
+    if (!o.checkpoint || !baseObjectVisible(o) || removedObjects.has(o.id)) continue;
+    const x = o.hitX ?? o.x, y = o.hitY ?? o.y;
+    ctx.save();
+    drawGate({ x, y }, { dx: 0, dy: 0, w: o.w, h: o.h }, o.label === 'Course checkpoint' ? COLORS.courseCheckpoint : COLORS.checkpoint, (o.label === 'Course checkpoint' ? 'COURSE CHECKPOINT' : 'CHECKPOINT') + (isLinked(baseCheckpointCourse(o)) ? ' · ' + linkLabel(baseCheckpointCourse(o)).toUpperCase() : o.label === 'Course checkpoint' ? ' · ANY COURSE' : ''));
+    ctx.restore();
+  }
+}
 function drawMarkers() {
-  const sc = base.scene, inState = (m) => m.state === 'always' || m.state === draft.baseState || !m.state;
+  const sc = base.scene;
   ctx.save();
   ctx.globalAlpha = 0.55;
-  for (const cp of sc.checkpoints || []) {
-    if (!inState(cp) || !cp.box) continue;
-    drawGate({ x: cp.at[0], y: cp.at[1] }, cp.box, COLORS.checkpoint, 'CHECKPOINT');
-  }
   for (const r of sc.respawns || []) drawGate({ x: r.at[0], y: r.at[1] }, SPAWN_BOX, COLORS.respawn, 'C' + r.course + ' RESPAWN');
   ctx.restore();
 }
@@ -6063,7 +6867,8 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
   ctx.save();
   ctx.lineWidth = 1;
   const inView = (cx, cy, pad = 0) => cx >= minCx - pad && cx <= maxCx + pad && cy >= minCy - pad && cy <= maxCy + pad;
-  const cellBox = (cx, cy, len = 1) => { const r = cellRect(cx, cy, len); ctx.fillRect(r.x, r.y, r.w, r.h); ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.round(r.w) - 1, Math.round(r.h) - 1); };
+  const thin = cam.scale * CELL < 4; // outlines under 4 px a cell are a smear: fill only
+  const cellBox = (cx, cy, len = 1) => { const r = cellRect(cx, cy, len); ctx.fillRect(r.x, r.y, r.w, r.h); if (!thin) ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.round(r.w) - 1, Math.round(r.h) - 1); };
   const solidRuns = (runsList, stroke, fill) => {
     ctx.strokeStyle = stroke;
     ctx.fillStyle = fill;
@@ -6083,13 +6888,31 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
     solidRuns(layer.blue, COLORS.blue, 'rgba(63, 127, 224, 0.2)');
     solidRuns(layer.orange, COLORS.orange, 'rgba(224, 138, 63, 0.2)');
   }
+  // Your blocks: the game paints them on a tilemap with a composite collider, so each connected region is one outline.
+  // Only kinds on a collider tilemap count (illusory walls, backgrounds and breakable-ground art are walk-through).
+  const solidStyle = { ground: [HIT.solid, HIT.solidFill], blue: [COLORS.blue, 'rgba(63, 127, 224, 0.2)'], orange: [COLORS.orange, 'rgba(224, 138, 63, 0.2)'] };
+  const own = { ground: [], blue: [], orange: [] };
   blocks.forEach((kind, k) => {
+    const g = solidGroup(kind, BLOCK_SETS);
+    if (!g) return;
     const [cx, cy] = unkey(k);
-    if (!inView(cx, cy)) return;
-    ctx.strokeStyle = isGround(kind) ? HIT.solid : COLORS[kind];
-    ctx.fillStyle = isGround(kind) ? HIT.solidFill : 'rgba(255,255,255,0.12)';
-    cellBox(cx, cy);
+    if (inView(cx, cy, 1)) own[g].push(k);
   });
+  for (const g in own) {
+    if (!own[g].length) continue;
+    ctx.strokeStyle = solidStyle[g][0];
+    ctx.fillStyle = solidStyle[g][1];
+    ctx.beginPath();
+    for (const loop of outlineLoops(own[g])) {
+      loop.forEach(([x, y], i) => {
+        const w = cellWorld(x, y), p = toScreen(w.x, w.y);
+        i ? ctx.lineTo(Math.round(p.x) + 0.5, Math.round(p.y) + 0.5) : ctx.moveTo(Math.round(p.x) + 0.5, Math.round(p.y) + 0.5);
+      });
+      ctx.closePath();
+    }
+    ctx.fill('evenodd');
+    ctx.stroke();
+  }
   const mask = killMask();
   const g = mask.getContext('2d');
   g.clearRect(0, 0, mask.width, mask.height);
@@ -6115,6 +6938,20 @@ function drawHitboxes(minCx, maxCx, minCy, maxCy) {
       if (sp.c === 'true') { const d = trueSpikeDef(); addShape(cx, cy, { layer: 'Spikes', shape: d.shape }, rotMatrix(spikeTurn(sp, cx, cy)), false); return; }
       const t = spikeTile(sp.c, spikeTurn(sp, cx, cy));
       addShape(cx, cy, defByTile(t.layer + '|' + t.tile), t.matrix, false);
+    });
+    freeSpikes.forEach((f) => {
+      const c = cellOf(f.x, f.y);
+      if (!inView(c.cx, c.cy, 2)) return;
+      const E = freeSpikeExtra(f);
+      let shape, m;
+      if (f.c === 'true') { shape = trueSpikeDef().shape; m = mul2(E, rotMatrix(f.q)); }
+      else { const t = spikeTile(f.c, f.q), d = defByTile(t.layer + '|' + t.tile); shape = d?.shape || [[[-12, -16], [12, -16], [0, 14]]]; m = mul2(E, t.matrix); }
+      ctx.beginPath();
+      for (const poly of shape) {
+        poly.forEach(([x, y], i) => { const p = toScreen(f.x + m[0] * x + m[1] * y, f.y + m[2] * x + m[3] * y); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+        ctx.closePath();
+      }
+      ctx.fill();
     });
     vines.forEach((v, k) => {
       const [cx, cy] = unkey(k);
@@ -6346,13 +7183,12 @@ function triggerLabel(t) {
 function drawTrigger(t) {
   const a = toScreen(t.x - t.w / 2, t.y + t.h / 2), w = t.w * cam.scale, h = t.h * cam.scale;
   const col = (TRIGGER_KINDS[trigKind(t)] || TRIGGER_KINDS.media).color;
-  const picked = !CALM && selection?.kind === 'mtrig' && triggers[selection.index] === t;
   ctx.save();
   ctx.strokeStyle = col;
-  ctx.fillStyle = col + (picked ? Math.round(18 + 14 * (0.5 + 0.5 * Math.sin(performance.now() / 260))).toString(16).padStart(2, '0') : '12');
+  ctx.fillStyle = col + '12';
+  ctx.fillRect(a.x, a.y, w, h);
   ctx.setLineDash([6, 4]);
   ctx.lineWidth = 1.5;
-  ctx.fillRect(a.x, a.y, w, h);
   ctx.strokeRect(a.x, a.y, w, h);
   if (MARKER_KINDS.has(trigKind(t))) {
     const c = toScreen(t.x, t.y), m = toScreen(t.x + (t.tx || 0), t.y + (t.ty || 0));
@@ -6548,7 +7384,7 @@ const plantImages = new Map();
 function csImage(cs) {
   if (!cs.game) return assetImage(cs.image);
   let img = plantImages.get(cs.game);
-  if (!img) { const pl = plantOf(cs); img = new Image(); img.onload = () => requestDraw(); img.onerror = () => assetLog.set('/maps/plants/' + (pl?.file || cs.game), { ok: false, tries: 1, err: 'load error' }); if (pl) img.src = '/maps/plants/' + pl.file; plantImages.set(cs.game, img); }
+  if (!img) { const pl = plantOf(cs); img = newMapImage(); img.onload = () => requestDraw(); img.onerror = () => assetLog.set(MAPS + 'plants/' + (pl?.file || cs.game), { ok: false, tries: 1, err: 'load error' }); if (pl) img.src = MAPS + 'plants/' + pl.file; plantImages.set(cs.game, img); }
   return img;
 }
 function customSpriteSize(cs) {
@@ -6825,8 +7661,8 @@ function showInDropdown(t) {
   if (!spot) return;
   const [cat, i] = spot;
   draft.pick[cat] = i;
-  const btn = root.querySelector(`[data-cat="${cat}"]`);
-  setTimeout(() => { if (popCat !== cat) openPopover(cat, btn); else renderPopover(''); }, 0);
+  // Selecting on the canvas never opens the palette popover (only its toolbar button does); one already open follows.
+  if (popCat) setTimeout(() => { if (popCat) { popCat = cat; renderPopover(''); } }, 0);
 }
 function replaceSelectionWith(it) {
   const t = selection;
@@ -6857,6 +7693,41 @@ function leaveEditor() {
   saveDraft();
   flushDraft();
   if (window.__amplifierOldClose) window.__amplifierOldClose();
+}
+
+// The editor closed: what it holds for drawing is let go. The tile workers alone keep a copy of the level's art and data each
+// (~0.4 GB apiece), and the caches fill up to a few hundred MB more, none of which anything frees once the editor is off screen.
+// Opening it again rebuilds them (mountEditor starts the workers; the caches refill as it draws).
+function releaseEditorMemory() {
+  for (const w of pool.workers) w.terminate();
+  Object.assign(pool, { workers: [], ready: 0, failed: false, version: -1, err: '', why: '' });
+  workersAsked = false;
+  pool.inflight.clear();
+  for (const c of tileCache.values()) freeCanvas(c);
+  tileCache.clear(); dirtyGen.clear();
+  for (const j of tileJobs.values()) freeCanvas(j.cv);
+  tileJobs.clear(); aheadQueue.clear(); prefetch = null; prefetchAt = '';
+  for (const c of cellCache.chunks.values()) freeCanvas(c.cv);
+  for (const cv of cellCache.pool) freeCanvas(cv);
+  Object.assign(cellCache, { chunks: new Map(), pool: [], refs: null, sig: '', cold: true });
+  for (const c of [levelLayer.a?.cv, levelLayer.b?.cv, worldCache.cv, backCanvas, pieceCanvas]) freeCanvas(c);
+  levelLayer.a = levelLayer.b = null; levelLayer.ok = false;
+  worldCache.cv = null; worldCache.ok = false; worldDirty = true;
+  backCanvas = null; backCtx = null; pieceCanvas = null;
+  for (const c of bdCache.values()) freeCanvas(c);
+  bdCache.clear(); bdPx = 0;
+  for (const c of tintCache.values()) freeCanvas(c);
+  tintCache.clear(); artCache.clear();
+  for (const k of Object.keys(scratchCanvas)) { freeCanvas(scratchCanvas[k]); delete scratchCanvas[k]; }
+  // The decoded pictures (level art, scenery, backdrops, fonts, vines: ~100 MB) and the baked text live on only through these references;
+  // each has its own loader that fetches it again when the editor next draws with it. The undo history of a closed editor is no use either:
+  // reopening reads the draft afresh.
+  atlasImg = null; sceneImg = null; lazyLoading.clear();
+  for (const k of Object.keys(bgImages)) delete bgImages[k];
+  fontImages.length = 0;
+  for (const k of Object.keys(vineImages)) delete vineImages[k];
+  textCache.clear(); sizeCache.clear();
+  undoStack = []; redoStack = [];
 }
 
 function syncChrome() {
@@ -7022,6 +7893,13 @@ function trigOf(o, item) {
   const b = objectBox(o, item) || [-50, -50, 50, 50];
   return { w: b[2] - b[0], h: b[3] - b[1], dx: (b[0] + b[2]) / 2, dy: (b[1] + b[3]) / 2 };
 }
+// The "Belongs to" options: your courses, then the level's.
+function courseLinkOptions(cur, none) {
+  return `<option value="">${none}</option>` + courses().map((c) => `<option value="${c.id}"${cur === c.id ? ' selected' : ''}>Course ${courseNumber(c.id)}</option>`).join('')
+    + (baseOn() ? base.courses.map((c, i) => `<option value="level:${i + 1}"${cur === 'level:' + (i + 1) ? ' selected' : ''}>Level course ${i + 1}</option>`).join('') : '');
+}
+// A level checkpoint's course, as the map files it (draft.baseEdits[id].course).
+const baseCheckpointCourse = (o) => draft.baseEdits?.[o.id]?.course || '';
 const LINKABLE = (item) => !!(item?.upgradeBox || isCourseCheckpoint(item));
 function newCourse() {
   const c = { id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: null, end: null, reward: { currency: 'Cash', amount: 0 } };
@@ -7116,7 +7994,7 @@ const screenBox = () => SCREEN_BOX;
 const BOARD_SLICE = 30, BOARD_EDGE = [(30 / 1.2) * 1.1, (30 / 1.2) * 1.15];
 let boardImg = null;
 function drawBoardSprite(x, y, w, h) {
-  if (!boardImg) { boardImg = new Image(); boardImg.onload = requestDraw; boardImg.src = '/maps/course-screen.png'; }
+  if (!boardImg) { boardImg = newMapImage(); boardImg.onload = requestDraw; boardImg.src = MAPS + 'course-screen.png'; }
   if (!boardImg.complete || !boardImg.naturalWidth) return;
   const iw = boardImg.naturalWidth, ih = boardImg.naturalHeight, b = BOARD_SLICE;
   const ex = Math.min(BOARD_EDGE[0] * cam.scale, w / 2), ey = Math.min(BOARD_EDGE[1] * cam.scale, h / 2);
@@ -7173,17 +8051,23 @@ function drawCourseScreen(c, col, n) {
   }
 }
 
-function markerAt(wx, wy) {
-  const hit = (g, b) => g && Math.abs(wx - (g.x + b.dx)) <= Math.max(b.w / 2, CELL / 2) && Math.abs(wy - (g.y + b.dy)) <= Math.max(b.h / 2, CELL / 2);
-  if (hit(draft.spawn, SPAWN_BOX)) return { which: 'spawn' };
+// Every course gate and the spawn marker with its box, in hit priority order.
+function markerList() {
+  const out = [], put = (g, b, target) => { if (g) out.push({ g, b, target }); };
+  put(draft.spawn, SPAWN_BOX, { kind: 'gate', which: 'spawn' });
   for (const c of courses()) {
-    if (hit(c.start, START_BOX)) return { which: 'start', course: c.id };
-    if (hit(c.end, END_BOX)) return { which: 'end', course: c.id };
-    const resets = c.resets || [];
-    for (let i = resets.length - 1; i >= 0; i--) if (hit(resets[i], resets[i].box || RESET_BOX)) return { which: 'reset', course: c.id, index: i };
+    put(c.start, START_BOX, { kind: 'gate', which: 'start', course: c.id });
+    put(c.end, END_BOX, { kind: 'gate', which: 'end', course: c.id });
+    (c.resets || []).forEach((r, i) => put(r, r.box || RESET_BOX, { kind: 'gate', which: 'reset', course: c.id, index: i }));
   }
-  for (const c of courses()) if (hit(courseScreen(c), screenBox())) return { which: 'screen', course: c.id };
-  return null;
+  for (const c of courses()) put(courseScreen(c), screenBox(), { kind: 'gate', which: 'screen', course: c.id });
+  return out;
+}
+function markerAt(wx, wy) {
+  const m = markerList().find(({ g, b }) => Math.abs(wx - (g.x + b.dx)) <= Math.max(b.w / 2, CELL / 2) && Math.abs(wy - (g.y + b.dy)) <= Math.max(b.h / 2, CELL / 2));
+  if (!m) return null;
+  const { kind, ...rest } = m.target;
+  return rest;
 }
 
 function applyTool(cx, cy) {
@@ -7270,7 +8154,7 @@ function applyTool(cx, cy) {
     if (blocks.delete(k) || spikes.delete(k)) return true;
     {
       const w = cellWorld(cx, cy), px = w.x + CELL / 2, py = w.y + CELL / 2;
-      const oi = placed.findLastIndex((o) => objectHit(o, px, py));
+      const oi = placed.findLastIndex((o) => objectHit(o, px, py, 'art'));
       if (oi >= 0) { placed.splice(oi, 1); return true; }
       const fi = freeSpikeAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
       if (fi >= 0) { freeSpikes.splice(fi, 1); return true; }
@@ -7278,30 +8162,35 @@ function applyTool(cx, cy) {
       if (si >= 0) { signs.splice(si, 1); return true; }
       const ci = csprites.findLastIndex((c) => customSpriteHit(c, hoverWorld?.x ?? px, hoverWorld?.y ?? py));
       if (ci >= 0) { csprites.splice(ci, 1); return true; }
-      const ti = triggerAt(hoverWorld?.x ?? px, hoverWorld?.y ?? py);
-      if (ti >= 0) { triggers.splice(ti, 1); return true; }
       const t = tileAt(px, py);
       if (t) { if (t[1].arrow) removeArrow(t[1].arrow); else tiles.delete(t[0]); return true; }
       if (mossCells.delete(mossKeyAt(px, py))) return true;
     }
-    const isBase = baseOn() && (groundSet.has(k) || mossSet.has(k) || blueSet.has(k) || orangeSet.has(k) || (baseHaz.get(k) && baseHaz.get(k).kind !== 'vine'));
-    if (isBase && !removed.has(k)) { removed.add(k); return true; }
     const w = cellWorld(cx, cy);
-    const marker = markerAt(w.x + CELL / 2, w.y + CELL / 2);
-    if (marker) { clearMarker(marker); return true; }
-    const obj = baseOn() && baseObjects.find((o) => !removedObjects.has(o.id) && Math.abs(w.x + CELL / 2 - o.x) <= o.w / 2 && Math.abs(w.y + CELL / 2 - o.y) <= o.h / 2);
+    const obj = baseOn() && baseObjects.find((o) => !isBaseArea(o) && baseObjectVisible(o) && !removedObjects.has(o.id) && Math.abs(w.x + CELL / 2 - (o.hitX ?? o.x)) <= o.w / 2 && Math.abs(w.y + CELL / 2 - (o.hitY ?? o.y)) <= o.h / 2);
     if (obj) { removedObjects.add(obj.id); return true; }
     const hit = vineAt(w.x + CELL / 2, w.y + CELL / 2);
-    if (!hit) {
-      const dt = baseOn() && decoAt(w.x + CELL / 2, w.y + CELL / 2);
-      if (dt) { dt.cells.forEach((k2) => removedDeco.add(dt.layer + '|' + k2)); return true; }
-      const sp = baseOn() && sceneSpriteAt(w.x + CELL / 2, w.y + CELL / 2);
-      if (!sp) return false;
-      removeScene(sp.id);
+    if (hit) {
+      if (hit.own) vines.delete(hit.k);
+      else removedVines.add(hit.k);
       return true;
     }
-    if (hit.own) vines.delete(hit.k);
-    else removedVines.add(hit.k);
+    const isBase = baseOn() && (groundSet.has(k) || mossSet.has(k) || blueSet.has(k) || orangeSet.has(k) || (baseHaz.get(k) && baseHaz.get(k).kind !== 'vine'));
+    if (isBase && !removed.has(k)) { removed.add(k); return true; }
+    const dt = baseOn() && decoAt(w.x + CELL / 2, w.y + CELL / 2);
+    if (dt) { dt.cells.forEach((k2) => removedDeco.add(dt.layer + '|' + k2)); return true; }
+    const sp = baseOn() && sceneSpriteAt(w.x + CELL / 2, w.y + CELL / 2);
+    if (sp) { removeScene(sp.id); return true; }
+    // Nothing visible here: a trigger area (checkpoint, gate, long-fall zone, trigger) goes instead.
+    const area = areaHits(hoverWorld?.x ?? w.x + CELL / 2, hoverWorld?.y ?? w.y + CELL / 2, false)[0]?.target || areaHits(w.x + CELL / 2, w.y + CELL / 2, false)[0]?.target;
+    if (!area) return false;
+    if (area.kind === 'mtrig') triggers.splice(area.index, 1);
+    else if (area.kind === 'object') placed.splice(area.index, 1);
+    else if (area.kind === 'xspawn') xspawns.splice(area.index, 1);
+    else if (area.kind === 'base') removedObjects.add(area.id);
+    else if (area.kind === 'gate') clearMarker(area);
+    else return false;
+    return true;
   } else if (tool === 'spawn') {
     draft.spawn = gateAt(cx, cy, 'spawn');
   } else if (tool === 'start' || tool === 'end') {
@@ -7373,9 +8262,6 @@ function updateStatus() {
   const el = root?.querySelector('#mm-status');
   if (!el) return;
   const parts = [`${blocks.size} blocks`, `${spikes.size} spikes`, `${vines.size} vines`];
-  // TEMPORARY: what the editor found under the cursor on the last click. Reads it
-  // back with window.__dbg = parts[0] after updateStatus().
-  if (window.__dbg) parts.push('DBG ' + window.__dbg);
   if (tiles.size) parts.push(`${tiles.size} tiles`);
   if (mossCells.size) parts.push(`${mossCells.size} moss`);
   if (PLACING.includes(tool) && (placeRot || placeFlip)) parts.push(`placing at ${placeRot * 90}°${placeFlip ? ' mirrored' : ''}`);
@@ -7562,7 +8448,25 @@ function toggleSimulate() {
   applyBaseMoves();
   saveDraft(); syncChrome(); invalidateBase();
 }
-let stagePath = null, stagePathOf = null;
+let stagePath = null, stagePathOf = null, stageAnchors = [];
+// One label anchor (top-left corner, world units) per connected piece of the overgrowth area.
+function stageLabelAnchors(set) {
+  const seen = new Set(), out = [];
+  for (const k0 of set) {
+    if (seen.has(k0)) continue;
+    seen.add(k0);
+    const queue = [k0];
+    let best = null;
+    for (let qi = 0; qi < queue.length; qi++) {
+      const [x, y] = unkey(queue[qi]), w = cellWorld(x, y);
+      if (!best || w.y > best.y || (w.y === best.y && w.x < best.x)) best = { x: w.x, y: w.y + CELL };
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const n = key(x + dx, y + dy); if (set.has(n) && !seen.has(n)) { seen.add(n); queue.push(n); } }
+    }
+    out.push(best);
+  }
+  return out;
+}
+const stageBadge = () => ({ icon: 'layers', text: draft.baseState === 'overgrown' ? 'OVERGROWTH AREA · OVERGROWN STATE' : 'OVERGROWTH AREA · START STATE', color: draft.baseState === 'overgrown' ? '#78c85a' : '#e6aa46' });
 function drawStageMask() {
   if (cam.scale < 0.05) return;
   const set = stageCells();
@@ -7570,6 +8474,7 @@ function drawStageMask() {
   if (stagePathOf !== set) {
     stagePathOf = set;
     stagePath = new Path2D();
+    stageAnchors = stageLabelAnchors(set);
     for (const k of set) {
       const [x, y] = unkey(k), w = cellWorld(x, y), x1 = w.x + CELL, y1 = w.y + CELL;
       if (!set.has(key(x, y + 1))) { stagePath.moveTo(w.x, y1); stagePath.lineTo(x1, y1); }
@@ -7582,10 +8487,18 @@ function drawStageMask() {
   ctx.save();
   ctx.setTransform(k, 0, 0, -k, o.x, o.y);
   ctx.strokeStyle = draft.baseState === 'overgrown' ? 'rgba(120, 200, 90, 0.55)' : 'rgba(230, 170, 70, 0.45)';
-  ctx.setLineDash([6 / k, 5 / k]);
+  // Dashes this small are a smear (and a dashed stroke over the whole outline is slow): far out the line is solid.
+  if (k >= 0.1) ctx.setLineDash([6 / k, 5 / k]);
   ctx.lineWidth = 1.5 / k;
   ctx.stroke(stagePath);
   ctx.restore();
+  // The dashed outline is the area the overgrowth changes: named like the other zones (same zoom rules).
+  const b = stageBadge(), W = canvas.width, H = canvas.height;
+  for (const a of stageAnchors) {
+    const c = toScreen(a.x, a.y);
+    if (c.x < -300 || c.x > W + 50 || c.y < -30 || c.y > H + 30) continue;
+    drawBadge(b.icon, c.x + 13, c.y - 14, b.color, cam.scale >= AREA_LABEL_MIN ? b.text : '');
+  }
 }
 
 function setBaseState(state) {
@@ -7799,15 +8712,9 @@ function bindCanvas() {
     const rect = canvas.getBoundingClientRect();
     const wp = toWorld(e.clientX - rect.left, e.clientY - rect.top);
     hoverWorld = wp;
-    // TEMPORARY: report what a click sees here, before anything can return early.
-    {
-      const h = itemAt(wp.x, wp.y);
-      window.__dbg = `hit=${h ? h.kind + (h.index ?? '') : 'none'} sel=${selection?.kind || 'none'} grab=${grabsSelection(wp)} tool=${tool} base=${baseOn()}`;
-      updateStatus();
-    }
     if (e.altKey) { pickAt(wp.x, wp.y); return; }
     if (platformEdit != null) { drag = { pan: false, platform: true, before: snapshot(), changed: false }; platformPaint(wp); return; }
-    if (tool === 'select' || (tool !== 'paste' && grabsSelection(wp))) { selectDown(e); return; }
+    if (selectCanvasTarget(wp, e)) return;
     const c = eventCell(e);
     drag = { pan: false, before: snapshot(), changed: false };
     if (tool === 'arrow') { arrowDown(c.cx, c.cy); requestDraw(); return; }
@@ -7827,7 +8734,7 @@ function bindWindow() {
     if (drag?.pan) {
       cam.x = drag.camX - (e.clientX - drag.x) / cam.scale;
       cam.y = drag.camY + (e.clientY - drag.y) / cam.scale;
-      requestDraw();
+      requestPanDraw();
       return;
     }
     if (drag?.platform) { const r = canvas.getBoundingClientRect(); hoverWorld = toWorld(e.clientX - r.left, e.clientY - r.top); platformPaint(hoverWorld); return; }
@@ -7836,7 +8743,7 @@ function bindWindow() {
     if (!drag && tool === 'select' && e.target === canvas) canvas.style.cursor = edgeCursor(edgesAt(worldAt(e)));
     if (drag?.zipPlace != null) { zipPlaceMove(e); return; }
     if (e.target !== canvas && !drag) {
-      if (hover) { hover = null; updateStatus(); requestDraw(); }
+      if (hover) { hover = null; updateStatus(); requestOverlayDraw(); }
       return;
     }
     if (!drag) {
@@ -7845,14 +8752,14 @@ function bindWindow() {
     }
     const c = eventCell(e);
     hoverWorld = worldAt(e);
-    if (hover && hover.cx === c.cx && hover.cy === c.cy) { if ((tool === 'select' || platformEdit != null) && !drag) requestDraw(); return; }
+    if (hover && hover.cx === c.cx && hover.cy === c.cy) { if ((tool === 'select' || platformEdit != null) && !drag) requestOverlayDraw(); return; }
     hover = c;
     if (drag?.arrow) arrowMove(c.cx, c.cy);
     else if (drag && (BLOCK_KIND[tool] || SPIKE_KIND[tool] || tool === 'erase' || tool === 'tile' || tool === 'moss')) {
       strokeAt(c.cx, c.cy);
     }
     updateStatus();
-    requestDraw();
+    if (drag) requestDraw(); else requestOverlayDraw();
   });
   window.addEventListener('mouseup', () => {
     if (!drag) return;
@@ -7965,6 +8872,7 @@ export async function mountEditor(container) {
       </div>
       <div class="mm-pop" id="mm-pop" hidden></div>
       <div class="mm-bar-right">
+        <span class="mm-ver" id="mm-ver" title="${editorVersion() === 'built-in' ? 'The Amplifier that came with this Recharge' : 'Downloaded Amplifier update'}" style="font-size:11px;opacity:.6;white-space:nowrap">Amplifier ${editorVersion()}</span>
         <div class="mm-group" aria-label="Edit">
           <button class="mm-tool mm-icon" id="mm-undo" title="Undo (Ctrl+Z)">${icon('undo')}</button>
           <button class="mm-tool mm-icon" id="mm-redo" title="Redo (Ctrl+Y)">${icon('redo')}</button>
@@ -8049,6 +8957,7 @@ export async function mountEditor(container) {
   root.addEventListener('mousedown', (e) => { if (popCat && !e.target.closest('#mm-pop, [data-cat]')) closePopover(); });
   root.querySelectorAll('[data-state]').forEach((b) => b.addEventListener('click', () => setBaseState(b.dataset.state)));
 
+  window.__amplifierRelease = releaseEditorMemory;
   loadDraft();
   if (container.dataset.amplifier) draft.inline = false; // opened from Amplifier: always fill the window
   if (!draft.useBase) loadBase().then(() => { fillJumpList(); requestDraw(); }).catch(() => {});
@@ -8056,6 +8965,7 @@ export async function mountEditor(container) {
     try { await loadBase(true); } catch { draft.useBase = false; }
   }
   applyBaseState();
+  if (baseSettled && draft.useBase) startTileWorkers();
 
   const jump = root.querySelector('#mm-jump');
   fillJumpList();
@@ -8101,7 +9011,11 @@ export async function mountEditor(container) {
 
 // Test hooks (tests/amp-base.test.mjs drives the editor headlessly through these).
 export const __test = {
-  fetchBase, loadImage, assetLog,
+  perf, caches: () => ({ tiles: tileCache.size, maxTiles: maxTiles(), chunks: cellCache.chunks.size, pool: cellCache.pool.length, jobs: tileJobs.size, inflight: pool.inflight.size, ahead: aheadQueue.size, prefetch: prefetch ? prefetch.queue.length : 0, tint: tintCache.size, workers: pool.workers.length, ready: pool.ready, failed: pool.failed, cacheScale }),
+  fetchBase, loadImage, assetLog, MAPS, MAPS_CROSS, editorVersion,
+  ov: () => ({ epoch: overview.epoch, restoring: overview.restoring, saving: overview.saving, dirty: overview.dirty, timer: !!overview.timer, persisted: overview.persisted.size, fp: baseFp, sig: overviewSig() }),
+  bench: (z, tx, ty, part = null) => { mipOn = false; const t0 = performance.now(); const cv = renderTile(z, tx, ty, part); const ms = performance.now() - t0; freeCanvas(cv); return ms; },
+    view: (x, y, k) => { cam.x = x; cam.y = y; cam.scale = k; camGoal.active = false; worldDirty = true; requestDraw(); }, levelBounds: () => levelBounds(), get cam() { return cam; },
   open: (d) => { loadDraftFrom(d); if (base) applyBaseState(); },
   save: () => { syncDraft(); return JSON.parse(JSON.stringify(editorState())); },
   buildMap: () => buildMap(),
@@ -8109,14 +9023,20 @@ export const __test = {
   baseEditCount: () => baseEditCount(),
   get base() { return base; },
   get objects() { return baseObjects; },
-  get scene() { return sceneList; },
+  setScale: (k) => { cam.scale = k; }, areaBadgeAt: (id) => { const o = baseObjects.find((x) => x.id === id); return o && isBaseArea(o) && cam.scale >= AREA_BADGE_MIN ? { ...areaBadge(o), text: cam.scale >= AREA_LABEL_MIN ? areaBadge(o).text : '' } : null; },
+  get scene() { return sceneList; }, stageZone: () => { const set = stageCells(); return { badge: stageBadge(), anchors: stageLabelAnchors(set), cells: set.size }; }, isBackgroundScene, itemsAt: (x, y) => [...itemsAtAny(x, y)],
   get sets() { return { ground: groundSet, moss: mossSet, blue: blueSet, orange: orangeSet, haz: baseHaz }; },
   get own() { return { blocks, spikes, vines, tiles, moss: mossCells }; },
   get gone() { return { removed, removedVines, removedObjects, removedScene, removedDeco, movedScene, movedObjects, levelTf, baseEdits: draft.baseEdits }; },
   get selection() { return selection; },
   set selection(v) { selection = v; },
-  itemAt, marqueeTargets, setSelection, baseCellsAt, decoAt, cellWorld, cellOf, key,
+  itemAt, marqueeTargets, setSelection, baseCellsAt, decoAt, cellWorld, cellOf, key, blockArt, BLOCK_SETS, levelOverrides, levelRails, joinSolid, levelJoinCells, joinInfo,
+  clickSelectsAt: (x, y) => clickSelects({ x, y }), selectTriggerAt: (x, y) => selectTriggerAt({ x, y }), selectCheckpointAt: (x, y) => selectCheckpointAt({ x, y }), selectCanvasTargetAt: (x, y) => selectCanvasTarget({ x, y }, null), checkpointHitAt: (x, y) => (baseCheckpointAt(x, y, true) || baseCheckpointAt(x, y))?.id || null, areaHitsAt: (x, y, badge) => areaHits(x, y, badge).map((h) => h.target), eraseAt: (cx, cy) => applyTool(cx, cy), setTool,
   deleteSelection, nudgeSelection, undo, redo, pushUndo,
   editBaseUpgrade: (id, field, raw) => { selection = { kind: 'base', id }; applyBaseUpgrade(field, raw); },
   get baseOn() { return baseOn(); },
+  paletteItems: (cat) => categoryItems(cat),
+  setBaseCheckpointLink: (v) => applyBaseCheckpointLink(v),
+  checkpointFlag: (i) => { const o = placed[i], item = catalogItem(o); return checkpointExport(o.x, o.y, trigOf(o, item)); },
+  showInDropdownOpens: () => { const was = popCat; showInDropdown({ kind: 'object', index: 0 }); return popCat !== was && popCat != null; },
 };

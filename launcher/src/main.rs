@@ -1,4 +1,5 @@
 //! Recharge launcher: installs itself, keeps app/ up to date from the hub (staged, hash-verified, rollback) and starts the app.
+mod holders;
 mod install;
 mod log;
 mod manifest;
@@ -155,6 +156,7 @@ fn main() -> ExitCode {
         progress: ui::Progress::new(!o.no_ui),
     };
     let mut st = state::State::load(&root);
+    update::sweep_leftovers(&root, &st);
 
     if o.stage {
         return stage_only(&ctx, &mut st);

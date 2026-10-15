@@ -8,6 +8,11 @@ let loginMode = 'login';
 
 let pollHandle = null;
 let lastLaunchMode = null;
+
+// Settings > RechargeLoader "Keep the game modded after closing" (default on): skip the automatic switch back to vanilla.
+function keepGameModded() {
+  try { return localStorage.getItem('keep-game-modded') !== '0'; } catch { return true; }
+}
 const LAUNCH_GRACE_MS = { direct: 5000, steam: 60000 };
 let launchGraceMs = LAUNCH_GRACE_MS.direct;
 let seenRunning = false;
@@ -155,6 +160,10 @@ async function checkRunning() {
   logLine(seenRunning ? 'game process exited' : "game never started (Steam didn't launch it in time)");
   if (lastLaunchMode === 'modded') {
     lastLaunchMode = null;
+    if (keepGameModded()) {
+      logLine('keeping the game modded (Settings)');
+      return;
+    }
     try {
       await invoke('restore_vanilla_build');
       logLine('switched back to <b>vanilla</b>');
@@ -417,7 +426,7 @@ async function checkForLauncherUpdate() {
         await invoke('install_or_update_loader');
         progress.textContent = 'Done.';
       } catch (err) {
-        progress.textContent = String(err);
+        progress.textContent = String(err).replace('IGTAP_RUNNING:', '').trim();
       } finally {
         nowBtn.disabled = false;
         laterBtn.disabled = false;
@@ -440,10 +449,28 @@ async function redeployLoader() {
     logLine('loader: <b>updated</b>');
     try { localStorage.setItem('loader-epoch', LOADER_EPOCH); } catch { /* storage unavailable */ }
   } catch (err) {
-    logLine(`loader update failed: ${escapeForHtml(String(err))}`);
+    if (String(err).includes('IGTAP_RUNNING:')) {
+      // The game has the assemblies mapped: skip quietly and try again once it is closed.
+      logLine('loader update postponed - IGTAP is running');
+      scheduleLoaderRetry();
+    } else {
+      logLine(`loader update failed: ${escapeForHtml(String(err))}`);
+    }
   } finally {
     unlisten();
   }
+}
+
+let loaderRetryTimer = null;
+function scheduleLoaderRetry() {
+  if (loaderRetryTimer) return;
+  loaderRetryTimer = setTimeout(async () => {
+    loaderRetryTimer = null;
+    let running = true;
+    try { running = await window.__TAURI__.core.invoke('is_game_running'); } catch { /* retry later */ }
+    if (running) scheduleLoaderRetry();
+    else redeployLoader();
+  }, 30000);
 }
 
 function escapeForHtml(s) {
@@ -504,7 +531,9 @@ export async function initHome() {
     logLine('game process already running');
   } else {
     logLine('no active game process');
-    try {
+    if (keepGameModded()) {
+      logLine('keeping the game modded (Settings)');
+    } else try {
       await invoke('restore_vanilla_build');
     } catch { /* no install detected yet, or nothing to restore - fine */ }
     // Mods are built against the loader's ModApi; a game with an older one shows half-built mod menus, so update it quietly.

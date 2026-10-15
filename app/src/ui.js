@@ -70,6 +70,31 @@ export function confirmDestructive({ title, body, confirmLabel, name }) {
   });
 }
 
+// A two-step delete on the button itself: the first click turns it into a red "Delete?" button for a few seconds (or until
+// the pointer leaves it), the second click goes ahead. Returns true on the confirming click.
+export function armConfirm(btn, label = 'Delete?') {
+  if (!btn) return false;
+  if (btn._armed) { btn._armed.reset(); return true; }
+  const was = btn.innerHTML, title = btn.title;
+  let timer = 0;
+  const reset = () => {
+    clearTimeout(timer);
+    btn.removeEventListener('mouseleave', leave);
+    btn._armed = null;
+    btn.classList.remove('is-armed');
+    btn.innerHTML = was;
+    btn.title = title;
+  };
+  const leave = () => { clearTimeout(timer); timer = setTimeout(reset, 1200); };
+  btn._armed = { reset };
+  btn.classList.add('is-armed');
+  btn.textContent = label;
+  btn.title = 'Click again to delete';
+  btn.addEventListener('mouseleave', leave);
+  timer = setTimeout(reset, 4000);
+  return false;
+}
+
 // Cycles a badge button through install -> installing -> done/failed.
 export function setBadgeState(btn, state, installClass = 'badge-install') {
   if (state === 'installing') {
