@@ -147,40 +147,74 @@ try {
         catch { }
     }
 
-    function Test-SdkCompatible([string]$dotnetExePath) {
+    # Highest SDK major a dotnet executable reports, or 0 when it isn't there / lists none.
+    function Get-SdkMajor([string]$dotnetExePath) {
         try {
             $sdks = & $dotnetExePath --list-sdks 2>$null
         }
-        catch { return $false }
-        if ($LASTEXITCODE -ne 0 -or -not $sdks) { return $false }
+        catch { return 0 }
+        if ($LASTEXITCODE -ne 0 -or -not $sdks) { return 0 }
+        $best = 0
         foreach ($line in $sdks) {
-            if ($line -match '^(\d+)\.' -and [int]$Matches[1] -ge $RequiredSdkMajor) { return $true }
+            if ($line -match '^(\d+)\.' -and [int]$Matches[1] -gt $best) { $best = [int]$Matches[1] }
         }
-        return $false
+        return $best
     }
 
-    function Get-DotnetExe {
-        if (Test-SdkCompatible 'dotnet') { return 'dotnet' }
+    # The private SDK lives outside the install folder: the launcher replaces that folder on every
+    # update, so an SDK kept in loader/.dotnet-sdk was downloaded again after each Recharge update.
+    $privateSdkDir = if ($IsWindowsPlatform -and $env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Recharge\dotnet-sdk' }
+        elseif ($env:XDG_DATA_HOME) { Join-Path $env:XDG_DATA_HOME 'recharge/dotnet-sdk' }
+        else { Join-Path $HOME '.local/share/recharge/dotnet-sdk' }
 
-        $localSdkDir = Join-Path $loaderRoot '.dotnet-sdk'
-        $localDotnetExe = Join-Path $localSdkDir $DotnetExeName
-        if ((Test-Path $localDotnetExe) -and (Test-SdkCompatible $localDotnetExe)) { return $localDotnetExe }
+    function Get-DotnetExe {
+        # An SDK installed system-wide isn't always on the PATH Recharge was started with (installed
+        # after Recharge or the launcher started, or a per-user install), so the usual places are
+        # checked too, then our own private copies.
+        $candidates = [System.Collections.Generic.List[string]]::new()
+        $candidates.Add('dotnet')
+        if ($env:DOTNET_ROOT) { $candidates.Add((Join-Path $env:DOTNET_ROOT $DotnetExeName)) }
+        if ($IsWindowsPlatform) {
+            if ($env:ProgramFiles) { $candidates.Add((Join-Path $env:ProgramFiles 'dotnet\dotnet.exe')) }
+            if (${env:ProgramFiles(x86)}) { $candidates.Add((Join-Path ${env:ProgramFiles(x86)} 'dotnet\dotnet.exe')) }
+            if ($env:LOCALAPPDATA) { $candidates.Add((Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe')) }
+        }
+        else {
+            $candidates.Add((Join-Path $HOME '.dotnet/dotnet'))
+            foreach ($d in '/usr/share/dotnet', '/usr/lib/dotnet', '/usr/local/share/dotnet', '/opt/dotnet') { $candidates.Add((Join-Path $d 'dotnet')) }
+        }
+        $candidates.Add((Join-Path $privateSdkDir $DotnetExeName))
+        $candidates.Add((Join-Path (Join-Path $loaderRoot '.dotnet-sdk') $DotnetExeName)) # where older versions kept it
+
+        $newestFound = 0
+        foreach ($exe in $candidates) {
+            if ($exe -ne 'dotnet' -and -not (Test-Path -LiteralPath $exe)) { continue }
+            $major = Get-SdkMajor $exe
+            if ($major -ge $RequiredSdkMajor) {
+                Write-Host ".NET SDK $major found: $exe"
+                return $exe
+            }
+            if ($major -gt $newestFound) { $newestFound = $major }
+        }
 
         if ($NoSdkDownload) {
             throw "No .NET $RequiredSdkMajor+ SDK available and automatic download was declined."
         }
 
-        Set-Status "Downloading the .NET SDK (one-time, roughly 200 MB)..."
-        New-Item -ItemType Directory -Force -Path $localSdkDir | Out-Null
+        # Say why, so a user who has an SDK installed knows it's only too old for the decompiler.
+        $why = if ($newestFound -gt 0) { ".NET SDK $newestFound is installed, but the decompiler needs $RequiredSdkMajor or newer. " } else { "" }
+        Set-Status "$($why)Downloading the .NET $RequiredSdkMajor SDK for Recharge (one-time, roughly 200 MB)..."
+        New-Item -ItemType Directory -Force -Path $privateSdkDir | Out-Null
+        $localDotnetExe = Join-Path $privateSdkDir $DotnetExeName
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $installScript = Join-Path $TempDir 'dotnet-install.ps1'
         Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/dotnet/install-scripts/v2026.07.21/src/dotnet-install.ps1' -OutFile $installScript -UseBasicParsing
         if (-not (Test-Path $installScript) -or (Get-Item $installScript).Length -lt 1000) {
             throw "Downloading dotnet-install.ps1 failed or returned an unexpectedly small file - check your internet connection."
         }
-        $installResult = Invoke-LoggedBuild (Join-Path $TempDir 'dotnet-sdk-install.log') $installScript @{ Channel = "$RequiredSdkMajor.0"; Quality = "ga"; InstallDir = $localSdkDir; NoPath = $true }
+        $installResult = Invoke-LoggedBuild (Join-Path $TempDir 'dotnet-sdk-install.log') $installScript @{ Channel = "$RequiredSdkMajor.0"; Quality = "ga"; InstallDir = $privateSdkDir; NoPath = $true }
 
-        if ((Test-Path $localDotnetExe) -and (Test-SdkCompatible $localDotnetExe)) { return $localDotnetExe }
+        if ((Test-Path $localDotnetExe) -and ((Get-SdkMajor $localDotnetExe) -ge $RequiredSdkMajor)) { return $localDotnetExe }
         throw (Format-BuildFailure "Could not obtain a .NET $RequiredSdkMajor+ SDK (check your internet connection)" $installResult)
     }
 
