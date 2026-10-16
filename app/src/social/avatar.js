@@ -68,8 +68,9 @@ export const initialOf = (name) => {
 export function hubUrl(u, base = HUB_BASE) {
   const s = String(u || '').trim();
   if (!s) return '';
+  // The hub lives under a path (https://codecade.co.za/recharge), so a hub-relative "/api/..." joins onto the whole base, not just its origin.
   if (s.startsWith('/')) {
-    try { return new URL(base).origin + s; } catch { return ''; }
+    try { const b = new URL(base); return b.origin + b.pathname.replace(/\/+$/, '') + s; } catch { return ''; }
   }
   return /^https?:\/\//i.test(s) ? s : '';
 }

@@ -35,7 +35,8 @@
 .cm-input-row textarea { flex: 1; min-width: 0; min-height: 44px; box-sizing: border-box; }
 .cm-input-row .btn { flex: none; margin-top: 0; }
 .cm-form-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; min-height: 0; }
-.cm-form-row:has(.cm-count:empty):has(.form-error:empty) { display: none; }
+/* only the comment box's hint row (its buttons sit beside the text box); the forum keeps its buttons in this row */
+.cm-form > .cm-form-row:not(:has(button)):has(.cm-count:empty):has(.form-error:empty) { display: none; }
 .cm-count { font-size: 13px; color: var(--text-dim); min-width: 60px; }
 .cm-login, .cm-empty { color: var(--text-dim); font-size: 15px; padding: 8px 0 14px; }
 .cm-thread { padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
@@ -291,3 +292,21 @@
 /* Square frames are solid squares: the old notched pixel corners broke the border at every corner. */
 .avatar[class*='frame-pixel'], .avatar.frame-s-pixel, .avatar.frame-s-pixel-duo { border-radius: max(2px, calc(var(--av) / 20)); }
 .frame-pixel-rainbow::before, .frame-s-pixel-duo::before { border-radius: max(1px, calc(var(--av) / 40)); }
+
+/* A forum thread is one panel: the post, its controls, the replies and the reply box sit inside it, split by thin lines. */
+.fm-thread { background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 20px 24px; max-width: 900px; box-sizing: border-box; }
+.fm-thread > .fm-post, .fm-thread > .fm-controls, .fm-thread > .fm-replies-head, .fm-thread > .fm-reply-list, .fm-thread > .fm-compose {
+  background: none; box-shadow: none; border-radius: 0; margin: 0; max-width: none; }
+.fm-thread > .fm-post { padding: 0 0 14px; }
+.fm-thread > .fm-controls { padding: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.fm-thread > .fm-replies-head { display: block; padding: 14px 0 6px; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.fm-thread > .fm-reply-list { padding: 0; }
+.fm-thread > .fm-compose { padding: 14px 0 0; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+
+/* The forum list is one panel too: the bars and the posts share it, split by thin lines. */
+.fm-board { background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 8px 12px 12px; max-width: 940px; box-sizing: border-box; }
+.fm-board .fm-toolbar, .fm-board .fm-list, .fm-board .fm-pager { background: none; box-shadow: none; border-radius: 0; margin: 0; max-width: none; }
+.fm-board .fm-toolbar { padding: 8px 0; }
+.fm-board .fm-toolbar + .fm-toolbar { border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.fm-board .fm-list { padding: 4px 0 0; margin-top: 4px; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.fm-board .fm-pager { width: auto; padding: 10px 0 0; }

@@ -92,7 +92,9 @@ test('avatar component: frames, fallback initial, safe attributes', () => {
   assert.ok(!avatarHtml({ username: EVIL, frame: '"><x', accent: 'red;x' }).includes('<script'));
   assert.equal(safeColor('#12ab9f'), '#12ab9f');
   assert.equal(safeColor('red'), '');
-  assert.equal(hubUrl('/api/a.png', 'https://h.example/recharge'), 'https://h.example/api/a.png');
+  assert.equal(hubUrl('/api/a.png', 'https://h.example/recharge'), 'https://h.example/recharge/api/a.png'); // the hub's path is kept
+  assert.equal(hubUrl('/api/a.png', 'https://h.example/recharge/'), 'https://h.example/recharge/api/a.png');
+  assert.equal(hubUrl('/api/a.png', 'http://127.0.0.1:38123'), 'http://127.0.0.1:38123/api/a.png');
   assert.match(nameHtml({ username: EVIL, nameColor: '#fff' }), /data-user="&lt;img/);
   assert.equal(userOf({ author: { username: 'a', avatar_url: '/x', frame: 'neon', name_color: '#fff' } }).frame, 'neon');
 });
@@ -213,4 +215,14 @@ test('frame shapes take the chosen colours as CSS variables, and only #hex gets 
   assert.equal(frameVars(['red', 'url(x)', '#12345']), '');
   assert.match(avatarHtml({ username: 'a', frame: 's-ring', frame_colors: ['#ff0000'] }), /--fc1:#ff0000/);
   assert.doesNotMatch(avatarHtml({ username: 'a', frame: 's-ring', frame_colors: ['#ff0000;background:url(x)'] }), /url\(/);
+});
+
+test('no CSS rule hides a button row: the forum Post / Reply / Save buttons sit in .cm-form-row', async () => {
+  const fs = await import('node:fs');
+  const css = fs.readFileSync(new URL('../src/social/social.css', import.meta.url), 'utf8');
+  for (const rule of css.split('}')) {
+    if (!/display:\s*none/.test(rule)) continue;
+    const sel = rule.split('{')[0];
+    if (sel.includes('cm-form-row')) assert.match(sel, /:not\(:has\(button\)\)/, 'a rule hiding .cm-form-row must skip rows with buttons: ' + sel.trim());
+  }
 });

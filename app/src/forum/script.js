@@ -46,7 +46,8 @@ async function showList() {
   leave();
   current = { screen: 'list', id: null };
   const seq = ++loadSeq;
-  root.innerHTML = `
+  // One panel: the category and filter bars on top, the posts and the pager under them.
+  root.innerHTML = `<div class="fm-board">
     <div class="fm-toolbar">
       <div class="fm-chips">${chipsHtml()}</div>
       <button class="btn btn-primary" data-act="new" type="button">New post</button>
@@ -57,7 +58,7 @@ async function showList() {
       <input class="browser-search fm-search" type="text" maxlength="100" placeholder="Search posts..." value="${escapeHtml(filters.q)}" />
     </div>
     <div class="fm-list" id="fm-list"><div class="empty-state">Loading...</div></div>
-    <div id="fm-pager"></div>`;
+    <div id="fm-pager"></div></div>`;
   try {
     const data = await forum.list(filters);
     if (seq !== loadSeq) return;
@@ -95,7 +96,8 @@ async function showPost(id, { scrollToReply = false } = {}) {
   if (post.can_edit) controls.push('<button class="btn" data-act="edit-post" type="button">Edit</button>');
   if (post.can_delete) controls.push('<button class="btn btn-danger" data-act="del-post" type="button">Delete</button>');
   const locked = post.status === 'closed' && !admin;
-  root.querySelector('#fm-post-host').innerHTML = `
+  // One panel for the whole thread: the post, its controls, the replies and the reply box, split by thin dividers.
+  root.querySelector('#fm-post-host').innerHTML = `<div class="fm-thread">
     ${postHtml(post)}
     ${controls.length ? `<div class="fm-controls">${controls.join('')}</div>` : ''}
     <div class="form-error fm-err" role="alert"></div>
@@ -105,7 +107,7 @@ async function showPost(id, { scrollToReply = false } = {}) {
       <textarea class="form-input fm-reply-input" rows="4" maxlength="${LIMITS.reply}" placeholder="Write a reply..."></textarea>
       <div class="fm-strip" id="fm-reply-strip"></div>
       <div class="cm-form-row"><span class="cm-count"></span><span class="form-error" id="fm-reply-err" role="alert"></span><button class="btn btn-primary" data-act="reply" type="button">Reply</button></div>`}
-    </div>`;
+    </div></div>`;
   const strip = root.querySelector('#fm-reply-strip');
   if (strip) {
     const ta = root.querySelector('.fm-reply-input');
