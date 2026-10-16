@@ -1,8 +1,13 @@
-import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { getToken, getUsername, isLoggedIn, isAdmin } from '../auth.js';
+import { uploaderHtml } from '../social/avatar.js';
+import { canRemoveUpload } from '../social/perms.js';
 import { requireLogin } from '../login-prompt.js';
+import { mountComments } from '../social/comments.js';
 import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
-const HUB_BASE = 'https://codecade.co.za/recharge';
+import { HUB_BASE } from '../hub.js';
+import { checkTab } from '../autoupdate.js';
+import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
 
 let currentSubtab = 'installed';
 let searchTerm = '';
@@ -12,6 +17,7 @@ let catalog = [];
 let catalogError = false;
 let chosenUploadPath = null;
 let myUploadIds = new Set();
+let myUploads = []; // the user's own skin uploads, for the upload form's "Update of"
 let detailImages = [];
 let detailImageIndex = 0;
 let openDetail = null; // { hubId } or { folderName }
@@ -42,7 +48,11 @@ async function loadCatalog() {
       id: row.id,
       name: row.name,
       author: row.author,
+      uploader: row.uploader || null,
+      uploader_name_color: row.uploader_name_color || null,
       description: row.description || '',
+      revision: row.revision || 1,
+      updatedAt: row.updatedAt || row.createdAt,
       images: galleryImages(row.gallery).map((f) => `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(f)}`),
       image: galleryImages(row.gallery).length ? `${HUB_BASE}/api/skins/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
     }));
@@ -56,6 +66,7 @@ async function loadCatalog() {
 async function loadMyUploadIds() {
   if (!isLoggedIn()) {
     myUploadIds = new Set();
+    myUploads = [];
     return;
   }
   try {
@@ -63,9 +74,11 @@ async function loadMyUploadIds() {
       headers: { Authorization: `Bearer ${getToken()}` },
     });
     const rows = res.ok ? await res.json() : [];
-    myUploadIds = new Set(rows.filter((r) => r.kind === 'skin').map((r) => r.id));
+    myUploads = rows.filter((r) => r.kind === 'skin');
+    myUploadIds = new Set(myUploads.map((r) => r.id));
   } catch {
     myUploadIds = new Set();
+    myUploads = [];
   }
 }
 
@@ -138,14 +151,15 @@ function renderBrowse() {
       const badge = installed
         ? `<div class="badge badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
-      const mine = myUploadIds.has(entry.id);
+      const mine = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
       return `
     <div class="browse-card" onclick="window.__skinOpenDetail('hub:${escapeHtml(entry.id)}')">
       ${thumb(entry.image, badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
-        <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
+        <div class="browse-card-meta">${uploaderHtml(entry)}</div>
       </div>
+      <div class="browse-card-desc">${escapeHtml(entry.description || '')}</div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
           <button class="icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
@@ -184,14 +198,13 @@ window.__skinOpenDetail = function (key) {
   openDetail = key;
 
   const name = entry ? entry.name : displayName(installedSkin);
-  const author = entry?.author || '';
   const description = entry?.description || '';
   const localThumb = installedSkin ? thumbCache.get(installedSkin.folderName) : null;
   detailImages = entry?.images?.length ? entry.images : entry?.image ? [entry.image] : localThumb ? [localThumb] : [];
   detailImageIndex = 0;
-  const mine = entry && myUploadIds.has(entry.id);
+  const mine = entry && canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
 
-  document.getElementById('skins-detail').innerHTML = `
+  document.getElementById('skins-detail').innerHTML = `<div class="detail-main">
     <button class="crumb-back" onclick="window.__skinCloseDetail()" style="margin-bottom:20px;">&lt; Skins</button>
     ${detailImages.length ? `<div class="gallery">
       <img class="detail-image" id="skins-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__skinGalleryStep(1)" style="cursor:pointer;"' : ''} />
@@ -201,7 +214,7 @@ window.__skinOpenDetail = function (key) {
     </div>` : ''}
     <div class="detail-header">
       <div class="detail-name">${escapeHtml(name)}</div>
-      ${author ? `<div class="detail-meta">${escapeHtml(author)}</div>` : ''}
+      ${entry?.author ? `<div class="detail-meta">by ${uploaderHtml(entry)}</div>` : ''}
     </div>
     ${description ? `<div class="detail-desc">${escapeHtml(description)}</div>` : ''}
     <div class="detail-actions">
@@ -211,13 +224,24 @@ window.__skinOpenDetail = function (key) {
         : entry ? `<button class="btn btn-primary" onclick="window.__skinInstall('${escapeHtml(entry.id)}', this)">Install</button>` : ''}
       ${mine ? `<button class="btn btn-danger" onclick="window.__skinConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">Remove from Library</button>` : ''}
     </div>
+    </div>
   `;
   document.getElementById('skins-list').style.display = 'none';
-  document.getElementById('skins-detail').style.display = 'block';
+  document.getElementById('skins-detail').style.display = ''; // the stylesheet lays it out (two columns)
+  commentsHandle?.destroy();
+  commentsHandle = null;
+  if (entry) {
+    const host = document.createElement('div');
+    document.getElementById('skins-detail').appendChild(host);
+    commentsHandle = mountComments(host, 'skins', entry.id);
+  }
   return true;
 };
 
+let commentsHandle = null;
 window.__skinCloseDetail = function () {
+  commentsHandle?.destroy();
+  commentsHandle = null;
   document.getElementById('skins-detail').style.display = 'none';
   document.getElementById('skins-list').style.display = 'block';
   openDetail = null;
@@ -283,6 +307,7 @@ window.__skinOpenUpload = function () {
   document.getElementById('skins-upload-path').textContent = 'No folder chosen';
   document.getElementById('skins-upload-name').value = '';
   document.getElementById('skins-upload-description').value = '';
+  fillUpdateSelect(document, 'skins', 'skins', myUploads, {}, escapeHtml);
   openModal('skins-upload-overlay');
 };
 
@@ -314,6 +339,12 @@ async function browseForSkinFolder() {
   if (!document.getElementById('skins-upload-name').value) {
     document.getElementById('skins-upload-name').value = suggestUploadName(folderName);
   }
+  syncSkinUpdateChoice();
+}
+
+// A skin of the same name as one of your uploads is a new version of it.
+function syncSkinUpdateChoice() {
+  fillUpdateSelect(document, 'skins', 'skins', myUploads, { name: document.getElementById('skins-upload-name').value }, escapeHtml);
 }
 
 function closeUploadModal() {
@@ -336,7 +367,7 @@ async function submitUpload() {
   confirmBtn.textContent = 'Uploading…';
   const { invoke } = window.__TAURI__.core;
   try {
-    await invoke('submit_skin_cmd', { token: getToken(), folderPath: chosenUploadPath, displayName: name, author: getUsername(), description: document.getElementById('skins-upload-description').value.trim() });
+    await invoke('submit_skin_cmd', { token: getToken(), folderPath: chosenUploadPath, displayName: name, author: getUsername(), description: document.getElementById('skins-upload-description').value.trim(), updates: chosenUpdate(document, 'skins') });
     closeUploadModal();
     await loadCatalog();
     await loadMyUploadIds();
@@ -360,6 +391,7 @@ export async function init() {
   document.getElementById('skins-upload-cancel').addEventListener('click', closeUploadModal);
   document.getElementById('skins-upload-confirm').addEventListener('click', submitUpload);
   document.getElementById('skins-upload-browse-btn').addEventListener('click', browseForSkinFolder);
+  document.getElementById('skins-upload-name').addEventListener('change', syncSkinUpdateChoice);
   render();
   await onShow();
 }
@@ -367,4 +399,6 @@ export async function init() {
 export async function onShow() {
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
+  // Installed skins the Hub has a newer revision of are updated in place (not awaited: the tab is already usable).
+  if (!catalogError) checkTab('skins', installedCache, catalog, refresh).catch(() => {});
 }

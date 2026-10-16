@@ -65,10 +65,18 @@
     </div>
     <div class="settings-row">
       <button class="btn" id="whatsnew-btn" onclick="window.__whatsNewToggle()">What's new</button>
+      <button class="btn" id="report-bug-btn" onclick="window.__reportBug()">Report a bug</button>
+      <button class="btn" id="settings-logout-btn" onclick="window.__settingsLogOut()" hidden>Log out</button>
     </div>
     <div id="whatsnew-panel" class="whatsnew-panel" hidden></div>
     <div id="launcher-notes" class="settings-sub" hidden></div>
     <div id="launcher-update-progress" class="settings-sub" hidden></div>
+  </div>
+
+  <div class="card">
+    <div class="settings-label">Maps, mods and skins</div>
+    <label class="settings-row"><input type="checkbox" id="auto-update-toggle" checked onchange="window.__setAutoUpdateContent(this.checked)" /> <span>Auto-update downloaded maps, mods and skins</span></label>
+    <div class="settings-sub">When on, a map, mod or skin you downloaded is replaced with its newer version when its author updates it. Nothing is updated while the game is running; it waits until you close it.</div>
   </div>
 
   <div class="card">

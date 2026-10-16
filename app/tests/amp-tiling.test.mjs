@@ -159,7 +159,7 @@ for (const kind of Object.keys(SHEETS)) {
         if (RAIL.has(kind) && base === 'C' && holes.length === 1 && realOf(hole)) { // rail sheets: the sheet's own inside tile, as the level has it
           const [tile, mat] = realOf(hole);
           assert.equal(art.tile, tile, label); assert.deepEqual(art.matrix, mat, label);
-        } else if (RAIL.has(kind) || base.length === 2) { // rail sheets and corner pieces: no generated connector
+        } else if ((RAIL.has(kind) && !(base === 'C' && !holes.some(realOf) && holes.every((d) => d[0] === 'S'))) || base.length === 2) { // rail sheets (except a bottom inside corner on a sheet with no inside tile, e.g. Floor plate) and corner pieces: no generated connector
           assert.ok(!art.parts, label + ' has no generated connector');
           const first = RAIL.has(kind) && base === 'C' && realOf(holes[0]);
           if (first) assert.equal(art.tile, first[0], label); else assert.ok(sameArt(kind, art, base, asTile(kind, base)), label + ' keeps its plain piece');

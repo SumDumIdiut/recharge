@@ -1,11 +1,12 @@
 <main class="page">
   <div class="page-header">Account</div>
 
-  <div class="account-header">
-    <div class="account-username" id="account-username-display"></div>
-    <button class="btn" id="account-logout-btn">Log Out</button>
+  <div class="card" id="account-profile"><div class="empty-state">Loading...</div></div>
+  <div class="page-header account-sub-header" id="account-uploads-header">My Uploads</div>
+  <div class="browser-subtabs" id="account-uploads-switch" style="display:none; margin-bottom:12px;">
+    <button class="subtab-btn active" data-scope="mine" onclick="window.__acctScope('mine')">Mine</button>
+    <button class="subtab-btn" data-scope="all" onclick="window.__acctScope('all')">Everyone</button>
   </div>
-  <div class="page-header account-sub-header">My Uploads</div>
   <div id="account-uploads-list" class="browser-grid"></div>
 </main>
 

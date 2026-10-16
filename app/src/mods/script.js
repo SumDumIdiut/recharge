@@ -1,8 +1,13 @@
-import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { getToken, getUsername, isLoggedIn, isAdmin } from '../auth.js';
+import { uploaderHtml } from '../social/avatar.js';
+import { canRemoveUpload } from '../social/perms.js';
 import { requireLogin } from '../login-prompt.js';
+import { mountComments } from '../social/comments.js';
 import { escapeHtml, galleryImages, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
-const HUB_BASE = 'https://codecade.co.za/recharge';
+import { HUB_BASE } from '../hub.js';
+import { checkTab, isNewerRevision } from '../autoupdate.js';
+import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
 
 const PROTECTED_MOD_IDS = new Set(['recharge.maps']);
 
@@ -17,6 +22,7 @@ let detailImages = [];
 let detailImageIndex = 0;
 const MAX_GALLERY_IMAGES = 8;
 let myUploadIds = new Set();
+let myUploads = []; // the user's own mod uploads, for the upload form's "Update of"
 let openDetailId = null;
 
 function matchesSearch(haystack) {
@@ -50,7 +56,11 @@ async function loadCatalog() {
         modId: row.modId || null,
         name: row.name,
         author: row.author,
+        uploader: row.uploader || null,
+        uploader_name_color: row.uploader_name_color || null,
         version: row.version || '1.0.0',
+        revision: row.revision || 1,
+        updatedAt: row.updatedAt || row.createdAt,
         description: row.description,
         image: galleryImages(row.gallery).length ? `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
         images: galleryImages(row.gallery).map((f) => `${HUB_BASE}/api/mods/${row.id}/gallery/${encodeURIComponent(f)}`),
@@ -66,6 +76,7 @@ async function loadCatalog() {
 async function loadMyUploadIds() {
   if (!isLoggedIn()) {
     myUploadIds = new Set();
+    myUploads = [];
     return;
   }
   try {
@@ -73,9 +84,11 @@ async function loadMyUploadIds() {
       headers: { Authorization: `Bearer ${getToken()}` },
     });
     const rows = res.ok ? await res.json() : [];
-    myUploadIds = new Set(rows.filter((r) => r.kind === 'mod').map((r) => r.id));
+    myUploads = rows.filter((r) => r.kind === 'mod');
+    myUploadIds = new Set(myUploads.map((r) => r.id));
   } catch {
     myUploadIds = new Set();
+    myUploads = [];
   }
 }
 
@@ -97,14 +110,14 @@ function renderInstalled() {
       // Picture: the hub entry of this mod (by mod id, else by name); a neutral placeholder if the hub has none.
       const pic = entry?.image || catalog.find((c) => c.image && String(c.name).trim().toLowerCase() === String(m.displayName).trim().toLowerCase())?.image;
       const protectedMod = PROTECTED_MOD_IDS.has(m.id);
-      const hasUpdate = entry && !protectedMod && isNewerVersion(entry.version, m.version);
+      const hasUpdate = entry && !protectedMod && (m.hubId ? isNewerRevision(m, entry) : isNewerVersion(entry.version, m.version));
       const author = entry?.author || m.author;
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
       ${sharedThumb(pic, hasUpdate ? `<button class="badge badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
         <div class="browse-card-name${protectedMod ? ' browse-card-name-protected' : ''}">${escapeHtml(m.displayName)}</div>
-        <div class="browse-card-meta">${author ? escapeHtml(author) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
+        <div class="browse-card-meta">${author ? (entry?.author ? uploaderHtml(entry) : escapeHtml(author)) : 'unknown'} &middot; v${escapeHtml(m.version)}${hasUpdate ? ` <span class="update-available">&rarr; v${escapeHtml(entry.version)} available</span>` : ''}</div>
       </div>
       <div class="browse-card-actions">
         <span class="browse-card-meta">${m.enabled ? 'Enabled' : 'Disabled'}</span>
@@ -138,14 +151,15 @@ function renderBrowse() {
       const badge = installed
         ? `<div class="badge badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
-      const mine = myUploadIds.has(entry.id);
+      const mine = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
       return `
     <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(entry.id)}')">
       ${thumb(entry, badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
-        <div class="browse-card-meta">${escapeHtml(entry.author)} &middot; v${escapeHtml(entry.version)}</div>
+        <div class="browse-card-meta">${uploaderHtml(entry)} &middot; v${escapeHtml(entry.version)}</div>
       </div>
+      <div class="browse-card-desc">${escapeHtml(entry.description || '')}</div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
           <button class="icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__modConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
@@ -197,6 +211,7 @@ window.__modOpenUpload = function () {
   document.getElementById('mods-upload-name').value = '';
   document.getElementById('mods-upload-description').value = '';
   renderGalleryChoice();
+  fillUpdateSelect(document, 'mods', 'mods', myUploads, {}, escapeHtml);
   openModal('mods-upload-overlay');
 };
 
@@ -224,6 +239,10 @@ async function browseForModFolder() {
   if (!chosen) return;
   chosenUploadPath = chosen;
   document.getElementById('mods-upload-path').textContent = chosen.split(/[\\/]/).pop();
+  // The folder's mod id decides which of your uploads this is a new version of.
+  let modId = null;
+  try { modId = await window.__TAURI__.core.invoke('mod_folder_id', { folderPath: chosen }); } catch { /* an older build: no pre-pick */ }
+  fillUpdateSelect(document, 'mods', 'mods', myUploads, { modId }, escapeHtml);
 }
 
 function renderGalleryChoice() {
@@ -282,6 +301,7 @@ async function submitUpload() {
       author: getUsername(),
       description: document.getElementById('mods-upload-description').value.trim(),
       galleryPaths: chosenGalleryPaths,
+      updates: chosenUpdate(document, 'mods'),
     });
     closeUploadModal();
     await loadCatalog();
@@ -450,7 +470,7 @@ window.__modOpenDetail = function (id) {
   detailImages = entry?.images?.length ? entry.images : (entry?.image ? [entry.image] : []);
   detailImageIndex = 0;
 
-  document.getElementById('mods-detail').innerHTML = `
+  document.getElementById('mods-detail').innerHTML = `<div class="detail-main">
     <button class="crumb-back" id="mods-detail-back" onclick="window.__modCloseDetail()" style="margin-bottom:20px;">&lt; Mods</button>
     ${detailImages.length ? `<div class="gallery">
       <img class="detail-image" id="mods-gallery-img" src="${escapeHtml(detailImages[0])}" alt=""${detailImages.length > 1 ? ' onclick="window.__modGalleryStep(1)" style="cursor:pointer;"' : ''} />
@@ -460,7 +480,7 @@ window.__modOpenDetail = function (id) {
     </div>` : ''}
     <div class="detail-header">
       <div class="detail-name${protectedMod ? ' detail-name-protected' : ''}">${escapeHtml(name)}</div>
-      <div class="detail-meta">${author ? escapeHtml(author) + ' \u00b7 ' : ''}v${escapeHtml(version)}</div>
+      <div class="detail-meta">${author ? (entry?.author ? uploaderHtml(entry) : escapeHtml(author)) + ' \u00b7 ' : ''}v${escapeHtml(version)}</div>
     </div>
     ${description ? `<div class="detail-desc">${escapeHtml(description)}</div>` : ''}
     ${deps?.length ? `<div class="detail-deps">Requires: ${deps.map(escapeHtml).join(', ')}</div>` : ''}
@@ -476,12 +496,22 @@ window.__modOpenDetail = function (id) {
             ? `<button class="btn btn-primary" onclick="window.__modInstall('${escapeHtml(hubId)}', this)">Install</button>`
             : ''
       }
+      ${entry && canRemoveUpload(myUploadIds.has(entry.id), isAdmin()) ? `<button class="btn btn-danger" onclick="window.__modConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">Remove from Library</button>` : ''}
+    </div>
     </div>
   `;
 
   document.getElementById('mods-list').style.display = 'none';
-  document.getElementById('mods-detail').style.display = 'block';
+  document.getElementById('mods-detail').style.display = ''; // the stylesheet lays it out (two columns)
+  modCommentsHandle?.destroy();
+  modCommentsHandle = null;
+  if (hubId) {
+    const host = document.createElement('div');
+    document.getElementById('mods-detail').appendChild(host);
+    modCommentsHandle = mountComments(host, 'mods', hubId);
+  }
 };
+let modCommentsHandle = null;
 
 window.__modConfirmUninstall = function (id, name) {
   document.getElementById('mods-dep-title').textContent = 'Uninstall Mod?';
@@ -508,6 +538,8 @@ window.__modConfirmUninstall = function (id, name) {
 };
 
 window.__modCloseDetail = function () {
+  modCommentsHandle?.destroy();
+  modCommentsHandle = null;
   document.getElementById('mods-detail').style.display = 'none';
   document.getElementById('mods-list').style.display = 'block';
   openDetailId = null;
@@ -533,4 +565,6 @@ export async function onShow() {
   await Promise.all([loadCatalog(), loadMyUploadIds(), refresh()]);
   render();
   if (openDetailId) window.__modOpenDetail(openDetailId);
+  // Installed mods the Hub has a newer revision of are updated in place (not awaited: the tab is already usable).
+  if (!catalogError) checkTab('mods', installedCache, catalog, async () => { await refresh(); if (openDetailId) window.__modOpenDetail(openDetailId); }).catch(() => {});
 }

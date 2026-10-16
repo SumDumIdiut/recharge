@@ -249,6 +249,10 @@ pub struct MapSummary {
     pub uid: Option<String>,
     /// The Hub id it was uploaded as, from here (hub.json), when it was.
     pub hub: Option<String>,
+    /// Which revision of that Hub entry this copy is (hub.json), and when the Hub says that revision was made.
+    pub revision: Option<i64>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
 }
 
 /// The name an installed map has on the Hub, kept beside it (hub.json) for the game's map list.
@@ -459,10 +463,12 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
             .map(|a| a.len())
             .unwrap_or(0);
         let uid = json.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let hub = std::fs::read_to_string(path.join("hub.json"))
+        let hub_json = std::fs::read_to_string(path.join("hub.json"))
             .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|h| h.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()));
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        let hub = hub_json.as_ref().and_then(|h| h.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()));
+        let revision = hub_json.as_ref().and_then(|h| h.get("revision").and_then(|v| v.as_i64()));
+        let updated_at = hub_json.as_ref().and_then(|h| h.get("updatedAt").and_then(|v| v.as_str()).map(|s| s.to_string()));
         maps.push(MapSummary {
             id,
             name,
@@ -471,6 +477,8 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
             group_count,
             uid,
             hub,
+            revision,
+            updated_at,
         });
     }
     maps

@@ -1,5 +1,6 @@
-import { escapeHtml, ICON_TRASH } from '../ui.js';
-import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { escapeHtml, ICON_TRASH, confirmDestructive } from '../ui.js';
+import { mountComments } from '../social/comments.js';
+import { getToken, getUsername, isLoggedIn, isAdmin } from '../auth.js';
 import { openAccount } from '../login-prompt.js';
 import { recheckBackground, applySoundSetting } from '../theme.js';
 import { getAudioPrefs, saveAudioPrefs } from '../bgmedia.js';
@@ -7,7 +8,7 @@ import { lazyThumb, loadThumb, hubCoverThumb, schedulePosters, forgetPoster } fr
 import { mediaKind, countsText, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, addingText, errText, activeTarget, soundOptions, PLAY_OVERLAY, MAY_NOT_PLAY_TEXT, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB, withoutPosters } from './media.js';
 
 import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, LIMITS_TEXT } from './editor.js';
-import { loadCommunity, imageCardsHtml, playlistCardsHtml, previewTilesHtml, startPreview, fillHubCovers, applyCover, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
+import { loadCommunity, imageCardsHtml, playlistCardsHtml, previewTilesHtml, backgroundGalleryUrl, startPreview, fillHubCovers, applyCover, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
 
 const INTERVALS = [
   [0, 'Every launch'],
@@ -314,6 +315,29 @@ window.__bgSubtab = function (tab) {
 let hubCovers = null; // the running "pictures for video cards" job; aborted when the grid is redrawn or the tab changes
 const coverEnv = { cover: (key, reader) => hubCoverThumb(key, reader) };
 
+// "Remove from the Recharge Library" on a community card (the uploader's or, for admins, anyone's). stopPropagation keeps the playlist card's preview from opening.
+function wireHubRemove(grid, rows, section) {
+  grid.querySelectorAll('.browse-card').forEach((card) => {
+    const btn = card.querySelector('[data-act=remove-hub]');
+    if (!btn) return;
+    const row = rows.find((r) => r.id === card.dataset.id);
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const ok = await confirmDestructive({
+        title: 'Delete upload',
+        body: `"${row.name}" will be removed from the Recharge Library. Copies already added stay, but this cannot be undone.`,
+        confirmLabel: 'Delete',
+        name: row.name,
+      });
+      if (!ok) return;
+      try {
+        await window.__TAURI__.core.invoke('delete_hub_submission_cmd', { token: getToken(), id: row.id });
+        if (communitySection === section) await renderCommunity();
+      } catch (err) { showError(`Couldn't remove "${row.name}": ${errText(err)}`); }
+    };
+  });
+}
+
 async function renderCommunity() {
   hubCovers?.abort();
   hubCovers = null;
@@ -323,11 +347,15 @@ async function renderCommunity() {
   grid.innerHTML = '<div class="empty-state">Loading...</div>';
   const data = await loadCommunity(invoke);
   if (communitySection === 'images') {
-    grid.innerHTML = imageCardsHtml(data.images, data.myImages, data.imageAdded);
+    grid.innerHTML = imageCardsHtml(data.images, data.myImages, data.imageAdded, isAdmin());
+    wireHubRemove(grid, data.images.rows, 'images');
     hubCovers = fillHubCovers(grid, coverEnv);
     grid.querySelectorAll('.browse-card').forEach((card) => {
       const row = data.images.rows.find((r) => r.id === card.dataset.id);
+      // The card opens the same preview as a playlist (with its comments); its own buttons keep their job.
+      card.onclick = (e) => { if (!e.target.closest('button')) openPreview(row, data.imageAdded, 'backgrounds'); };
       card.querySelector('[data-act=add-image]').onclick = async (e) => {
+        e.stopPropagation();
         if (e.currentTarget.disabled) return;
         const btn = e.currentTarget;
         clearError();
@@ -347,7 +375,8 @@ async function renderCommunity() {
     });
     return;
   }
-  grid.innerHTML = playlistCardsHtml(data.playlists, data.myPlaylists, data.playlistAdded);
+  grid.innerHTML = playlistCardsHtml(data.playlists, data.myPlaylists, data.playlistAdded, isAdmin());
+  wireHubRemove(grid, data.playlists.rows, 'playlists');
   hubCovers = fillHubCovers(grid, coverEnv);
   grid.querySelectorAll('.browse-card').forEach((card) => {
     card.onclick = () => openPreview(data.playlists.rows.find((r) => r.id === card.dataset.id), data.playlistAdded);
@@ -360,24 +389,30 @@ window.__bgCommunity = function (section) {
 };
 
 let previewMedia = null;
+let previewComments = null;
 function closePreview() {
+  previewComments?.destroy();
+  previewComments = null;
   previewMedia?.release(); // videos paused + emptied, sound stopped
   previewMedia = null;
   document.getElementById('bg-preview').hidden = true;
 }
 
-function openPreview(row, isAdded = () => false) {
+// kind: 'playlists' (a hub playlist) or 'backgrounds' (one hub image / video / sound).
+function openPreview(row, isAdded = () => false, kind = 'playlists') {
+  const single = kind === 'backgrounds';
+  const addLabel = single ? 'Add to my images' : 'Add to my playlists';
   const { invoke } = window.__TAURI__.core;
   const box = document.getElementById('bg-preview');
   document.getElementById('bg-preview-title').textContent = `${row.name} - by ${row.author || '?'}`;
   previewMedia?.release();
   const grid = document.getElementById('bg-preview-grid');
-  grid.innerHTML = previewTilesHtml(row);
+  grid.innerHTML = single ? previewTilesHtml(row, backgroundGalleryUrl) : previewTilesHtml(row);
   previewMedia = startPreview(grid, undefined, coverEnv);
   const add = document.getElementById('bg-preview-add');
   const already = isAdded(row);
   add.disabled = already;
-  add.textContent = already ? 'Added' : 'Add to my playlists';
+  add.textContent = already ? 'Added' : addLabel;
   add.onclick = async () => {
     if (already) return;
     clearError();
@@ -391,20 +426,24 @@ function openPreview(row, isAdded = () => false) {
       });
     } catch (e) {}
     try {
-      await invoke('download_hub_playlist', { id: row.id, name: row.name, author: row.author || '' });
+      if (single) await invoke('download_hub_background', { id: row.id, name: row.name });
+      else await invoke('download_hub_playlist', { id: row.id, name: row.name, author: row.author || '' });
       postersSoon();
       await refreshImages();
       closePreview();
-      window.__bgSubtab('playlists');
+      if (single) await renderCommunity(); // its card now says Added
+      else window.__bgSubtab('playlists');
     } catch (err) {
       add.disabled = false;
-      add.textContent = 'Add to my playlists';
+      add.textContent = addLabel;
       showError(`Couldn't add "${row.name}": ${errText(err)}`);
     } finally {
       try { unlisten?.(); } catch (e) {}
     }
   };
   document.getElementById('bg-preview-close').onclick = closePreview;
+  previewComments?.destroy();
+  previewComments = row.id ? mountComments(document.getElementById('bg-preview-comments'), kind, row.id) : null;
   box.hidden = false;
 }
 

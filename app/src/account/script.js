@@ -1,22 +1,28 @@
 import { getToken, getUsername, isAdmin, clearSession, isLoggedIn } from '../auth.js';
 import { escapeHtml, galleryImages, thumb, openModal, closeModal, confirmDestructive, ICON_TRASH, ICON_EDIT } from '../ui.js';
 
-const HUB_BASE = 'https://codecade.co.za/recharge';
+import { HUB_BASE } from '../hub.js';
+import { mountProfileEditor } from './deco.js';
+import { profiles } from '../social/api.js';
+import { uploaderHtml } from '../social/avatar.js';
+let editor = null;
 
 let myUploads = [];
+// Admins can switch the list to every user's uploads (GET /api/admin/submissions); Edit and Delete work the same on both.
+let uploadScope = 'mine';
 let editingId = null;
 
 function galleryUrl(row) {
   const first = galleryImages(row.gallery)[0];
   if (!first) return null;
-  const kindPath = row.kind === 'mod' ? 'mods' : row.kind === 'map' ? 'maps' : 'skins';
+  const kindPath = { mod: 'mods', map: 'maps', skin: 'skins', playlist: 'playlists', background: 'backgrounds' }[row.kind] || 'skins';
   return `${HUB_BASE}/api/${kindPath}/${row.id}/gallery/${encodeURIComponent(first)}`;
 }
 
 function renderUploads() {
   const list = document.getElementById('account-uploads-list');
   if (!myUploads.length) {
-    list.innerHTML = '<div class="empty-state">You haven\'t uploaded anything yet.</div>';
+    list.innerHTML = `<div class="empty-state">${uploadScope === 'all' ? 'Nothing has been uploaded yet.' : 'You haven\'t uploaded anything yet.'}</div>`;
     return;
   }
   list.innerHTML = myUploads
@@ -27,7 +33,7 @@ function renderUploads() {
       ${thumb(img)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(row.name)}</div>
-        <div class="browse-card-meta">${escapeHtml(row.kind)} &middot; ${escapeHtml(row.author)}</div>
+        <div class="browse-card-meta">${escapeHtml(row.kind)} &middot; ${uploaderHtml(row)}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
@@ -40,9 +46,19 @@ function renderUploads() {
     .join('');
 }
 
+window.__acctScope = function (scope) {
+  uploadScope = scope === 'all' ? 'all' : 'mine';
+  loadUploads();
+};
+
 async function loadUploads() {
+  if (!isAdmin()) uploadScope = 'mine';
+  const sw = document.getElementById('account-uploads-switch');
+  sw.style.display = isAdmin() ? '' : 'none';
+  sw.querySelectorAll('.subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.scope === uploadScope));
+  document.getElementById('account-uploads-header').textContent = uploadScope === 'all' ? 'All Uploads' : 'My Uploads';
   try {
-    const res = await fetch(`${HUB_BASE}/api/me/submissions`, {
+    const res = await fetch(`${HUB_BASE}${isAdmin() && uploadScope === 'all' ? '/api/admin/submissions' : '/api/me/submissions'}`, {
       headers: { Authorization: `Bearer ${getToken()}` },
     });
     if (!res.ok) throw new Error('failed to load uploads');
@@ -113,17 +129,25 @@ window.__acctDelete = async function (id, name) {
     .catch((err) => alert(String(err.message || err)));
 };
 
+async function refreshAll() {
+  if (!isLoggedIn()) { window.goHome(); return; }
+  editor?.destroy();
+  editor = null;
+  const host = document.getElementById('account-profile');
+  host.innerHTML = '<div class="empty-state">Loading...</div>';
+  profiles.me().then((me) => { editor = mountProfileEditor(host, me); })
+    .catch((e) => { host.innerHTML = `<div class="empty-state">${escapeHtml(e.message)}</div>`; });
+  await loadUploads();
+}
+
 export async function init() {
   if (!isLoggedIn()) {
     window.goHome();
     return;
   }
-  document.getElementById('account-username-display').textContent = `Logged in as ${getUsername()}${isAdmin() ? ' (admin)' : ''}`;
-  document.getElementById('account-logout-btn').addEventListener('click', () => {
-    clearSession();
-    window.goHome();
-  });
   document.getElementById('account-edit-cancel').addEventListener('click', closeEditModal);
   document.getElementById('account-edit-save').addEventListener('click', saveEdit);
-  await loadUploads();
+  await refreshAll();
 }
+
+export async function onShow() { await refreshAll(); }

@@ -1,12 +1,13 @@
 // "What's new": the newest Library additions plus Recharge releases.
 import { escapeHtml, galleryImages } from './ui.js';
+import { uploaderHtml } from './social/avatar.js';
 import { mapThumbFor, hubStamp } from './maps/mapthumb.js';
 import { hubVideoSource, rowPicture } from './backgrounds/community.js';
 import { mediaKind } from './backgrounds/media.js';
 import { urlReader } from './backgrounds/cover.js';
 import { applySkinThumb } from './skin-thumb.js';
 
-const HUB = 'https://codecade.co.za/recharge';
+import { HUB_BASE as HUB } from './hub.js';
 const MAX_ENTRIES = 10;
 
 export function ago(iso) {
@@ -53,6 +54,8 @@ async function additions() {
           when: row.createdAt,
           title: row.name,
           by: row.author,
+          uploader: row.uploader || null,
+          uploader_name_color: row.uploader_name_color || null,
           body: row.description || '',
           image: galleryImages(row.gallery).length ? `${HUB}/api/${kind.path}/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
           };
@@ -111,7 +114,7 @@ export function renderNews(entries) {
   }
   el.innerHTML = entries
     .map((e) => {
-      const by = e.by ? ` \u00b7 ${escapeHtml(e.by)}` : '';
+      const by = e.by ? ` \u00b7 ${uploaderHtml({ author: e.by, uploader: e.uploader, uploader_name_color: e.uploader_name_color })}` : '';
       const isSkin = e.tag === 'Skin';
       const img = !e.image
         ? ''

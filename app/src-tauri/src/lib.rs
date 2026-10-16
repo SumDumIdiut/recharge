@@ -87,6 +87,7 @@ pub fn run() {
             hub::submit_map_cmd,
             hub::submit_installed_map_cmd,
             hub::submit_mod_cmd,
+            hub::mod_folder_id,
             hub::delete_hub_submission_cmd,
             hub::fetch_hub_map_json,
             hub::fetch_hub_playlists_cmd,

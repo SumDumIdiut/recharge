@@ -52,12 +52,33 @@ fn each_manifest(app: &AppHandle) -> Vec<(PathBuf, ModManifest)> {
 // Navigator is baked into every install (see loader.rs); filtered from user-facing lists only, since other mods still load against it.
 const BUILTIN_MOD_IDS: [&str; 1] = ["recharge.maps"];
 
+/// An installed mod: its manifest, plus (when it came from the Hub) which entry and revision.
+#[derive(Serialize)]
+pub struct InstalledMod {
+    #[serde(flatten)]
+    pub manifest: ModManifest,
+    #[serde(rename = "hubId", skip_serializing_if = "Option::is_none")]
+    pub hub_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
 #[tauri::command]
-pub fn list_installed_mods(app: AppHandle) -> Vec<ModManifest> {
+pub fn list_installed_mods(app: AppHandle) -> Vec<InstalledMod> {
     each_manifest(&app)
         .into_iter()
-        .map(|(_, m)| m)
-        .filter(|m| !BUILTIN_MOD_IDS.contains(&m.id.as_str()))
+        .filter(|(_, m)| !BUILTIN_MOD_IDS.contains(&m.id.as_str()))
+        .map(|(path, manifest)| {
+            let meta = path.parent().and_then(super::skins::read_hub_meta);
+            InstalledMod {
+                manifest,
+                hub_id: meta.as_ref().map(|m| m.hub_id.clone()),
+                revision: meta.as_ref().and_then(|m| m.revision),
+                updated_at: meta.and_then(|m| m.updated_at),
+            }
+        })
         .collect()
 }
 
