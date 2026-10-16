@@ -3,7 +3,7 @@ import { escapeHtml } from '../ui.js';
 import { profiles } from '../social/api.js';
 import { setNameColor } from '../auth.js';
 import { avatarHtml, FRAME_PICKER, frameColorCount, safeColor, normalizeGradient, nameStyle } from '../social/avatar.js';
-import { profileCardHtml, titleChipsHtml, pickedTitles } from '../social/profile.js';
+import { profileCardHtml } from '../social/profile.js';
 import { openCropDialog } from '../social/cropdialog.js';
 import { coverSource, renderToBlob } from '../social/crop.js';
 import { LIMITS } from '../social/validate.js';
@@ -37,7 +37,6 @@ export function mountProfileEditor(host, me) {
   const admin = !!me.admin;
   // The colours a shape is drawn with in the picker / preview: yours once picked, else its own starting colours.
   const frameColorsFor = (f) => (f.colors ? [...(d.frame_colors || []), ...f.def].slice(0, f.colors) : []);
-  const myTitles = () => (Array.isArray(d.titles) ? d.titles : d.title ? [d.title] : []);
 
   const swatches = (key) => `<div class="deco-row">${PALETTE.map((c) => `<button type="button" class="swatch${safeColor(d[key]) === c ? ' active' : ''}" style="background:${c}" data-k="${key}" data-c="${c}" aria-label="${c}"></button>`).join('')}
     <input type="color" data-k="${key}" value="${safeColor(d[key], '#41f88d').length === 7 ? safeColor(d[key], '#41f88d') : '#41f88d'}" aria-label="Custom colour" />
@@ -57,9 +56,6 @@ export function mountProfileEditor(host, me) {
       <div class="settings-sublabel">Frame</div>
       <div class="deco-row" id="deco-frames"></div>
       <div class="deco-fcolors" id="deco-fcolors"></div>
-      ${admin
-        ? `<div class="form-field" style="margin-top:14px">Titles <div id="deco-titles">${titleChipsHtml(myTitles())}</div></div>`
-        : `<div class="form-field" style="margin-top:14px">Titles <div class="deco-title-ro">${myTitles().length ? myTitles().map((t) => escapeHtml(t)).join(', ') : 'None yet'} <span class="deco-note">Titles are given by staff.</span></div></div>`}
       <label class="form-field">Pronouns <input class="form-input" id="deco-pron" maxlength="${LIMITS.pronouns}" /></label>
       <label class="form-field">Bio <textarea class="form-input" id="deco-bio" rows="3" maxlength="${LIMITS.bio}" style="font:inherit"></textarea></label>
       <div class="form-field">Links (http/https, up to ${LIMITS.links})
@@ -97,8 +93,6 @@ export function mountProfileEditor(host, me) {
 
   const setKey = (k, v) => { d[k] = v || null; dirty = true; paintAll(); };
   const onClick = async (e) => {
-    const chip = e.target.closest?.('#deco-titles .title-chip');
-    if (chip) { chip.classList.toggle('on'); chip.setAttribute('aria-pressed', chip.classList.contains('on')); d.titles = pickedTitles($('deco-titles')); d.title = d.titles[0] || null; dirty = true; paintPreviewOnly(); return; }
     // Frame colour swatches look like the other swatches, so they're checked first.
     const fc = e.target.closest('[data-fc]');
     if (fc) { d.frame_colors = [...(d.frame_colors || [])]; d.frame_colors[Number(fc.dataset.fc)] = fc.dataset.c; dirty = true; return paintAll(); }
@@ -191,7 +185,7 @@ export function mountProfileEditor(host, me) {
     try {
       const r = await profiles.save({
         banner_color: d.banner_color || null, accent_color: d.accent_color || null, name_color: d.name_color || null,
-        frame: d.frame || 'none', frame_colors: frameColorCount(d.frame) ? (d.frame_colors || []).slice(0, frameColorCount(d.frame)) : null, ...(admin && $('deco-titles') ? { titles: pickedTitles($('deco-titles')) } : {}), bio: d.bio || '', pronouns: d.pronouns || null, links,
+        frame: d.frame || 'none', frame_colors: frameColorCount(d.frame) ? (d.frame_colors || []).slice(0, frameColorCount(d.frame)) : null, bio: d.bio || '', pronouns: d.pronouns || null, links,
       });
       d = { ...d, ...r, links: [...(r.links || [])] };
       setNameColor(r.name_color || '');

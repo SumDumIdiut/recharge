@@ -55,5 +55,5 @@ export function validateComment({ body } = {}) {
 export const firstError = (r) => Object.values(r.errors)[0] || '';
 
 // Titles an admin can give (the hub's lists; staff titles are for staff).
-export const TITLES = ['Mapmaker', 'Speedrunner', 'Modder', 'Skin artist', 'Tester', 'Explorer', 'Collector'];
+export const TITLES = ['Mapmaker', 'Speedrunner', 'Modder', 'Skin artist', 'Tester'];
 export const STAFF_TITLES = ['Admin', 'Developer', 'Moderator'];

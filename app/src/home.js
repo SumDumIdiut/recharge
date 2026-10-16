@@ -126,7 +126,8 @@ function logLine(html) {
 }
 
 function setPlayStatus(status) {
-  document.querySelectorAll('.home-tile').forEach((el) => (el.disabled = status != null));
+  // Only the Vanilla / Modded launch tiles lock while the game runs; the Forum tile shares their look but stays usable.
+  document.querySelectorAll('.home-launch-row .home-tile').forEach((el) => (el.disabled = status != null));
   document.getElementById('home-play-status').textContent =
     status === 'launching' ? 'Launching…' : status === 'running' ? 'Running' : '';
 }

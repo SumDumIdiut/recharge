@@ -86,3 +86,13 @@ if (dir && fs.existsSync(dir)) {
   }
 }
 console.log('skin-thumb ok');
+
+// A skin with no character art (DOTN'T: only the empty template + its indicators) has no frame, so What's new shows no picture.
+{
+  const p = '/tmp/claude-1000/-run-media-oliver-Drive-Scripts/edca7e75-4acd-4892-b2c5-c7accabb7490/scratchpad/dotnt/pixels.json';
+  if (fs.existsSync(p)) { // the sample sheet is only on the dev machine
+    const px = JSON.parse(fs.readFileSync(p, 'utf8'));
+    assert.equal(findSkinFrame(Uint8ClampedArray.from(px.player.data), px.player.w, px.player.h), null, 'the sheet is empty');
+  }
+  console.log('skin-thumb empty-sheet ok');
+}

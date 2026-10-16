@@ -101,7 +101,8 @@ function placeholder(ctx, n) {
 
 // Draws the skin picture of a loaded image into el (a fixed-size box) as a canvas: the first real frame, else a placeholder
 // (never the guide lines). False when the image has no size.
-export function drawSkinThumb(el, img, box = el.clientWidth || 124) {
+// allowPlaceholder: draw the stand-in when nothing is found (else 'empty' is returned and nothing is drawn).
+export function drawSkinThumb(el, img, box = el.clientWidth || 124, { allowPlaceholder = true } = {}) {
   const w = img.naturalWidth, h = img.naturalHeight;
   if (!w || !h) return false;
   const dpr = window.devicePixelRatio || 1;
@@ -126,18 +127,21 @@ export function drawSkinThumb(el, img, box = el.clientWidth || 124) {
   if (frame) {
     const f = fitRect(frame, out.width);
     octx.drawImage(source, frame.x, frame.y, frame.w, frame.h, f.dx, f.dy, f.dw, f.dh);
-  } else {
+  } else if (allowPlaceholder) {
     placeholder(octx, out.width);
+  } else {
+    return 'empty';
   }
   el.replaceChildren(out);
   return true;
 }
 
-// Loads src (hub images send Access-Control-Allow-Origin: *) and draws it into el; the box is removed when the image fails.
+// Loads src (hub images send Access-Control-Allow-Origin: *) and draws it into el. The box is removed when the image fails, and
+// when the sheet has no character art (e.g. a skin that only changes the indicators and sounds): then nothing is shown.
 export function applySkinThumb(el, src) {
   const img = new Image();
   img.crossOrigin = 'anonymous';
-  img.onload = () => { if (!drawSkinThumb(el, img)) el.remove(); };
+  img.onload = () => { const r = drawSkinThumb(el, img, undefined, { allowPlaceholder: false }); if (r !== true) el.remove(); };
   img.onerror = () => el.remove();
   img.src = src;
 }
