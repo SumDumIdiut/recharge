@@ -241,8 +241,14 @@ body::before {
 .settings-install-list .home-install-row { flex-direction: row; align-items: center; justify-content: space-between; }
 .settings-install-list .home-install-row .btn { width: 140px; flex-shrink: 0; text-align: center; }
 
-/* Installation takes a modest share of the row: wide enough for the path, narrow enough not to compete with the menu. */
-.home-panel { flex: 0.7 1 280px; min-width: 250px; max-width: 340px; }
+/* Installation takes a modest share of the row: wide enough for the path, narrow enough not to compete with the menu.
+   It shares its column with the Forum tile, which sits in the space under it; the column fits its content instead of
+   stretching to the tallest panel. */
+.home-left-col { display: flex; flex-direction: column; gap: 16px; flex: 0.7 1 280px; min-width: 250px; max-width: 340px; align-self: flex-start; }
+.home-left-col > .home-panel { width: auto; flex: none; }
+/* Pushed to the bottom of the column, which home.js sizes to end level with the menu panel (Credits). */
+.home-forum-tile { display: flex; flex-direction: column; gap: 6px; font-size: 24px; padding: 22px 26px; margin-top: auto; }
+.home-forum-sub { font-size: 12px; letter-spacing: 0.04em; text-transform: none; color: var(--text-dim); }
 
 .home-menu-col { display: flex; flex-direction: column; gap: 16px; flex: 1.7 1 420px; min-width: 400px; }
 
@@ -373,14 +379,19 @@ body::before {
   padding: 8px 12px;
 }
 
-.browser-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 380px)); gap: 18px; align-items: start; }
+.browser-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 380px)); gap: 18px; align-items: stretch; } /* equal-height cards per row */
 
 .browse-card { background: var(--panel); border: 1px solid var(--line); padding: 0 0 16px; display: flex; flex-direction: column; }
 .browse-card-top { display: flex; flex-direction: column; gap: 0; }
 .browse-card-info { padding: 14px 16px 0; }
 .browse-card-name { font-size: 20px; color: var(--text); text-transform: uppercase; }
 .browse-card-meta { color: var(--text-dim); font-size: 14px; }
-.browse-card-desc { color: var(--text-dim); font-size: 15px; margin-top: 6px; line-height: 1.4; padding: 0 16px; }
+/* Every community card's description is cut to two lines (and always takes two lines' room), and the buttons sit at the
+   bottom, so cards in a row are the same height whatever was written. */
+.browse-card-desc { color: var(--text-dim); font-size: 15px; margin-top: 6px; line-height: 1.4; padding: 0 16px;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; min-height: calc(1.4em * 2); overflow-wrap: anywhere; }
+.browse-card > .browse-card-actions { margin-top: auto; padding-top: 14px; }
+.browse-card > .browse-card-desc:last-child { margin-bottom: 0; }
 .browse-card-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 0 16px; }
 
 .empty-state { color: var(--text-dim); font-size: 16px; padding: 20px 0; }
@@ -458,3 +469,29 @@ body::before {
 .home-play-status:not(:empty) { padding: 8px 14px; }
 /* What's new is a plain green heading; over a picture the whole column sits on one glass panel so the title reads. */
 :root.has-bg .home-log-panel { background: var(--glass); box-shadow: var(--hl); padding: 16px 14px 0 !important; }
+
+/* A map / mod / skin page is one panel that fits the window: the picture, name, description and buttons on the left, the
+   comments on the right scrolling on their own. A narrow window stacks them and the page scrolls instead. */
+#maps-detail, #mods-detail, #skins-detail {
+  display: grid; grid-template-columns: fit-content(640px) minmax(280px, 400px); column-gap: 30px; align-items: start;
+  max-height: calc(100vh - 56px - 56px); box-sizing: border-box; width: fit-content; max-width: 100%;
+  background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 22px 26px;
+}
+/* Only as tall as what's in it; each column scrolls on its own if the window is too short. */
+#maps-detail > .detail-main, #mods-detail > .detail-main, #skins-detail > .detail-main { min-height: 0; max-height: calc(100vh - 56px - 56px - 44px); overflow-y: auto; padding-right: 4px; }
+#maps-detail > .comments, #mods-detail > .comments, #skins-detail > .comments {
+  min-height: 0; max-height: calc(100vh - 56px - 56px - 44px); overflow-y: auto; margin: 0; padding: 0; max-width: none;
+  background: none; box-shadow: none; border: none;
+}
+/* The picture box hugs the picture (no dark bars beside it). */
+:is(#maps-detail, #mods-detail, #skins-detail) .gallery { width: fit-content; max-width: 100%; margin-bottom: 16px; }
+:is(#maps-detail, #mods-detail, #skins-detail) .detail-image { width: auto; max-width: 100%; height: auto; max-height: min(340px, 40vh); min-height: 120px; }
+:is(#maps-detail, #mods-detail, #skins-detail) .detail-desc { max-width: none; margin-bottom: 14px; }
+:is(#maps-detail, #mods-detail, #skins-detail) .detail-header { margin-bottom: 8px; }
+:is(#maps-detail, #mods-detail, #skins-detail) .detail-actions { max-width: none; flex-direction: row; flex-wrap: wrap; align-items: center; }
+:is(#maps-detail, #mods-detail, #skins-detail) .detail-actions .btn { min-width: 150px; }
+:is(#maps-detail, #mods-detail, #skins-detail) .crumb-back { margin-bottom: 16px !important; }
+@media (max-width: 1000px), (max-height: 560px) {
+  #maps-detail, #mods-detail, #skins-detail { display: block; height: auto; }
+  #maps-detail > .comments, #mods-detail > .comments, #skins-detail > .comments { border-left: none; padding: 18px 0 0; margin-top: 18px; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+}

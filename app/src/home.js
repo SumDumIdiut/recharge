@@ -1,9 +1,11 @@
 import { initHomeNews, layoutNews } from '/home-news.js';
 import { getWaveSettings, applyRandomBackground } from '/theme.js';
 import { renderInstallList } from '/install-list.js';
-import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession, sessionExpired, clearExpiredNote, EXPIRED_MESSAGE } from '/auth.js';
+import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession, sessionExpired, clearExpiredNote, EXPIRED_MESSAGE, getNameColor } from '/auth.js';
+import { nameStyle } from '/social/avatar.js';
+import { escapeHtml } from '/ui.js';
 
-const HUB_BASE = 'https://codecade.co.za/recharge';
+import { HUB_BASE } from './hub.js';
 let loginMode = 'login';
 
 let pollHandle = null;
@@ -195,12 +197,15 @@ window.__homeLaunch = async function (mode) {
 
 let accountSynced = false;
 
+window.__updateAccountBadge = () => updateAccountBadge();
 export function updateAccountBadge() {
   const badge = document.getElementById('home-account-badge');
   if (!badge) return;
   const loggedIn = isLoggedIn();
   const admin = loggedIn && isAdmin();
-  badge.textContent = loggedIn ? (admin ? `${getUsername()} · Admin` : getUsername()) : 'Log In';
+  // The account's name in its own colour (gradients too), like everywhere else the name appears.
+  const st = loggedIn ? nameStyle(getNameColor()) : '';
+  badge.innerHTML = loggedIn ? `<span class="home-badge-name"${st ? ` style="${st}"` : ''}>${escapeHtml(getUsername() || '')}</span>` : 'Log In';
   badge.classList.toggle('is-logged-in', loggedIn);
   badge.classList.toggle('is-admin', admin);
 }
@@ -542,4 +547,24 @@ export async function initHome() {
 
   initHomeNews();
   startWaveform();
+  alignLeftColumn();
+}
+
+// The Forum tile ends a little above the bottom of the menu panel (Credits): the left column is sized to reach it. Only while the
+// columns sit side by side; when the window is narrow and they stack, the column keeps its natural height.
+function alignLeftColumn() {
+  const col = document.querySelector('.home-left-col'), rows = document.querySelector('.home-menu-rows');
+  if (!col || !rows || col.dataset.aligned) return;
+  col.dataset.aligned = '1';
+  const fit = () => {
+    col.style.height = '';
+    const c = col.getBoundingClientRect(), r = rows.getBoundingClientRect();
+    if (!c.height || !r.height || Math.abs(c.top - rows.closest('.home-menu-col').getBoundingClientRect().top) > 2) return;
+    // A little above the menu panel's bottom edge (not level with it), so it doesn't crowd the bottom of the page.
+    const h = r.bottom - 72 - c.top;
+    if (h > c.height) col.style.height = h + 'px';
+  };
+  new ResizeObserver(fit).observe(rows);
+  window.addEventListener('resize', fit);
+  fit();
 }

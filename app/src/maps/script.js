@@ -1,9 +1,14 @@
-import { getToken, getUsername, isLoggedIn } from '../auth.js';
+import { getToken, getUsername, isLoggedIn, isAdmin } from '../auth.js';
+import { uploaderHtml } from '../social/avatar.js';
+import { canRemoveUpload } from '../social/perms.js';
 import { requireLogin } from '../login-prompt.js';
 import { hubStamp, cardImage, needsView } from './mapthumb.js';
+import { mountComments } from '../social/comments.js';
 import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
 
-const HUB_BASE = 'https://codecade.co.za/recharge';
+import { HUB_BASE } from '../hub.js';
+import { checkTab } from '../autoupdate.js';
+import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
 
 let currentSubtab = 'installed';
 let searchTerm = '';
@@ -13,6 +18,7 @@ const thumbs = new Map();
 let catalog = [];
 let catalogError = false;
 let myUploadIds = new Set();
+let myUploads = []; // the user's own map uploads (id, name, mapUid, ...), for the upload form's "Update of"
 let chosenGalleryPaths = [];
 const MAX_GALLERY_IMAGES = 8;
 
@@ -31,6 +37,11 @@ async function loadCatalog() {
       author: row.author,
       description: row.description,
       stamp: hubStamp(row.createdAt),
+      revision: row.revision || 1,
+      updatedAt: row.updatedAt || row.createdAt,
+      uploader: row.uploader || null,
+      uploader_name_color: row.uploader_name_color || null,
+      images: galleryImages(row.gallery).map((f) => `${HUB_BASE}/api/maps/${row.id}/gallery/${encodeURIComponent(f)}`),
       image: galleryImages(row.gallery).length ? `${HUB_BASE}/api/maps/${row.id}/gallery/${encodeURIComponent(galleryImages(row.gallery)[0])}` : null,
     }));
     catalogError = false;
@@ -43,6 +54,7 @@ async function loadCatalog() {
 async function loadMyUploadIds() {
   if (!isLoggedIn()) {
     myUploadIds = new Set();
+    myUploads = [];
     return;
   }
   try {
@@ -50,9 +62,11 @@ async function loadMyUploadIds() {
       headers: { Authorization: `Bearer ${getToken()}` },
     });
     const rows = res.ok ? await res.json() : [];
-    myUploadIds = new Set(rows.filter((r) => r.kind === 'map').map((r) => r.id));
+    myUploads = rows.filter((r) => r.kind === 'map');
+    myUploadIds = new Set(myUploads.map((r) => r.id));
   } catch {
     myUploadIds = new Set();
+    myUploads = [];
   }
 }
 
@@ -74,11 +88,11 @@ function renderInstalled() {
     .map((m) => {
       const entry = catalog.find((c) => c.id === m.id || c.id === m.hub);
       return `
-    <div class="browse-card">
+    <div class="browse-card"${entry ? ` onclick="window.__mapOpenDetail('${escapeHtml(entry.id)}')"` : ''}>
       ${thumb(cardImage(entry?.image, thumbs.get(m.id)))}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(shownName(m))}</div>
-        <div class="browse-card-meta">${m.groupCount} course${m.groupCount === 1 ? '' : 's'}</div>
+        <div class="browse-card-meta">${entry?.author ? uploaderHtml(entry) + ' &middot; ' : ''}${m.groupCount} course${m.groupCount === 1 ? '' : 's'}</div>
       </div>
       <div class="browse-card-actions">
         <div class="browse-card-actions-right">
@@ -109,24 +123,107 @@ function renderBrowse() {
       const badge = installed
         ? `<div class="badge badge-installed" title="Installed">${ICON_CHECK}</div>`
         : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__mapInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
-      const mine = myUploadIds.has(entry.id);
+      const mine = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
       return `
-    <div class="browse-card">
+    <div class="browse-card" onclick="window.__mapOpenDetail('${escapeHtml(entry.id)}')">
       ${thumb(cardImage(entry.image, thumbs.get(entry.id)), badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
-        <div class="browse-card-meta">${escapeHtml(entry.author || '')}</div>
+        <div class="browse-card-meta">${uploaderHtml(entry)}</div>
       </div>
       <div class="browse-card-desc">${escapeHtml(entry.description || '')}</div>
       ${mine ? `<div class="browse-card-actions">
         <div class="browse-card-actions-right">
-          <button class="icon-btn" title="Remove from the Recharge Library" onclick="window.__mapConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
+          <button class="icon-btn" title="Remove from the Recharge Library" onclick="event.stopPropagation(); window.__mapConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${escapeHtml(entry.name).replace(/'/g, "\\'")}')">${ICON_TRASH}</button>
         </div>
       </div>` : ''}
     </div>`;
     })
     .join('');
 }
+
+// Map page: a full-page view like the Skins/Mods ones (gallery, description, actions, comments underneath).
+// Pictures: the map's Hub gallery, else its drawn view (the same picture its card shows).
+let mapComments = null;
+let openDetailId = null;
+let detailImages = [];
+let detailImageIndex = 0;
+let detailSig = '';
+
+const installedFor = (entry) => installedCache.find((m) => m.id === entry.id || m.hub === entry.id);
+
+function detailPictures(entry, installed) {
+  if (entry.images?.length) return entry.images;
+  const pic = cardImage(entry.image, thumbs.get(entry.id) || (installed && thumbs.get(installed.id)));
+  return pic ? [pic] : [];
+}
+
+window.__mapGalleryStep = function (delta) {
+  if (detailImages.length < 2) return;
+  detailImageIndex = (detailImageIndex + delta + detailImages.length) % detailImages.length;
+  document.getElementById('maps-gallery-img').src = detailImages[detailImageIndex];
+  document.getElementById('maps-gallery-count').textContent = `${detailImageIndex + 1} / ${detailImages.length}`;
+};
+
+// Builds (or refreshes) the page above the comments. Returns false when the map is gone from the library.
+function fillDetail(entry) {
+  const installed = installedFor(entry);
+  const pics = detailPictures(entry, installed);
+  const canRemove = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
+  // Only rebuild when something shown changed, so a thumbnail finishing elsewhere doesn't reset the gallery position.
+  const sig = [entry.id, entry.name, entry.author, entry.description, !!installed, installed?.id, canRemove, pics.join('|')].join('\u0001');
+  if (sig === detailSig) return;
+  detailSig = sig;
+  detailImages = pics;
+  detailImageIndex = 0;
+  const safeName = escapeHtml(entry.name).replace(/'/g, "\\'");
+  document.getElementById('maps-detail-body').innerHTML = `
+    <button class="crumb-back" onclick="window.__mapCloseDetail()" style="margin-bottom:20px;">&lt; Maps</button>
+    ${pics.length ? `<div class="gallery">
+      <img class="detail-image" id="maps-gallery-img" src="${escapeHtml(pics[0])}" alt=""${pics.length > 1 ? ' onclick="window.__mapGalleryStep(1)" style="cursor:pointer;"' : ''} />
+      ${pics.length > 1 ? `<button class="gallery-nav gallery-prev" title="Previous image" onclick="window.__mapGalleryStep(-1)">&lsaquo;</button>
+      <button class="gallery-nav gallery-next" title="Next image" onclick="window.__mapGalleryStep(1)">&rsaquo;</button>
+      <div class="gallery-count" id="maps-gallery-count">1 / ${pics.length}</div>` : ''}
+    </div>` : ''}
+    <div class="detail-header">
+      <div class="detail-name">${escapeHtml(entry.name)}</div>
+      ${entry.author ? `<div class="detail-meta">by ${uploaderHtml(entry)}</div>` : ''}
+    </div>
+    ${entry.description ? `<div class="detail-desc">${escapeHtml(entry.description)}</div>` : ''}
+    <div class="detail-actions">
+      ${installed
+        ? `<span class="browse-card-meta">Installed</span>
+           <button class="btn btn-danger" onclick="window.__mapConfirmUninstall('${escapeHtml(installed.id)}', this)">Delete</button>`
+        : `<button class="btn btn-primary" onclick="window.__mapInstall('${escapeHtml(entry.id)}', this)">Install</button>`}
+      ${canRemove ? `<button class="btn btn-danger" onclick="window.__mapConfirmDeleteFromHub('${escapeHtml(entry.id)}', '${safeName}')">Remove from Library</button>` : ''}
+    </div>`;
+}
+
+window.__mapOpenDetail = function (id) {
+  const entry = catalog.find((c) => c.id === id);
+  if (!entry) return false;
+  const reopen = openDetailId !== id;
+  if (reopen) {
+    mapComments?.destroy();
+    mapComments = null;
+    detailSig = '';
+    openDetailId = id;
+    document.getElementById('maps-detail').innerHTML = '<div id="maps-detail-body" class="detail-main"></div><div id="maps-detail-comments"></div>';
+    mapComments = mountComments(document.getElementById('maps-detail-comments'), 'maps', id);
+  }
+  fillDetail(entry);
+  document.getElementById('maps-list').style.display = 'none';
+  document.getElementById('maps-detail').style.display = ''; // the stylesheet lays it out (two columns)
+  return true;
+};
+window.__mapCloseDetail = function () {
+  mapComments?.destroy();
+  mapComments = null;
+  openDetailId = null;
+  detailSig = '';
+  document.getElementById('maps-detail').style.display = 'none';
+  document.getElementById('maps-list').style.display = 'block';
+};
 
 function render() {
   document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
@@ -135,6 +232,8 @@ function render() {
   document.getElementById('maps-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
   renderInstalled();
   renderBrowse();
+  // Keep an open map page in step with installs, deletes and finished pictures, or leave it if its map left the library.
+  if (openDetailId && !window.__mapOpenDetail(openDetailId)) window.__mapCloseDetail();
 }
 
 window.__mapsSubtab = function (tab) {
@@ -239,12 +338,15 @@ window.__mapConfirmDeleteFromHub = async function (id, name) {
 };
 
 const onHub = (m) => catalog.some((c) => c.id === m.id || c.id === m.hub);
-const uploadable = () => installedCache.filter((m) => !onHub(m)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+// Maps not on the Hub yet, and maps whose Hub entry is the user's own (those can be uploaded as a new version of it).
+const uploadable = () => installedCache.filter((m) => !onHub(m) || myUploadIds.has(m.hub) || myUploadIds.has(m.id)).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 // The picked map's own name and description, to start from.
 function fillUploadFields() {
   const m = installedCache.find((x) => x.id === document.getElementById('maps-upload-map').value);
   document.getElementById('maps-upload-name').value = m?.name || '';
   document.getElementById('maps-upload-description').value = m?.description || '';
+  // A new version of one of your uploads: pre-picked when it is the same map (map id), or the upload this folder came from.
+  fillUpdateSelect(document, 'maps', 'maps', myUploads, { mapUid: m?.uid, hubId: m?.hub, name: m?.name }, escapeHtml);
 }
 
 function closeUploadModal() {
@@ -283,6 +385,7 @@ async function submitUpload() {
       author: getUsername(),
       description,
       galleryPaths: gallery,
+      updates: chosenUpdate(document, 'maps'),
     });
     closeUploadModal();
     await loadCatalog();
@@ -354,4 +457,6 @@ export async function onShow() {
   render();
   syncHubNames();
   loadThumbs();
+  // Installed maps the Hub has a newer revision of are updated in place (not awaited: the tab is already usable).
+  if (!catalogError) checkTab('maps', installedCache, catalog, refresh).catch(() => {});
 }

@@ -1,13 +1,17 @@
 // Community tab data + markup (kept free of DOM so it can be tested under node).
-import { escapeHtml, galleryImages } from '../ui.js';
+import { escapeHtml, galleryImages, ICON_TRASH } from '../ui.js';
+import { uploaderHtml } from '../social/avatar.js';
+import { canRemoveUpload } from '../social/perms.js';
 import { releaseMedia, manualLoop } from '../releasemedia.js';
 import { isImageAdded, isPlaylistAdded, mediaKind, countsText, placeholderKind, PLAY_OVERLAY, MAY_NOT_PLAY_TEXT } from './media.js';
 import { urlReader, blobReader } from './cover.js';
 
-export const HUB_BASE = 'https://codecade.co.za/recharge';
+import { HUB_BASE } from '../hub.js';
+export { HUB_BASE };
 export const UNSUPPORTED_PLAYLISTS = "The hub doesn't support playlists yet.";
 export const UNSUPPORTED_IMAGES = "The hub doesn't support single images yet.";
 
+export const backgroundGalleryUrl = (row, file) => `${HUB_BASE}/api/backgrounds/${encodeURIComponent(row.id)}/gallery/${encodeURIComponent(file)}`;
 export const playlistGalleryUrl = (row, file) => `${HUB_BASE}/api/playlists/${encodeURIComponent(row.id)}/gallery/${encodeURIComponent(file)}`;
 // Only ever a PICTURE url (a video must never be a CSS background / <img>: WebKitGTK decodes it into a huge GPU pool).
 export const imageThumbUrl = (row) => {
@@ -68,7 +72,10 @@ export async function loadCommunity(invoke) {
 const yours = '<span class="bg-yours">yours</span>';
 const addedBadge = '<span class="badge-added">Added</span>';
 
-export function imageCardsHtml(section, mine, isAdded = () => false) {
+// Admins also get Remove from the Recharge Library on everyone's cards.
+const removeBtn = (r, mine, admin) => (canRemoveUpload(mine.has(r.id), admin) ? `<button class="icon-btn" title="Remove from the Recharge Library" data-act="remove-hub">${ICON_TRASH}</button>` : '');
+
+export function imageCardsHtml(section, mine, isAdded = () => false, admin = false) {
   if (section.state !== 'ok') return `<div class="empty-state">${escapeHtml(section.message)}</div>`;
   if (!section.rows.length) return '<div class="empty-state">No community images yet - make one of yours public!</div>';
   return section.rows
@@ -80,11 +87,12 @@ export function imageCardsHtml(section, mine, isAdded = () => false) {
       <div class="browse-card-media">${cardThumb(r, 'background')}${added ? addedBadge : ''}</div>
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(r.name)}</div>
-        <div class="browse-card-meta">by ${escapeHtml(r.author || '?')}</div>
+        <div class="browse-card-meta">by ${uploaderHtml({ author: r.author || '?', uploader: r.uploader, uploader_name_color: r.uploader_name_color })}</div>
       </div>
+      <div class="browse-card-desc">${escapeHtml(r.description || '')}</div>
       <div class="browse-card-actions">
         <span class="browse-card-meta">${mine.has(r.id) ? yours : ''}</span>
-        <div class="browse-card-actions-right">${added ? '<button class="btn" data-act="add-image" disabled>Added</button>' : '<button class="btn btn-primary" data-act="add-image">Add</button>'}</div>
+        <div class="browse-card-actions-right">${removeBtn(r, mine, admin)}${added ? '<button class="btn" data-act="add-image" disabled>Added</button>' : '<button class="btn btn-primary" data-act="add-image">Add</button>'}</div>
       </div>
     </div>`;
       }
@@ -139,7 +147,7 @@ export function applyCover(el, r) {
   if (r.mayNotPlay) { el.classList.add('may-not-play'); el.title = MAY_NOT_PLAY_TEXT; }
 }
 
-export function playlistCardsHtml(section, mine, isAdded = () => false) {
+export function playlistCardsHtml(section, mine, isAdded = () => false, admin = false) {
   if (section.state !== 'ok') return `<div class="empty-state">${escapeHtml(section.message)}</div>`;
   if (!section.rows.length) return '<div class="empty-state">No community playlists yet - make one of yours public!</div>';
   return section.rows
@@ -151,10 +159,12 @@ export function playlistCardsHtml(section, mine, isAdded = () => false) {
       <div class="browse-card-media">${thumb}${added ? addedBadge : ''}</div>
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(r.name)}</div>
-        <div class="browse-card-meta">by ${escapeHtml(r.author || '?')} - ${escapeHtml(countsText(r.gallery))}</div>
+        <div class="browse-card-meta">by ${uploaderHtml({ author: r.author || '?', uploader: r.uploader, uploader_name_color: r.uploader_name_color })} - ${escapeHtml(countsText(r.gallery))}</div>
       </div>
+      <div class="browse-card-desc">${escapeHtml(r.description || '')}</div>
       <div class="browse-card-actions">
         <span class="browse-card-meta">${mine.has(r.id) ? yours : ''}</span>
+        <div class="browse-card-actions-right">${removeBtn(r, mine, admin)}</div>
       </div>
     </div>`;
     })

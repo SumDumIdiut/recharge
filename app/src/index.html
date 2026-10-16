@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="/backgrounds/style.css" />
     <link rel="stylesheet" href="/credits/style.css" />
     <link rel="stylesheet" href="/maps/style.css" />
+    <link rel="stylesheet" href="/social/social.css" />
     <script type="module" src="/app.js" defer></script>
   </head>
   <body>
@@ -58,7 +59,8 @@
         </div>
 
         <div class="home-grid">
-          <div class="home-panel" style="align-self: flex-start;"> <!-- fit the content instead of stretching to the tallest panel -->
+          <div class="home-left-col"> <!-- Installation at its own height; the Forum tile sits at the bottom of the column -->
+          <div class="home-panel">
             <div class="home-panel-title">Installation</div>
             <div class="home-install-list" id="home-install-list">
               <div class="home-install-sub">Detecting…</div>
@@ -66,6 +68,11 @@
             <div class="home-install-list" style="margin-top:6px;">
               <button class="btn" id="home-games-btn" onclick="navigate('games')" style="width:100%;">Legacy</button>
             </div>
+          </div>
+            <button class="home-tile home-forum-tile" onclick="navigate('forum')">
+              <span>&gt; Forum</span>
+              <span class="home-forum-sub">Bugs, issues, questions</span>
+            </button>
           </div>
 
           <div class="home-menu-col">
@@ -87,11 +94,11 @@
               <button class="home-menu-row" id="home-skins-row" onclick="navigate('skins')">
                 <span>&gt; Skins</span>
               </button>
-              <button class="home-menu-row" onclick="navigate('backgrounds')">
-                <span>&gt; Backgrounds</span>
-              </button>
               <button class="home-menu-row" id="home-maps-row" onclick="navigate('maps')">
                 <span>&gt; Maps</span>
+              </button>
+              <button class="home-menu-row" onclick="navigate('backgrounds')">
+                <span>&gt; Backgrounds</span>
               </button>
               <button class="home-menu-row" id="home-amplifier-row" onclick="chooseAmplifier()">
                 <span>&gt; Amplifier</span>
@@ -121,6 +128,7 @@
     <div class="view" id="view-backgrounds"></div>
     <div class="view" id="view-settings"></div>
     <div class="view" id="view-credits"></div>
+    <div class="view" id="view-forum"></div>
 
     <div id="toast-container"></div>
 

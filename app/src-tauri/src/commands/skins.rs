@@ -94,6 +94,10 @@ pub struct SkinHubMeta {
     #[serde(rename = "hubId")]
     pub hub_id: String,
     pub name: String,
+    #[serde(default)]
+    pub revision: Option<i64>,
+    #[serde(default, rename = "updatedAt")]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -105,6 +109,10 @@ pub struct SkinEntry {
     pub hub_id: Option<String>,
     #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 pub fn read_hub_meta(skin_folder: &std::path::Path) -> Option<SkinHubMeta> {
@@ -139,6 +147,8 @@ pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
                 folder_name,
                 enabled,
                 hub_id: meta.as_ref().map(|m| m.hub_id.clone()),
+                revision: meta.as_ref().and_then(|m| m.revision),
+                updated_at: meta.as_ref().and_then(|m| m.updated_at.clone()),
                 display_name: meta.map(|m| m.name),
             }
         })

@@ -11,7 +11,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub const LIVE_PORT: u16 = 39285;
 /// Bump with app/live.json's "apiLevel" when a change adds or alters a Rust command, so older binaries stop applying bundles that need it.
 /// 16: commands/amp.rs added amp_status, amp_mark_bad, amp_check_now (Amplifier updates).
-pub const API_LEVEL: u64 = 16;
+/// 17: uploads update in place and downloads auto-update: install_from_hub_cmd takes `quiet`, the submit_*_cmd commands take `updates`, and list_maps / list_installed_mods / list_installed_skins report `revision` and `updatedAt` (hubId for mods).
+pub const API_LEVEL: u64 = 17;
 const REPO: &str = "SumDumIdiut/recharge";
 const MAX_BUNDLE_BYTES: u64 = 200 * 1024 * 1024;
 const CHECK_EVERY: Duration = Duration::from_secs(20 * 60);

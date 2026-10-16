@@ -3,12 +3,13 @@ import './dropdown.js';
 import './live-update.js';
 import { maybeShowUpdatedBanner } from './whatsnew-banner.js';
 import { startBackgroundTimer } from './theme.js';
+import { initSocial } from './social/profile.js';
 
 const _tabLoaded = {};
 let curTab = 'home';
 let navGeneration = 0; // bumped on every navigate(), so a slow load that's since been left can't clobber wherever the user is now
 
-const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games']);
+const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games', 'forum', 'account', 'settings']);
 
 // Loads/refreshes a tab's content after it is visible, so switching never blocks on the fetch, import or refresh.
 async function loadTab(tab, target, token) {
@@ -98,6 +99,8 @@ function showToast(html) {
   }, 4000);
 }
 
+window.__showToast = showToast; // for modules that report things (automatic updates)
+
 window.addEventListener('session-expired', (e) => showToast(e.detail || 'Your login expired - log in again.'));
 
 async function refreshTab(tab) {
@@ -111,6 +114,11 @@ setTimeout(() => {
   if (window.requestIdleCallback) window.requestIdleCallback(go, { timeout: 20000 });
   else go();
 }, 6000);
+
+// Installed maps, mods and skins follow their Hub entry (autoupdate.js): once at startup, after a pause so the app is up first; Maps / Mods / Skins also check when opened.
+setTimeout(() => {
+  import('/autoupdate.js').then((m) => m.startupCheck(refreshTab)).catch((e) => console.warn('[auto-update] startup check failed:', e));
+}, 5000);
 
 window.__TAURI__.event.listen('hub-beam-installed', (event) => {
   const { kind, name } = event.payload;
@@ -155,6 +163,7 @@ window.addEventListener('keydown', async (e) => {
 });
 
 initHome();
+initSocial();
 startBackgroundTimer();
 maybeShowUpdatedBanner();
 

@@ -3705,6 +3705,7 @@ async function openMap(map, label, installedId = null) {
   saveDraft();
   syncBaseUi();
   draft.savedId = installedId && installedId !== TEST_MAP_ID ? installedId : null;
+  draft.mapUid = typeof map.uid === 'string' && map.uid ? map.uid : undefined; // an older map gets its id on its next save
   if (installedId && window.__TAURI__) fetchInstalledAssets(installedId).then(requestDraw);
   draft.savedAt = null;
   saveDraft();
@@ -4012,7 +4013,10 @@ function plateTile(layer, family, plate, solid, cx, cy, styleAt) {
     if (plate.rail && r.whole === 'C' && r.holes.length === 1 && real(r.holes[0])) return { layer, ...real(r.holes[0]), centre: true };
     // A level cell is only ever re-tiled into the sheet's own centre or inside tile, as the level does it: no generated connector.
     if (tilingLevelCell) return r.whole === 'C' && r.holes.length === 1 && real(r.holes[0]) ? { layer, ...real(r.holes[0]), centre: true } : { layer, ...resolve(r.whole) };
-    if (plate.rail || !/^[CTBLR]$/.test(r.whole)) return { layer, ...(r.whole === 'C' && real(r.holes[0]) ? real(r.holes[0]) : resolve(r.whole)) };
+    // A rail sheet with no inside tile of its own (Floor plate) still gets the connector at a BOTTOM inside corner: its rail
+    // runs along the top only, so the bottom and side edges joined there are plain plate, and the bare centre left a flat hole.
+    const railBottomOnly = plate.rail && r.whole === 'C' && !r.holes.some((d) => real(d)) && r.holes.every((d) => d === 'SW' || d === 'SE');
+    if ((plate.rail && !railBottomOnly) || !/^[CTBLR]$/.test(r.whole)) return { layer, ...(r.whole === 'C' && real(r.holes[0]) ? real(r.holes[0]) : resolve(r.whole)) };
     const baseTile = name(r.whole), parts = [], tokens = [];
     for (const d of r.holes) {
       const role = connectorRoles(d), vId = plate[role.v], hId = plate[role.h];
@@ -4283,9 +4287,14 @@ function buildOverlayCore() {
   };
 }
 
+// The map's own id, written into map.json as "uid": the same across saves, exports and copies of the map, so the Hub can tell a new version of a map (an update of its upload, and of installed copies) from a different map.
+function ensureMapUid() {
+  if (!draft.mapUid) draft.mapUid = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  return draft.mapUid;
+}
 function buildMap() {
-  if (baseOn()) return buildOverlay();
-  return withGroups(buildCustomMap());
+  const map = baseOn() ? buildOverlay() : withGroups(buildCustomMap());
+  return { uid: ensureMapUid(), ...map };
 }
 function buildCustomMap() {
   const area = exportArea();
@@ -8364,6 +8373,7 @@ async function newMapOnBase() {
   }
   pushUndo();
   resetDraftContents();
+  draft.mapUid = undefined; // a new map is a different map
   draft.name = '';
   draft.description = '';
   draft.baseState = 'start';

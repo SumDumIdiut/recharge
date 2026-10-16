@@ -7,6 +7,7 @@ import { runMigrate } from '/migrate-ui.js';
 import { confirmDestructive } from '/ui.js';
 import { renderInstallList } from '/install-list.js';
 import { loadChangelog, resolveVersion, cleanVersion } from '/whatsnew.js';
+import { clearSession, isLoggedIn } from '/auth.js';
 
 function readFileAs(file, method) {
   return new Promise((resolve, reject) => {
@@ -139,6 +140,19 @@ window.__setKeepModded = function (on) {
   try { localStorage.setItem('keep-game-modded', on ? '1' : '0'); } catch { /* storage unavailable */ }
 };
 
+// "Auto-update downloaded maps, mods and skins" (localStorage autoUpdateContent, default on): read by autoupdate.js.
+window.__setAutoUpdateContent = function (on) {
+  try { localStorage.setItem('autoUpdateContent', on ? '1' : '0'); } catch { /* storage unavailable */ }
+};
+
+function initAutoUpdate() {
+  const box = document.getElementById('auto-update-toggle');
+  if (!box) return;
+  let on = true;
+  try { on = localStorage.getItem('autoUpdateContent') !== '0'; } catch { /* default on */ }
+  box.checked = on;
+}
+
 function initKeepModded() {
   const box = document.getElementById('keep-modded-toggle');
   if (!box) return;
@@ -226,6 +240,7 @@ async function refreshInstallList() {
 async function refreshStatus() {
   const { invoke } = window.__TAURI__.core;
   initKeepModded();
+  initAutoUpdate();
   const status = document.getElementById('loader-status');
   const pathInput = document.getElementById('settings-game-path');
   try {
@@ -241,6 +256,14 @@ async function refreshStatus() {
 }
 
 let launcherUpdateInfo = null;
+
+// Opens the forum's new-post form on the Bug category with the version filled in.
+window.__reportBug = async function () {
+  let version = '';
+  try { version = await shownVersion(''); } catch {}
+  window.__forumPreset = { category: 'bug', title: '', body: `Recharge version: ${version || 'unknown'}\n\nWhat happened:\n\nWhat I expected:\n\nSteps to reproduce:\n` };
+  window.navigate('forum');
+};
 
 // Recharge is delivered as live code, so the shown number is the one shipped with it (version.json), not the installed package's; beta adds its own build counter.
 async function shownVersion(fallback) {
@@ -511,6 +534,7 @@ async function openWhatsNew(force) {
 window.__whatsNewToggle = () => openWhatsNew(false);
 
 export async function init() {
+  showLogOut();
   const { listen } = window.__TAURI__.event;
   window.addEventListener('open-whatsnew', () => openWhatsNew(true));
   if (window.__openWhatsNew) {
@@ -529,3 +553,16 @@ export async function init() {
   initTexture();
   initWaveform();
 }
+
+// Logging out lives here (the Account page is just the profile and uploads).
+window.__settingsLogOut = function () {
+  clearSession();
+  window.__updateAccountBadge?.();
+  window.goHome?.();
+};
+function showLogOut() {
+  const b = document.getElementById('settings-logout-btn');
+  if (b) b.hidden = !isLoggedIn();
+}
+// Each time Settings is opened: Log out only shows while logged in.
+export function onShow() { showLogOut(); }

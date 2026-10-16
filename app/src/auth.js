@@ -2,7 +2,8 @@ const TOKEN_KEY = 'rechargeAuthToken';
 const USERNAME_KEY = 'rechargeAuthUsername';
 const ADMIN_KEY = 'rechargeAuthAdmin';
 const EXPIRED_KEY = 'rechargeSessionExpired';
-const HUB_BASE = 'https://codecade.co.za/recharge';
+const NAME_COLOR_KEY = 'rechargeNameColor'; // the account's name colour (a #hex or a gradient), for the home badge
+import { HUB_BASE } from './hub.js';
 
 export function getToken() {
   try {
@@ -43,9 +44,20 @@ export function clearSession() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USERNAME_KEY);
     localStorage.removeItem(ADMIN_KEY);
+    localStorage.removeItem(NAME_COLOR_KEY);
   } catch {
     /* ignore */
   }
+}
+
+export function getNameColor() {
+  try { return localStorage.getItem(NAME_COLOR_KEY) || ''; } catch { return ''; }
+}
+
+// Remembers the account's name colour and redraws the home badge with it.
+export function setNameColor(c) {
+  try { if (c) localStorage.setItem(NAME_COLOR_KEY, c); else localStorage.removeItem(NAME_COLOR_KEY); } catch { /* not remembered */ }
+  window.__updateAccountBadge?.();
 }
 
 export function isLoggedIn() {
@@ -98,6 +110,7 @@ export async function refreshSession(fetchFn = (...a) => fetch(...a)) {
     if (!res.ok) return 'unchecked';
     const me = await res.json();
     setSession(token, me.username, !!me.admin);
+    setNameColor(me.name_color || '');
     return 'ok';
   } catch {
     return 'unchecked'; /* offline - keep the stored session */
