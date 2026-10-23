@@ -33,7 +33,6 @@ function loadImage(file) {
 export function mountProfileEditor(host, me) {
   let d = { ...me, links: [...(me.links || [])] };
   let dirty = false, bannerPreview = '', previewTimer = 0;
-  const admin = !!me.admin;
   // The colours a shape is drawn with in the picker / preview: yours once picked, else its own starting colours.
   const frameColorsFor = (f) => (f.colors ? [...(d.frame_colors || []), ...f.def].slice(0, f.colors) : []);
 

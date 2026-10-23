@@ -22,7 +22,7 @@ test('selecting a player opens the profile card, not a second panel', () => {
   assert.ok(!/players-detail/.test(src));
   assert.ok(!/victors\(/.test(src), 'no per-map victor lookups on a click any more');
   // data-user is what the app-wide listener acts on, so it lands on the same profile card
-  // every other name in the app opens - badge editor and moderator button included.
+  // every other name in the app opens.
   assert.match(src, /row\.dataset\.user = row\.dataset\.player/);
 });
 
@@ -30,16 +30,6 @@ test('the renderer that drew the green header is gone', () => {
   const css = readFileSync(new URL('../src/social/social.css', import.meta.url), 'utf8');
   assert.ok(!/\.player-detail\b/.test(css));
   assert.ok(!/\.player-bio\b/.test(css));
-});
-
-test('granting the role refreshes the badges the hub handed back', () => {
-  const src = readFileSync(new URL('../src/social/profile.js', import.meta.url), 'utf8');
-  // The response now carries badges; without reading them the card would show the old set
-  // until it was closed and reopened.
-  assert.match(src, /if \(Array\.isArray\(r\.badges\)\) p\.badges = r\.badges/);
-  // ...and the card is re-rendered so the Moderator chip and the name above it agree.
-  assert.match(src, /profileCardHtml\(p, \{ uploads: true \}\)/);
-  assert.match(src, /x\.id === 'moderator'/);
 });
 
 test('the row normalises the hub shape so avatars and colours actually render', () => {
@@ -60,7 +50,7 @@ test('a directory row with an avatar and a colour survives the round trip', () =
     avatar_url: '/api/avatars/b06afa.webp',
     name_color: 'linear-gradient(90deg, #41f88d, #4aa8ff)',
     frame: 's-spin-gradient', frame_colors: ['#41f88d', '#4aa8ff'],
-    badges: [], moderator: false, uploads: {},
+    uploads: {},
   };
   const u = userOf(raw);
   assert.equal(u.avatar, '/api/avatars/b06afa.webp');
@@ -84,9 +74,10 @@ test('points are gone from the row and uploads stand in', () => {
   assert.match(src, /\['background', 'Backgrounds'\]/);
 });
 
-test('a moderator without the badge still shows as one', () => {
+test('player rows show no badges, titles or moderator pill', () => {
   const src = readFileSync(new URL('../src/players/script.js', import.meta.url), 'utf8');
-  // An admin is a moderator without the is_moderator flag, so the badge alone would make
-  // every admin look like an ordinary account.
-  assert.match(src, /raw\.moderator && !\(raw\.badges \|\| \[\]\)\.some\(\(b\) => b\.id === 'moderator'\)/);
+  assert.ok(!/badgesFor/.test(src), 'the badge chips are gone');
+  assert.ok(!/player-row-badges/.test(src), 'the badge column is gone');
+  assert.ok(!/raw\.badges/.test(src), 'the directory badges are ignored');
+  assert.ok(!/Moderator/.test(src), 'the Moderator pill is gone');
 });

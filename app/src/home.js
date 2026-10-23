@@ -227,7 +227,7 @@ window.__homeLaunch = async function (mode) {
 
 let accountSynced = false;
 
-window.__updateAccountBadge = () => { updateAccountBadge(); window.__refreshModeratorRow?.(); };
+window.__updateAccountBadge = () => { updateAccountBadge(); };
 export function updateAccountBadge() {
   const badge = document.getElementById('home-account-badge');
   if (!badge) return;

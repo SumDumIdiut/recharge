@@ -3,8 +3,16 @@
 .nb-page { height: 100%; }
 .nb { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 12px; }
 .nb-top { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
-.nb-title.page-header { margin: 0; }
-.nb-vaults { margin-right: auto; }
+.nb-nav { margin-left: auto; }
+/* The title is the vault dropdown: the select's classes land on its button (dropdown.js), styled like the other pages' title pills. */
+.nb-top .nb-vault-pick { margin: 0; border: 0; background: transparent; color: var(--green); font: inherit; font-size: 26px; line-height: normal; letter-spacing: 0.08em; text-transform: uppercase; padding: 0 30px 0 0; cursor: pointer; }
+:root.has-bg .nb-top .nb-vault-pick { display: inline-flex; background: var(--glass); border-radius: var(--radius-sm); padding: 4px 34px 4px 12px; }
+:root.has-bg .nb-top .nb-vault-pick:hover { background: var(--glass-hi); }
+.nb-top .nb-vault-pick::after { border-color: var(--green); right: 13px; }
+/* Back / Forward on the same dark glass as the title and tabs; disabled dims the text, not the whole button. */
+.nb-nav .btn:not(.btn-primary) { background: var(--glass); }
+.nb-nav .btn:not(.btn-primary):hover:not(:disabled) { background: var(--glass-hi); }
+.nb-nav .btn:disabled:not(.btn-primary) { opacity: 1; color: var(--text-dim); }
 .nb-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .nb-side-toggle { display: none; }
 .nb-body { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; flex: 1; min-height: 0; }
@@ -122,9 +130,7 @@ details[open] > summary.nb-callout-title::after { content: '-'; }
 /* mermaid */
 .nb-mermaid { margin: 0 0 1em; padding: 14px; background: color-mix(in srgb, var(--bg) 60%, transparent); border-radius: var(--radius-sm); box-shadow: var(--hl); overflow-x: auto; min-height: 60px; text-align: center; }
 .nb-mermaid[data-state="done"] { cursor: zoom-in; }
-.nb-mermaid.zoom { cursor: zoom-out; text-align: left; }
 .nb-mermaid svg { max-width: 100%; height: auto; }
-.nb-mermaid.zoom svg { max-width: none !important; }
 .nb-mermaid-src { margin: 0; text-align: left; font-family: inherit; font-size: 16px; color: var(--text-dim); white-space: pre; }
 .nb-mermaid[data-state="idle"] .nb-mermaid-src, .nb-mermaid[data-state="busy"] .nb-mermaid-src { opacity: 0.35; max-height: 120px; overflow: hidden; }
 .nb-mermaid[data-state="error"] { text-align: left; }
@@ -146,5 +152,12 @@ details[open] > summary.nb-callout-title::after { content: '-'; }
   .nb.side-open .nb-side { max-height: none; }
   .nb-article { padding: 16px 16px; font-size: 19px; }
   .nb-article h1 { font-size: 32px; }
-  .nb-vaults { margin-right: 0; }
 }
+
+/* full-screen diagram viewer */
+.nb-fs-overlay { position: fixed; inset: 0; z-index: 200000; background: var(--bg); overflow: hidden; cursor: grab; user-select: none; }
+.nb-fs-overlay.nb-fs-drag { cursor: grabbing; }
+.nb-fs-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.nb-fs-stage svg { display: block; max-width: none !important; max-height: none !important; }
+.nb-fs-close { position: absolute; top: 16px; right: 16px; z-index: 1; }
+.nb-fs-hint { position: absolute; left: 16px; bottom: 14px; color: var(--text-dim); font-size: 15px; pointer-events: none; }

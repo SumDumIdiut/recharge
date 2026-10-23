@@ -171,28 +171,19 @@ test('reply parent id goes to the hub as a number', () => {
   assert.strictEqual(typeof parentIdOf('7'), 'number');
 });
 
-test('badges: one chip each, escaped, with the badge colour as a CSS var', async () => {
-  const { badgesHtml, titlesHtml, userOf } = await import('../src/social/avatar.js');
-  const badge = (id, name, colour = null, description = '') => ({ id, name, colour, description });
-  assert.equal(
-    badgesHtml({ badges: [badge('moderator', 'Moderator'), badge('admin', 'Admin')] }),
-    '<span class="cm-title" title="Moderator">Moderator</span><span class="cm-title" title="Admin">Admin</span>'
-  );
-  // The badge's own colour only when it is a real colour; anything else is dropped.
-  assert.match(badgesHtml({ badges: [badge('a', 'A', '#41f88d')] }), /style="--bd:#41f88d"/);
-  assert.equal(badgesHtml({ badges: [badge('a', 'A', 'red; background:url(x)')] }), '<span class="cm-title" title="A">A</span>');
-  assert.equal(badgesHtml({ badges: [badge('a', '<b>x</b>')] }), '<span class="cm-title" title="&lt;b&gt;x&lt;/b&gt;">&lt;b&gt;x&lt;/b&gt;</span>');
-  assert.equal(badgesHtml({ badges: [badge('a', 'A', null, 'Runs the hub')] }).includes('title="Runs the hub"'), true);
-  assert.equal(badgesHtml({}), '');
-  assert.equal(badgesHtml({ badges: 'nope' }), '');
-  // titlesHtml is the name the call sites already use, and it is badges now.
-  assert.equal(titlesHtml, badgesHtml);
-  // The old title labels render nothing rather than old labels.
-  assert.equal(badgesHtml({ titles: ['Mapmaker'], title: 'Tester' }), '');
-  // userOf carries the badges and the moderator flag through.
-  assert.deepEqual(userOf({ author: { username: 'a', badges: [badge('moderator', 'Moderator')] } }).badges.map((b) => b.id), ['moderator']);
-  assert.equal(userOf({ author: { username: 'a', moderator: true } }).moderator, true);
-  assert.equal(userOf({ author: { username: 'a' } }).moderator, false);
+test('player badges, titles and moderator status are not shown or carried through', async () => {
+  const { userOf } = await import('../src/social/avatar.js');
+  const u = userOf({ author: { username: 'a', title: 'Tester', titles: ['Mapmaker'], moderator: true, badges: [{ id: 'admin', name: 'Admin' }] } });
+  assert.equal(u.title, undefined);
+  assert.equal(u.titles, undefined);
+  assert.equal(u.moderator, undefined);
+  assert.equal(u.badges, undefined);
+  const post = { id: 1, title: 't', body: 'b', category: 'bug', author: { username: 'a', badges: [{ id: 'admin', name: 'Admin' }] } };
+  assert.ok(!postHtml(post).includes('Admin'));
+  assert.ok(!postRowHtml(post).includes('Admin'));
+  assert.ok(!replyHtml({ id: 2, body: 'b', author: { username: 'a', badges: [{ id: 'admin', name: 'Admin' }] } }).includes('Admin'));
+  assert.ok(!commentsHtml([{ id: 3, body: 'b', author: { username: 'a', badges: [{ id: 'admin', name: 'Admin' }] } }]).includes('Admin'));
+  assert.ok(!profileCardHtml({ username: 'a', title: 'Tester', titles: ['Mapmaker'] }).includes('Tester'));
 });
 
 test('name colours: plain hex or a strict gradient, nothing else reaches the style', async () => {

@@ -1,9 +1,8 @@
 // Profile card: the popup that opens from any name / avatar, and the same card as the live preview in the decoration editor.
 import { escapeHtml } from '../ui.js';
-import { avatarHtml, hubUrl, safeColor, userOf, titlesHtml, nameTextHtml } from './avatar.js';
+import { avatarHtml, hubUrl, safeColor, userOf, nameTextHtml } from './avatar.js';
 import { linkHtml, safeUrl, openExternal } from './text.js';
 import { profiles } from './api.js';
-import { isAdmin } from '../auth.js';
 
 const KIND_LABEL = { mod: 'Mod', map: 'Map', skin: 'Skin', playlist: 'Playlist', background: 'Background' };
 
@@ -27,7 +26,6 @@ export function profileCardHtml(p, { uploads = false, preview = false } = {}) {
       <div class="pc-avatar">${avatarHtml(u, 72, { clickable: false })}</div>
       <div class="pc-name"><span class="pc-name-text">${nameTextHtml(p)}</span></div>
       <div class="pc-sub">
-        ${titlesHtml(p, 'pc-title')}
         ${p.pronouns ? `<span class="pc-pron">${escapeHtml(p.pronouns)}</span>` : ''}
       </div>
       ${p.bio ? `<div class="pc-bio">${escapeHtml(p.bio)}</div>` : ''}
@@ -65,71 +63,8 @@ export async function openProfile(username) {
     const p = await profiles.get(username);
     if (open?.overlay !== overlay) return;
     overlay.querySelector('.pc-loading').outerHTML = profileCardHtml(p, { uploads: true });
-    if (isAdmin()) mountBadgeGiver(overlay, p);
   } catch (e) {
     if (open?.overlay === overlay) overlay.querySelector('.pc-loading').textContent = e.status === 404 ? 'No such user.' : e.message;
-  }
-}
-
-// Admins hand out badges from the card: pick any, then Save (leaving one out removes it).
-// This replaces the old title chips; the hub checks the admin rights again.
-// The row sits at the bottom of the card body (inside its padding, full width); re-rendering the card puts it back with the result message.
-let badgeCatalog = null; // GET /api/badges, fetched once and kept
-export function badgeChipsHtml(available, selected = []) {
-  const have = new Set(selected);
-  const list = (available && available.length ? available : []).map((b) =>
-    `<button type="button" class="title-chip${have.has(b.id) ? ' on' : ''}" data-badge="${escapeHtml(b.id)}" title="${escapeHtml(b.description || b.name)}" aria-pressed="${have.has(b.id)}">${escapeHtml(b.name)}</button>`).join('');
-  return `<div class="title-chips">${list || '<span class="pc-give-msg">No badges loaded.</span>'}</div>`;
-}
-// The chips' current picks, in list order.
-export const pickedBadges = (host) => [...host.querySelectorAll('.title-chip.on')].map((b) => b.dataset.badge);
-
-async function mountBadgeGiver(overlay, p, message = '') {
-  if (!badgeCatalog) { try { badgeCatalog = await profiles.badges(); } catch { badgeCatalog = []; } }
-  const have = (Array.isArray(p.badges) ? p.badges : []).map((b) => b.id);
-  const row = document.createElement('div');
-  row.className = 'pc-give-title';
-  row.innerHTML = `<div class="pc-give-label">Badges</div>${badgeChipsHtml(badgeCatalog, have)}
-    <div class="pc-give-line"><button class="btn" type="button" data-act="give">Save badges</button><span class="pc-give-msg">${escapeHtml(message)}</span></div>`;
-  overlay.querySelector('.pc-body').appendChild(row);
-  const btn = row.querySelector('[data-act=give]'), msg = row.querySelector('.pc-give-msg');
-  row.addEventListener('click', (e) => {
-    const chip = e.target.closest('.title-chip');
-    if (chip) { chip.classList.toggle('on'); chip.setAttribute('aria-pressed', chip.classList.contains('on')); }
-  });
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    try {
-      const r = await profiles.giveBadges(p.username, pickedBadges(row));
-      p.badges = r.badges || [];
-      overlay.querySelector('.profile-card').outerHTML = profileCardHtml(p, { uploads: true });
-      mountBadgeGiver(overlay, p, p.badges.length ? `Saved: ${p.badges.map((b) => b.name).join(', ')}.` : 'Badges cleared.');
-    } catch (e) { msg.textContent = e.message; btn.disabled = false; }
-  });
-  // The moderator role is granted here too: only admins can, and the hub re-checks.
-  if (p.moderator !== undefined) {
-    const modRow = document.createElement('div');
-    modRow.className = 'pc-give-title';
-    const isMod = !!p.moderator;
-    modRow.innerHTML = `<div class="pc-give-label">Moderator</div>
-      <div class="pc-give-line"><button class="btn" type="button" data-act="mod">${isMod ? 'Revoke moderator' : 'Make moderator'}</button></div>`;
-    overlay.querySelector('.pc-body').appendChild(modRow);
-    modRow.querySelector('[data-act=mod]').addEventListener('click', async (e) => {
-      const b = e.currentTarget;
-      b.disabled = true;
-      try {
-        const r = await profiles.setModerator(p.username, !isMod);
-        p.moderator = !!r.moderator;
-        // The hub hands the Moderator badge over with the role and takes it back on a revoke,
-        // so the card is re-rendered to show the badges as they now stand.
-        if (Array.isArray(r.badges)) p.badges = r.badges;
-        overlay.querySelector('.profile-card').outerHTML = profileCardHtml(p, { uploads: true });
-        mountBadgeGiver(overlay, p, p.moderator
-          ? (p.badges || []).some((x) => x.id === 'moderator') ? 'Moderator badge granted.' : 'Made moderator.'
-          : 'Moderator revoked.');
-        window.__updateAccountBadge?.();
-      } catch (err) { b.disabled = false; msg.textContent = err.message; }
-    });
   }
 }
 

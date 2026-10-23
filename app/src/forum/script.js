@@ -1,7 +1,7 @@
 import { escapeHtml, armConfirm } from '../ui.js';
-import { isLoggedIn, isAdmin } from '../auth.js';
+import { isLoggedIn } from '../auth.js';
 import { openAccount } from '../login-prompt.js';
-import { forum, moderation } from '../social/api.js';
+import { forum } from '../social/api.js';
 import { CATEGORIES, LIMITS, validatePost, validateReply, firstError } from '../social/validate.js';
 import { createImageStrip, openLightbox } from '../social/images.js';
 import { listHtml, pagerHtml, postHtml, replyHtml } from './lib.js';
@@ -84,18 +84,10 @@ async function showPost(id, { scrollToReply = false } = {}) {
   }
   if (seq !== loadSeq) return;
   const { post, replies } = data;
-  const admin = isAdmin();
   const controls = [];
-  if (post.can_status) {
-    if (post.status === 'solved') controls.push('<button class="btn" data-act="set-status" data-v="open" type="button">Reopen</button>');
-    else if (post.status === 'open') controls.push('<button class="btn btn-primary" data-act="set-status" data-v="solved" type="button">Mark solved</button>');
-    if (post.status !== 'closed') controls.push('<button class="btn" data-act="set-status" data-v="closed" type="button">Close</button>');
-    else if (admin) controls.push('<button class="btn" data-act="set-status" data-v="open" type="button">Reopen</button>');
-  }
-  if (post.can_pin || admin) controls.push(`<button class="btn" data-act="pin" data-v="${post.pinned ? '0' : '1'}" type="button">${post.pinned ? 'Unpin' : 'Pin'}</button>`);
   if (post.can_edit) controls.push('<button class="btn" data-act="edit-post" type="button">Edit</button>');
   if (post.can_delete) controls.push('<button class="btn btn-danger" data-act="del-post" type="button">Delete</button>');
-  const locked = post.status === 'closed' && !admin;
+  const locked = post.status === 'closed';
   // One panel for the whole thread: the post, its controls, the replies and the reply box, split by thin dividers.
   root.querySelector('#fm-post-host').innerHTML = `<div class="fm-thread">
     ${postHtml(post)}
@@ -243,8 +235,6 @@ async function onClick(e) {
     case 'discard': clearDraft(); showComposer({ title: '', body: '', category: 'bug' }); break;
     case 'submit': submitNew(btn); break;
     case 'reply': submitReply(btn); break;
-    case 'set-status': guarded(btn, async () => { await forum.setStatus(current.id, v); await showPost(current.id); }); break;
-    case 'pin': guarded(btn, async () => { await forum.pin(current.id, v === '1'); await showPost(current.id); }); break;
     case 'del-post':
       if (armConfirm(btn)) guarded(btn, async () => { await forum.remove(current.id); await showList(); });
       break;

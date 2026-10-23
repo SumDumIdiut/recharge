@@ -9,17 +9,7 @@ const _tabLoaded = {};
 let curTab = 'home';
 let navGeneration = 0; // bumped on every navigate(), so a slow load that's since been left can't clobber wherever the user is now
 
-const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games', 'forum', 'moderators', 'players', 'account', 'settings', 'notebook']);
-
-// The Moderators tile on the home screen: a chat room of its own, for moderators only.
-// The hub turns anyone else away at the route, so this only keeps it off their home.
-window.__refreshModeratorRow = function () {
-  const tile = document.getElementById('home-moderators-tile');
-  if (!tile) return;
-  let ok = false;
-  try { ok = localStorage.getItem('rechargeAuthModerator') === '1' || localStorage.getItem('rechargeAuthAdmin') === '1'; } catch { ok = false; }
-  tile.hidden = !ok;
-};
+const LIVE_TABS = new Set(['mods', 'maps', 'skins', 'games', 'forum', 'players', 'account', 'settings', 'notebook']);
 
 // Loads/refreshes a tab's content after it is visible, so switching never blocks on the fetch, import or refresh.
 async function loadTab(tab, target, token) {
@@ -56,7 +46,6 @@ window.navigate = function navigate(tab) {
 
   if (tab === 'home') {
     refreshInstallStatus({ log: false });
-    window.__refreshModeratorRow?.();
     import('/home-news.js').then((m) => m.refreshHomeNews()).catch(() => {});
     return;
   }
@@ -175,9 +164,6 @@ window.addEventListener('keydown', async (e) => {
 
 initHome();
 initSocial();
-// The Moderators row starts hidden and is shown by role, so it has to be checked once here
-// too - navigate('home') only runs when the user leaves the page and comes back.
-window.__refreshModeratorRow?.();
 startBackgroundTimer();
 maybeShowUpdatedBanner();
 

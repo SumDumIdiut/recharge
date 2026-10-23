@@ -3,9 +3,9 @@
 // page is wired up and the page just sits there. It type-checks fine and passes every
 // behavioural test, because those import the helpers directly rather than through the page.
 //
-// This happened for real: the moderator chat imported escapeHtml from social/avatar.js,
-// which does not export it (avatar.js imports escapeHtml from ui.js). The page rendered and
-// looked right, and no message could ever be sent.
+// This happened for real: a page imported escapeHtml from social/avatar.js, which does not
+// export it (avatar.js imports escapeHtml from ui.js). The page rendered and looked right,
+// and nothing on it could work.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -43,7 +43,7 @@ const MODULES = [...allModules(SRC)].sort();
 test('the walk actually found the modules it is meant to check', () => {
   // A walk that silently matched nothing would make the test below pass for the wrong reason.
   assert.ok(MODULES.length > 20, `only found ${MODULES.length} modules`);
-  for (const expected of ['maps/script', 'account/deco', 'social/validate', 'moderators/script']) {
+  for (const expected of ['maps/script', 'account/deco', 'social/validate', 'players/script']) {
     assert.ok(MODULES.includes(expected), `walk missed ${expected}`);
   }
 });

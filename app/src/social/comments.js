@@ -1,7 +1,7 @@
 // Comments under a skin / playlist / mod / map. commentsHtml() is pure (testable under node); mountComments() wires it to the DOM.
 import { escapeHtml, armConfirm } from '../ui.js';
 import { isLoggedIn } from '../auth.js';
-import { avatarHtml, nameHtml, userOf, titlesHtml } from './avatar.js';
+import { avatarHtml, nameHtml, userOf } from './avatar.js';
 import { richText, timeAgo } from './text.js';
 import { validateComment, firstError, LIMITS } from './validate.js';
 import { comments as api } from './api.js';
@@ -18,7 +18,7 @@ function oneHtml(c, { reply = false } = {}) {
   return `<div class="cm${reply ? ' cm-reply' : ''}" data-cid="${escapeHtml(c.id)}">
     ${avatarHtml(u, reply ? 26 : 32)}
     <div class="cm-main">
-      <div class="cm-head">${nameHtml(u)}${titlesHtml(u)}<span class="cm-time">${escapeHtml(timeAgo(c.created_at))}${c.edited_at ? ' (edited)' : ''}</span></div>
+      <div class="cm-head">${nameHtml(u)}<span class="cm-time">${escapeHtml(timeAgo(c.created_at))}${c.edited_at ? ' (edited)' : ''}</span></div>
       <div class="cm-body rich">${richText(c.body)}</div>
       ${acts.length ? `<div class="cm-acts">${acts.join('')}</div>` : ''}
       <div class="cm-slot"></div>

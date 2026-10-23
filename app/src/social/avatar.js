@@ -86,25 +86,8 @@ export function userOf(item) {
     frameColors: Array.isArray(a.frame_colors) ? a.frame_colors : [],
     nameColor: a.name_color ?? '',
     accent: a.accent_color ?? '',
-    title: a.title ?? '',
-    titles: Array.isArray(a.titles) ? a.titles : a.title ? [a.title] : [],
-    moderator: !!a.moderator,
-    badges: Array.isArray(a.badges) ? a.badges.filter((b) => b && (b.name || b.id)) : [],
   };
 }
-
-// Someone's badges as small chips (a profile, or a user from userOf()). This is what
-// `titlesHtml` used to draw: the hub's title labels are gone and badges took their place,
-// so `titlesHtml` stays as the name call sites already use.
-export function badgesHtml(u, cls = 'cm-title') {
-  const list = Array.isArray(u?.badges) ? u.badges : [];
-  return list.map((b) => {
-    const colour = safeColor(b.colour);
-    return `<span class="${cls}"${colour ? ` style="--bd:${colour}"` : ''} title="${escapeHtml(b.description || b.name || '')}">${escapeHtml(b.name || b.id)}</span>`;
-  }).join('');
-}
-
-export const titlesHtml = badgesHtml;
 
 // size in px. The box is fixed-size, so lists never jump while pictures load. data-user makes it open the profile card.
 export function avatarHtml(user, size = 36, { clickable = true } = {}) {

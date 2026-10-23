@@ -1,6 +1,6 @@
-// The Players page: everyone with an account, searchable by name, each showing their avatar,
-// their badges, and what they have published. Selecting one opens their profile card, the
-// same one every other name opens.
+// The Players page: everyone with an account, searchable by name, each showing their avatar
+// and what they have published. Selecting one opens their profile card, the same one every
+// other name opens.
 import { escapeHtml, patchCards } from '../ui.js';
 import { moderation } from '../social/api.js';
 import { avatarHtml, nameHtml, userOf } from '../social/avatar.js';
@@ -25,16 +25,6 @@ async function load(force = false) {
   return all;
 }
 
-// Their badges, plus a Moderator chip for anyone who moderates but has not been given the
-// badge - an admin is a moderator without the flag, and would otherwise look like nobody.
-function badgesFor(raw) {
-  const chips = (raw.badges || []).map((b) => `<span class="card-grade" title="${escapeHtml(b.description || b.name)}">${escapeHtml(b.name)}</span>`);
-  if (raw.moderator && !(raw.badges || []).some((b) => b.id === 'moderator')) {
-    chips.push('<span class="card-grade">Moderator</span>');
-  }
-  return chips.join('');
-}
-
 function rowsHtml(users) {
   return users.map((raw) => {
     // The directory sends the hub's field names (avatar_url, name_color); the renderers want
@@ -50,7 +40,6 @@ function rowsHtml(users) {
         <div class="player-row-name">${nameHtml(u)}</div>
         ${counts.length ? `<div class="player-row-meta">${counts.join(' &middot; ')}</div>` : ''}
       </div>
-      <div class="player-row-badges">${badgesFor(raw)}</div>
     </div>`;
   });
 }
@@ -74,7 +63,7 @@ async function render() {
   }
   patchCards(list, rowsHtml(users), `<div class="empty-state">${term ? 'No player matches that search.' : 'No players yet.'}</div>`);
   // data-user, so the app-wide listener opens the profile card - the same one any other
-  // name in the app opens, badge editor and all.
+  // name in the app opens.
   for (const row of root.querySelectorAll('[data-player]')) {
     if (!row.dataset.user) row.dataset.user = row.dataset.player;
   }

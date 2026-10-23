@@ -91,7 +91,8 @@ function errorState(e, retry) {
 }
 
 function renderVaultSwitcher() {
-  el.vaults.innerHTML = vaults.map((v) => `<button class="chip${st && st.meta.id === v.id ? ' active' : ''}" data-vault="${escapeHtml(v.id)}" type="button">${escapeHtml(v.title)}</button>`).join('');
+  el.vaults.innerHTML = vaults.map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.title)}</option>`).join('');
+  if (st) el.vaults.value = st.meta.id;
 }
 
 function renderDownload() {
@@ -286,10 +287,75 @@ async function renderDiagram(box) {
   }
 }
 
+// ---- full-screen diagram viewer ----
+let fs = null;
+function closeFullscreen() {
+  if (!fs) return;
+  const { overlay, off } = fs; fs = null; off(); overlay.remove();
+}
+function openFullscreen(box) {
+  const src = box.querySelector('svg');
+  if (!src) return;
+  closeFullscreen();
+  const svg = src.cloneNode(true);
+  const vb = src.viewBox && src.viewBox.baseVal;
+  const r = src.getBoundingClientRect();
+  const w = (vb && vb.width) || r.width || 800, h = (vb && vb.height) || r.height || 600;
+  svg.removeAttribute('style'); svg.removeAttribute('width'); svg.removeAttribute('height');
+  svg.setAttribute('width', w); svg.setAttribute('height', h);
+  if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  const overlay = document.createElement('div'); overlay.className = 'nb-fs-overlay';
+  const stage = document.createElement('div'); stage.className = 'nb-fs-stage'; stage.appendChild(svg);
+  const close = document.createElement('button'); close.className = 'btn nb-fs-close'; close.type = 'button'; close.textContent = 'Close';
+  const hint = document.createElement('div'); hint.className = 'nb-fs-hint'; hint.textContent = 'Scroll to zoom \u00b7 drag to pan \u00b7 double-click to fit \u00b7 Esc to close';
+  overlay.append(stage, close, hint);
+  document.body.appendChild(overlay);
+  let fit = 1, k = 1, x = 0, y = 0, drag = null, moved = false;
+  const apply = () => { stage.style.transform = `translate(${x}px, ${y}px) scale(${fit * k})`; };
+  const reset = () => {
+    const M = 48, W = innerWidth - 2 * M, H = innerHeight - 2 * M;
+    fit = Math.max(0.01, Math.min(W / w, H / h)); k = 1;
+    x = (innerWidth - w * fit) / 2; y = (innerHeight - h * fit) / 2; apply();
+  };
+  reset();
+  const onWheel = (e) => {
+    e.preventDefault();
+    const nk = Math.min(8, Math.max(0.5, k * Math.exp(-e.deltaY * 0.0015)));
+    const f = nk / k;
+    x = e.clientX - (e.clientX - x) * f; y = e.clientY - (e.clientY - y) * f; k = nk; apply();
+  };
+  const onDown = (e) => { if (e.button !== 0 || e.target === close) return; drag = { sx: e.clientX, sy: e.clientY, x, y }; moved = false; };
+  const onMove = (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!moved && Math.hypot(dx, dy) > 4) { moved = true; overlay.classList.add('nb-fs-drag'); }
+    if (moved) { x = drag.x + dx; y = drag.y + dy; apply(); }
+  };
+  const onUp = () => { drag = null; overlay.classList.remove('nb-fs-drag'); };
+  const onClick = (e) => { if (e.target === overlay && !moved) closeFullscreen(); moved = false; };
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFullscreen(); } };
+  const onClose = () => closeFullscreen();
+  overlay.addEventListener('wheel', onWheel, { passive: false });
+  overlay.addEventListener('pointerdown', onDown);
+  addEventListener('pointermove', onMove);
+  addEventListener('pointerup', onUp);
+  overlay.addEventListener('click', onClick);
+  overlay.addEventListener('dblclick', reset);
+  addEventListener('keydown', onKey, true);
+  addEventListener('resize', reset);
+  close.addEventListener('click', onClose);
+  fs = { overlay, off() {
+    overlay.removeEventListener('wheel', onWheel); overlay.removeEventListener('pointerdown', onDown);
+    removeEventListener('pointermove', onMove); removeEventListener('pointerup', onUp);
+    overlay.removeEventListener('click', onClick); overlay.removeEventListener('dblclick', reset);
+    removeEventListener('keydown', onKey, true); removeEventListener('resize', reset); close.removeEventListener('click', onClose);
+  } };
+}
+
 // ---- events ----
 function onArticleClick(e) {
   const mm = e.target.closest('.nb-mermaid[data-state="done"]');
-  if (mm && !e.target.closest('a')) { mm.classList.toggle('zoom'); return; }
+  if (mm && !e.target.closest('a')) { openFullscreen(mm); return; }
   const a = e.target.closest('a');
   if (a) {
     if (a.dataset.extUrl) { e.preventDefault(); openUrl(a.dataset.extUrl); return; }
@@ -338,7 +404,7 @@ async function switchVault(id) {
 }
 
 function wire() {
-  el.vaults.addEventListener('click', (e) => { const b = e.target.closest('[data-vault]'); if (b) switchVault(b.dataset.vault); });
+  el.vaults.addEventListener('change', () => { if (el.vaults.value && el.vaults.value !== cur.vault) switchVault(el.vaults.value); });
   el.back.addEventListener('click', () => goHistory(-1));
   el.fwd.addEventListener('click', () => goHistory(1));
   el.sideToggle.addEventListener('click', () => el.root.classList.toggle('side-open'));
