@@ -1,4 +1,5 @@
-import { mediaBase, mediaUrl, showVideo, clearVideo, setSound, soundFor, pollGameRunning, currentVideo, currentSound } from './bgmedia.js';
+import { isActive, onActivity } from './activity.js';
+import { mediaBase, mediaUrl, showVideo, clearVideo, setSound, soundFor, setGameRunning, currentVideo, currentSound } from './bgmedia.js';
 
 // Old theming storage keys, removed at startup (the colour scheme is now fixed in style.css).
 const LEGACY_KEYS = ['rechargeColors', 'rechargeCustomCss'];
@@ -31,6 +32,26 @@ export function applyBgTexture(dataUrl) {
   document.documentElement.style.setProperty('--bg-image', dataUrl ? `url("${dataUrl}")` : 'none');
 }
 
+// Shows a texture without persisting it (a media-server URL is only valid for this session; the early-paint copy in localStorage must be a data URL).
+function applyLiveTexture(url) {
+  try { localStorage.removeItem(TEXTURE_KEY); } catch (e) {}
+  document.documentElement.style.setProperty('--bg-image', `url("${url}")`);
+}
+
+// Pictures that fit localStorage are kept as a data URL for the early-paint script in index.html (as before); bigger ones are only shown live.
+const TEXTURE_PERSIST_MAX = 3 * 1024 * 1024;
+async function persistableTexture(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const len = Number(res.headers.get('content-length')) || 0;
+    if (len > TEXTURE_PERSIST_MAX) { res.body?.cancel?.(); return null; }
+    const blob = await res.blob();
+    if (blob.size > TEXTURE_PERSIST_MAX) return null;
+    return await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(blob); });
+  } catch (e) { return null; }
+}
+
 const BG_LAST_KEY = 'rechargeBgLastChange';
 const BG_CUR_KEY = 'rechargeBgCurrent';
 const FADE_MS = 1000;
@@ -53,20 +74,22 @@ function bgStore(key, value) {
 }
 
 // Crossfades a fixed layer (under the UI) in over the old picture, then commits it as the texture.
-function crossfadeTexture(dataUrl) {
-  if (!dataUrl || document.hidden || !document.body) {
-    applyBgTexture(dataUrl);
+// `url` is what is shown (a data URL or a media-server URL); `persistUrl` (a data URL, or null) is what is saved for the next start.
+function crossfadeTexture(url, persistUrl = url) {
+  const commit = () => { if (persistUrl) applyBgTexture(persistUrl); else if (url) applyLiveTexture(url); else applyBgTexture(''); };
+  if (!url || document.hidden || !document.body) {
+    commit();
     return Promise.resolve();
   }
   const layer = document.createElement('div');
   layer.style.cssText =
     'position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0;background-size:cover;background-position:center;background-repeat:no-repeat;' +
-    `transition:opacity ${FADE_MS}ms ease;background-image:url("${dataUrl}")`;
+    `transition:opacity ${FADE_MS}ms ease;background-image:url("${url}")`;
   document.body.appendChild(layer);
   return new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => { layer.style.opacity = '1'; }));
     setTimeout(() => {
-      try { applyBgTexture(dataUrl); } catch (e) {}
+      try { commit(); } catch (e) {}
       layer.remove();
       resolve();
     }, FADE_MS + 60);
@@ -126,8 +149,9 @@ export async function changeBackground(mode = 'launch') {
       await restoreCurrent(invoke, playlist);
       return false;
     }
-    const picked = await invoke('pick_background', { exclude: bgLoad(BG_CUR_KEY) });
-    if (!picked || (picked.kind !== 'video' && !picked.data_url)) return false;
+    // inline:false - images come back as a file name and are loaded from the media server, not base64 over IPC.
+    const picked = await invoke('pick_background', { exclude: bgLoad(BG_CUR_KEY), inline: false });
+    if (!picked) return false;
     if (picked.kind === 'video') {
       const base = await mediaBase(invoke);
       const video = await showVideo(mediaUrl(base, picked.file));
@@ -137,9 +161,22 @@ export async function changeBackground(mode = 'launch') {
       setSound(picked.sound, base);
       return true;
     }
+    let shown = picked.data_url || '';
+    let persist = shown || null;
+    if (!shown) {
+      try {
+        shown = mediaUrl(await mediaBase(invoke), picked.file);
+        persist = await persistableTexture(shown);
+      } catch (e) {
+        // media server unreachable: the old way, the whole picture through the backend
+        shown = await invoke('read_background_image', { fileName: picked.file });
+        persist = shown;
+      }
+    }
+    if (!shown) return false;
     bgStore(BG_LAST_KEY, String(bgClock()));
     bgStore(BG_CUR_KEY, picked.file);
-    await crossfadeTexture(picked.data_url);
+    await crossfadeTexture(shown, persist);
     clearVideo();
     setSound(picked.sound, picked.sound && picked.sound !== 'own' ? await mediaBase(invoke) : null);
     return true;
@@ -157,18 +194,26 @@ export function applyRandomBackground() {
 
 // App-wide: checks now and every `periodMs` whether a timed playlist is due. Safe to call twice.
 let bgTimer = null;
-let gameTimer = null;
+let bgActivityOff = null;
+let gameUnlisten = null;
 export function startBackgroundTimer({ periodMs = 15000, now } = {}) {
   if (now) bgClock = now;
   if (bgTimer) clearInterval(bgTimer);
   setHasBg(!!bgLoad(BG_CUR_KEY));
-  bgTimer = setInterval(() => changeBackground('tick'), periodMs);
-  // Videos and sound stop while the game runs: look every few seconds.
-  const poll = () => { const invoke = window.__TAURI__?.core?.invoke; if (invoke) pollGameRunning(invoke); };
-  poll();
-  if (gameTimer) clearInterval(gameTimer);
-  gameTimer = setInterval(poll, 5000);
-  return () => { clearInterval(bgTimer); clearInterval(gameTimer); bgTimer = null; gameTimer = null; };
+  // No ticking while the window is hidden or minimised; one catch-up check when it comes back.
+  const arm = () => { clearInterval(bgTimer); bgTimer = setInterval(() => changeBackground('tick'), periodMs); };
+  if (bgActivityOff) bgActivityOff();
+  if (isActive()) arm(); else bgTimer = null;
+  bgActivityOff = onActivity((on) => { if (on) { arm(); changeBackground('tick'); } else { clearInterval(bgTimer); bgTimer = null; } });
+  // Videos and sound stop while the game runs: one initial check, then the backend's `game-running` events (it polls once for the whole app).
+  const T = window.__TAURI__;
+  try { T?.core?.invoke?.('is_game_running').then((s) => setGameRunning(s === true || s === 'running'), () => {}); } catch (e) {}
+  if (gameUnlisten) { try { gameUnlisten(); } catch (e) {} gameUnlisten = null; }
+  try {
+    const p = T?.event?.listen?.('game-running', (e) => setGameRunning(e.payload === 'running'));
+    p?.then?.((un) => { gameUnlisten = un; });
+  } catch (e) {}
+  return () => { clearInterval(bgTimer); bgTimer = null; if (bgActivityOff) { bgActivityOff(); bgActivityOff = null; } if (gameUnlisten) { try { gameUnlisten(); } catch (e) {} gameUnlisten = null; } };
 }
 
 // Call after the active playlist changed (force) or its interval did (re-check if due).

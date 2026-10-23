@@ -79,7 +79,7 @@ fn bundled_maps_version(app: &AppHandle) -> Option<String> {
 }
 
 fn deployed_maps_version(app: &AppHandle) -> Option<String> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     let path = PathBuf::from(game_path)
         .join("Recharge")
         .join("Mods")

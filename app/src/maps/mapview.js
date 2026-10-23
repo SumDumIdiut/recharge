@@ -20,6 +20,7 @@ function start() {
       const m = e.data;
       if (m.type === 'ready') resolve();
       else if (m.type === 'unsupported') { reject(new Error(m.error)); stop(new Error(m.error)); }
+      else if (m.type === 'progress') pending.get(m.id)?.poke();
       else if (m.type === 'view') {
         const p = pending.get(m.id);
         pending.delete(m.id);
@@ -40,8 +41,12 @@ export async function renderMapView(map, w = 960, h = 540) {
   clearTimeout(idle);
   const id = ++seq;
   const done = new Promise((resolve, reject) => {
-    const t = setTimeout(() => { pending.delete(id); reject(new Error('map view timed out')); stop(new Error('map view timed out')); }, 90000);
-    pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
+    // A hang is 90 s without a progress report from the worker; a render that keeps reporting is allowed up to 15 minutes in all.
+    const born = Date.now();
+    const fail = () => { pending.delete(id); reject(new Error('map view timed out')); stop(new Error('map view timed out')); };
+    let t = setTimeout(fail, 90000);
+    const poke = () => { if (Date.now() - born > 900000) return; clearTimeout(t); t = setTimeout(fail, 90000); };
+    pending.set(id, { poke, resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
   });
   worker.postMessage({ type: 'view', id, map, w, h });
   try { return await done; } finally { if (!pending.size) idle = setTimeout(() => stop(), IDLE_MS); }

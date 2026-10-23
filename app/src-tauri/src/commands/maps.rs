@@ -5,7 +5,7 @@ use tauri::AppHandle;
 use super::settings;
 
 fn maps_dir(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     Some(
         PathBuf::from(game_path)
             .join("Recharge")
@@ -91,7 +91,11 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 /// One of an installed map's asset files, base64 (to bring it back into the editor).
 #[tauri::command]
-pub fn read_map_asset(app: AppHandle, id: String, file: String) -> Result<String, String> {
+pub async fn read_map_asset(app: AppHandle,id: String,file: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_map_asset", || read_map_asset_sync(app, id, file))).await.expect("command thread panicked")
+}
+
+pub fn read_map_asset_sync(app: AppHandle, id: String, file: String) -> Result<String, String> {
     if !safe_file(&id) || !safe_file(&file) {
         return Err("invalid name".into());
     }
@@ -102,7 +106,11 @@ pub fn read_map_asset(app: AppHandle, id: String, file: String) -> Result<String
 
 /// Keeps a picked file (base64 or data URL) in the app's own folder, so the editor can get it back.
 #[tauri::command]
-pub fn store_map_asset(app: AppHandle, file: String, data: String) -> Result<(), String> {
+pub async fn store_map_asset(app: AppHandle,file: String,data: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("store_map_asset", || store_map_asset_sync(app, file, data))).await.expect("command thread panicked")
+}
+
+pub fn store_map_asset_sync(app: AppHandle, file: String, data: String) -> Result<(), String> {
     if !safe_file(&file) {
         return Err(format!("invalid asset name: '{file}'"));
     }
@@ -113,7 +121,11 @@ pub fn store_map_asset(app: AppHandle, file: String, data: String) -> Result<(),
 
 /// An asset file by name, base64: from the app's own copy, else from any installed map's assets.
 #[tauri::command]
-pub fn find_map_asset(app: AppHandle, file: String) -> Result<String, String> {
+pub async fn find_map_asset(app: AppHandle,file: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("find_map_asset", || find_map_asset_sync(app, file))).await.expect("command thread panicked")
+}
+
+pub fn find_map_asset_sync(app: AppHandle, file: String) -> Result<String, String> {
     if !safe_file(&file) {
         return Err("invalid name".into());
     }
@@ -137,7 +149,11 @@ pub fn find_map_asset(app: AppHandle, file: String) -> Result<String, String> {
 
 /// A map's picture (thumb.png beside it), base64, while newer than the map; none when missing or stale.
 #[tauri::command]
-pub fn read_map_thumb(app: AppHandle, id: String) -> Option<String> {
+pub async fn read_map_thumb(app: AppHandle,id: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_map_thumb", || read_map_thumb_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn read_map_thumb_sync(app: AppHandle, id: String) -> Option<String> {
     if !safe_file(&id) {
         return None;
     }
@@ -150,7 +166,11 @@ pub fn read_map_thumb(app: AppHandle, id: String) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn write_map_thumb(app: AppHandle, id: String, data: String) -> Result<(), String> {
+pub async fn write_map_thumb(app: AppHandle,id: String,data: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("write_map_thumb", || write_map_thumb_sync(app, id, data))).await.expect("command thread panicked")
+}
+
+pub fn write_map_thumb_sync(app: AppHandle, id: String, data: String) -> Result<(), String> {
     if !safe_file(&id) {
         return Err(format!("invalid id: '{id}'"));
     }
@@ -179,7 +199,11 @@ fn view_name(id: &str, stamp: &str) -> String {
 
 /// When an installed map was last changed (its map.json's modified time, in ms), as the stamp its picture is kept under.
 #[tauri::command]
-pub fn map_view_stamp(app: AppHandle, id: String) -> Option<String> {
+pub async fn map_view_stamp(app: AppHandle,id: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("map_view_stamp", || map_view_stamp_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn map_view_stamp_sync(app: AppHandle, id: String) -> Option<String> {
     if !safe_file(&id) {
         return None;
     }
@@ -189,7 +213,11 @@ pub fn map_view_stamp(app: AppHandle, id: String) -> Option<String> {
 
 /// The kept drawn picture for this map and stamp, base64; none when there isn't one for exactly this stamp.
 #[tauri::command]
-pub fn read_map_view(app: AppHandle, id: String, stamp: String) -> Option<String> {
+pub async fn read_map_view(app: AppHandle,id: String,stamp: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_map_view", || read_map_view_sync(app, id, stamp))).await.expect("command thread panicked")
+}
+
+pub fn read_map_view_sync(app: AppHandle, id: String, stamp: String) -> Option<String> {
     if !safe_file(&id) {
         return None;
     }
@@ -198,7 +226,11 @@ pub fn read_map_view(app: AppHandle, id: String, stamp: String) -> Option<String
 
 /// Keeps the drawn picture for this map and stamp, dropping the ones for its older stamps.
 #[tauri::command]
-pub fn write_map_view(app: AppHandle, id: String, stamp: String, data: String) -> Result<(), String> {
+pub async fn write_map_view(app: AppHandle,id: String,stamp: String,data: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("write_map_view", || write_map_view_sync(app, id, stamp, data))).await.expect("command thread panicked")
+}
+
+pub fn write_map_view_sync(app: AppHandle, id: String, stamp: String, data: String) -> Result<(), String> {
     if !safe_file(&id) {
         return Err(format!("invalid id: '{id}'"));
     }
@@ -217,7 +249,11 @@ pub fn write_map_view(app: AppHandle, id: String, stamp: String, data: String) -
 
 /// The path of the kept picture (for an upload, which takes files), when there is one for this stamp.
 #[tauri::command]
-pub fn map_view_path(app: AppHandle, id: String, stamp: String) -> Option<String> {
+pub async fn map_view_path(app: AppHandle,id: String,stamp: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("map_view_path", || map_view_path_sync(app, id, stamp))).await.expect("command thread panicked")
+}
+
+pub fn map_view_path_sync(app: AppHandle, id: String, stamp: String) -> Option<String> {
     if !safe_file(&id) {
         return None;
     }
@@ -257,7 +293,11 @@ pub struct MapSummary {
 
 /// The name an installed map has on the Hub, kept beside it (hub.json) for the game's map list.
 #[tauri::command]
-pub fn set_map_hub_name(app: AppHandle, id: String, name: String) -> Result<(), String> {
+pub async fn set_map_hub_name(app: AppHandle,id: String,name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("set_map_hub_name", || set_map_hub_name_sync(app, id, name))).await.expect("command thread panicked")
+}
+
+pub fn set_map_hub_name_sync(app: AppHandle, id: String, name: String) -> Result<(), String> {
     if !safe_file(&id) {
         return Err(format!("invalid id: '{id}'"));
     }
@@ -274,7 +314,11 @@ pub fn set_map_hub_name(app: AppHandle, id: String, name: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub fn uninstall_map(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn uninstall_map(app: AppHandle,id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("uninstall_map", || uninstall_map_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn uninstall_map_sync(app: AppHandle, id: String) -> Result<(), String> {
     if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
         return Err(format!("invalid id: '{id}'"));
     }
@@ -287,7 +331,11 @@ pub fn uninstall_map(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn read_map(app: AppHandle, id: String) -> Result<String, String> {
+pub async fn read_map(app: AppHandle,id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_map", || read_map_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn read_map_sync(app: AppHandle, id: String) -> Result<String, String> {
     if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
         return Err(format!("invalid id: '{id}'"));
     }
@@ -297,21 +345,32 @@ pub fn read_map(app: AppHandle, id: String) -> Result<String, String> {
 
 // Writes the editor's map into the installed maps as <id>/map.json; the replaced version goes to <id>/history (autosaves kept apart so they never push out saves).
 #[tauri::command]
-pub fn save_map(app: AppHandle, id: String, map_json: String, assets: Option<Vec<MapAsset>>, auto: Option<bool>) -> Result<(), String> {
+pub async fn save_map(app: AppHandle,id: String,map_json: String,assets: Option<Vec<MapAsset>>,auto: Option<bool>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("save_map", || save_map_sync(app, id, map_json, assets, auto))).await.expect("command thread panicked")
+}
+
+pub fn save_map_sync(app: AppHandle, id: String, map_json: String, assets: Option<Vec<MapAsset>>, auto: Option<bool>) -> Result<(), String> {
     if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
-        return Err(format!("invalid id: '{id}'"));
+        return Err(format!("invalid_map: invalid map id '{id}'"));
     }
-    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
-    let target = maps_dir(&app).ok_or("game path not set")?.join(&id);
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    if map_json.len() > 64 * 1024 * 1024 {
+        return Err(format!("too_large: map JSON is {} bytes", map_json.len()));
+    }
+    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("invalid_map: map isn't valid JSON: {e}"))?;
+    let dir = maps_dir(&app).ok_or_else(|| "io: game path not set".to_string())?;
+    let target = dir.join(&id);
+    std::fs::create_dir_all(&target).map_err(|e| format!("io: couldn't create map folder '{id}': {e}"))?;
     let current = target.join("map.json");
     if let Ok(old) = std::fs::read_to_string(&current) {
         if old != map_json {
             keep_history(&target, &old, auto.unwrap_or(false));
         }
     }
-    std::fs::write(current, map_json).map_err(|e| format!("couldn't save map '{id}': {e}"))?;
-    write_assets(&app, &target, assets.as_deref().unwrap_or(&[]))
+    std::fs::write(&current, &map_json).map_err(|e| format!("io: couldn't save map '{id}': {e}"))?;
+    write_assets(&app, &target, assets.as_deref().unwrap_or(&[])).map_err(|e| {
+        // write_assets already returns free text; classify by content.
+        if e.starts_with("invalid") { format!("invalid_map: {e}") } else { format!("io: {e}") }
+    })
 }
 
 const HISTORY_SAVES: usize = 20;
@@ -357,7 +416,11 @@ pub struct MapVersion {
 
 // The versions a save replaced, newest first.
 #[tauri::command]
-pub fn map_history(app: AppHandle, id: String) -> Result<Vec<MapVersion>, String> {
+pub async fn map_history(app: AppHandle,id: String) -> Result<Vec<MapVersion>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("map_history", || map_history_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn map_history_sync(app: AppHandle, id: String) -> Result<Vec<MapVersion>, String> {
     if !safe_file(&id) {
         return Err(format!("invalid id: '{id}'"));
     }
@@ -375,7 +438,11 @@ pub fn map_history(app: AppHandle, id: String) -> Result<Vec<MapVersion>, String
 }
 
 #[tauri::command]
-pub fn read_map_version(app: AppHandle, id: String, file: String) -> Result<String, String> {
+pub async fn read_map_version(app: AppHandle,id: String,file: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_map_version", || read_map_version_sync(app, id, file))).await.expect("command thread panicked")
+}
+
+pub fn read_map_version_sync(app: AppHandle, id: String, file: String) -> Result<String, String> {
     if !safe_file(&id) || !safe_file(&file) {
         return Err("invalid name".into());
     }
@@ -416,7 +483,118 @@ pub async fn export_map_zip(app: AppHandle, map_json: String, file_name: String,
 }
 
 #[tauri::command]
-pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
+pub async fn list_maps(app: AppHandle) -> Vec<MapSummary> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("list_maps", || list_maps_sync(app))).await.expect("command thread panicked")
+}
+
+/// What the map list needs from a map.json. Maps are big (tens of MB of tiles), so this is read with a streaming skip (no tree built) and remembered by file size + mtime.
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct MapHead {
+    name: Option<String>,
+    description: Option<String>,
+    images: Vec<String>,
+    group_count: usize,
+    uid: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct HeadCacheEntry {
+    len: u64,
+    mtime_ns: u128,
+    head: MapHead,
+}
+
+// A value of an unexpected type counts as absent, like the old `json.get(..).and_then(as_str)`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Lenient<T> {
+    Value(T),
+    Other(serde::de::IgnoredAny),
+}
+
+fn lenient<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    Ok(match Lenient::<T>::deserialize(d)? {
+        Lenient::Value(v) => Some(v),
+        Lenient::Other(_) => None,
+    })
+}
+
+// Lenient list of strings: non-strings are dropped, a non-array is empty.
+fn lenient_strings<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Item {
+        S(String),
+        Other(serde::de::IgnoredAny),
+    }
+    let items: Option<Vec<Item>> = lenient(d)?;
+    Ok(items.unwrap_or_default().into_iter().filter_map(|i| if let Item::S(s) = i { Some(s) } else { None }).collect())
+}
+
+// Counts the elements of an array without keeping them.
+struct CountSeq(usize);
+
+impl<'de> Deserialize<'de> for CountSeq {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, SeqAccess, Visitor};
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = CountSeq;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("anything")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<CountSeq, A::Error> {
+                let mut n = 0;
+                while a.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    n += 1;
+                }
+                Ok(CountSeq(n))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<CountSeq, A::Error> {
+                while a.next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?.is_some() {}
+                Ok(CountSeq(0))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+            fn visit_i64<E>(self, _: i64) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+            fn visit_u64<E>(self, _: u64) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+            fn visit_f64<E>(self, _: f64) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+            fn visit_str<E>(self, _: &str) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+            fn visit_unit<E>(self) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+            fn visit_none<E>(self) -> Result<CountSeq, E> { Ok(CountSeq(0)) }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+#[derive(Deserialize)]
+struct RawHead {
+    #[serde(default, deserialize_with = "lenient")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    description: Option<String>,
+    #[serde(default, deserialize_with = "lenient_strings")]
+    images: Vec<String>,
+    #[serde(default)]
+    groups: Option<CountSeq>,
+    #[serde(default, deserialize_with = "lenient")]
+    uid: Option<String>,
+}
+
+/// None when the file isn't valid JSON (the map is then left out of the list, as before).
+fn parse_map_head(bytes: &[u8]) -> Option<MapHead> {
+    if let Ok(h) = serde_json::from_slice::<RawHead>(bytes) {
+        return Some(MapHead { name: h.name, description: h.description, images: h.images, group_count: h.groups.map_or(0, |c| c.0), uid: h.uid });
+    }
+    // Valid JSON that isn't an object: same result the old tree walk gave (everything absent).
+    serde_json::from_slice::<serde_json::Value>(bytes).ok().map(|_| MapHead::default())
+}
+
+fn head_cache_path(app: &AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().ok().map(|d| d.join("list-maps-cache.json"))
+}
+
+pub fn list_maps_sync(app: AppHandle) -> Vec<MapSummary> {
     let mut maps = Vec::new();
     let Some(dir) = maps_dir(&app) else {
         return maps;
@@ -424,6 +602,13 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return maps;
     };
+    let cache_path = head_cache_path(&app);
+    let old: std::collections::HashMap<String, HeadCacheEntry> = cache_path
+        .as_ref()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let mut fresh: std::collections::HashMap<String, HeadCacheEntry> = std::collections::HashMap::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -432,37 +617,27 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
         let Some(id) = path.file_name().map(|s| s.to_string_lossy().to_string()) else {
             continue;
         };
-        let Ok(text) = std::fs::read_to_string(path.join("map.json")) else {
+        let map_file = path.join("map.json");
+        let Ok(meta) = std::fs::metadata(&map_file) else {
             continue;
         };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
+        let len = meta.len();
+        let mtime_ns = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+        let key = map_file.to_string_lossy().to_string();
+        let head = match old.get(&key) {
+            Some(c) if c.len == len && c.mtime_ns == mtime_ns && mtime_ns != 0 => c.head.clone(),
+            _ => {
+                let Ok(bytes) = std::fs::read(&map_file) else {
+                    continue;
+                };
+                let Some(head) = parse_map_head(&bytes) else {
+                    continue;
+                };
+                head
+            }
         };
-        let name = json
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&id)
-            .to_string();
-        let description = json
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let images = json
-            .get("images")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let group_count = json
-            .get("groups")
-            .and_then(|g| g.as_array())
-            .map(|a| a.len())
-            .unwrap_or(0);
-        let uid = json.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string());
+        fresh.insert(key, HeadCacheEntry { len, mtime_ns, head: head.clone() });
+        let name = head.name.unwrap_or_else(|| id.clone());
         let hub_json = std::fs::read_to_string(path.join("hub.json"))
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
@@ -472,14 +647,24 @@ pub fn list_maps(app: AppHandle) -> Vec<MapSummary> {
         maps.push(MapSummary {
             id,
             name,
-            description,
-            images,
-            group_count,
-            uid,
+            description: head.description.unwrap_or_default(),
+            images: head.images,
+            group_count: head.group_count,
+            uid: head.uid,
             hub,
             revision,
             updated_at,
         });
+    }
+    if let Some(p) = cache_path {
+        if fresh.len() != old.len() || fresh.iter().any(|(k, v)| old.get(k).map_or(true, |o| o.len != v.len || o.mtime_ns != v.mtime_ns)) {
+            if let Ok(json) = serde_json::to_vec(&fresh) {
+                let tmp = p.with_extension("json.tmp");
+                if std::fs::write(&tmp, json).is_ok() {
+                    let _ = std::fs::rename(&tmp, &p);
+                }
+            }
+        }
     }
     maps
 }
@@ -494,21 +679,71 @@ pub async fn test_launch_map(app: AppHandle, map_json: String, assets: Option<Ve
 }
 
 fn test_launch_map_blocking(app: AppHandle, map_json: String, assets: Option<Vec<MapAsset>>) -> Result<super::play::LaunchMethod, String> {
-    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("map isn't valid JSON: {e}"))?;
-    let dir = maps_dir(&app).ok_or("game path not set")?;
+    serde_json::from_str::<serde_json::Value>(&map_json).map_err(|e| format!("invalid_map: map isn't valid JSON: {e}"))?;
+    let dir = maps_dir(&app).ok_or_else(|| "not_installed: game path not set".to_string())?;
+    // The game executable must be present.
+    if super::play::find_exe(&PathBuf::from(settings::get_game_path_sync(app.clone()).unwrap_or_default())).is_none() {
+        return Err("not_installed: IGTAP executable not found".into());
+    }
+    // Navigator must be deployed beside the maps folder.
+    let navigator = dir.parent().map(|p| p.join("RechargeMaps.dll")).unwrap_or_default();
+    if !navigator.is_file() && std::env::var_os("RECHARGE_DEV_NAVIGATOR_DLL").map(PathBuf::from).filter(|p| p.is_file()).is_none() {
+        return Err("navigator_missing: RechargeMaps.dll not found in the test build".into());
+    }
     // Dev: a locally-built Navigator (RECHARGE_DEV_NAVIGATOR_DLL) overrides the installed one.
     if let Some(dll) = std::env::var_os("RECHARGE_DEV_NAVIGATOR_DLL").map(PathBuf::from).filter(|p| p.is_file()) {
-        let installed = dir.parent().ok_or("bad maps folder")?.join("RechargeMaps.dll");
-        std::fs::copy(&dll, &installed).map_err(|e| format!("couldn't install the dev Navigator: {e}"))?;
+        let installed = dir.parent().ok_or_else(|| "io: bad maps folder".to_string())?.join("RechargeMaps.dll");
+        std::fs::copy(&dll, &installed).map_err(|e| format!("io: couldn't install the dev Navigator: {e}"))?;
     }
     let target = dir.join(TEST_MAP_ID);
-    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    std::fs::write(target.join("map.json"), map_json).map_err(|e| e.to_string())?;
-    write_assets(&app, &target, assets.as_deref().unwrap_or(&[]))?;
-    let request = dir.parent().ok_or("bad maps folder")?.join("autoplay.txt");
-    std::fs::write(&request, TEST_MAP_ID).map_err(|e| e.to_string())?;
+    // Testing a map wants a known starting point: another mod can change how the game behaves,
+    // so a broken map can look broken for the wrong reason. Only Navigator is left on, and the
+    // ones that were on are written down to put back when the game closes.
+    super::mods::restore_after_test_launch(&app).map_err(|e| format!("io: {e}"))?; // clear any note left by an earlier run
+    super::mods::disable_all_but_navigator(&app).map_err(|e| format!("io: {e}"))?;
+    std::fs::create_dir_all(&target).map_err(|e| format!("io: {e}"))?;
+    std::fs::write(target.join("map.json"), &map_json).map_err(|e| format!("io: {e}"))?;
+    write_assets(&app, &target, assets.as_deref().unwrap_or(&[])).map_err(|e| {
+        if e.starts_with("invalid") { format!("invalid_map: {e}") } else { format!("io: {e}") }
+    })?;
+    let request_parent = dir.parent().ok_or_else(|| "io: bad maps folder".to_string())?;
+    let request = request_parent.join("autoplay.txt");
+    std::fs::write(&request, TEST_MAP_ID).map_err(|e| format!("io: {e}"))?;
     super::play::close_then_launch(app).map_err(|e| {
         let _ = std::fs::remove_file(&request);
-        e
+        // classify launch errors
+        let low = e.to_lowercase();
+        if low.contains("not found") && (low.contains("executable") || low.contains("game path") || low.contains("igtap install")) {
+            format!("not_installed: {e}")
+        } else if low.contains("rechargemaps") || low.contains("navigator") || low.contains("modded build is missing") {
+            format!("navigator_missing: {e}")
+        } else if low.contains("failed to launch") || low.contains("failed to start") {
+            format!("spawn_failed: {e}")
+        } else {
+            format!("io: {e}")
+        }
     })
+}
+
+#[cfg(test)]
+mod head_tests {
+    use super::parse_map_head;
+
+    #[test]
+    fn head_reads_only_what_the_list_needs() {
+        let h = parse_map_head(br#"{"tiles":[[1,2],[3]],"name":"N","description":"D","images":["a.png",3,"b.png"],"groups":[{"x":1},{},[]],"uid":"u1"}"#).unwrap();
+        assert_eq!(h.name.as_deref(), Some("N"));
+        assert_eq!(h.description.as_deref(), Some("D"));
+        assert_eq!(h.images, vec!["a.png", "b.png"]);
+        assert_eq!(h.group_count, 3);
+        assert_eq!(h.uid.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn wrong_types_count_as_absent_and_bad_json_is_skipped() {
+        let h = parse_map_head(br#"{"name":5,"images":"x","groups":7,"uid":null}"#).unwrap();
+        assert!(h.name.is_none() && h.images.is_empty() && h.group_count == 0 && h.uid.is_none());
+        assert!(parse_map_head(b"[1,2]").is_some());
+        assert!(parse_map_head(b"{ nope").is_none());
+    }
 }

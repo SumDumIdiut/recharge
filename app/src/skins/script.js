@@ -3,7 +3,7 @@ import { uploaderHtml } from '../social/avatar.js';
 import { canRemoveUpload } from '../social/perms.js';
 import { requireLogin } from '../login-prompt.js';
 import { mountComments } from '../social/comments.js';
-import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH, patchCards } from '../ui.js';
 
 import { HUB_BASE } from '../hub.js';
 import { checkTab } from '../autoupdate.js';
@@ -12,7 +12,7 @@ import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
 let currentSubtab = 'installed';
 let searchTerm = '';
 let installedCache = [];
-let thumbCache = new Map(); // fileName -> data URL
+let thumbCache = new Map(); // folder name -> thumbnail URL (media server, or a data URL fallback)
 let catalog = [];
 let catalogError = false;
 let chosenUploadPath = null;
@@ -84,9 +84,22 @@ async function loadMyUploadIds() {
 
 async function loadThumbnails() {
   const { invoke } = window.__TAURI__.core;
+  // Thumbnails are served by the local media server (an <img>/CSS URL, no base64 over IPC); the backend command stays as the fallback.
+  let base = null;
+  if (installedCache.some((s) => s.hasThumb && !thumbCache.has(s.folderName))) {
+    try { base = await invoke('background_media_base'); } catch { base = null; }
+  }
   await Promise.all(
     installedCache.map(async (s) => {
       if (thumbCache.has(s.folderName)) return;
+      if (base && s.hasThumb) {
+        thumbCache.set(s.folderName, `${base}skin/${encodeURIComponent(s.folderName)}?v=${encodeURIComponent(`${s.revision ?? ''}-${s.updatedAt ?? ''}`)}`);
+        return;
+      }
+      if (s.hasThumb === false) {
+        thumbCache.set(s.folderName, null);
+        return;
+      }
       try {
         thumbCache.set(s.folderName, await invoke('read_skin_thumbnail', { folderName: s.folderName }));
       } catch {
@@ -109,15 +122,15 @@ function renderInstalled() {
     .filter((s) => matchesSearch(displayName(s)))
     .sort((a, b) => displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
-    list.innerHTML = installedCache.length
+    patchCards(list, [], installedCache.length
       ? '<div class="empty-state">No skins match your search.</div>'
-      : '<div class="empty-state">No skins installed. Browse the library to add one.</div>';
+      : '<div class="empty-state">No skins installed. Browse the library to add one.</div>');
     return;
   }
-  list.innerHTML = filtered
+  patchCards(list, filtered
     .map(
       (s) => `
-    <div class="browse-card" onclick="window.__skinOpenDetail('${escapeHtml(s.hubId ? 'hub:' + s.hubId : 'local:' + s.folderName)}')">
+    <div class="browse-card" data-k="${escapeHtml(s.folderName)}" onclick="window.__skinOpenDetail('${escapeHtml(s.hubId ? 'hub:' + s.hubId : 'local:' + s.folderName)}')">
       ${thumb(thumbCache.get(s.folderName) || catalog.find((c) => c.id === s.hubId)?.image)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(displayName(s))}</div>
@@ -129,23 +142,23 @@ function renderInstalled() {
       </div>
     </div>`
     )
-    .join('');
+  );
 }
 
 function renderBrowse() {
   const list = document.getElementById('skins-browse-view');
   if (catalogError) {
-    list.innerHTML = '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>';
+    patchCards(list, [], '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>');
     return;
   }
   const filtered = catalog
     .filter((s) => matchesSearch(s.name + ' ' + (s.author || '') + ' ' + (s.description || '')))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
-    list.innerHTML = '<div class="empty-state">No skins published yet.</div>';
+    patchCards(list, [], '<div class="empty-state">No skins published yet.</div>');
     return;
   }
-  list.innerHTML = filtered
+  patchCards(list, filtered
     .map((entry) => {
       const installed = !!installedFor(entry);
       const badge = installed
@@ -153,7 +166,7 @@ function renderBrowse() {
         : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__skinInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
       return `
-    <div class="browse-card" onclick="window.__skinOpenDetail('hub:${escapeHtml(entry.id)}')">
+    <div class="browse-card" data-k="${escapeHtml(entry.id)}" onclick="window.__skinOpenDetail('hub:${escapeHtml(entry.id)}')">
       ${thumb(entry.image, badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
@@ -167,7 +180,7 @@ function renderBrowse() {
       </div>` : ''}
     </div>`;
     })
-    .join('');
+  );
 }
 
 function render() {
@@ -175,8 +188,8 @@ function render() {
   document.getElementById('skins-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('skins-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
   document.getElementById('skins-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
-  renderInstalled();
-  renderBrowse();
+  // Only the list on show is drawn; the other is brought up to date when its tab is opened.
+  if (currentSubtab === 'installed') renderInstalled(); else renderBrowse();
   // Keep an open detail page in step with installs/deletes, or leave it if its skin is gone.
   if (openDetail && !window.__skinOpenDetail(openDetail)) window.__skinCloseDetail();
 }

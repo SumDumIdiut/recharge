@@ -4,11 +4,16 @@ import { renderInstallList } from '/install-list.js';
 import { isLoggedIn, getUsername, isAdmin, setSession, refreshSession, sessionExpired, clearExpiredNote, EXPIRED_MESSAGE, getNameColor } from '/auth.js';
 import { nameStyle } from '/social/avatar.js';
 import { escapeHtml } from '/ui.js';
+import { isActive, onActivity } from '/activity.js';
+import { nextBeat, BEAT_ANIMATIONS } from '/wave-beat.js';
 
 import { HUB_BASE } from './hub.js';
 let loginMode = 'login';
 
-let pollHandle = null;
+let pollHandle = null; // grace-period timer: re-checks once when the launch grace ends (the Rust poller pushes `game-running` events on changes)
+let watchingGame = false;
+// is_game_running answers 'running' | 'not-running' | 'unknown' (older builds: a boolean).
+const isRunningState = (v) => v === true || v === 'running';
 let lastLaunchMode = null;
 
 // Settings > RechargeLoader "Keep the game modded after closing" (default on): skip the automatic switch back to vanilla.
@@ -23,6 +28,7 @@ let launchStartedAt = 0;
 const BEAT_SHAPES = ['single', 'double', 'sharp'];
 
 let waveGeneration = 0;
+let waveTeardown = () => {};
 
 function shapePoints(shape, x0, width, height, baseY) {
   const h = height;
@@ -65,6 +71,8 @@ export function startWaveform() {
   const banner = document.getElementById('wave-banner');
   if (!svg || !polyline || !banner) return;
 
+  waveTeardown();
+  waveTeardown = () => {};
   const myGeneration = ++waveGeneration;
   const settings = getWaveSettings();
   banner.style.display = settings.enabled ? '' : 'none';
@@ -87,32 +95,50 @@ export function startWaveform() {
   svg.setAttribute('viewBox', `0 0 ${totalWidth * 2} ${svgHeight}`);
   polyline.setAttribute('points', allPoints.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
 
-  // Indexed in lockstep with units (a Map keyed by object hashed on every frame for nothing).
-  const lastScreenX = new Array(units.length).fill(null);
-  const start = performance.now();
+  // The scroll is one linear Web Animation (no script per frame); beats are timed from its clock, so a hidden Home costs nothing.
+  const speed = settings.speed;
+  const scroll = polyline.animate(
+    [{ transform: 'translateX(0px)' }, { transform: `translateX(${-totalWidth}px)` }],
+    { duration: (totalWidth / speed) * 1000, iterations: Infinity, easing: 'linear' }
+  );
+  let width = banner.clientWidth || containerWidth;
+  let beatTimer = null;
+  let beatAnim = null;
+  let inView = true;
 
-  function frame(now) {
-    if (myGeneration !== waveGeneration) return; // a newer startWaveform() call superseded this loop
-    const elapsed = (now - start) / 1000;
-    const offset = (elapsed * settings.speed) % totalWidth;
-    polyline.style.transform = `translateX(${-offset}px)`;
+  const offsetNow = () => (((scroll.currentTime || 0) / 1000) * speed) % totalWidth;
+  const stopBeats = () => { clearTimeout(beatTimer); beatTimer = null; };
+  const scheduleBeat = () => {
+    stopBeats();
+    if (myGeneration !== waveGeneration || scroll.playState !== 'running') return;
+    const next = nextBeat(units, totalWidth, width - 30, speed, offsetNow());
+    if (!next) return;
+    beatTimer = setTimeout(() => {
+      if (beatAnim) beatAnim.cancel();
+      const def = BEAT_ANIMATIONS[next.shape];
+      beatAnim = polyline.animate(def.keyframes, { duration: def.duration, easing: 'ease-out' });
+      scheduleBeat();
+    }, Math.max(0, next.delayMs));
+  };
+  const sync = () => {
+    if (myGeneration !== waveGeneration) return;
+    if (inView && isActive()) { if (scroll.playState !== 'running') scroll.play(); scheduleBeat(); }
+    else { scroll.pause(); stopBeats(); }
+  };
 
-    const tx = (banner.clientWidth || containerWidth) - 30;
-    for (let i = 0; i < units.length; i++) {
-      const u = units[i];
-      const screenX = u.peakX - offset;
-      const prev = lastScreenX[i];
-      if (prev != null && prev - screenX < 20 && prev > tx && screenX <= tx) {
-        polyline.classList.remove('beat-single', 'beat-double', 'beat-sharp');
-        void polyline.offsetWidth;
-        polyline.classList.add('beat-' + u.shape);
-      }
-      lastScreenX[i] = screenX;
-    }
-
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
+  const io = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+    inView = entries[entries.length - 1].isIntersecting;
+    sync();
+  }) : null;
+  io?.observe(banner);
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    const w = banner.clientWidth;
+    if (w && w !== width) { width = w; if (scroll.playState === 'running') scheduleBeat(); }
+  }) : null;
+  ro?.observe(banner);
+  const off = onActivity(sync);
+  waveTeardown = () => { scroll.cancel(); beatAnim?.cancel(); stopBeats(); io?.disconnect(); ro?.disconnect(); off(); };
+  sync();
 }
 
 function logLine(html) {
@@ -148,7 +174,7 @@ async function pollRunning() {
 
 async function checkRunning() {
   const { invoke } = window.__TAURI__.core;
-  const running = await invoke('is_game_running');
+  const running = isRunningState(await invoke('is_game_running'));
   if (running) {
     seenRunning = true;
     setPlayStatus('running');
@@ -157,8 +183,9 @@ async function checkRunning() {
   if (!seenRunning && Date.now() - launchStartedAt < launchGraceMs) {
     return;
   }
-  clearInterval(pollHandle);
+  clearTimeout(pollHandle);
   pollHandle = null;
+  watchingGame = false;
   setPlayStatus(null);
   logLine(seenRunning ? 'game process exited' : "game never started (Steam didn't launch it in time)");
   if (lastLaunchMode === 'modded') {
@@ -188,7 +215,9 @@ window.__homeLaunch = async function (mode) {
     launchStartedAt = Date.now();
     logLine(`process started (${mode})`);
     setPlayStatus('running');
-    if (!pollHandle) pollHandle = setInterval(pollRunning, 2000);
+    watchingGame = true;
+    clearTimeout(pollHandle);
+    pollHandle = setTimeout(pollRunning, launchGraceMs + 500);
   } catch (err) {
     document.getElementById('home-play-status').textContent = String(err);
     logLine(`launch failed: ${String(err)}`);
@@ -198,7 +227,7 @@ window.__homeLaunch = async function (mode) {
 
 let accountSynced = false;
 
-window.__updateAccountBadge = () => updateAccountBadge();
+window.__updateAccountBadge = () => { updateAccountBadge(); window.__refreshModeratorRow?.(); };
 export function updateAccountBadge() {
   const badge = document.getElementById('home-account-badge');
   if (!badge) return;
@@ -473,7 +502,7 @@ function scheduleLoaderRetry() {
   loaderRetryTimer = setTimeout(async () => {
     loaderRetryTimer = null;
     let running = true;
-    try { running = await window.__TAURI__.core.invoke('is_game_running'); } catch { /* retry later */ }
+    try { running = isRunningState(await window.__TAURI__.core.invoke('is_game_running')); } catch { /* retry later */ }
     if (running) scheduleLoaderRetry();
     else redeployLoader();
   }, 30000);
@@ -494,6 +523,9 @@ export async function initHome() {
   applyRandomBackground();
 
   await autoSelectInstall();
+  // Independent of the checks below, so it runs alongside them; its log line still comes after theirs.
+  const modsScan = invoke('list_installed_mods');
+  modsScan.catch(() => {});
   const install = await refreshInstallStatus();
 
   let loaderInstalled = false;
@@ -523,17 +555,19 @@ export async function initHome() {
   checkForLauncherUpdate();
 
   try {
-    const mods = await invoke('list_installed_mods');
+    const mods = await modsScan;
     const enabled = mods.filter((m) => m.enabled).length;
     logLine(`${mods.length} mod${mods.length === 1 ? '' : 's'} found, ${enabled} enabled`);
   } catch (err) {
     logLine(`mod scan failed: ${String(err)}`);
   }
 
-  if (await invoke('is_game_running')) {
+  // The Rust side polls the process every 2 s and emits `game-running` when it changes; this replaces the old 2 s interval.
+  window.__TAURI__.event?.listen('game-running', () => { if (watchingGame) pollRunning(); });
+  if (isRunningState(await invoke('is_game_running'))) {
     seenRunning = true;
     setPlayStatus('running');
-    pollHandle = setInterval(pollRunning, 2000);
+    watchingGame = true;
     logLine('game process already running');
   } else {
     logLine('no active game process');

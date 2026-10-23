@@ -3,13 +3,16 @@ import { uploaderHtml } from '../social/avatar.js';
 import { canRemoveUpload } from '../social/perms.js';
 import { requireLogin } from '../login-prompt.js';
 import { mountComments } from '../social/comments.js';
-import { escapeHtml, galleryImages, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, galleryImages, sleep, thumb as sharedThumb, openModal, closeModal, setBadgeState, confirmDestructive, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH, patchCards } from '../ui.js';
 
 import { HUB_BASE } from '../hub.js';
 import { checkTab, isNewerRevision } from '../autoupdate.js';
 import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
+import { REPO_MODS, BUILT_IN_MOD_IDS } from '../repo-mods.js';
+import { submissions } from '../social/api.js';
 
-const PROTECTED_MOD_IDS = new Set(['recharge.maps']);
+// Navigator is built into every install, so it is never browsed as a separate download and never removed.
+const PROTECTED_MOD_IDS = BUILT_IN_MOD_IDS;
 
 let currentSubtab = 'installed';
 let searchTerm = '';
@@ -49,8 +52,8 @@ async function loadCatalog() {
     const res = await fetch(`${HUB_BASE}/api/mods`);
     const rows = await res.json();
     catalog = rows
-      // Navigator (recharge.maps) is built into every install, not browsed separately.
-      .filter((row) => row.modId !== 'recharge.maps')
+      // Navigator is built into every install, not browsed separately.
+      .filter((row) => !BUILT_IN_MOD_IDS.has(row.modId))
       .map((row) => ({
         id: row.id,
         modId: row.modId || null,
@@ -80,11 +83,8 @@ async function loadMyUploadIds() {
     return;
   }
   try {
-    const res = await fetch(`${HUB_BASE}/api/me/submissions`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    });
-    const rows = res.ok ? await res.json() : [];
-    myUploads = rows.filter((r) => r.kind === 'mod');
+    const rows = await submissions.mine();
+    myUploads = (Array.isArray(rows) ? rows : []).filter((r) => r.kind === 'mod');
     myUploadIds = new Set(myUploads.map((r) => r.id));
   } catch {
     myUploadIds = new Set();
@@ -99,12 +99,12 @@ function renderInstalled() {
     // Enabled mods first, then disabled, each group alphabetical.
     .sort((a, b) => (b.enabled - a.enabled) || a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
-    list.innerHTML = installedCache.length
+    patchCards(list, [], installedCache.length
       ? '<div class="empty-state">No mods match your search.</div>'
-      : '<div class="empty-state">No mods installed. Browse the catalog to add one.</div>';
+      : '<div class="empty-state">No mods installed. Browse the catalog to add one.</div>');
     return;
   }
-  list.innerHTML = filtered
+  patchCards(list, filtered
     .map((m) => {
       const entry = catalog.find((c) => c.modId === m.id);
       // Picture: the hub entry of this mod (by mod id, else by name); a neutral placeholder if the hub has none.
@@ -113,7 +113,7 @@ function renderInstalled() {
       const hasUpdate = entry && !protectedMod && (m.hubId ? isNewerRevision(m, entry) : isNewerVersion(entry.version, m.version));
       const author = entry?.author || m.author;
       return `
-    <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
+    <div class="browse-card" data-k="${escapeHtml(m.id)}" onclick="window.__modOpenDetail('${escapeHtml(m.id)}')">
       ${sharedThumb(pic, hasUpdate ? `<button class="badge badge-update" title="Update to v${escapeHtml(entry.version)}" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>` : '')}
       <div class="browse-card-info">
         <div class="browse-card-name${protectedMod ? ' browse-card-name-protected' : ''}">${escapeHtml(m.displayName)}</div>
@@ -128,13 +128,13 @@ function renderInstalled() {
       </div>
     </div>`;
     })
-    .join('');
+  );
 }
 
 function renderBrowse() {
   const list = document.getElementById('mods-browse-view');
   if (catalogError) {
-    list.innerHTML = '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>';
+    patchCards(list, [], '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>');
     return;
   }
   const filtered = catalog
@@ -142,10 +142,10 @@ function renderBrowse() {
     .filter((m) => matchesSearch(m.name + ' ' + m.description + ' ' + m.author))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
-    list.innerHTML = '<div class="empty-state">No mods match your search.</div>';
+    patchCards(list, [], '<div class="empty-state">No mods match your search.</div>');
     return;
   }
-  list.innerHTML = filtered
+  patchCards(list, filtered
     .map((entry) => {
       const installed = installedCache.some((m) => m.id === entry.modId);
       const badge = installed
@@ -153,7 +153,7 @@ function renderBrowse() {
         : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__modInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
       return `
-    <div class="browse-card" onclick="window.__modOpenDetail('${escapeHtml(entry.id)}')">
+    <div class="browse-card" data-k="${escapeHtml(entry.id)}" onclick="window.__modOpenDetail('${escapeHtml(entry.id)}')">
       ${thumb(entry, badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
@@ -167,7 +167,7 @@ function renderBrowse() {
       </div>` : ''}
     </div>`;
     })
-    .join('');
+  );
 }
 
 function render() {
@@ -175,8 +175,8 @@ function render() {
   document.getElementById('mods-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('mods-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
   document.getElementById('mods-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
-  renderInstalled();
-  renderBrowse();
+  // Only the list on show is drawn; the other is brought up to date when its tab is opened.
+  if (currentSubtab === 'installed') renderInstalled(); else renderBrowse();
 }
 
 window.__modsSubtab = function (tab) {
@@ -329,11 +329,23 @@ window.__modToggle = async function (el) {
   }
 };
 
+// A mod's dependencies are a list of ids. Anything else (a missing field, a string, an object) is ignored:
+// the catalog is fetched from the hub, so its shape is not ours to trust.
+function dependenciesOf(entry) {
+  const deps = entry?.dependencies;
+  if (deps == null) return [];
+  if (!Array.isArray(deps)) {
+    console.warn('[mods] ignoring a non-array dependencies field on', entry?.id);
+    return [];
+  }
+  return deps;
+}
+
 function resolveMissingDependencies(entry) {
   const missing = [];
   const unavailable = [];
-  const seen = new Set([entry.id]);
-  const queue = [...(entry.dependencies || [])];
+  const seen = new Set([entry?.id]);
+  const queue = [...dependenciesOf(entry)];
 
   while (queue.length) {
     const depId = queue.shift();
@@ -348,7 +360,7 @@ function resolveMissingDependencies(entry) {
       continue;
     }
     missing.push(depEntry);
-    queue.push(...(depEntry.dependencies || []));
+    queue.push(...dependenciesOf(depEntry));
   }
   return { missing, unavailable };
 }
@@ -357,49 +369,66 @@ function closeDepModal() {
   closeModal('mods-dep-overlay');
 }
 
+// The button goes back to being clickable, whatever happened to the install.
+function resetInstallButton(btn) {
+  if (!btn) return;
+  btn.disabled = false;
+  if (btn.classList.contains('badge')) setBadgeState(btn, 'failed');
+  else btn.textContent = 'Install';
+}
+
 window.__modInstall = async function (id, btn) {
   const entry = catalog.find((c) => c.id === id);
-  const { missing, unavailable } = resolveMissingDependencies(entry);
-
-  if (unavailable.length) {
-    document.getElementById('mods-dep-title').textContent = "Can't Install";
-    document.getElementById('mods-dep-body').innerHTML =
-      `<p><b>${escapeHtml(entry.name)}</b> requires the following, which ${unavailable.length === 1 ? "isn't" : "aren't"} available in the catalog:</p>` +
-      `<ul class="dep-list">${unavailable.map((depId) => `<li class="text-danger">${escapeHtml(depId)}</li>`).join('')}</ul>`;
-    document.getElementById('mods-dep-confirm').style.display = 'none';
-    document.getElementById('mods-dep-cancel').textContent = 'Close';
-    openModal('mods-dep-overlay');
+  if (!entry) {
+    // The catalog is a cache: a refresh between rendering the row and clicking it can drop the id.
+    resetInstallButton(btn);
+    window.__showToast?.('That mod is no longer in the catalog - refreshing the library.');
+    await loadCatalog();
+    render();
     return;
   }
 
-  if (missing.length) {
-    document.getElementById('mods-dep-title').textContent = 'Additional Mods Required';
-    document.getElementById('mods-dep-body').innerHTML =
-      `<p><b>${escapeHtml(entry.name)}</b> requires the following mod${missing.length === 1 ? '' : 's'}, which ${missing.length === 1 ? "isn't" : "aren't"} installed yet:</p>` +
-      `<ul class="dep-list">${missing.map((m) => `<li>${escapeHtml(m.name)}</li>`).join('')}</ul>` +
-      `<p>Install ${missing.length === 1 ? 'it' : 'them'} along with <b>${escapeHtml(entry.name)}</b>?</p>`;
-    document.getElementById('mods-dep-confirm').style.display = '';
-    document.getElementById('mods-dep-cancel').textContent = 'Cancel';
-    openModal('mods-dep-overlay');
+  try {
+    const { missing, unavailable } = resolveMissingDependencies(entry);
 
-    document.getElementById('mods-dep-confirm').onclick = () => {
-      closeDepModal();
-      doInstall([...missing.map((m) => m.id), id], btn);
-    };
-    return;
+    if (unavailable.length) {
+      document.getElementById('mods-dep-title').textContent = "Can't Install";
+      document.getElementById('mods-dep-body').innerHTML =
+        `<p><b>${escapeHtml(entry.name)}</b> requires the following, which ${unavailable.length === 1 ? "isn't" : "aren't"} available in the catalog:</p>` +
+        `<ul class="dep-list">${unavailable.map((depId) => `<li class="text-danger">${escapeHtml(depId)}</li>`).join('')}</ul>`;
+      document.getElementById('mods-dep-confirm').style.display = 'none';
+      document.getElementById('mods-dep-cancel').textContent = 'Close';
+      openModal('mods-dep-overlay');
+      return;
+    }
+
+    if (missing.length) {
+      document.getElementById('mods-dep-title').textContent = 'Additional Mods Required';
+      document.getElementById('mods-dep-body').innerHTML =
+        `<p><b>${escapeHtml(entry.name)}</b> requires the following mod${missing.length === 1 ? '' : 's'}, which ${missing.length === 1 ? "isn't" : "aren't"} installed yet:</p>` +
+        `<ul class="dep-list">${missing.map((m) => `<li>${escapeHtml(m.name)}</li>`).join('')}</ul>` +
+        `<p>Install ${missing.length === 1 ? 'it' : 'them'} along with <b>${escapeHtml(entry.name)}</b>?</p>`;
+      document.getElementById('mods-dep-confirm').style.display = '';
+      document.getElementById('mods-dep-cancel').textContent = 'Cancel';
+      openModal('mods-dep-overlay');
+
+      document.getElementById('mods-dep-confirm').onclick = () => {
+        closeDepModal();
+        doInstall([...missing.map((m) => m.id), id], btn);
+      };
+      return;
+    }
+
+    doInstall([id], btn);
+  } catch (err) {
+    // A global called from rendered markup: an unexpected throw must still say something.
+    resetInstallButton(btn);
+    window.__showToast?.(`Couldn't install ${entry.name}: ${err}`);
   }
-
-  doInstall([id], btn);
 };
 
-// Mods whose source lives in a GitHub repo: installing pulls it in, then the loader build compiles/deploys it.
-const REPO_MODS = {
-  // recharge.maps (Navigator) isn't here - built into every install automatically (see loader.rs).
-  'recharge.customskins': { repo: 'recharge-skins' },
-  'recharge.example': { repo: 'recharge-mods', folder: 'recharge-example' },
-  'recharge.multiplayer': { repo: 'recharge-mods', folder: 'recharge-multiplayer' },
-};
-
+// Installing a repo mod pulls its repo and then the loader build compiles/deploys it. The table
+// of repo mods lives in repo-mods.js, so the auto-updater skips exactly the same mods.
 async function doInstall(ids, btn) {
   const { invoke } = window.__TAURI__.core;
   const isBadge = btn && btn.classList.contains('badge');
@@ -416,8 +445,17 @@ async function doInstall(ids, btn) {
     for (const id of ids) {
       // ids here are hub catalog ids, while REPO_MODS is keyed by mod id.
       const source = REPO_MODS[id] ?? REPO_MODS[catalog.find((c) => c.id === id)?.modId];
+      if (source?.builtIn) {
+        // Navigator is built into every install: there is nothing to pull and nothing to install.
+        console.warn('[mods] built-in mod, nothing to install:', id);
+        continue;
+      }
       if (source) {
-        await invoke('pull_mod_repo', { repo: source.repo, folder: source.folder ?? null });
+        try {
+          await invoke('pull_mod_repo', { repo: source.repo, folder: source.folder ?? null });
+        } catch (err) {
+          throw new Error(`Couldn't pull ${source.repo}${source.folder ? `/${source.folder}` : ''} for ${id}: ${err}`);
+        }
         pulledFromRepo = true;
       } else {
         await invoke('install_from_hub_cmd', { kind: 'mods', id });
@@ -432,14 +470,7 @@ async function doInstall(ids, btn) {
     const openId = ids[ids.length - 1];
     if (document.getElementById('mods-detail').style.display !== 'none') window.__modOpenDetail(openId);
   } catch (err) {
-    if (btn) {
-      btn.disabled = false;
-      if (isBadge) {
-        setBadgeState(btn, 'failed');
-      } else {
-        btn.textContent = 'Install';
-      }
-    }
+    resetInstallButton(btn);
     alert(String(err));
   }
 }
@@ -568,3 +599,10 @@ export async function onShow() {
   // Installed mods the Hub has a newer revision of are updated in place (not awaited: the tab is already usable).
   if (!catalogError) checkTab('mods', installedCache, catalog, async () => { await refresh(); if (openDetailId) window.__modOpenDetail(openDetailId); }).catch(() => {});
 }
+
+// Test hooks: the install pre-flight is a decision over the catalog, so a test can set one up.
+export const __test = {
+  setCatalog: (rows) => { catalog = rows || []; },
+  setInstalled: (rows) => { installedCache = rows || []; },
+  resolveMissingDependencies: (entry) => resolveMissingDependencies(entry),
+};

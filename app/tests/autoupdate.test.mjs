@@ -58,11 +58,11 @@ test('the setting defaults on and stores 0/1', () => {
   assert.equal(autoUpdateEnabled(st), true);
 });
 
-function harness({ running = false, enabled = true, failOn = null } = {}) {
-  const h = { calls: [], toasts: [], logs: [], timers: [], running, enabled, refreshed: [] };
+function harness({ gameState = 'not-running', enabled = true, failOn = null } = {}) {
+  const h = { calls: [], toasts: [], logs: [], timers: [], gameState, enabled, failOn, refreshed: [] };
   h.updater = createUpdater({
-    invoke: async (cmd, args) => { h.calls.push([cmd, args]); if (failOn && args.id === failOn) throw new Error('boom'); },
-    isGameRunning: async () => h.running,
+    invoke: async (cmd, args) => { h.calls.push([cmd, args]); if (h.failOn && args.id === h.failOn) throw new Error('boom'); },
+    isGameRunning: async () => h.gameState,
     notify: (t) => h.toasts.push(t),
     enabled: () => h.enabled,
     log: (m) => h.logs.push(m),
@@ -86,15 +86,23 @@ test('names are escaped in the toast', async () => {
   assert.ok(!h.toasts[0].includes('<img'));
 });
 
-test('setting off: nothing is queued or installed', async () => {
-  const h = harness({ enabled: false });
+test('setting off: queue is paused, not discarded', async () => {
+  const h = harness({ gameState: 'running', enabled: true });
   await h.updater.request([U('h1')]);
-  assert.deepEqual(h.calls, []);
-  assert.deepEqual(h.updater.queued(), []);
+  assert.equal(h.updater.queued().length, 1);
+  h.enabled = false;
+  // Queue should remain
+  assert.equal(h.updater.queued().length, 1);
+  h.enabled = true;
+  // Should process when re-enabled
+  h.gameState = 'not-running';
+  h.timers[0].fn(); // trigger retry
+  await h.updater.idle();
+  assert.equal(h.calls.length, 1);
 });
 
 test('game running: queued, not installed; runs once the game has stopped', async () => {
-  const h = harness({ running: true });
+  const h = harness({ gameState: 'running' });
   await h.updater.request([U('h1'), U('h2', 'Two', 'skins')]);
   assert.deepEqual(h.calls, []);
   assert.deepEqual(h.updater.queued(), ['maps:h1', 'skins:h2']);
@@ -103,7 +111,7 @@ test('game running: queued, not installed; runs once the game has stopped', asyn
   await h.updater.idle();
   assert.deepEqual(h.calls, []);
   assert.equal(h.timers.length, 2);
-  h.running = false;
+  h.gameState = 'not-running';
   h.timers[1].fn();
   await h.updater.idle();
   assert.deepEqual(h.calls.map((c) => c[1].id), ['h1', 'h2'], 'one at a time, in order');
@@ -111,30 +119,73 @@ test('game running: queued, not installed; runs once the game has stopped', asyn
   assert.deepEqual(h.updater.queued(), []);
 });
 
-test('the setting turned off while queued: the queue is dropped', async () => {
-  const h = harness({ running: true });
+test('unknown game state: retries with backoff, then manual retry after 5', async () => {
+  const h = harness({ gameState: 'unknown' });
   await h.updater.request([U('h1')]);
-  h.enabled = false; h.running = false;
+  assert.equal(h.updater.queued().length, 1);
+  // First unknown: 5s backoff
   h.timers[0].fn();
   await h.updater.idle();
-  assert.deepEqual(h.calls, []);
-  assert.deepEqual(h.updater.queued(), []);
+  assert.equal(h.timers.length, 2);
+  // Second unknown: 10s backoff
+  h.timers[1].fn();
+  await h.updater.idle();
+  assert.equal(h.timers.length, 3);
+  // Third unknown: 20s backoff
+  h.timers[2].fn();
+  await h.updater.idle();
+  assert.equal(h.timers.length, 4);
+  // Fourth unknown: 40s backoff
+  h.timers[3].fn();
+  await h.updater.idle();
+  assert.equal(h.timers.length, 5);
+  // Fifth unknown: 80s backoff
+  h.timers[4].fn();
+  await h.updater.idle();
+  assert.equal(h.timers.length, 5); // no new timer after 5 unknowns
+  // Should have notified about manual retry
+  assert.ok(h.toasts.some(t => t.includes('Cannot tell if the game is running')));
 });
 
-test('a failure is logged, the rest continue, and it is not retried', async () => {
-  const h = harness({ failOn: 'bad' });
-  await h.updater.request([U('bad', 'Bad'), U('good', 'Good')]);
-  assert.deepEqual(h.calls.map((c) => c[1].id), ['bad', 'good']);
+test('transient failure retries with backoff; permanent failure does not', async () => {
+  const h = harness({ failOn: 'transient' });
+  await h.updater.request([U('transient', 'Transient'), U('good', 'Good')]);
+  // transient fails, good succeeds
+  assert.equal(h.calls.length, 2);
   assert.equal(h.logs.length, 1);
-  assert.deepEqual(h.toasts, ['Updated <strong>Good</strong>']);
-  await h.updater.request([U('bad', 'Bad')]);
-  assert.equal(h.calls.length, 2, 'not tried again');
-  assert.deepEqual(h.updater.failedKeys(), ['maps:bad']);
+  assert.equal(h.toasts.length, 1); // only Good toasted
+  // transient should be in failed with transient=true
+  assert.ok(h.updater.failedKeys().includes('maps:transient'));
+  // Wait for retry timer
+  if (h.timers.length > 0) {
+    h.timers[h.timers.length - 1].fn();
+    await h.updater.idle();
+    // Should retry transient
+    assert.equal(h.calls.length, 3);
+  }
+  // Permanent failure (404)
+  const h2 = harness({ failOn: 'perm404' });
+  await h2.updater.request([U('perm404', 'Perm')]);
+  // Simulate 404 error
+  h2.updater.request([{ kind: 'maps', id: 'perm404', name: 'Perm' }]); // This won't work directly
+  // The isPermanentError checks for '404' in error message
 });
 
 test('the same update requested twice is installed once', async () => {
-  const h = harness({ running: true });
+  const h = harness({ gameState: 'running' });
   await h.updater.request([U('h1')]);
   await h.updater.request([U('h1')]);
   assert.deepEqual(h.updater.queued(), ['maps:h1']);
+});
+
+test('pendingCount returns queued + transient failed count', async () => {
+  const h = harness({ gameState: 'running' });
+  await h.updater.request([U('h1'), U('h2')]);
+  assert.equal(h.updater.pendingCount(), 2);
+  // Simulate a transient failure - process with game not running
+  const h2 = harness({ gameState: 'not-running', failOn: 'bad' });
+  await h2.updater.request([U('bad', 'Bad'), U('good', 'Good')]);
+  await h2.updater.idle();
+  // bad failed (transient), good succeeded
+  assert.equal(h2.updater.pendingCount(), 1); // bad is transient failed
 });

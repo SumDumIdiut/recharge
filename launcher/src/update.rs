@@ -37,6 +37,10 @@ pub fn platform_id() -> &'static str {
     if cfg!(windows) { "windows-x64" } else { "linux-x64" }
 }
 
+const CONNECT_SECS: u64 = 10;
+const MANIFEST_SECS: u64 = 30;
+const BACKOFF_SECS: [u64; 2] = [1, 3];
+
 fn agent(secs: u64) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(secs)))
@@ -44,14 +48,103 @@ fn agent(secs: u64) -> ureq::Agent {
         .into()
 }
 
-fn get_text(url: &str, secs: u64) -> Result<String, String> {
-    let mut r = agent(secs).get(url).call().map_err(|e| format!("GET {url}: {e}"))?;
-    r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| format!("GET {url}: {e}"))
+/// Agent for small metadata fetches: separate connect timeout, HTTP statuses returned (not turned into errors) so the body can be inspected.
+fn meta_agent(secs: u64) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(CONNECT_SECS)))
+        .timeout_global(Some(Duration::from_secs(secs)))
+        .http_status_as_error(false)
+        .build()
+        .into()
+}
+
+/// What went wrong with a network fetch, coarse enough to pick a message and a retry decision.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NetFail {
+    /// The server answered with this HTTP status (body kept for the "error code: 1033" tunnel text).
+    Status(u16, String),
+    Timeout,
+    /// DNS, refused/reset connection, TLS.
+    Connect,
+    Other,
+}
+
+const MSG_OFFLINE: &str = "The update server is offline right now (not a problem with your connection). Try again later.";
+const MSG_TIMEOUT: &str = "The update server didn't answer in time. Check your connection and try again.";
+const MSG_CONNECT: &str = "Couldn't reach the update server. Check your connection.";
+
+fn is_server_down(f: &NetFail) -> bool {
+    match f {
+        NetFail::Status(code, body) => matches!(code, 530 | 502 | 503 | 504) || body.contains("error code: 1033"),
+        _ => false,
+    }
+}
+
+/// Friendly one-line message for the UI; None when the failure has no special wording (callers keep their own text).
+pub fn friendly_message(f: &NetFail) -> Option<&'static str> {
+    if is_server_down(f) {
+        return Some(MSG_OFFLINE);
+    }
+    match f {
+        NetFail::Timeout => Some(MSG_TIMEOUT),
+        NetFail::Connect => Some(MSG_CONNECT),
+        _ => None,
+    }
+}
+
+/// Retry timeouts, connection errors and 5xx (incl. Cloudflare 530); never 4xx.
+pub fn should_retry(f: &NetFail) -> bool {
+    match f {
+        NetFail::Timeout | NetFail::Connect => true,
+        NetFail::Status(code, _) => *code >= 500 || is_server_down(f),
+        NetFail::Other => false,
+    }
+}
+
+fn classify(e: &ureq::Error) -> NetFail {
+    use ureq::Error as E;
+    match e {
+        E::Timeout(_) => NetFail::Timeout,
+        E::StatusCode(c) => NetFail::Status(*c, String::new()),
+        E::Io(io) if matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => NetFail::Timeout,
+        E::HostNotFound | E::ConnectionFailed | E::Io(_) => NetFail::Connect,
+        _ => NetFail::Other,
+    }
+}
+
+fn get_once(agent: &ureq::Agent, url: &str) -> Result<String, (NetFail, String)> {
+    let mut r = agent.get(url).call().map_err(|e| (classify(&e), format!("GET {url}: {e}")))?;
+    let status = r.status().as_u16();
+    if status >= 400 {
+        let body: String = r.body_mut().read_to_string().unwrap_or_default().chars().take(200).collect();
+        return Err((NetFail::Status(status, body.clone()), format!("GET {url}: HTTP {status} {}", body.trim())));
+    }
+    r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| (classify(&e), format!("GET {url}: {e}")))
+}
+
+/// GET with `attempts` tries (backoff 1 s, 3 s) for retryable failures. The error string is the friendly message when there is one; the technical detail goes to the log.
+fn get_text_retry(url: &str, secs: u64, attempts: usize) -> Result<String, String> {
+    let agent = meta_agent(secs);
+    let mut n = 0;
+    loop {
+        match get_once(&agent, url) {
+            Ok(t) => return Ok(t),
+            Err((fail, detail)) => {
+                n += 1;
+                log!("fetch attempt {n}/{attempts} failed: {detail}");
+                if n < attempts && should_retry(&fail) {
+                    std::thread::sleep(Duration::from_secs(BACKOFF_SECS[(n - 1).min(BACKOFF_SECS.len() - 1)]));
+                    continue;
+                }
+                return Err(friendly_message(&fail).map(String::from).unwrap_or(detail));
+            }
+        }
+    }
 }
 
 fn fetch_channel_manifest(ctx: &Ctx, channel: &str) -> Result<Manifest, String> {
     let url = format!("{}/update/{}/manifest.json", ctx.base, channel);
-    let m: Manifest = serde_json::from_str(&get_text(&url, 5)?).map_err(|e| format!("bad manifest: {e}"))?;
+    let m: Manifest = serde_json::from_str(&get_text_retry(&url, MANIFEST_SECS, 3)?).map_err(|e| format!("bad manifest: {e}"))?;
     if m.format != 1 {
         return Err(format!("unsupported manifest format {}", m.format));
     }
@@ -72,7 +165,15 @@ pub fn fetch_manifest(ctx: &Ctx) -> Result<Manifest, String> {
     if ctx.channel != "beta" {
         return fetch_channel_manifest(ctx, &ctx.channel);
     }
-    let (m, from_stable) = pick_newest(fetch_channel_manifest(ctx, "beta"), fetch_channel_manifest(ctx, "stable"))?;
+    let (beta, stable) = std::thread::scope(|s| {
+        let b = s.spawn(|| fetch_channel_manifest(ctx, "beta"));
+        let st = s.spawn(|| fetch_channel_manifest(ctx, "stable"));
+        (
+            b.join().unwrap_or_else(|_| Err("manifest fetch panicked".into())),
+            st.join().unwrap_or_else(|_| Err("manifest fetch panicked".into())),
+        )
+    });
+    let (m, from_stable) = pick_newest(beta, stable)?;
     log!("beta channel: using the {} manifest (build {})", if from_stable { "stable" } else { "beta" }, m.build);
     Ok(m)
 }
@@ -476,7 +577,7 @@ pub fn update_launcher(ctx: &Ctx, exe: &Path) -> Result<bool, String> {
     #[derive(serde::Deserialize)]
     struct Info { sha256: String, size: u64 }
     let url = format!("{}/update/launcher/{}", ctx.base, ctx.platform);
-    let info: Info = match get_text(&url, 5) {
+    let info: Info = match get_text_retry(&url, 15, 1) {
         Ok(t) => serde_json::from_str(&t).map_err(|e| format!("bad launcher info: {e}"))?,
         Err(_) => return Ok(false), // not published / unreachable: nothing to do
     };
@@ -558,6 +659,35 @@ pub fn set_exec(_: &Path) {}
 
 #[cfg(test)]
 mod tests {
+    use super::{friendly_message, should_retry, NetFail};
+
+    #[test]
+    fn friendly_messages() {
+        let off = "The update server is offline right now (not a problem with your connection). Try again later.";
+        for c in [530u16, 502, 503, 504] {
+            assert_eq!(friendly_message(&NetFail::Status(c, String::new())), Some(off));
+        }
+        assert_eq!(friendly_message(&NetFail::Status(200, "error code: 1033".into())), Some(off));
+        assert_eq!(friendly_message(&NetFail::Timeout), Some("The update server didn't answer in time. Check your connection and try again."));
+        assert_eq!(friendly_message(&NetFail::Connect), Some("Couldn't reach the update server. Check your connection."));
+        assert_eq!(friendly_message(&NetFail::Status(404, String::new())), None);
+        assert_eq!(friendly_message(&NetFail::Other), None);
+    }
+
+    #[test]
+    fn retry_decision() {
+        assert!(should_retry(&NetFail::Timeout));
+        assert!(should_retry(&NetFail::Connect));
+        for c in [500u16, 502, 503, 504, 530] {
+            assert!(should_retry(&NetFail::Status(c, String::new())), "{c}");
+        }
+        assert!(should_retry(&NetFail::Status(403, "error code: 1033".into())));
+        for c in [400u16, 403, 404, 429] {
+            assert!(!should_retry(&NetFail::Status(c, String::new())), "{c}");
+        }
+        assert!(!should_retry(&NetFail::Other));
+    }
+
     use super::*;
 
     fn ctx(root: &Path) -> Ctx {

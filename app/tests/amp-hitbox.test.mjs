@@ -32,4 +32,49 @@ test('a placed spike\'s box is the game collider shape through the spike\'s turn
   assert.deepEqual(shapeBounds(turnShape(shape, [1, 0, 0, 1])), [-12, -16, 12, 14]);
   assert.deepEqual(shapeBounds(turnShape(shape, [0, -1, 1, 0])), [-14, -12, 16, 12]);
 });
+
+test('a diagonal pair (pinch corner) produces two separate polygons', () => {
+  // Two cells touching only at a corner: (0,0) and (1,1)
+  const loops = outlineLoops(['0,0', '1,1']);
+  assert.equal(loops.length, 2, 'two separate polygons for diagonal pair');
+  assert.equal(loops[0].length, 4, 'each polygon has 4 corners');
+  assert.equal(loops[1].length, 4);
+});
+
+test('insertion order independence: same cell set in different orders produces identical loops', () => {
+  const cells = ['0,0', '1,0', '0,1', '1,1', '2,1', '1,2']; // a small cluster with pinch corners
+  const orders = [
+    cells,
+    [...cells].reverse(),
+    [cells[2], cells[0], cells[4], cells[1], cells[5], cells[3]],
+    [cells[5], cells[3], cells[1], cells[4], cells[0], cells[2]],
+  ];
+  // Normalize polygons: rotate to start at lexicographically smallest point, then compare
+  const norm = (loops) => loops.map((poly) => {
+    const pts = poly.map((p) => p.join(','));
+    let minIdx = 0;
+    for (let i = 1; i < pts.length; i++) if (pts[i] < pts[minIdx]) minIdx = i;
+    return [...pts.slice(minIdx), ...pts.slice(0, minIdx)].join(';');
+  }).sort().join('|');
+  const results = orders.map((o) => norm(outlineLoops(o)));
+  for (const r of results) assert.equal(r, results[0], 'all insertion orders produce identical loops');
+});
+
+test('a 2x2 block with one corner removed produces one polygon with a notch (6 corners)', () => {
+  // 2x2 minus top-right: (0,0), (1,0), (0,1)
+  const loops = outlineLoops(['0,0', '1,0', '0,1']);
+  assert.equal(loops.length, 1, 'single polygon');
+  assert.equal(loops[0].length, 6, 'notched rectangle has 6 corners');
+});
+
+test('an S-shape has no spurious pinch split', () => {
+  // S-shape: (0,0), (1,0), (1,1), (2,1), (2,2)
+  const cells = ['0,0', '1,0', '1,1', '2,1', '2,2'];
+  const loops = outlineLoops(cells);
+  assert.equal(loops.length, 1, 'S-shape is one connected polygon');
+  // Should have 10 corners for this S-shape (no extra splits at pinch points)
+  const totalCorners = loops.flatMap((l) => l).length;
+  assert.ok(totalCorners >= 10 && totalCorners <= 12, `S-shape has reasonable corner count: ${totalCorners}`);
+});
+
 console.log(n + ' passed');

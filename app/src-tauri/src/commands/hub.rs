@@ -28,12 +28,12 @@ fn sanitize_id(id: &str) -> Result<(), String> {
 }
 
 fn mods_dir(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     Some(PathBuf::from(game_path).join("Recharge").join("Mods"))
 }
 
 fn maps_dir(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     Some(
         PathBuf::from(game_path)
             .join("Recharge")
@@ -44,7 +44,7 @@ fn maps_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     Some(
         PathBuf::from(game_path)
             .join("Recharge")
@@ -757,7 +757,11 @@ fn submit_mod_blocking(
 
 /// The mod id (mod.json "id") of a mod folder, so the upload form can pre-pick which of the user's uploads it updates.
 #[tauri::command]
-pub fn mod_folder_id(folder_path: String) -> Option<String> {
+pub async fn mod_folder_id(folder_path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("mod_folder_id", || mod_folder_id_sync(folder_path))).await.expect("command thread panicked")
+}
+
+pub fn mod_folder_id_sync(folder_path: String) -> Option<String> {
     read_json_file(&PathBuf::from(folder_path).join("mod.json"))?.get("id")?.as_str().map(str::to_string)
 }
 

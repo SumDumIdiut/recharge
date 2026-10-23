@@ -223,7 +223,11 @@ fn install_blocking(app: &AppHandle, id: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn uninstall_library_game(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn uninstall_library_game(app: AppHandle,id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("uninstall_library_game", || uninstall_library_game_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn uninstall_library_game_sync(app: AppHandle, id: String) -> Result<(), String> {
     check_id(&id)?;
     let target = games_dir(&app)?.join(&id);
     if target.is_dir() {

@@ -113,25 +113,8 @@ body::before {
   stroke-width: 2;
 }
 
-.wave-trace polyline.beat-single { animation: wave-beat-1 0.5s ease-out; }
-.wave-trace polyline.beat-double { animation: wave-beat-2 0.6s ease-out; }
-.wave-trace polyline.beat-sharp { animation: wave-beat-3 0.4s ease-out; }
-
-@keyframes wave-beat-1 {
-  0%, 100% { stroke-width: 2; }
-  50% { stroke-width: 3.2; }
-}
-@keyframes wave-beat-2 {
-  0%, 100% { stroke-width: 2; }
-  25% { stroke-width: 3; }
-  45% { stroke-width: 2; }
-  60% { stroke-width: 3.6; }
-}
-@keyframes wave-beat-3 {
-  0% { stroke-width: 2; }
-  15% { stroke-width: 4; }
-  100% { stroke-width: 2; }
-}
+/* The beat pulse is a Web Animation (wave-beat.js); everything animates only while the window is shown. */
+html.app-idle *, html.app-idle *::before, html.app-idle *::after { animation-play-state: paused !important; }
 
 .crumb-bar {
   position: fixed;

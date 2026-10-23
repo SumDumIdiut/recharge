@@ -1,0 +1,26 @@
+<main class="page nb-page">
+  <div class="nb" id="nb-root">
+    <div class="nb-top">
+      <div class="page-header nb-title">Notebook</div>
+      <div class="seg nb-vaults" id="nb-vaults"></div>
+      <div class="nb-nav">
+        <button class="btn" id="nb-back" type="button" title="Back" disabled>&lt; Back</button>
+        <button class="btn" id="nb-fwd" type="button" title="Forward" disabled>Forward &gt;</button>
+        <button class="btn nb-side-toggle" id="nb-side-toggle" type="button">Contents</button>
+        <button class="btn btn-primary" id="nb-download" type="button" hidden>Download .zip</button>
+      </div>
+    </div>
+    <div class="nb-body">
+      <aside class="nb-side" id="nb-side">
+        <input class="browser-search nb-search" id="nb-search" type="text" maxlength="100" placeholder="Search the notebook..." autocomplete="off" spellcheck="false" />
+        <div class="nb-tree" id="nb-tree"></div>
+      </aside>
+      <section class="nb-main" id="nb-main">
+        <div class="nb-article-wrap" id="nb-scroll">
+          <article class="nb-article card" id="nb-article"><div class="empty-state">Loading...</div></article>
+          <section class="nb-backlinks card" id="nb-backlinks" hidden></section>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>

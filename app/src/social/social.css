@@ -310,3 +310,78 @@
 .fm-board .fm-toolbar + .fm-toolbar { border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
 .fm-board .fm-list { padding: 4px 0 0; margin-top: 4px; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
 .fm-board .fm-pager { width: auto; padding: 10px 0 0; }
+
+/* A name that is not a link. Inline so it sits inside table cells and chat lines without
+   forcing a line break, and so an inline colour style on it wins over anything here. */
+.user-name-plain { display: inline; }
+/* The moderator chat room, on its own page: the page is a flex column so the room can take
+   up whatever height is left, with the log scrolling inside it and the input always in reach. */
+.mod-page { display: flex; flex-direction: column; min-height: calc(100vh - 112px); }
+.modchat { flex: 1; min-height: 0; max-width: 940px; margin: 12px 0 0; background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); overflow: hidden; display: flex; flex-direction: column; }
+.modchat-head { padding: 10px 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.modchat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
+/* Yours on the right, everyone else's on the left. Bubbles hug their content rather than
+   stretching across the room, so a short message doesn't read as a full-width one. */
+.modchat-msg { line-height: 1.45; overflow-wrap: anywhere; max-width: 74%; padding: 6px 11px; border-radius: 14px; background: color-mix(in srgb, var(--text) 7%, transparent); }
+.modchat-msg.mine { align-self: flex-end; background: color-mix(in srgb, var(--green) 17%, transparent); border-bottom-right-radius: 4px; }
+.modchat-msg.theirs { align-self: flex-start; border-bottom-left-radius: 4px; }
+.modchat-who { color: var(--green); font-weight: 600; margin-right: 5px; }
+.modchat-msg.mine .modchat-who { opacity: 0.75; }
+.modchat-form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.modchat-form input { flex: 1; min-width: 0; }
+
+/* Badges: what the old title chips are now. --bd is the badge's own colour when it has one. */
+.cm-title { --bd: transparent; }
+.cm-title[style] { border-color: var(--bd); }
+
+/* The Moderator page's panels. */
+.mod-panel { background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 14px 16px; margin: 0 0 16px; max-width: 940px; box-sizing: border-box; }
+.mod-h { margin: 0 0 10px; font-size: 20px; text-transform: uppercase; letter-spacing: 1px; color: var(--green); }
+.mod-note { color: var(--text-dim); font-size: 13px; line-height: 1.45; margin: 6px 0; }
+.mod-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.mod-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-dim); }
+.mod-field select, .mod-field input, .mod-field textarea { min-width: 150px; }
+.mod-rating-result { margin-top: 10px; color: var(--green); font-size: 13px; }
+.mod-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.mod-table th { text-align: left; color: var(--text-dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; padding: 6px 8px; }
+.mod-table td { padding: 7px 8px; border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent); vertical-align: middle; }
+.mod-num { text-align: right; font-variant-numeric: tabular-nums; }
+.mod-total { color: var(--green); font-weight: 600; }
+.mod-grade-cell { color: var(--green); font-weight: 600; }
+.mod-award-user { width: 110px; margin-left: 8px; }
+.mod-standards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.mod-standards textarea { width: 100%; resize: vertical; font: inherit; }
+.mod-standards .mod-field textarea.saved { border-color: var(--green); }
+.mod-standards .mod-field textarea.failed { border-color: #ff6b6b; }
+
+/* The Moderator page: one panel like the Forum's, with a tab row on top. */
+.mod-board { background: var(--glass); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 8px 12px 12px; max-width: 940px; box-sizing: border-box; }
+.mod-toolbar { padding: 6px 0; border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent); }
+.mod-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mod-victors { color: var(--text-dim); font-size: 13px; margin-left: 6px; }
+
+/* The difficulty list and player search, on the Maps page. */
+.mod-player-row { display: flex; align-items: baseline; gap: 12px; padding: 8px 4px; border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent); cursor: pointer; }
+.mod-player-row:hover { background: color-mix(in srgb, var(--green) 7%, transparent); }
+.mod-player-head { display: flex; align-items: baseline; gap: 12px; padding: 10px 4px 8px; }
+.detail-rating { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.detail-grade { color: var(--green); font-weight: 600; letter-spacing: 1px; }
+.detail-points { color: var(--text-dim); font-size: 14px; font-variant-numeric: tabular-nums; }
+.detail-quality { color: var(--text-dim); font-size: 13px; }
+
+/* A map's grade on its card and on its detail page. */
+.card-grade { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: 12px; letter-spacing: 1px; color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 45%, transparent); background: color-mix(in srgb, var(--green) 10%, transparent); vertical-align: middle; white-space: nowrap; }
+.detail-rating-block { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 8px 0 2px; }
+.detail-bonus { color: var(--text-dim); font-weight: 400; }
+.detail-awarded { color: var(--text-dim); font-size: 13px; }
+#maps-rate-picker { flex-basis: 100%; margin-top: 8px; }
+.mod-picker { align-items: flex-end; }
+
+/* The Players page. */
+.player-list { display: flex; flex-direction: column; }
+.player-row { display: flex; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent); cursor: pointer; }
+.player-row:hover { background: color-mix(in srgb, var(--green) 7%, transparent); }
+.player-row-main { flex: 1; min-width: 0; }
+.player-row-name { font-size: 17px; }
+.player-row-meta { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+.player-row-badges { display: flex; gap: 6px; flex-wrap: wrap; }

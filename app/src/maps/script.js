@@ -1,14 +1,17 @@
+import { isActive, onActivity } from '../activity.js';
 import { getToken, getUsername, isLoggedIn, isAdmin } from '../auth.js';
 import { uploaderHtml } from '../social/avatar.js';
 import { canRemoveUpload } from '../social/perms.js';
 import { requireLogin } from '../login-prompt.js';
-import { hubStamp, cardImage, needsView } from './mapthumb.js';
+import { hubStamp, cardImage, needsView, viewFailed, retryView } from './mapthumb.js';
 import { mountComments } from '../social/comments.js';
-import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH } from '../ui.js';
+import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadgeState, confirmDestructive, armConfirm, ICON_CHECK, ICON_DOWNLOAD, ICON_TRASH, patchCards } from '../ui.js';
 
 import { HUB_BASE } from '../hub.js';
 import { checkTab } from '../autoupdate.js';
 import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
+import { isTestMap } from './test-map.js';
+import { submissions } from '../social/api.js';
 
 let currentSubtab = 'installed';
 let searchTerm = '';
@@ -36,7 +39,10 @@ async function loadCatalog() {
       name: row.name,
       author: row.author,
       description: row.description,
-      stamp: hubStamp(row.createdAt),
+      // Keyed on what changes when a map is updated, not on when it was first published:
+      // createdAt never moves, so a stamp built from it would reuse the drawn view of the
+      // first version forever and the thumbnail would never change.
+      stamp: hubStamp(`${row.updatedAt || row.createdAt}|${row.revision || 1}`),
       revision: row.revision || 1,
       updatedAt: row.updatedAt || row.createdAt,
       uploader: row.uploader || null,
@@ -58,11 +64,8 @@ async function loadMyUploadIds() {
     return;
   }
   try {
-    const res = await fetch(`${HUB_BASE}/api/me/submissions`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    });
-    const rows = res.ok ? await res.json() : [];
-    myUploads = rows.filter((r) => r.kind === 'map');
+    const rows = await submissions.mine();
+    myUploads = (Array.isArray(rows) ? rows : []).filter((r) => r.kind === 'map');
     myUploadIds = new Set(myUploads.map((r) => r.id));
   } catch {
     myUploadIds = new Set();
@@ -73,23 +76,39 @@ async function loadMyUploadIds() {
 // A map from the Hub goes by its Hub name (two uploads of one map can share the name in their files).
 const shownName = (m) => catalog.find((c) => c.id === m.id || c.id === m.hub)?.name || m.name;
 
+// A card's picture: the author's, else the map drawn zoomed out. When that could not be drawn the card
+// says so, and offers another try, rather than showing an empty box for ever.
+function cardThumb(id, uploaded, drawn, badge) {
+  const pic = cardImage(uploaded, drawn);
+  const retry = !pic && viewFailed(id)
+    ? `<button class="thumb-retry" title="The map's view could not be drawn" onclick="event.stopPropagation(); window.__mapRetryView('${escapeHtml(id)}')">view unavailable - retry</button>`
+    : '';
+  return thumb(pic, badge, retry);
+}
+// Another try at a map whose view failed: what failed is forgotten, and the view is drawn again.
+window.__mapRetryView = function (id) {
+  if (!retryView(id)) return;
+  render();
+  loadThumbs();
+};
+
 function renderInstalled() {
   const list = document.getElementById('maps-installed-view');
   const filtered = installedCache
     .filter((m) => matchesSearch(shownName(m)))
     .sort((a, b) => shownName(a).localeCompare(shownName(b), undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
-    list.innerHTML = installedCache.length
+    patchCards(list, [], installedCache.length
       ? '<div class="empty-state">No maps match your search.</div>'
-      : '<div class="empty-state">No maps installed yet. Browse the catalog to add one.</div>';
+      : '<div class="empty-state">No maps installed yet. Browse the catalog to add one.</div>');
     return;
   }
-  list.innerHTML = filtered
+  patchCards(list, filtered
     .map((m) => {
       const entry = catalog.find((c) => c.id === m.id || c.id === m.hub);
       return `
-    <div class="browse-card"${entry ? ` onclick="window.__mapOpenDetail('${escapeHtml(entry.id)}')"` : ''}>
-      ${thumb(cardImage(entry?.image, thumbs.get(m.id)))}
+    <div class="browse-card" data-k="${escapeHtml(m.id)}"${entry ? ` onclick="window.__mapOpenDetail('${escapeHtml(entry.id)}')"` : ''}>
+      ${cardThumb(m.id, entry?.image, thumbs.get(m.id))}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(shownName(m))}</div>
         <div class="browse-card-meta">${entry?.author ? uploaderHtml(entry) + ' &middot; ' : ''}${m.groupCount} course${m.groupCount === 1 ? '' : 's'}</div>
@@ -101,23 +120,23 @@ function renderInstalled() {
       </div>
     </div>`;
     })
-    .join('');
+  );
 }
 
 function renderBrowse() {
   const list = document.getElementById('maps-browse-view');
   if (catalogError) {
-    list.innerHTML = '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>';
+    patchCards(list, [], '<div class="empty-state">Couldn\'t reach the Recharge Hub library. Check your connection and reopen this tab.</div>');
     return;
   }
   const filtered = catalog
     .filter((m) => matchesSearch(m.name + ' ' + (m.description || '') + ' ' + (m.author || '')))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   if (!filtered.length) {
-    list.innerHTML = '<div class="empty-state">No maps published yet.</div>';
+    patchCards(list, [], '<div class="empty-state">No maps published yet.</div>');
     return;
   }
-  list.innerHTML = filtered
+  patchCards(list, filtered
     .map((entry) => {
       const installed = installedCache.some((m) => m.id === entry.id || m.hub === entry.id);
       const badge = installed
@@ -125,8 +144,8 @@ function renderBrowse() {
         : `<button class="badge badge-install" title="Install" onclick="event.stopPropagation(); window.__mapInstall('${escapeHtml(entry.id)}', this)">${ICON_DOWNLOAD}</button>`;
       const mine = canRemoveUpload(myUploadIds.has(entry.id), isAdmin());
       return `
-    <div class="browse-card" onclick="window.__mapOpenDetail('${escapeHtml(entry.id)}')">
-      ${thumb(cardImage(entry.image, thumbs.get(entry.id)), badge)}
+    <div class="browse-card" data-k="${escapeHtml(entry.id)}" onclick="window.__mapOpenDetail('${escapeHtml(entry.id)}')">
+      ${cardThumb(entry.id, entry.image, thumbs.get(entry.id), badge)}
       <div class="browse-card-info">
         <div class="browse-card-name">${escapeHtml(entry.name)}</div>
         <div class="browse-card-meta">${uploaderHtml(entry)}</div>
@@ -139,7 +158,7 @@ function renderBrowse() {
       </div>` : ''}
     </div>`;
     })
-    .join('');
+  );
 }
 
 // Map page: a full-page view like the Skins/Mods ones (gallery, description, actions, comments underneath).
@@ -225,13 +244,13 @@ window.__mapCloseDetail = function () {
   document.getElementById('maps-list').style.display = 'block';
 };
 
-function render() {
+async function render() {
   document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === currentSubtab));
   document.getElementById('maps-installed-view').style.display = currentSubtab === 'installed' ? '' : 'none';
   document.getElementById('maps-browse-view').style.display = currentSubtab === 'browse' ? '' : 'none';
   document.getElementById('maps-upload-btn').style.display = ''; // always shown: logged-out clicks explain how to log in
-  renderInstalled();
-  renderBrowse();
+  // Only the list on show is drawn; the other is brought up to date when its tab is opened.
+  if (currentSubtab === 'installed') renderInstalled(); else renderBrowse();
   // Keep an open map page in step with installs, deletes and finished pictures, or leave it if its map left the library.
   if (openDetailId && !window.__mapOpenDetail(openDetailId)) window.__mapCloseDetail();
 }
@@ -240,6 +259,7 @@ window.__mapsSubtab = function (tab) {
   currentSubtab = tab;
   document.querySelectorAll('#view-maps .subtab-btn').forEach((el) => el.classList.toggle('active', el.dataset.subtab === tab));
   render();
+  loadThumbs();
 };
 
 window.__mapsSearch = function (value) {
@@ -402,7 +422,10 @@ async function submitUpload() {
 async function refresh() {
   const { invoke } = window.__TAURI__.core;
   // The editor's "Test in game" slot isn't a map of its own.
-  installedCache = (await invoke('list_maps')).filter((m) => m.id !== 'map-maker-test');
+  installedCache = (await invoke('list_maps')).filter((m) => !isTestMap(m));
+  // A fresh list: a map whose view failed to draw is tried again (the failure was about the session).
+  const { clearFailed } = await import('./mapthumb.js');
+  clearFailed();
   render();
   syncHubNames();
   loadThumbs();
@@ -425,9 +448,15 @@ async function loadThumbs() {
       }
       for (const entry of catalog) if (!todo.some((t) => t.key === entry.id)) todo.push({ key: entry.id, id: entry.id, stamp: entry.stamp, uploaded: entry.image });
       for (const t of todo) {
+        // Drawing a view is heavy: only while the Maps page is on show and the window is live, and only for the tab being looked at.
+        // What is left is picked up by the next onShow / tab switch.
+        if (!document.getElementById('view-maps')?.classList.contains('v-on') || !isActive()) break;
+        if (!(currentSubtab === 'installed' ? installedCache.some((m) => m.id === t.key) : catalog.some((c) => c.id === t.key))) continue;
         if (!needsView(t.uploaded, thumbs.get(t.key))) continue;
         const img = await mapThumbFor(t.id, { stamp: t.stamp }).catch(() => null);
         if (img) { thumbs.set(t.key, img); render(); }
+        // It could not be drawn: the card says so (and offers another try) instead of showing nothing.
+        else if (viewFailed(t.id)) render();
         await sleep(50);
       }
     } while (run.again);
@@ -460,3 +489,6 @@ export async function onShow() {
   // Installed maps the Hub has a newer revision of are updated in place (not awaited: the tab is already usable).
   if (!catalogError) checkTab('maps', installedCache, catalog, refresh).catch(() => {});
 }
+
+// Back from a minimised window: carry on drawing what was left.
+onActivity((on) => { if (on) loadThumbs(); });

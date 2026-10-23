@@ -9,7 +9,6 @@ import { coverSource, renderToBlob } from '../social/crop.js';
 import { LIMITS } from '../social/validate.js';
 import { safeUrl } from '../social/text.js';
 
-export { TITLES, STAFF_TITLES } from '../social/validate.js';
 // Name colours can be gradients too (drawn through the letters); these are ready-made ones, in the hub's strict form.
 const NAME_GRADIENTS = [
   ['Recharge', 'linear-gradient(90deg, #41f88d, #4aa8ff)'],

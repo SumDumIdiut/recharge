@@ -44,32 +44,52 @@ pub fn save_update_channel(app: &AppHandle, channel: &str) {
 }
 
 #[tauri::command]
-pub fn get_game_path(app: AppHandle) -> Option<String> {
+pub async fn get_game_path(app: AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("get_game_path", || get_game_path_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn get_game_path_sync(app: AppHandle) -> Option<String> {
     load(&app).game_path.or_else(|| steam::detect().map(|i| i.path))
 }
 
 #[tauri::command]
-pub fn get_saved_game_path(app: AppHandle) -> Option<String> {
+pub async fn get_saved_game_path(app: AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("get_saved_game_path", || get_saved_game_path_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn get_saved_game_path_sync(app: AppHandle) -> Option<String> {
     load(&app).game_path
 }
 
 #[tauri::command]
-pub fn set_game_path(app: AppHandle, path: String) {
+pub async fn set_game_path(app: AppHandle,path: String) {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("set_game_path", || set_game_path_sync(app, path))).await.expect("command thread panicked")
+}
+
+pub fn set_game_path_sync(app: AppHandle, path: String) {
     let mut settings = load(&app);
     settings.game_path = Some(path);
     save(&app, &settings);
 }
 
 #[tauri::command]
-pub fn auto_detect_game_path(app: AppHandle) -> Result<String, String> {
+pub async fn auto_detect_game_path(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("auto_detect_game_path", || auto_detect_game_path_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn auto_detect_game_path_sync(app: AppHandle) -> Result<String, String> {
     let info = steam::detect().ok_or("Couldn't find an IGTAP install in any Steam library.")?;
-    set_game_path(app, info.path.clone());
+    set_game_path_sync(app, info.path.clone());
     Ok(info.path)
 }
 
 #[tauri::command]
-pub fn open_game_folder_in_explorer(app: AppHandle) -> Result<(), String> {
-    let path = get_game_path(app).ok_or("no installation detected")?;
+pub async fn open_game_folder_in_explorer(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("open_game_folder_in_explorer", || open_game_folder_in_explorer_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn open_game_folder_in_explorer_sync(app: AppHandle) -> Result<(), String> {
+    let path = get_game_path_sync(app).ok_or("no installation detected")?;
     open_in_file_manager(&path)
 }
 

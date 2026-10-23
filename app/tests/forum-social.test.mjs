@@ -171,14 +171,28 @@ test('reply parent id goes to the hub as a number', () => {
   assert.strictEqual(typeof parentIdOf('7'), 'number');
 });
 
-test('several titles: badges for each, escaped, and older single-title data still shows', async () => {
-  const { titlesHtml, userOf } = await import('../src/social/avatar.js');
-  assert.equal(titlesHtml({ titles: ['Mapmaker', 'Tester'] }), '<span class="cm-title">Mapmaker</span><span class="cm-title">Tester</span>');
-  assert.equal(titlesHtml({ title: 'Modder' }, 'pc-title'), '<span class="pc-title">Modder</span>');
-  assert.equal(titlesHtml({ titles: ['<b>x</b>'] }), '<span class="cm-title">&lt;b&gt;x&lt;/b&gt;</span>');
-  assert.deepEqual(userOf({ author: { username: 'a', titles: ['Tester', 'Explorer'] } }).titles, ['Tester', 'Explorer']);
-  assert.deepEqual(userOf({ author: { username: 'a', title: 'Tester' } }).titles, ['Tester']);
-  assert.equal(titlesHtml({}), '');
+test('badges: one chip each, escaped, with the badge colour as a CSS var', async () => {
+  const { badgesHtml, titlesHtml, userOf } = await import('../src/social/avatar.js');
+  const badge = (id, name, colour = null, description = '') => ({ id, name, colour, description });
+  assert.equal(
+    badgesHtml({ badges: [badge('moderator', 'Moderator'), badge('admin', 'Admin')] }),
+    '<span class="cm-title" title="Moderator">Moderator</span><span class="cm-title" title="Admin">Admin</span>'
+  );
+  // The badge's own colour only when it is a real colour; anything else is dropped.
+  assert.match(badgesHtml({ badges: [badge('a', 'A', '#41f88d')] }), /style="--bd:#41f88d"/);
+  assert.equal(badgesHtml({ badges: [badge('a', 'A', 'red; background:url(x)')] }), '<span class="cm-title" title="A">A</span>');
+  assert.equal(badgesHtml({ badges: [badge('a', '<b>x</b>')] }), '<span class="cm-title" title="&lt;b&gt;x&lt;/b&gt;">&lt;b&gt;x&lt;/b&gt;</span>');
+  assert.equal(badgesHtml({ badges: [badge('a', 'A', null, 'Runs the hub')] }).includes('title="Runs the hub"'), true);
+  assert.equal(badgesHtml({}), '');
+  assert.equal(badgesHtml({ badges: 'nope' }), '');
+  // titlesHtml is the name the call sites already use, and it is badges now.
+  assert.equal(titlesHtml, badgesHtml);
+  // The old title labels render nothing rather than old labels.
+  assert.equal(badgesHtml({ titles: ['Mapmaker'], title: 'Tester' }), '');
+  // userOf carries the badges and the moderator flag through.
+  assert.deepEqual(userOf({ author: { username: 'a', badges: [badge('moderator', 'Moderator')] } }).badges.map((b) => b.id), ['moderator']);
+  assert.equal(userOf({ author: { username: 'a', moderator: true } }).moderator, true);
+  assert.equal(userOf({ author: { username: 'a' } }).moderator, false);
 });
 
 test('name colours: plain hex or a strict gradient, nothing else reaches the style', async () => {

@@ -26,6 +26,11 @@ export function outlineLoops(keys) {
     if (!has(x, y + 1)) edge([x + 1, y + 1], [x, y + 1]);
     if (!has(x - 1, y)) edge([x, y + 1], [x, y]);
   }
+  // Sort adjacency lists by angle for deterministic walk order (independent of cell insertion order).
+  for (const [k, list] of out) {
+    const [cx, cy] = k.split(',').map(Number);
+    list.sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+  }
   const loops = [];
   for (const [k0, list0] of out) {
     while (list0.length) {
@@ -35,11 +40,21 @@ export function outlineLoops(keys) {
       while (cur[0] !== start[0] || cur[1] !== start[1]) {
         pts.push(cur);
         const list = out.get(cur.join(','));
-        // At a pinch corner take the left-most turn so touching cells stay separate shapes.
+        // At a pinch corner (multiple continuations) take the left-most turn so touching cells stay separate shapes.
+        // If only one continuation exists (normal convex/concave corner), take it directly.
         const dx = cur[0] - from[0], dy = cur[1] - from[1];
-        let i = list.findIndex((n) => (n[0] - cur[0]) * -dy + (n[1] - cur[1]) * dx > 0);
-        if (i < 0) i = list.findIndex((n) => (n[0] - cur[0]) * dx + (n[1] - cur[1]) * dy > 0);
-        if (i < 0) i = 0;
+        let i = -1;
+        if (list.length === 1) {
+          i = 0; // only one way to go
+        } else {
+          i = list.findIndex((n) => (n[0] - cur[0]) * -dy + (n[1] - cur[1]) * dx > 0); // left turn
+          if (i < 0) i = list.findIndex((n) => (n[0] - cur[0]) * dx + (n[1] - cur[1]) * dy > 0); // straight
+        }
+        if (i < 0) {
+          // Malformed edge graph: no valid continuation at a pinch corner. This should not happen for valid cell sets.
+          // Throw to surface the problem instead of picking arbitrarily (which was insertion-order dependent).
+          throw new Error(`outlineLoops: malformed loop at ${cur.join(',')} from ${from.join(',')} (no valid continuation, ${list.length} options)`);
+        }
         from = cur;
         cur = list.splice(i, 1)[0];
       }

@@ -74,8 +74,6 @@
   gap: 10px;
   color: var(--text);
   background: color-mix(in srgb, var(--panel) 88%, transparent);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
 }
 .bg-editor[hidden], .bg-library-picker[hidden], .bg-editor [hidden] { display: none; }
 .bg-library-picker { background: color-mix(in srgb, var(--bg) 40%, var(--panel)); margin-bottom: 0; }
@@ -120,15 +118,11 @@
   background: var(--bgp-panel);
   padding: 4px 12px;
   align-self: flex-start;
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
 }
 #view-backgrounds .browser-subtabs,
 #view-backgrounds .bg-toolbar-right {
   background: var(--bgp-panel);
   padding: 4px;
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
 }
 #view-backgrounds .bg-toolbar-right { padding: 4px 8px; }
 #view-backgrounds .bg-keep .bg-switch-label,
@@ -198,7 +192,7 @@
 #view-backgrounds select:focus-visible,
 #view-backgrounds input[type=text]:focus-visible { outline: none; background: var(--bgp-hi); }
 /* "+ New playlist" sits straight on the picture: give it the dark panel */
-#view-backgrounds .bg-pl-toolbar .btn { background: var(--bgp-panel); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+#view-backgrounds .bg-pl-toolbar .btn { background: var(--bgp-panel); }
 #view-backgrounds .bg-pl-toolbar .btn:hover { background: color-mix(in srgb, var(--text) 14%, var(--bgp-panel)); }
 
 /* ---- Soft UI pass (shared look; kept cheap here: no blur, no per-card drop shadows, so grid scrolling stays smooth) ---- */
@@ -206,7 +200,6 @@
 #view-backgrounds .page-header,
 #view-backgrounds .browser-subtabs,
 #view-backgrounds .bg-toolbar-right,
-#view-backgrounds .bg-pl-toolbar .btn { -webkit-backdrop-filter: none; backdrop-filter: none; }
 #view-backgrounds .page-header { color: var(--green); border-radius: var(--radius-sm); }
 #view-backgrounds .browser-subtabs { border-radius: var(--radius-sm); box-shadow: none; padding: 0 6px; }
 #view-backgrounds .bg-toolbar-right { border-radius: var(--radius-sm); box-shadow: var(--hl); padding: 4px 12px; }
@@ -240,7 +233,7 @@
 #view-backgrounds .bg-playlist-row.is-active { background: var(--glass-hi); box-shadow: var(--hl), inset 3px 0 0 var(--green); }
 #view-backgrounds .bg-playlist-list { gap: 10px; }
 #view-backgrounds .bg-editor,
-#view-backgrounds .bg-library-picker { border-radius: var(--radius); box-shadow: var(--hl); -webkit-backdrop-filter: none; backdrop-filter: none; padding: 16px; }
+#view-backgrounds .bg-library-picker { border-radius: var(--radius); box-shadow: var(--hl); padding: 16px; }
 #view-backgrounds .bg-editor-title { color: var(--green); }
 #view-backgrounds .bg-strip-item,
 #view-backgrounds .bg-pick { border-radius: var(--radius-sm); overflow: hidden; }

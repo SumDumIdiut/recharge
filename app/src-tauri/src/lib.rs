@@ -1,4 +1,5 @@
 mod commands;
+mod perf;
 mod vdf;
 
 use commands::{amp, backgrounds, games, hub, launcher, live, loader, maps, migrate, mods, play, repos, settings, skins, steam, updater};
@@ -48,14 +49,24 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             hub::start_beam_server(app.handle().clone());
+            play::start_game_poller(app.handle().clone());
             live::init(app.handle());
             updater::init(app.handle());
             amp::init(app.handle()); // after updater::init: the channel comes from its state
+            // A test launch turns the other mods off and writes down which ones; if the app
+            // was closed while the game was still running, that note is still here. Put them
+            // back before anything else can read the mods folder.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(e) = mods::restore_after_test_launch(&handle) {
+                    eprintln!("[mods] couldn't restore after a test launch: {e}");
+                }
+            });
             #[cfg(target_os = "linux")]
             allow_media_without_gesture(app.handle());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({ let inner = perf::typed(tauri::generate_handler![
             steam::detect_igtap_install,
             steam::detect_all_igtap_installs,
             settings::get_game_path,
@@ -72,6 +83,7 @@ pub fn run() {
             amp::amp_mark_bad,
             amp::amp_check_now,
             live::live_status,
+            live::live_package_version,
             live::live_get_channel,
             live::live_set_channel,
             live::live_ack,
@@ -157,7 +169,7 @@ pub fn run() {
             backgrounds::unpublish_background_image,
             hub::fetch_hub_backgrounds_cmd,
             hub::fetch_changelog_cmd,
-        ])
+        ]); move |inv| perf::wrap(&inner, inv) })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

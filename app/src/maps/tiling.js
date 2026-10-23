@@ -7,11 +7,14 @@
 // same tileset, level blocks and your own alike.
 //
 // The rule follows the game's own rule tiles (read from the level's tiles; see tests/amp-tiling.test.mjs):
-//   no neighbour / a 1-wide run  -> single / strip pieces
+//   no neighbour / a 1-wide run  -> the sheet's own single / v / h piece, or the quarters cut from the panel when it has none
 //   one missing side             -> edge, two missing sides -> outer corner (diagonals are ignored there)
 //   all four sides present       -> centre, with an inside corner (see INSIDE_QUARTER) in each quarter whose diagonal is empty
 // and an edge or corner cell that also has an empty diagonal gets the inside quarter too. Cells with an inside corner
 // are put together quarter-wise, like the 1-wide strips are.
+// The sheet's own art comes first: a lone cell, a 1-wide column and a 1-wide row each have a piece of their own on some
+// sheets, and those are the art the game draws. The quarters are the fallback for the sheets that have none: they are cut
+// out of whole tiles, so they drift from the game by a pixel or two at every half-cell seam.
 
 export const DIAGONALS = ['NE', 'SE', 'SW', 'NW'];
 
@@ -26,6 +29,7 @@ const quarterPiece = (v, h, vPiece, hPiece, both) => (!v && !h ? both : !v ? vPi
 export function pickPieces(plate, has) {
   const n = has(0, 1), e = has(1, 0), s = has(0, -1), w = has(-1, 0);
   const quarters = () => ({ quarters: [quarterPiece(n, w, 'T', 'L', 'TL'), quarterPiece(n, e, 'T', 'R', 'TR'), quarterPiece(s, w, 'B', 'L', 'BL'), quarterPiece(s, e, 'B', 'R', 'BR')] });
+  // The sheet's own single / v / h piece when it has one, the quarters cut from the panel when it has not.
   if (!n && !e && !s && !w) return plate.single != null ? { whole: 'single' } : quarters();
   if ((n || s) && !e && !w) return plate.v ? { whole: 'v' + (!n ? 0 : !s ? 2 : 1) } : quarters();
   if ((e || w) && !n && !s) return plate.h ? { whole: 'h' + (!w ? 0 : !e ? 2 : 1) } : quarters();

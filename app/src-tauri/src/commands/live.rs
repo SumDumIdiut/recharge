@@ -46,20 +46,41 @@ pub struct LiveInfo {
     sha: Option<String>,
     #[serde(rename = "apiLevel")]
     api_level: u64,
+    managed: bool,
+    #[serde(rename = "managedReason")]
+    managed_reason: String,
 }
 
 fn live_root(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_local_data_dir().ok().map(|d| d.join("live"))
 }
 
-/// Launcher-managed installs carry src/, loader/ and live.json next to the binary (the launcher keeps it current), so the GitHub live updater stays out; None otherwise.
-fn packaged_dir() -> Option<PathBuf> {
+/// Launcher-managed installs carry src/, loader/, live.json and a started-<build>.ok marker next to the binary (the launcher keeps it current), so the GitHub live updater stays out; None otherwise.
+fn packaged_dir(_app: &AppHandle) -> Option<PathBuf> {
     let dir = super::updater::packaged_root()?;
-    dir.join("src").join("index.html").is_file().then_some(dir)
+    let has_layout = dir.join("src").join("index.html").is_file();
+    let has_marker = std::fs::read_dir(&dir)
+        .ok()
+        .and_then(|mut it| it.find(|e| e.as_ref().map(|e| e.file_name().to_string_lossy().starts_with("started-") && e.file_name().to_string_lossy().ends_with(".ok")).unwrap_or(false)))
+        .is_some();
+    (has_layout && has_marker).then_some(dir)
+}
+
+/// Detects if this is a launcher-managed install and returns the reason.
+fn detect_managed(app: &AppHandle) -> (bool, String) {
+    // RECHARGE_NO_LIVE env var explicitly disables live updates
+    if std::env::var_os("RECHARGE_NO_LIVE").is_some() {
+        return (true, "env".to_string());
+    }
+    // Check for launcher-managed install: layout + started marker (written by launcher on successful start)
+    if packaged_dir(app).is_some() {
+        return (true, "launcher".to_string());
+    }
+    (false, "none".to_string())
 }
 
 fn current_dir(app: &AppHandle) -> Option<PathBuf> {
-    packaged_dir().or_else(|| live_root(app).map(|r| r.join("current")))
+    packaged_dir(app).or_else(|| live_root(app).map(|r| r.join("current")))
 }
 
 fn log(app: &AppHandle, msg: &str) {
@@ -85,9 +106,6 @@ fn required_api_level(dir: &Path) -> u64 {
 }
 
 fn bundle_usable(app: &AppHandle) -> bool {
-    if std::env::var_os("RECHARGE_NO_LIVE").is_some() {
-        return false;
-    }
     let Some(dir) = current_dir(app) else { return false };
     dir.join("src").join("index.html").is_file() && required_api_level(&dir) <= API_LEVEL
 }
@@ -107,15 +125,17 @@ fn read_file(path: &Path) -> Option<String> {
 
 pub fn init(app: &AppHandle) {
     app.manage(LiveState::default());
-    if std::env::var_os("RECHARGE_NO_LIVE").is_some() {
+    let (managed, reason) = detect_managed(app);
+    if managed {
+        if reason == "env" {
+            log(app, "RECHARGE_NO_LIVE set: GitHub live updates are off");
+        } else {
+            log(app, "launcher-managed install: screens come from the install folder, GitHub live updates are off");
+        }
         return;
     }
     if bundle_usable(app) {
         start_server(app);
-    }
-    if packaged_dir().is_some() {
-        log(app, "launcher-managed install: screens come from the install folder, GitHub live updates are off");
-        return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
@@ -204,7 +224,11 @@ fn serve(app: &AppHandle, url: &str) -> tiny_http::Response<Cursor<Vec<u8>>> {
 }
 
 #[tauri::command]
-pub fn live_status(app: AppHandle, redirect: Option<bool>) -> LiveInfo {
+pub async fn live_status(app: AppHandle,redirect: Option<bool>) -> LiveInfo {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("live_status", || live_status_sync(app, redirect))).await.expect("command thread panicked")
+}
+
+pub fn live_status_sync(app: AppHandle, redirect: Option<bool>) -> LiveInfo {
     let sha = current_dir(&app).and_then(|d| read_file(&d.join("sha")));
     let mut active = bundle_usable(&app) && app.state::<LiveState>().server_started.load(Ordering::SeqCst);
 
@@ -221,12 +245,17 @@ pub fn live_status(app: AppHandle, redirect: Option<bool>) -> LiveInfo {
             }
         }
     }
-    LiveInfo { active, url: format!("http://127.0.0.1:{LIVE_PORT}/"), sha, api_level: API_LEVEL }
+    let (managed, managed_reason) = detect_managed(&app);
+    LiveInfo { active, url: format!("http://127.0.0.1:{LIVE_PORT}/"), sha, api_level: API_LEVEL, managed, managed_reason }
 }
 
 /// Called by the live page once it has loaded and can reach Rust.
 #[tauri::command]
-pub fn live_ack(app: AppHandle) {
+pub async fn live_ack(app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("live_ack", || live_ack_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn live_ack_sync(app: AppHandle) {
     if let Some(root) = live_root(&app) {
         let _ = std::fs::write(root.join("acked"), "1");
         let _ = std::fs::remove_file(root.join("tries"));
@@ -416,7 +445,8 @@ fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> 
 }
 
 fn check_and_apply(app: &AppHandle) -> Result<Outcome, String> {
-    if packaged_dir().is_some() {
+    let (managed, _) = detect_managed(app);
+    if managed {
         return Ok(Outcome::UpToDate); // the launcher delivers screens
     }
     let state = app.state::<LiveState>();
@@ -485,12 +515,27 @@ pub struct ChannelInfo {
 }
 
 #[tauri::command]
-pub fn live_get_channel(app: AppHandle) -> ChannelInfo {
+pub async fn live_get_channel(app: AppHandle) -> ChannelInfo {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("live_get_channel", || live_get_channel_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn live_get_channel_sync(app: AppHandle) -> ChannelInfo {
     ChannelInfo {
         channel: super::settings::update_channel(&app),
         sha: current_dir(&app).and_then(|d| read_file(&d.join("sha"))),
         needs_package: app.state::<LiveState>().needs_package.load(Ordering::SeqCst),
     }
+}
+
+#[derive(Serialize)]
+pub struct PackageVersionInfo {
+    #[serde(rename = "packageVersion")]
+    package_version: String,
+}
+
+#[tauri::command]
+pub fn live_package_version(app: AppHandle) -> PackageVersionInfo {
+    PackageVersionInfo { package_version: app.package_info().version.to_string() }
 }
 
 /// Switches between "stable" (master) and "beta" (dev) and fetches that channel's code right away.

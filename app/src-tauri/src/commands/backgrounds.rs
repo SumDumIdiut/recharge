@@ -92,7 +92,11 @@ fn sanitize_segment(s: &str) -> Result<(), String> {
 
 // Every background image you've uploaded, newest first.
 #[tauri::command]
-pub fn list_background_images(app: AppHandle) -> Vec<String> {
+pub async fn list_background_images(app: AppHandle) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("list_background_images", || list_background_images_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn list_background_images_sync(app: AppHandle) -> Vec<String> {
     let Ok(dir) = images_dir(&app) else { return Vec::new() };
     let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
     let mut rows: Vec<(std::time::SystemTime, String)> = entries
@@ -124,7 +128,11 @@ fn unique_name(dir: &Path, name: &str) -> String {
 }
 
 #[tauri::command]
-pub fn upload_background_image(app: AppHandle, path: String) -> Result<String, String> {
+pub async fn upload_background_image(app: AppHandle,path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("upload_background_image", || upload_background_image_sync(app, path))).await.expect("command thread panicked")
+}
+
+pub fn upload_background_image_sync(app: AppHandle, path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
     if !src.is_file() {
         return Err(format!("'{path}' not found"));
@@ -143,7 +151,11 @@ pub fn upload_background_image(app: AppHandle, path: String) -> Result<String, S
 }
 
 #[tauri::command]
-pub fn delete_background_image(app: AppHandle, file_name: String) -> Result<(), String> {
+pub async fn delete_background_image(app: AppHandle,file_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("delete_background_image", || delete_background_image_sync(app, file_name))).await.expect("command thread panicked")
+}
+
+pub fn delete_background_image_sync(app: AppHandle, file_name: String) -> Result<(), String> {
     sanitize_segment(&file_name)?;
     let dir = images_dir(&app)?;
     std::fs::remove_file(dir.join(&file_name)).map_err(|e| e.to_string())?;
@@ -194,7 +206,11 @@ fn write_poster_into(dir: &Path, name: &str, bytes: &[u8]) -> Result<String, Str
 }
 
 #[tauri::command]
-pub fn write_poster(app: AppHandle, name: String, bytes: Vec<u8>) -> Result<String, String> {
+pub async fn write_poster(app: AppHandle,name: String,bytes: Vec<u8>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("write_poster", || write_poster_sync(app, name, bytes))).await.expect("command thread panicked")
+}
+
+pub fn write_poster_sync(app: AppHandle, name: String, bytes: Vec<u8>) -> Result<String, String> {
     write_poster_into(&images_dir(&app)?, &name, &bytes)
 }
 
@@ -226,7 +242,11 @@ pub struct VideoPosters {
 }
 
 #[tauri::command]
-pub fn list_video_posters(app: AppHandle) -> VideoPosters {
+pub async fn list_video_posters(app: AppHandle) -> VideoPosters {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("list_video_posters", || list_video_posters_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn list_video_posters_sync(app: AppHandle) -> VideoPosters {
     match images_dir(&app) {
         Ok(dir) => {
             let (have, missing) = video_posters_in(&dir);
@@ -266,7 +286,11 @@ fn mime_of(path: &Path) -> &'static str {
 }
 
 #[tauri::command]
-pub fn read_background_image(app: AppHandle, file_name: String) -> Result<String, String> {
+pub async fn read_background_image(app: AppHandle,file_name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_background_image", || read_background_image_sync(app, file_name))).await.expect("command thread panicked")
+}
+
+pub fn read_background_image_sync(app: AppHandle, file_name: String) -> Result<String, String> {
     sanitize_segment(&file_name)?;
     let path = images_dir(&app)?.join(&file_name);
     if media_kind(&path) != Some("image") {
@@ -335,12 +359,20 @@ fn new_id() -> String {
 }
 
 #[tauri::command]
-pub fn get_backgrounds_config(app: AppHandle) -> BackgroundsConfig {
+pub async fn get_backgrounds_config(app: AppHandle) -> BackgroundsConfig {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("get_backgrounds_config", || get_backgrounds_config_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn get_backgrounds_config_sync(app: AppHandle) -> BackgroundsConfig {
     load_config(&app)
 }
 
 #[tauri::command]
-pub fn save_playlist(app: AppHandle, id: Option<String>, name: String, images: Vec<String>) -> Result<Playlist, String> {
+pub async fn save_playlist(app: AppHandle,id: Option<String>,name: String,images: Vec<String>) -> Result<Playlist, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("save_playlist", || save_playlist_sync(app, id, name, images))).await.expect("command thread panicked")
+}
+
+pub fn save_playlist_sync(app: AppHandle, id: Option<String>, name: String, images: Vec<String>) -> Result<Playlist, String> {
     if name.trim().is_empty() {
         return Err("name is required".to_string());
     }
@@ -364,14 +396,22 @@ pub fn save_playlist(app: AppHandle, id: Option<String>, name: String, images: V
 }
 
 #[tauri::command]
-pub fn set_playlist_interval(app: AppHandle, id: String, interval: u64) -> Result<(), String> {
+pub async fn set_playlist_interval(app: AppHandle,id: String,interval: u64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("set_playlist_interval", || set_playlist_interval_sync(app, id, interval))).await.expect("command thread panicked")
+}
+
+pub fn set_playlist_interval_sync(app: AppHandle, id: String, interval: u64) -> Result<(), String> {
     let mut config = load_config(&app);
     config.playlists.iter_mut().find(|p| p.id == id).ok_or("playlist not found")?.interval = interval;
     save_config(&app, &config)
 }
 
 #[tauri::command]
-pub fn set_playlist_sound(app: AppHandle, id: String, sound: String) -> Result<(), String> {
+pub async fn set_playlist_sound(app: AppHandle,id: String,sound: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("set_playlist_sound", || set_playlist_sound_sync(app, id, sound))).await.expect("command thread panicked")
+}
+
+pub fn set_playlist_sound_sync(app: AppHandle, id: String, sound: String) -> Result<(), String> {
     if !matches!(sound.as_str(), "auto" | "off" | "own") {
         sanitize_segment(&sound)?;
     }
@@ -828,7 +868,11 @@ pub async fn download_hub_playlist(app: AppHandle, id: String, name: String, aut
 }
 
 #[tauri::command]
-pub fn delete_playlist(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn delete_playlist(app: AppHandle,id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("delete_playlist", || delete_playlist_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn delete_playlist_sync(app: AppHandle, id: String) -> Result<(), String> {
     let mut config = load_config(&app);
     config.playlists.retain(|p| p.id != id);
     if config.active_playlist.as_deref() == Some(id.as_str()) {
@@ -838,7 +882,11 @@ pub fn delete_playlist(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_active_playlist(app: AppHandle, id: Option<String>) -> Result<(), String> {
+pub async fn set_active_playlist(app: AppHandle,id: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("set_active_playlist", || set_active_playlist_sync(app, id))).await.expect("command thread panicked")
+}
+
+pub fn set_active_playlist_sync(app: AppHandle, id: Option<String>) -> Result<(), String> {
     let mut config = load_config(&app);
     config.active_playlist = id;
     save_config(&app, &config)
@@ -879,7 +927,16 @@ fn resolve_sound(sound: &str, playlist_files: &[String], exists: &dyn Fn(&str) -
 
 // Random picture or video of the active playlist, never `exclude` unless it's the only one.
 #[tauri::command]
-pub fn pick_background(app: AppHandle, exclude: Option<String>) -> Result<Option<PickedBackground>, String> {
+pub async fn pick_background(app: AppHandle, exclude: Option<String>, inline: Option<bool>) -> Result<Option<PickedBackground>, String> {
+    tauri::async_runtime::spawn_blocking(move || pick_background_impl(app, exclude, inline.unwrap_or(true))).await.expect("command thread panicked")
+}
+
+pub fn pick_background_sync(app: AppHandle, exclude: Option<String>) -> Result<Option<PickedBackground>, String> {
+    pick_background_impl(app, exclude, true)
+}
+
+// inline = false: images come back with an empty data_url (the page loads them from the media server instead of base64 over IPC).
+fn pick_background_impl(app: AppHandle, exclude: Option<String>, inline: bool) -> Result<Option<PickedBackground>, String> {
     let config = load_config(&app);
     let Some(active_id) = config.active_playlist else { return Ok(None) };
     let Some(playlist) = config.playlists.iter().find(|p| p.id == active_id) else { return Ok(None) };
@@ -907,7 +964,8 @@ pub fn pick_background(app: AppHandle, exclude: Option<String>) -> Result<Option
             let sound = sound(&file);
             return Ok(Some(PickedBackground { file, kind: "video".to_string(), data_url: String::new(), sound }));
         }
-        if let Ok(data_url) = read_background_image(app.clone(), file.clone()) {
+        let data_url = if inline { read_background_image_sync(app.clone(), file.clone()) } else { Ok(String::new()) };
+        if let Ok(data_url) = data_url {
             let sound = sound(&file);
             return Ok(Some(PickedBackground { file, kind: "image".to_string(), data_url, sound }));
         }
@@ -916,8 +974,12 @@ pub fn pick_background(app: AppHandle, exclude: Option<String>) -> Result<Option
 }
 
 #[tauri::command]
-pub fn pick_random_background(app: AppHandle) -> Result<Option<String>, String> {
-    Ok(pick_background(app, None)?.filter(|p| p.kind == "image").map(|p| p.data_url))
+pub async fn pick_random_background(app: AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("pick_random_background", || pick_random_background_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn pick_random_background_sync(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(pick_background_sync(app, None)?.filter(|p| p.kind == "image").map(|p| p.data_url))
 }
 
 // --- Local media server: videos and audio are streamed (with Range support), not base64'd into memory ---
@@ -1033,7 +1095,27 @@ fn cors_headers(origin: Option<&str>) -> Vec<tiny_http::Header> {
     ]
 }
 
+#[cfg(test)]
 fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
+    handle_media_request_with(&|url| resolve_media_path(dir, token, url).map(|p| (p, false)), request)
+}
+
+// "<token>/skin/<percent-encoded folder name>" -> that skin's thumbnail image (same file read_skin_thumbnail used to base64), or None.
+fn resolve_skin_thumb(app: &AppHandle, token: &str, raw_url: &str) -> Option<PathBuf> {
+    let rest = raw_url.split(['?', '#']).next().unwrap_or("").strip_prefix('/')?;
+    let (t, rest) = rest.split_once('/')?;
+    if t != token {
+        return None;
+    }
+    let name = percent_decode(rest.strip_prefix("skin/")?);
+    if name.contains('\0') {
+        return None;
+    }
+    super::skins::thumbnail_path(app, &name)
+}
+
+// resolve returns the file and whether the browser may cache it (skin thumbnails, whose URLs carry a revision stamp).
+fn handle_media_request_with(resolve: &dyn Fn(&str) -> Option<(PathBuf, bool)>, request: tiny_http::Request) {
     use std::io::{Read, Seek, SeekFrom};
     let h = |k: &str, v: &str| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap();
     let origin = request.headers().iter().find(|x| x.field.equiv("Origin")).map(|x| x.value.as_str().to_string());
@@ -1051,7 +1133,7 @@ fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
         let _ = request.respond(plain(405));
         return;
     }
-    let Some(path) = resolve_media_path(dir, token, request.url()) else {
+    let Some((path, cacheable)) = resolve(request.url()) else {
         let _ = request.respond(plain(404));
         return;
     };
@@ -1065,7 +1147,7 @@ fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
     let mut headers = vec![
         h("Content-Type", mime_of(&path)),
         h("Accept-Ranges", "bytes"),
-        h("Cache-Control", "no-store"),
+        h("Cache-Control", if cacheable { "private, max-age=300" } else { "no-store" }),
         h("X-Content-Type-Options", "nosniff"),
     ];
     // Last-Modified (CORS-safelisted) lets the page key its cached thumbnails by file + mtime.
@@ -1090,7 +1172,11 @@ fn handle_media_request(dir: &Path, token: &str, request: tiny_http::Request) {
 
 // Base url (with trailing slash) of the local media server; start it on first use.
 #[tauri::command]
-pub fn background_media_base(app: AppHandle) -> Result<String, String> {
+pub async fn background_media_base(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("background_media_base", || background_media_base_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn background_media_base_sync(app: AppHandle) -> Result<String, String> {
     if let Some((port, token)) = MEDIA_SERVER.get() {
         return Ok(format!("http://127.0.0.1:{port}/{token}/"));
     }
@@ -1105,8 +1191,13 @@ pub fn background_media_base(app: AppHandle) -> Result<String, String> {
     let serve_token = token.clone();
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
-            let (dir, token) = (dir.clone(), serve_token.clone());
-            std::thread::spawn(move || handle_media_request(&dir, &token, request));
+            let (dir, token, app) = (dir.clone(), serve_token.clone(), app.clone());
+            std::thread::spawn(move || {
+                handle_media_request_with(
+                    &|url| resolve_skin_thumb(&app, &token, url).map(|p| (p, true)).or_else(|| resolve_media_path(&dir, &token, url).map(|p| (p, false))),
+                    request,
+                )
+            });
         }
     });
     Ok(format!("http://127.0.0.1:{port}/{token}/"))

@@ -148,6 +148,24 @@
 
 .update-available { color: var(--magenta); }
 
+/* A card whose picture could not be made: the state is shown, and there is a way to try again. */
+.thumb-retry {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 1;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: rgba(20, 20, 20, 0.85);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.thumb-retry:hover { color: var(--green); border-color: var(--green); }
+
 .icon-btn {
   background: none;
   border: 1px solid var(--line);
@@ -367,3 +385,9 @@ select[data-dd] {
 /* safety net for any select left native */
 select option, select optgroup { background-color: var(--panel); color: var(--text); }
 select { color-scheme: dark; }
+
+/* Long lists: cards and rows that are scrolled out of view are not laid out or painted (their animations stop with them);
+   the intrinsic size keeps the scroll bar steady, and "auto" remembers the real size once a card has been seen. */
+#view-mods .browse-card, #view-maps .browse-card, #view-skins .browse-card { content-visibility: auto; contain-intrinsic-size: auto 335px; }
+.player-row { content-visibility: auto; contain-intrinsic-size: auto 60px; }
+.fm-row { content-visibility: auto; contain-intrinsic-size: auto 62px; }

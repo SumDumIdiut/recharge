@@ -7,6 +7,7 @@
     <button class="subtab-btn active" data-scope="mine" onclick="window.__acctScope('mine')">Mine</button>
     <button class="subtab-btn" data-scope="all" onclick="window.__acctScope('all')">Everyone</button>
   </div>
+  <div class="account-error" id="account-uploads-error" hidden></div>
   <div id="account-uploads-list" class="browser-grid"></div>
 </main>
 
@@ -26,7 +27,16 @@
         Description
         <input class="form-input" id="account-edit-description" type="text" />
       </label>
+      <!-- Maps only (hidden otherwise): pick an installed map and Save uploads it as a new
+           version of this entry, revision +1, keeping its comments. Left alone, Save only
+           saves the text above. -->
+      <label class="form-field" id="account-edit-upload-row" hidden>
+        Upload a new version from
+        <select class="form-input" id="account-edit-upload"></select>
+        <span class="mod-note" id="account-edit-upload-hint" hidden></span>
+      </label>
     </div>
+    <div class="account-error" id="account-edit-error" hidden></div>
     <div class="modal-actions">
       <button class="btn" id="account-edit-cancel">Cancel</button>
       <button class="btn btn-primary" id="account-edit-save">Save</button>

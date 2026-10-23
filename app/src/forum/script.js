@@ -1,7 +1,7 @@
 import { escapeHtml, armConfirm } from '../ui.js';
 import { isLoggedIn, isAdmin } from '../auth.js';
 import { openAccount } from '../login-prompt.js';
-import { forum } from '../social/api.js';
+import { forum, moderation } from '../social/api.js';
 import { CATEGORIES, LIMITS, validatePost, validateReply, firstError } from '../social/validate.js';
 import { createImageStrip, openLightbox } from '../social/images.js';
 import { listHtml, pagerHtml, postHtml, replyHtml } from './lib.js';

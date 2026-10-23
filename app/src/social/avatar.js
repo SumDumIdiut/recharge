@@ -88,14 +88,23 @@ export function userOf(item) {
     accent: a.accent_color ?? '',
     title: a.title ?? '',
     titles: Array.isArray(a.titles) ? a.titles : a.title ? [a.title] : [],
+    moderator: !!a.moderator,
+    badges: Array.isArray(a.badges) ? a.badges.filter((b) => b && (b.name || b.id)) : [],
   };
 }
 
-// Someone's titles as small badges (a profile, or a user from userOf()).
-export function titlesHtml(u, cls = 'cm-title') {
-  const list = Array.isArray(u?.titles) ? u.titles : u?.title ? [u.title] : [];
-  return list.map((t) => `<span class="${cls}">${escapeHtml(t)}</span>`).join('');
+// Someone's badges as small chips (a profile, or a user from userOf()). This is what
+// `titlesHtml` used to draw: the hub's title labels are gone and badges took their place,
+// so `titlesHtml` stays as the name call sites already use.
+export function badgesHtml(u, cls = 'cm-title') {
+  const list = Array.isArray(u?.badges) ? u.badges : [];
+  return list.map((b) => {
+    const colour = safeColor(b.colour);
+    return `<span class="${cls}"${colour ? ` style="--bd:${colour}"` : ''} title="${escapeHtml(b.description || b.name || '')}">${escapeHtml(b.name || b.id)}</span>`;
+  }).join('');
 }
+
+export const titlesHtml = badgesHtml;
 
 // size in px. The box is fixed-size, so lists never jump while pictures load. data-user makes it open the profile card.
 export function avatarHtml(user, size = 36, { clickable = true } = {}) {
@@ -104,7 +113,7 @@ export function avatarHtml(user, size = 36, { clickable = true } = {}) {
   const src = hubUrl(u.avatar);
   const frame = frameOf(u.frame);
   const accent = safeColor(u.accent);
-  const img = src ? `<img class="avatar-img" src="${escapeHtml(src)}" alt="" decoding="async" onerror="this.remove()" />` : '';
+  const img = src ? `<img class="avatar-img" src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async" onerror="this.remove()" />` : '';
   const attrs = clickable && name ? ` data-user="${escapeHtml(name)}" role="button" tabindex="0" title="${escapeHtml(name)}"` : '';
   const px = Math.max(16, Math.min(160, Math.round(size)));
   return `<span class="avatar frame-${frame}" style="--av:${px}px${accent ? `;--av-accent:${accent}` : ''}${frameVars(u.frameColors ?? u.frame_colors)}"${attrs}><span class="avatar-initial" aria-hidden="true">${escapeHtml(initialOf(name))}</span>${img}</span>`;
@@ -116,6 +125,18 @@ export function nameHtml(user, extra = '') {
   const st = nameStyle(u.nameColor);
   const name = u.username || 'unknown';
   return `<a class="user-name ${escapeHtml(extra)}" data-user="${escapeHtml(name)}" role="button" tabindex="0"${st ? ` style="${st}"` : ''}>${escapeHtml(u.label ?? name)}</a>`;
+}
+
+// A name that is not a link - inside a table cell, a leaderboard row, a chat line. Same
+// colour rule as nameHtml: every place a name appears, it appears in its owner's colour.
+// Accepts either field spelling (nameColor / name_color) so hub rows and normalised rows
+// both work without the caller having to convert first.
+export function nameTextHtml(user, extra = '') {
+  // A bare string is a name with no known colour, e.g. a fallback for a missing author.
+  const u = typeof user === 'string' ? { username: user } : (user || {});
+  const name = String(u.username ?? u.label ?? u.name ?? '');
+  const st = nameStyle(u.nameColor ?? u.name_color);
+  return `<span class="user-name-plain ${escapeHtml(extra)}"${st ? ` style="${st}"` : ''}>${escapeHtml(name)}</span>`;
 }
 
 // The author of a hub submission: a clickable name when the hub knows the uploader's account (`uploader`), else the plain `author` text (uploads made without an account).

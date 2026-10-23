@@ -40,7 +40,7 @@ function setup({ keep, running = false }) {
   };
   const window = { __TAURI__: { core: { invoke }, event: { listen() {} } } };
   const ctx = vm.createContext({
-    window, document, console, Date, setTimeout, clearInterval, setInterval: () => 1, requestAnimationFrame() {},
+    window, document, console, Date, setTimeout: () => 1, clearTimeout() {}, clearInterval, setInterval: () => 1, requestAnimationFrame() {},
     localStorage: { getItem: (k) => store[k] ?? null, setItem(k, v) { store[k] = v; } },
   });
   vm.runInContext(

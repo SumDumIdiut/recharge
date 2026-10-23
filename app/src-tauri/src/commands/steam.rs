@@ -265,7 +265,7 @@ pub async fn detect_igtap_install(app: AppHandle) -> Option<InstallInfo> {
 }
 
 fn detect_igtap_install_blocking(app: AppHandle) -> Option<InstallInfo> {
-    if let Some(path) = settings::get_game_path(app) {
+    if let Some(path) = settings::get_game_path_sync(app) {
         if let Some(info) = info_for_path(Path::new(&path)) {
             return Some(info);
         }

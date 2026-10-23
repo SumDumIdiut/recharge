@@ -120,7 +120,7 @@ fn collect_sources(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
 }
 
 fn settings_game_path(app: &AppHandle) -> Option<String> {
-    super::settings::get_game_path(app.clone())
+    super::settings::get_game_path_sync(app.clone())
 }
 
 // Windows canonicalized paths come back as `\\?\C:\...`, which the build script's Join-Path can't parse.
@@ -313,7 +313,11 @@ fn install_or_update_loader_blocking(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn uninstall_loader(app: AppHandle) -> Result<(), String> {
+pub async fn uninstall_loader(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("uninstall_loader", || uninstall_loader_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn uninstall_loader_sync(app: AppHandle) -> Result<(), String> {
     let game_path = settings_game_path(&app)
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     let managed = super::steam::managed_dir(std::path::Path::new(&game_path))

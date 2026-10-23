@@ -52,6 +52,10 @@ async function additions() {
           tab: kind.tab,
           id: row.id,
           when: row.createdAt,
+          // The picture's cache key. Separate from `when`, which is shown as the news date: an
+          // update moves the revision and the update time, never the publish date, so keying
+          // the picture on `when` would freeze it at the first version forever.
+          stamp: `${row.updatedAt || row.createdAt}|${row.revision || 1}`,
           title: row.name,
           by: row.author,
           uploader: row.uploader || null,
@@ -121,7 +125,7 @@ export function renderNews(entries) {
         : isSkin
           ? `<div class="news-img-crop" data-skin-src="${escapeHtml(e.image)}"></div>`
           : `<img class="news-img" src="${escapeHtml(e.image)}" alt="" loading="lazy" onerror="this.remove()" />`;
-      const cover = !e.image && e.cover ? `<div class="news-cover"><img class="news-img" src="${escapeHtml(e.cover)}" alt="" onerror="this.parentNode.remove()" /><span class="bg-play" aria-hidden="true"></span></div>` : '';
+      const cover = !e.image && e.cover ? `<div class="news-cover"><img class="news-img" src="${escapeHtml(e.cover)}" alt="" loading="lazy" decoding="async" onerror="this.parentNode.remove()" /><span class="bg-play" aria-hidden="true"></span></div>` : '';
       return `
       <div class="news-block" ${e.tab ? `onclick="navigate('${e.tab}')"` : ''}>
         <div class="news-meta"><span class="tag tag-${e.kind}">${escapeHtml(e.tag)}</span>${escapeHtml(ago(e.when))}${by}</div>
@@ -162,7 +166,7 @@ export async function initHomeNews({ cover = defaultCover, fetchFn } = {}) {
   const mapPictures = async () => {
     for (const e of fresh) {
       if (e.tag !== 'Map' || !e.id || e.image) continue;
-      const img = await mapThumbFor(e.id, { stamp: hubStamp(e.when) }).catch(() => null);
+      const img = await mapThumbFor(e.id, { stamp: hubStamp(e.stamp || e.when) }).catch(() => null);
       if (mine !== generation) return;
       if (img) { e.image = img; layoutNews(); }
     }

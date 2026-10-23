@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Emitter};
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -11,7 +12,7 @@ use super::safe_fs;
 use super::settings;
 use super::steam;
 
-enum GameExe {
+pub(crate) enum GameExe {
     Windows(PathBuf),
     Linux(PathBuf),
 }
@@ -28,7 +29,7 @@ impl GameExe {
     }
 }
 
-fn find_exe(game_dir: &Path) -> Option<GameExe> {
+pub(crate) fn find_exe(game_dir: &Path) -> Option<GameExe> {
     let entries = std::fs::read_dir(game_dir).ok()?;
     let mut windows_exe: Option<PathBuf> = None;
     let mut linux_exe: Option<PathBuf> = None;
@@ -81,22 +82,12 @@ fn is_process_running(exe_name: &str) -> bool {
         .contains(&exe_name.to_lowercase())
 }
 
-// pgrep -f matches an already-exited zombie too, so filter those via /proc/[pid]/stat's state field.
+// In-process equivalent of `pgrep -f -i <name>` (no process spawn): any live, non-zombie process other than us whose command line contains the exe name. list_procs already skips zombies.
 #[cfg(not(windows))]
 fn is_process_running(exe_name: &str) -> bool {
-    let Ok(output) = Command::new("pgrep")
-        .args(["-f", "-i", &regex_escape_literal(exe_name)])
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|l| l.trim().parse::<u32>().ok())
-        .any(|pid| !is_zombie(pid))
+    let needle = exe_name.to_lowercase();
+    let me = std::process::id();
+    list_procs().iter().any(|p| p.pid != me && p.args.join(" ").to_lowercase().contains(&needle))
 }
 
 #[cfg(not(windows))]
@@ -111,27 +102,111 @@ fn is_zombie(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(windows))]
-fn regex_escape_literal(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if ".^$*+?()[]{}|\\".contains(c) {
-            out.push('\\');
+/// Exe name per game path, so the 2 s poll does not re-scan the game folder every time.
+fn cached_exe_name(game_path: &str) -> Option<String> {
+    static CACHE: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+    if let Ok(c) = CACHE.lock() {
+        if let Some((p, n)) = c.as_ref() {
+            if p == game_path {
+                return Some(n.clone());
+            }
         }
-        out.push(c);
     }
-    out
+    let name = find_exe(&PathBuf::from(game_path))?.file_name();
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((game_path.to_string(), name.clone()));
+    }
+    Some(name)
 }
 
+fn game_status(app: &AppHandle) -> &'static str {
+    let Some(game_path) = settings::get_game_path_sync(app.clone()) else {
+        return "unknown";
+    };
+    let Some(exe) = cached_exe_name(&game_path) else {
+        return "unknown";
+    };
+    match check_process_running(&exe) {
+        Some(true) => "running",
+        Some(false) => "not-running",
+        None => "unknown",
+    }
+}
+
+/// One-off check. The shared poller (below) pushes changes as `game-running` events; this stays for initial reads and other callers.
 #[tauri::command]
-pub fn is_game_running(app: AppHandle) -> bool {
-    let Some(game_path) = settings::get_game_path(app) else {
-        return false;
-    };
-    let Some(exe) = find_exe(&PathBuf::from(game_path)) else {
-        return false;
-    };
-    is_process_running(&exe.file_name())
+pub async fn is_game_running(app: AppHandle) -> String {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("is_game_running", || game_status(&app).to_string())).await.unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Returns Some(true) if running, Some(false) if confirmed not running, None if unable to determine.
+fn check_process_running(exe_name: &str) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("tasklist");
+        cmd.args(["/FI", &format!("IMAGENAME eq {exe_name}"), "/NH"]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let output = cmd.output().ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        Some(stdout.contains(&exe_name.to_lowercase()))
+    }
+    #[cfg(not(windows))]
+    {
+        if !Path::new("/proc/self/cmdline").exists() {
+            return None; // no procfs: can't tell
+        }
+        Some(is_process_running(exe_name))
+    }
+}
+
+// ---- shared poller ----
+
+static POKE: (std::sync::Mutex<bool>, std::sync::Condvar) = (std::sync::Mutex::new(false), std::sync::Condvar::new());
+
+/// Wake the poller for an immediate check (it also checks quickly for a while afterwards).
+pub(crate) fn poke_game_poller() {
+    if let Ok(mut p) = POKE.0.lock() {
+        *p = true;
+        POKE.1.notify_all();
+    }
+}
+
+/// One background thread for the whole app: checks every 2 s (every 0.5 s for 20 s after a poke) and emits `game-running` ("running" | "not-running" | "unknown") only when the state changes.
+pub fn start_game_poller(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("game-poller".into())
+        .spawn(move || {
+            let mut last: Option<&'static str> = None;
+            let mut burst_until = std::time::Instant::now();
+            loop {
+                let status = crate::perf::timed("poller_game_status", || game_status(&app));
+                if last != Some(status) {
+                    last = Some(status);
+                    let _ = app.emit("game-running", status);
+                }
+                let wait = if std::time::Instant::now() < burst_until { Duration::from_millis(500) } else { Duration::from_secs(2) };
+                let Ok(mut poked) = POKE.0.lock() else { return };
+                if !*poked {
+                    poked = match POKE.1.wait_timeout(poked, wait) {
+                        Ok((g, _)) => g,
+                        Err(_) => return,
+                    };
+                }
+                if *poked {
+                    *poked = false;
+                    burst_until = std::time::Instant::now() + Duration::from_secs(20);
+                }
+            }
+        })
+        .ok();
+}
+
+/// Watches a game process we spawned and pokes the poller the moment it exits.
+fn watch_child(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        poke_game_poller();
+    });
 }
 
 // A cheap content stamp (FNV-1a, as in loader.rs): "is this byte-for-byte what I wrote".
@@ -277,15 +352,26 @@ pub(crate) fn log_launch(app: &AppHandle, msg: &str) {
 
 /// Frontend background-media diagnostics -> <app data>/media.log (one line, capped length).
 #[tauri::command]
-pub fn media_log(app: AppHandle, line: String) {
+pub async fn media_log(app: AppHandle,line: String) {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("media_log", || media_log_sync(app, line))).await.expect("command thread panicked")
+}
+
+pub fn media_log_sync(app: AppHandle, line: String) {
     let line: String = line.chars().filter(|c| !c.is_control()).take(500).collect();
     append_log(&app, "media.log", &line);
 }
 
 #[tauri::command]
-pub fn launch_game(app: AppHandle, modded: bool) -> Result<LaunchMethod, String> {
+pub async fn launch_game(app: AppHandle,modded: bool) -> Result<LaunchMethod, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("launch_game", || launch_game_sync(app, modded))).await.expect("command thread panicked")
+}
+
+pub fn launch_game_sync(app: AppHandle, modded: bool) -> Result<LaunchMethod, String> {
     log_launch(&app, &format!("launch requested (modded={modded})"));
     let result = launch_game_inner(&app, modded);
+    if result.is_ok() {
+        poke_game_poller();
+    }
     match &result {
         Ok(m) => log_launch(&app, &format!("launch ok via {}", if matches!(m, LaunchMethod::Steam) { "steam" } else { "direct" })),
         Err(e) => log_launch(&app, &format!("launch FAILED: {e}")),
@@ -294,7 +380,7 @@ pub fn launch_game(app: AppHandle, modded: bool) -> Result<LaunchMethod, String>
 }
 
 fn launch_game_inner(app: &AppHandle, modded: bool) -> Result<LaunchMethod, String> {
-    let game_path = settings::get_game_path(app.clone())
+    let game_path = settings::get_game_path_sync(app.clone())
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     let game_dir = PathBuf::from(&game_path);
 
@@ -325,7 +411,8 @@ fn launch_exe(exe: &GameExe, game_dir: &Path) -> Result<LaunchMethod, String> {
 fn launch_windows_exe(exe: &Path, game_dir: &Path) -> Result<LaunchMethod, String> {
     let mut cmd = Command::new(exe);
     cmd.current_dir(game_dir);
-    cmd.spawn().map_err(|e| format!("Failed to launch game: {e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("Failed to launch game: {e}"))?;
+    watch_child(child);
     Ok(LaunchMethod::Direct)
 }
 
@@ -355,10 +442,11 @@ fn launch_linux_exe(exe: &Path, game_dir: &Path) -> Result<LaunchMethod, String>
             let _ = std::fs::set_permissions(exe, perms);
         }
     }
-    Command::new(exe)
+    let child = Command::new(exe)
         .current_dir(game_dir)
         .spawn()
         .map_err(|e| format!("Failed to launch game: {e}"))?;
+    watch_child(child);
     Ok(LaunchMethod::Direct)
 }
 
@@ -371,8 +459,12 @@ fn launch_linux_exe(exe: &Path, _game_dir: &Path) -> Result<LaunchMethod, String
 }
 
 #[tauri::command]
-pub fn restore_vanilla_build(app: AppHandle) -> Result<(), String> {
-    let game_path = settings::get_game_path(app)
+pub async fn restore_vanilla_build(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("restore_vanilla_build", || restore_vanilla_build_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn restore_vanilla_build_sync(app: AppHandle) -> Result<(), String> {
+    let game_path = settings::get_game_path_sync(app)
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
     deploy_build(&PathBuf::from(&game_path), false)
 }
@@ -401,7 +493,7 @@ pub(crate) fn matching_game_pids(procs: &[ProcEntry], exe_name: &str, game_dir: 
     // Viewers/editors/shells that may merely have the file name as an argument.
     const NOT_GAME: &[&str] = &[
         "vim", "nvim", "vi", "nano", "less", "more", "cat", "grep", "rg", "pgrep", "pkill", "ls", "tail", "head", "stat", "file", "cp", "mv", "rm",
-        "code", "kate", "gedit", "xdg-open", "sh", "bash", "zsh", "fish", "claude", "node", "git", "strings", "sha256sum", "md5sum", "tar", "zip", "unzip",
+        "code", "kate", "gedit", "xdg-open", "sh", "bash", "zsh", "fish", "node", "git", "strings", "sha256sum", "md5sum", "tar", "zip", "unzip",
     ];
     let exe = exe_name.to_lowercase();
     let dir = norm_path(&game_dir.to_string_lossy());
@@ -542,7 +634,7 @@ pub(crate) fn game_running_error() -> String {
 #[tauri::command]
 pub async fn close_game_and_wait(app: AppHandle) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(game_path) = settings::get_game_path(app) else { return Ok(false) };
+        let Some(game_path) = settings::get_game_path_sync(app) else { return Ok(false) };
         let game_dir = PathBuf::from(game_path);
         let Some(exe) = find_exe(&game_dir) else { return Ok(false) };
         close_game_processes(&exe.file_name(), &game_dir)
@@ -553,7 +645,7 @@ pub async fn close_game_and_wait(app: AppHandle) -> Result<bool, String> {
 
 /// "Test in game": close any running IGTAP first (emits `test-game-status` {phase:"closing"} only if one was running, then {phase:"launching"}), then launch modded; blocking.
 pub fn close_then_launch(app: AppHandle) -> Result<LaunchMethod, String> {
-    if let Some(game_path) = settings::get_game_path(app.clone()) {
+    if let Some(game_path) = settings::get_game_path_sync(app.clone()) {
         let game_dir = PathBuf::from(&game_path);
         if let Some(exe) = find_exe(&game_dir) {
             let name = exe.file_name();
@@ -567,7 +659,56 @@ pub fn close_then_launch(app: AppHandle) -> Result<LaunchMethod, String> {
         }
     }
     let _ = app.emit("test-game-status", serde_json::json!({ "phase": "launching" }));
-    launch_game(app, true)
+    let launched = launch_game_sync(app.clone(), true);
+    // Put the other mods back once the game closes, so a test launch leaves nothing behind.
+    // Only on a successful launch: otherwise there is no game to wait for, and the mods stay
+    // off exactly as long as they would have.
+    if launched.is_ok() {
+        spawn_test_mod_restore(app);
+    }
+    launched
+}
+
+/// Waits for the game to appear and then to exit, then restores the mods a test launch
+/// turned off. Best effort throughout: if the process cannot be found the watch simply
+/// ends, and the state left behind is still undone the next time the app starts.
+fn spawn_test_mod_restore(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Some(game_path) = settings::get_game_path_sync(app.clone()) else {
+            return;
+        };
+        let game_dir = PathBuf::from(&game_path);
+        let Some(exe) = find_exe(&game_dir) else { return };
+        let name = exe.file_name();
+
+        // Wait for it to come up (up to a minute), so we do not mistake "not started yet"
+        // for "already finished" and restore the mods while the game is still loading.
+        let mut started = false;
+        for _ in 0..120 {
+            if is_process_running(&name) {
+                started = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        if !started {
+            return;
+        }
+        // Then wait for it to go away. Games run for hours; this is only a slow poll.
+        for _ in 0..(60 * 60 * 4) {
+            std::thread::sleep(Duration::from_secs(1));
+            if !is_process_running(&name) {
+                // It can take a moment to actually go away after the window closes.
+                std::thread::sleep(Duration::from_secs(2));
+                if !is_process_running(&name) {
+                    break;
+                }
+            }
+        }
+        if let Err(e) = super::mods::restore_after_test_launch(&app) {
+            eprintln!("[mods] couldn't restore after the test game: {e}");
+        }
+    });
 }
 
 #[cfg(test)]

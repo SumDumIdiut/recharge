@@ -10,7 +10,7 @@ const IMAGE_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
 const INDICATOR_STEMS: [&str; 5] = ["dash", "doublejump", "double-jump", "double_jump", "jump"];
 
 fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     Some(
         PathBuf::from(game_path)
             .join("Recharge")
@@ -22,7 +22,7 @@ fn skins_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn config_path(app: &AppHandle) -> Option<PathBuf> {
-    let game_path = settings::get_game_path(app.clone())?;
+    let game_path = settings::get_game_path_sync(app.clone())?;
     Some(
         PathBuf::from(game_path)
             .join("Recharge")
@@ -105,6 +105,9 @@ pub struct SkinEntry {
     #[serde(rename = "folderName")]
     pub folder_name: String,
     pub enabled: bool,
+    /// Whether the folder has a thumbnail image (served by the media server, see backgrounds::resolve_skin_thumb).
+    #[serde(rename = "hasThumb")]
+    pub has_thumb: bool,
     #[serde(rename = "hubId", skip_serializing_if = "Option::is_none")]
     pub hub_id: Option<String>,
     #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
@@ -121,7 +124,11 @@ pub fn read_hub_meta(skin_folder: &std::path::Path) -> Option<SkinHubMeta> {
 }
 
 #[tauri::command]
-pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
+pub async fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("list_installed_skins", || list_installed_skins_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn list_installed_skins_sync(app: AppHandle) -> Vec<SkinEntry> {
     let mut names: Vec<String> = (|| {
         let dir = skins_dir(&app)?;
         let entries = std::fs::read_dir(dir).ok()?;
@@ -143,7 +150,9 @@ pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
         .map(|folder_name| {
             let enabled = config.current_skin_folder.as_deref() == Some(folder_name.as_str());
             let meta = dir.as_ref().and_then(|d| read_hub_meta(&d.join(&folder_name)));
+            let has_thumb = dir.as_ref().map_or(false, |d| find_image_file(&d.join(&folder_name)).is_some());
             SkinEntry {
+                has_thumb,
                 folder_name,
                 enabled,
                 hub_id: meta.as_ref().map(|m| m.hub_id.clone()),
@@ -156,7 +165,11 @@ pub fn list_installed_skins(app: AppHandle) -> Vec<SkinEntry> {
 }
 
 #[tauri::command]
-pub fn set_active_skin(app: AppHandle, folder_name: Option<String>) -> Result<(), String> {
+pub async fn set_active_skin(app: AppHandle,folder_name: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("set_active_skin", || set_active_skin_sync(app, folder_name))).await.expect("command thread panicked")
+}
+
+pub fn set_active_skin_sync(app: AppHandle, folder_name: Option<String>) -> Result<(), String> {
     if let Some(name) = &folder_name {
         sanitize_name(name)?;
     }
@@ -180,8 +193,19 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// The skin's thumbnail file, for the media server.
+pub(crate) fn thumbnail_path(app: &AppHandle, folder_name: &str) -> Option<PathBuf> {
+    sanitize_name(folder_name).ok()?;
+    let dir = skins_dir(app)?;
+    find_image_file(&dir.join(folder_name))
+}
+
 #[tauri::command]
-pub fn read_skin_thumbnail(app: AppHandle, folder_name: String) -> Result<String, String> {
+pub async fn read_skin_thumbnail(app: AppHandle,folder_name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("read_skin_thumbnail", || read_skin_thumbnail_sync(app, folder_name))).await.expect("command thread panicked")
+}
+
+pub fn read_skin_thumbnail_sync(app: AppHandle, folder_name: String) -> Result<String, String> {
     sanitize_name(&folder_name)?;
     let dir = skins_dir(&app).ok_or("game path not set")?;
     let image_path = find_image_file(&dir.join(&folder_name)).ok_or("no image file in this skin's folder")?;
@@ -194,7 +218,11 @@ pub fn read_skin_thumbnail(app: AppHandle, folder_name: String) -> Result<String
 }
 
 #[tauri::command]
-pub fn delete_skin(app: AppHandle, folder_name: String) -> Result<(), String> {
+pub async fn delete_skin(app: AppHandle,folder_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("delete_skin", || delete_skin_sync(app, folder_name))).await.expect("command thread panicked")
+}
+
+pub fn delete_skin_sync(app: AppHandle, folder_name: String) -> Result<(), String> {
     sanitize_name(&folder_name)?;
     let dir = skins_dir(&app).ok_or("game path not set")?;
     std::fs::remove_dir_all(dir.join(&folder_name)).map_err(|e| e.to_string())?;

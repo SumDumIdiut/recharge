@@ -48,20 +48,88 @@ struct HubLauncher {
     size: u64,
 }
 
-fn fetch_launcher_info(plat: &str) -> Result<HubLauncher, String> {
-    let url = format!("{}/update/launcher/{plat}", base());
-    let mut r = ureq::get(&url)
+const MSG_OFFLINE: &str = "The update server is offline right now (not a problem with your connection). Try again later.";
+const MSG_TIMEOUT: &str = "The update server didn't answer in time. Check your connection and try again.";
+const MSG_CONNECT: &str = "Couldn't reach the update server. Check your connection.";
+
+/// Coarse failure kind of a fetch (mirrors the launcher's mapping).
+#[derive(Debug, Clone, PartialEq)]
+enum NetFail {
+    Status(u16, String),
+    Timeout,
+    Connect,
+    Other,
+}
+
+fn friendly_message(f: &NetFail) -> Option<&'static str> {
+    match f {
+        NetFail::Status(code, body) if matches!(code, 530 | 502 | 503 | 504) || body.contains("error code: 1033") => Some(MSG_OFFLINE),
+        NetFail::Timeout => Some(MSG_TIMEOUT),
+        NetFail::Connect => Some(MSG_CONNECT),
+        _ => None,
+    }
+}
+
+/// Timeouts, connection errors and 5xx retry; 4xx and bad data do not.
+fn should_retry(f: &NetFail) -> bool {
+    match f {
+        NetFail::Timeout | NetFail::Connect => true,
+        NetFail::Status(code, body) => *code >= 500 || body.contains("error code: 1033"),
+        NetFail::Other => false,
+    }
+}
+
+fn classify(e: &ureq::Error) -> NetFail {
+    use ureq::Error as E;
+    match e {
+        E::Timeout(_) => NetFail::Timeout,
+        E::StatusCode(c) => NetFail::Status(*c, String::new()),
+        E::Io(io) if matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => NetFail::Timeout,
+        E::HostNotFound | E::ConnectionFailed | E::Io(_) => NetFail::Connect,
+        _ => NetFail::Other,
+    }
+}
+
+fn launcher_info_once(url: &str) -> Result<HubLauncher, (NetFail, String)> {
+    let mut r = ureq::get(url)
         .header("User-Agent", "Recharge")
         .config()
-        .timeout_global(Some(Duration::from_secs(10)))
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_global(Some(Duration::from_secs(30)))
+        .http_status_as_error(false)
         .build()
         .call()
-        .map_err(|e| format!("update server: {e}"))?;
-    let j: HubLauncher = r.body_mut().read_json().map_err(|e| format!("bad launcher info: {e}"))?;
+        .map_err(|e| (classify(&e), format!("GET {url}: {e}")))?;
+    let status = r.status().as_u16();
+    if status >= 400 {
+        let body: String = r.body_mut().read_to_string().unwrap_or_default().chars().take(200).collect();
+        return Err((NetFail::Status(status, body.clone()), format!("GET {url}: HTTP {status} {}", body.trim())));
+    }
+    let j: HubLauncher = r.body_mut().read_json().map_err(|e| (classify(&e), format!("bad launcher info: {e}")))?;
     if j.sha256.len() != 64 || !j.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("bad launcher info: sha256".into());
+        return Err((NetFail::Other, "bad launcher info: sha256".into()));
     }
     Ok(j)
+}
+
+/// Up to 3 attempts (1 s, 3 s backoff) for retryable failures; the error is the friendly message, the detail goes to migrate.log via eprintln.
+fn fetch_launcher_info(plat: &str) -> Result<HubLauncher, String> {
+    let url = format!("{}/update/launcher/{plat}", base());
+    let mut n = 0;
+    loop {
+        match launcher_info_once(&url) {
+            Ok(j) => return Ok(j),
+            Err((fail, detail)) => {
+                n += 1;
+                eprintln!("[migrate] launcher info attempt {n}/3 failed: {detail}");
+                if n < 3 && should_retry(&fail) {
+                    std::thread::sleep(Duration::from_secs(if n == 1 { 1 } else { 3 }));
+                    continue;
+                }
+                return Err(friendly_message(&fail).map(String::from).unwrap_or_else(|| format!("update server: {detail}")));
+            }
+        }
+    }
 }
 
 /// What kind of old install this process is, and what we may do about it.
@@ -444,7 +512,7 @@ fn migrate_in(app: &AppHandle, cleanup: bool, _plat: &str, info: &HubLauncher, t
     log(app, &format!("launcher --stage: {status} / {}", text.trim().replace('\n', " | ")));
     // "staged N" or "up to date" (an earlier attempt already installed everything) are both fine.
     if !status.success() {
-        let last = text.lines().rev().find(|l| l.contains("stage failed")).or(text.lines().last()).unwrap_or("launcher failed");
+        let last = super::updater::stage_error_text(&text);
         return Err(format!("the new install couldn't be prepared: {last}"));
     }
     if !installed.is_file() {
@@ -521,13 +589,28 @@ fn installed_launcher_path() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn net_failure_messages_and_retry() {
+        use super::{friendly_message, should_retry, NetFail};
+        for c in [530u16, 502, 503, 504] {
+            assert!(friendly_message(&NetFail::Status(c, String::new())).unwrap().contains("offline"));
+            assert!(should_retry(&NetFail::Status(c, String::new())));
+        }
+        assert!(friendly_message(&NetFail::Status(200, "error code: 1033".into())).unwrap().contains("offline"));
+        assert!(friendly_message(&NetFail::Timeout).unwrap().contains("didn't answer in time"));
+        assert!(friendly_message(&NetFail::Connect).unwrap().contains("Couldn't reach"));
+        assert!(should_retry(&NetFail::Timeout) && should_retry(&NetFail::Connect));
+        assert!(!should_retry(&NetFail::Status(404, String::new())) && !should_retry(&NetFail::Other));
+        assert_eq!(friendly_message(&NetFail::Status(404, String::new())), None);
+    }
+
     use super::*;
 
     #[test]
     fn cargo_target_paths_are_dev_builds() {
         assert!(path_is_cargo_target(Path::new("/home/o/Recharge/app/src-tauri/target/release/recharge")));
         assert!(path_is_cargo_target(Path::new("/x/target/debug/recharge")));
-        assert!(path_is_cargo_target(Path::new("/run/media/o/Drive/claude-activity/cargo-target-app/release/recharge")));
+        assert!(path_is_cargo_target(Path::new("/run/media/o/Drive/build/cargo-target-app/release/recharge")));
         assert!(!path_is_cargo_target(Path::new("/usr/bin/recharge")));
         assert!(!path_is_cargo_target(Path::new("/opt/Recharge/recharge")));
         assert!(!path_is_cargo_target(Path::new("/home/o/.local/share/recharge/app/recharge")));

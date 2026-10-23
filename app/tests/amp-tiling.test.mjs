@@ -55,7 +55,7 @@ const EXPECT_INNER = {
   blueplate: turned(195), bluefloor: turned(195), orangeplate: turned(199), orangefloor: turned(199),
   plate: null, floorplate: null, bgwall: null, bgfloor: null, // the 3x3-only sheets have no inside tile
 };
-const RAIL = new Set(['panel', 'darkpanel', 'blue', 'orange', 'lightfloor', 'darkfloor', 'bluefloor', 'orangefloor', 'floorplate', 'bgfloor']); // a rail / bar along the top: no generated connector
+const RAIL = new Set(['panel', 'darkpanel', 'blue', 'orange', 'lightfloor', 'darkfloor', 'bluefloor', 'orangefloor', 'floorplate', 'bgfloor']); // a rail / bar along the top: prefers its own inside tiles, otherwise a rail-aware connector
 
 await test('rail floors use their own inside-corner tile at a wall\'s foot (not the ground sheet\'s different-looking 22 / 23)', () => {
   for (const kind of ['lightfloor', 'darkfloor', 'bluefloor', 'orangefloor']) {
@@ -159,7 +159,7 @@ for (const kind of Object.keys(SHEETS)) {
         if (RAIL.has(kind) && base === 'C' && holes.length === 1 && realOf(hole)) { // rail sheets: the sheet's own inside tile, as the level has it
           const [tile, mat] = realOf(hole);
           assert.equal(art.tile, tile, label); assert.deepEqual(art.matrix, mat, label);
-        } else if ((RAIL.has(kind) && !(base === 'C' && !holes.some(realOf) && holes.every((d) => d[0] === 'S'))) || base.length === 2) { // rail sheets (except a bottom inside corner on a sheet with no inside tile, e.g. Floor plate) and corner pieces: no generated connector
+        } else if (base.length === 2) { // corner pieces: no generated connector (rail sheets now get a rail-aware connector otherwise)
           assert.ok(!art.parts, label + ' has no generated connector');
           const first = RAIL.has(kind) && base === 'C' && realOf(holes[0]);
           if (first) assert.equal(art.tile, first[0], label); else assert.ok(sameArt(kind, art, base, asTile(kind, base)), label + ' keeps its plain piece');
@@ -242,8 +242,8 @@ await test('blocks next to the level join it: same tileset only', () => {
 
 await test('changing a block redraws its neighbours within one cell (the picture cache margin)', () => {
   const src = fs.readFileSync(path.join(mapsDir, 'editor.js'), 'utf8');
-  assert.match(src, /take\(blocks, cellRectOf\(3 \* CELL\)\)/, 'a block change drops chunks 3 cells around it');
-  assert.match(src, /take\(removed, cellRectOf\(6 \* CELL\)\)/);
+  assert.match(src, /take\(blocks, cellRectOf\(3 \* CELL\), cellChunkRect\(3 \* CELL\)\)/, 'a block change drops chunks 3 cells around it');
+  assert.match(src, /take\(removed, cellRectOf\(6 \* CELL\), cellChunkRect\(6 \* CELL\)\)/);
 });
 
 await test('placed tiles export as the game paints them: whole tiles with turns, or quarter mixes', () => {
@@ -276,7 +276,7 @@ await test('level cells beside your blocks are re-tiled with the combined shape,
   const ov = T.levelOverrides();
   assert.ok(ov.cells.has(wk), 'the level wall cell beside your block is re-tiled');
   assert.equal(ov.cells.get(wk).art.tile, 'ground1_tileset_64', 'into the sheet\'s centre, like the level\'s own interior');
-  for (const [k, q] of ov.cells) assert.ok(q.art.centre && !q.art.parts, 'a level cell is only re-tiled into a centre / inside tile, never a generated piece: ' + k);
+  for (const [k, q] of ov.cells) assert.ok(!q.art.parts, 'a level cell is re-tiled with a piece of the sheet, never with generated pixels: ' + k);
   assert.ok(![...ov.cells.keys()].some((k) => T.own.blocks.has(k)), 'your own cells are not overrides');
   const o = ov.cells.get(wk);
   assert.equal(o.art.layer, 'ground');
@@ -298,6 +298,156 @@ await test('level cells beside your blocks are re-tiled with the combined shape,
   assert.equal(T.levelOverrides().cells.size, 0, 'back to the level\'s own art');
   assert.equal(T.levelOverrides().hide.size, 0);
   assert.equal(T.buildMap().groups[0].objects.filter((q) => q.levelRetile).length, 0);
+});
+
+await test('a level cell abutting your block is re-tiled with the sheet\'s own edge or corner, not only its centre', () => {
+  T.open({ name: 't', useBase: true, baseState: 'start' });
+  const lvl = T.levelJoinCells(T.joinInfo('ground')), at = (x, y) => T.key(x, y);
+  // a level plate corner (58: the north and the east are open) with open air around it
+  let corner = null;
+  for (const [k, name] of lvl.names) {
+    if (name !== 'ground1_tileset_58') continue;
+    const [x, y] = k.split(',').map(Number);
+    if (!lvl.has(at(x + 1, y)) && !lvl.has(at(x, y + 1)) && lvl.has(at(x, y - 1)) && lvl.has(at(x - 1, y))) { corner = [x, y]; break; }
+  }
+  assert.ok(corner, 'a level plate corner in open air');
+  const [x, y] = corner, ck = at(x, y);
+  T.own.blocks.set(at(x + 1, y), 'ground');
+  const ov = T.levelOverrides();
+  assert.ok(ov.cells.has(ck), 'the level corner beside your block is re-tiled');
+  assert.equal(ov.cells.get(ck).art.tile, 'ground1_tileset_57', 'into the sheet\'s own top edge: the corner points the right way now');
+  assert.ok(!ov.cells.get(ck).art.parts, 'with the sheet\'s own piece, not with generated pixels');
+  // the level's own art comes back when the block goes
+  T.own.blocks.delete(at(x + 1, y));
+  assert.ok(!T.levelOverrides().cells.has(ck), 'the level\'s own corner is back');
+});
+
+await test('a level cell whose shape has not changed keeps the level\'s own art (its inside tile)', () => {
+  T.open({ name: 't', useBase: true, baseState: 'start' });
+  const lvl = T.levelJoinCells(T.joinInfo('ground')), at = (x, y) => T.key(x, y);
+  // a level cell with the plate's own inside tile (66: the north-east diagonal is empty)
+  let inner = null;
+  for (const [k, name] of lvl.names) {
+    if (name !== 'ground1_tileset_66') continue;
+    const [x, y] = k.split(',').map(Number);
+    if (!lvl.has(at(x + 1, y + 1)) && lvl.has(at(x, y + 1)) && lvl.has(at(x + 1, y))) { inner = [x, y]; break; }
+  }
+  assert.ok(inner, 'a level cell with the sheet\'s own inside tile');
+  const [x, y] = inner;
+  T.own.blocks.set(at(x - 1, y), 'ground');   // a block beside it: the shape of the level cell is the same
+  assert.ok(!T.levelOverrides().cells.has(at(x, y)), 'the level keeps its own inside tile: the shape has not changed');
+});
+
+await test('an inside corner on a sheet with no inside tile of its own gets a connector only where the cells that supply its clean lines are re-tiled', () => {
+  T.open({ name: 't', useBase: true, baseState: 'start' });
+  const lvl = T.levelJoinCells(T.joinInfo('bgwall')), at = (x, y) => T.key(x, y);
+  // a Background wall cell (the TILE V2 sheet has no inside tile of its own) with its north and east neighbours solid and the
+  // north-east diagonal empty: an inside corner that only a connector can fill
+  const corners = [];
+  for (const [k, name] of lvl.names) {
+    if (name !== 'TILE V2 Tileset_4') continue;
+    const [x, y] = k.split(',').map(Number);
+    if (lvl.has(at(x, y + 1)) && lvl.has(at(x + 1, y)) && !lvl.has(at(x + 1, y + 1)) && !lvl.has(at(x - 1, y)) && !lvl.has(at(x, y - 1))) corners.push([x, y]);
+    if (corners.length > 8) break;
+  }
+  assert.ok(corners.length, 'a Background wall cell with an inside corner');
+  // a block of yours south of it (and one on its south-east diagonal): the wall cell is a left edge with an inside corner,
+  // and the clean lines of that corner come from the wall's own north and east cells
+  let corner = null;
+  for (const [x, y] of corners) {
+    T.open({ name: 't', useBase: true, baseState: 'start' });
+    T.own.blocks.set(at(x, y - 1), 'bgwall');
+    T.own.blocks.set(at(x + 1, y - 1), 'bgwall');
+    if (T.levelOverrides().cells.get(at(x, y))?.art?.parts?.length) { corner = [x, y]; break; }
+  }
+  assert.ok(corner, 'the wall cell with the inside corner gets a connector');
+  const [x, y] = corner;
+  const ov = T.levelOverrides();
+  assert.match(ov.cells.get(at(x, y)).art.tile, /^TILE V2 Tileset_3\+/, 'the connector is drawn on the cell\'s own edge piece');
+  assert.ok(ov.cells.has(at(x, y + 1)), 'the wall cell north of it is re-tiled: it supplies the clean line');
+  assert.ok(ov.cells.has(at(x + 1, y)), 'the wall cell east of it is re-tiled: it supplies the clean line');
+  // the export paints the connector over the level's own tile
+  const retile = T.buildMap().groups[0].objects.filter((o) => o.levelRetile);
+  const painted = retile.find((o) => o.x === T.cellWorld(x, y).x + 16 && o.y === T.cellWorld(x, y).y + 16);
+  assert.ok(painted?.spriteFrom?.pixels?.length, 'the connector is exported as a sprite over the level\'s tile');
+  // but not where a clean line would come from a cell of yours: the north side is then your own block
+  T.open({ name: 't', useBase: true, baseState: 'start' });
+  T.own.blocks.set(at(x, y - 1), 'bgwall');
+  T.own.blocks.set(at(x + 1, y - 1), 'bgwall');
+  T.own.blocks.set(at(x, y + 1), 'bgwall');
+  const art = T.levelOverrides().cells.get(at(x, y))?.art;
+  assert.equal(art?.tile, 'TILE V2 Tileset_3', 'the plain edge piece: the clean line would come from your own block');
+  assert.ok(!art?.parts?.length, 'and no connector');
+});
+
+await test('the re-tiling walks a bounded ring past your blocks, and settles', () => {
+  T.open({ name: 't', useBase: true, baseState: 'start' });
+  const lvl = T.levelJoinCells(T.joinInfo('bgwall')), at = (x, y) => T.key(x, y);
+  // a Background wall cell with an inside corner: the wall's own north and east cells supply its clean lines
+  const corners = [];
+  for (const [k, name] of lvl.names) {
+    if (name !== 'TILE V2 Tileset_4') continue;
+    const [x, y] = k.split(',').map(Number);
+    if (lvl.has(at(x, y + 1)) && lvl.has(at(x + 1, y)) && !lvl.has(at(x + 1, y + 1)) && !lvl.has(at(x - 1, y)) && !lvl.has(at(x, y - 1))) corners.push([x, y]);
+    if (corners.length > 8) break;
+  }
+  assert.ok(corners.length, 'a Background wall cell with an inside corner');
+  let corner = null;
+  for (const [x, y] of corners) {
+    T.open({ name: 't', useBase: true, baseState: 'start' });
+    T.own.blocks.set(at(x, y - 1), 'bgwall');
+    T.own.blocks.set(at(x + 1, y - 1), 'bgwall');
+    if (T.levelOverrides().cells.get(at(x, y))?.art?.parts?.length) { corner = [x, y]; break; }
+  }
+  assert.ok(corner, 'the wall cell with the inside corner gets a connector');
+  const [x, y] = corner;
+  const ov = T.levelOverrides();
+  // the walk goes on over the ring around a re-tiled cell: a level cell with no block of yours next to it is re-tiled too
+  assert.ok(ov.cells.has(at(x, y + 1)), 'the wall cell north of it is re-tiled although no block of yours is next to it');
+  // but it stops: no re-tiled cell is more than three rings away from a block of yours
+  const mine = [...T.own.blocks.keys()].map((k) => k.split(',').map(Number));
+  for (const [k] of ov.cells) {
+    const [cx, cy] = k.split(',').map(Number);
+    const rings = Math.min(...mine.map(([bx, by]) => Math.max(Math.abs(cx - bx), Math.abs(cy - by))));
+    assert.ok(rings <= 3, 'the walk stops after three rings: ' + k);
+  }
+  // and it settles: the same level, worked out again, is the same (the walk does not oscillate between two shapes)
+  const first = [...ov.cells].map(([k, o]) => k + '=' + o.art.tile).sort();
+  T.gone.removed.add(at(-999, -999));
+  T.gone.removed.delete(at(-999, -999));
+  const again = [...T.levelOverrides().cells].map(([k, o]) => k + '=' + o.art.tile).sort();
+  assert.deepEqual(again, first, 'the same cells with the same pieces');
+});
+
+await test('a 1-wide run uses the sheet\'s own strip piece, and the level keeps its own strip art', () => {
+  // the sheets that have strip art of their own use it: a 1-wide row and a 1-wide column
+  for (const kind of ['panel', 'grate', 'lightfloor', 'ground']) {
+    const p = place(kind, ['###']);
+    const art = T.blockArt(kind, ...p.cell(1, 0));
+    const { family, plate } = SHEETS[kind];
+    if (plate.h) assert.equal(art.tile, family + plate.h[1], kind + ': a 1-wide row is the sheet\'s own strip');
+    else assert.ok(art.quarters, kind + ': this sheet has no strip art, so the run is cut into quarters');
+    const q = place(kind, ['#', '#', '#']);
+    const col = T.blockArt(kind, ...q.cell(0, 1));
+    if (plate.v) assert.equal(col.tile, family + plate.v[1], kind + ': a 1-wide column is the sheet\'s own strip');
+    else assert.ok(col.quarters, kind + ': this sheet has no strip art, so the column is cut into quarters');
+  }
+  // a level 1-wide run is re-tiled with the sheet's own strip piece, not cut into quarters
+  T.open({ name: 't', useBase: true, baseState: 'start' });
+  const lvl = T.levelJoinCells(T.joinInfo('ground')), at = (x, y) => T.key(x, y);
+  let strip = null;
+  for (const [k, name] of lvl.names) {
+    if (name !== 'ground1_tileset_10') continue;
+    const [x, y] = k.split(',').map(Number);
+    if (lvl.has(at(x + 1, y)) && lvl.has(at(x - 1, y)) && !lvl.has(at(x, y + 1)) && !lvl.has(at(x, y - 1))) { strip = [x, y]; break; }
+  }
+  assert.ok(strip, 'a level 1-wide row');
+  const [x, y] = strip;
+  T.own.blocks.set(at(x + 1, y + 1), 'panel');   // a block beside it: the shape of the level cell is the same
+  const art = T.levelOverrides().cells.get(at(x, y))?.art;
+  assert.ok(art, 'the level row is re-tiled');
+  assert.equal(art.tile, 'ground1_tileset_28', 'with the sheet\'s own strip piece');
+  assert.ok(!art.quarters, 'not cut into quarters');
 });
 
 // ---- merge tiles: the ground sheets turn a plate edge into a rail edge with 73-80 ----
@@ -417,16 +567,65 @@ await test('the user\'s square on the level rail strip: x79-86, y-14..-7 of ligh
   assert.ok(lvl.has(at(80, -15)) && !lvl.has(at(80, -14)), 'level art rows map one cell lower in the editor');
 });
 
-await test('a lone rail cell between plate cells is an ordinary edge, not a merge tile (the level only merges where the rail continues)', () => {
+await test('a lone rail cell between plate cells gets a terminal cap tile (not a merge tile, not a plain edge)', () => {
   T.open({ name: 't', useBase: false });
   const put = (x, y, kind) => T.own.blocks.set(T.key(x, y), kind);
   for (let x = 0; x < 5; x++) for (let y = 0; y < 2; y++) put(x, y, x === 2 ? 'panel' : 'ground');
-  assert.ok(!/_7[3-9]$|_80$/.test(T.blockArt('panel', 2, 1).tile), 'no merge tile for a rail cell between plates');
+  const art = T.blockArt('panel', 2, 1);
+  assert.ok(!/_7[3-9]$|_80$/.test(art.tile), 'no merge tile for a rail cell between plates');
+  // Terminal case: rail cell with plate on both sides along the edge -> cap tile (h0 for panel top edge)
+  assert.equal(art.tile, 'ground1_tileset_27', 'terminal cap tile for a 1-cell rail run between plates');
+  assert.ok(art.terminal, 'terminal flag set');
   for (let x = 0; x < 5; x++) for (let y = 0; y < 2; y++) put(x, y, x < 2 ? 'ground' : 'panel');
   assert.equal(T.blockArt('panel', 2, 1).tile, 'ground1_tileset_73', 'but where the rail continues, the merge tile');
 });
 
-await test('level-vs-level junctions are never touched, and a single block against a wall leaves the wall\'s own edges', () => {
+await test('mirrored rail-plate builds tile identically (horizontal symmetry)', () => {
+  T.open({ name: 't', useBase: false });
+  const put = (x, y, kind) => T.own.blocks.set(T.key(x, y), kind);
+  // Original: plate | rail | rail  (ground at 0,1; panel at 2,3)
+  for (let x = 0; x < 4; x++) for (let y = 0; y < 2; y++) put(x, y, x < 2 ? 'ground' : 'panel');
+  const origMerge = T.blockArt('panel', 2, 1).tile; // should be merge tile 73
+  const origEnd = T.blockArt('panel', 3, 1).tile; // rail end cap (right end, tile 3)
+  // Mirrored: rail | rail | plate  (panel at 0,1; ground at 2,3)
+  T.open({ name: 't', useBase: false });
+  for (let x = 0; x < 4; x++) for (let y = 0; y < 2; y++) put(x, y, x < 2 ? 'panel' : 'ground');
+  const mirrMerge = T.blockArt('panel', 1, 1).tile; // should be merge tile 74 (mirror of 73)
+  const mirrEnd = T.blockArt('panel', 0, 1).tile; // rail end cap (left end, tile 1)
+  assert.equal(origMerge, 'ground1_tileset_73', 'original: plate|rail|rail -> merge 73');
+  assert.equal(mirrMerge, 'ground1_tileset_74', 'mirrored: rail|rail|plate -> merge 74');
+  // End caps are naturally different (left vs right end), but both are rail end caps
+  assert.ok(/_(1|3)$/.test(origEnd) && /_(1|3)$/.test(mirrEnd), 'both ends are rail caps');
+  assert.notEqual(origEnd, mirrEnd, 'left and right end caps differ as expected');
+});
+
+await test('mirrored rail-plate builds tile identically (vertical symmetry)', () => {
+  T.open({ name: 't', useBase: false });
+  const put = (x, y, kind) => T.own.blocks.set(T.key(x, y), kind);
+  // Original: plate above, rail below (ground at y=2,3; panel at y=0,1) - left edge
+  for (let x = 0; x < 2; x++) for (let y = 0; y < 4; y++) put(x, y, y < 2 ? 'panel' : 'ground');
+  const origMerge = T.blockArt('panel', 0, 1).tile; // should be merge tile 75 (left edge, plate above)
+  // Mirrored: rail above, plate below (panel at y=2,3; ground at y=0,1) - left edge
+  T.open({ name: 't', useBase: false });
+  for (let x = 0; x < 2; x++) for (let y = 0; y < 4; y++) put(x, y, y < 2 ? 'ground' : 'panel');
+  const mirrMerge = T.blockArt('panel', 0, 2).tile; // should be merge tile 79 (left edge, plate below)
+  assert.equal(origMerge, 'ground1_tileset_75', 'original: rail|rail|plate (vertical) -> merge 75');
+  assert.equal(mirrMerge, 'ground1_tileset_79', 'mirrored: plate|rail|rail (vertical) -> merge 79');
+});
+
+await test('terminal cap on vertical edge (plate | rail | plate vertically)', () => {
+  T.open({ name: 't', useBase: false });
+  const put = (x, y, kind) => T.own.blocks.set(T.key(x, y), kind);
+  // Single rail cell between plates vertically: ground at y=0 and y=2, panel at y=1 (left edge)
+  for (let x = 0; x < 2; x++) for (let y = 0; y < 3; y++) put(x, y, y === 1 ? 'panel' : 'ground');
+  const art = T.blockArt('panel', 0, 1);
+  assert.ok(!/_7[3-9]$|_80$/.test(art.tile), 'no merge tile for a rail cell between plates vertically');
+  // Terminal case: rail cell with plate on both sides along the left edge -> cap tile (v0 for panel left edge)
+  assert.equal(art.tile, 'ground1_tileset_8', 'terminal cap tile for a 1-cell rail run between plates vertically');
+  assert.ok(art.terminal, 'terminal flag set');
+});
+
+await test('level-vs-level junctions are never touched, and a single block against a wall turns it into the sheet\'s own centre', () => {
   T.open({ name: 't', useBase: true, baseState: 'start' });
   assert.equal(T.levelOverrides().cells.size, 0, 'no blocks of yours: not one level cell is re-tiled, whatever junctions the level has');
   const lvl = T.levelJoinCells(T.joinInfo('ground')), at = (x, y) => T.key(x, y);
@@ -440,12 +639,12 @@ await test('level-vs-level junctions are never touched, and a single block again
   T.open({ name: 't', useBase: true, baseState: 'start' });
   T.own.blocks.set(at(cap[0] - 3, cap[1] + 2), 'lightfloor');
   assert.ok(!T.levelOverrides().cells.has(at(...cap)), 'the end cap keeps its art');
-  // a lone block against a wall: the wall cell would lose its outline at two corners, so it stays as the level has it
+  // a lone block against a wall: the wall cell is re-tiled with the sheet's own centre, so the seam has one border, not two
   T.open({ name: 't', useBase: true, baseState: 'start' });
-  const wall = [...lvl.names].find(([k, name]) => { if (name !== 'ground1_tileset_65') return false; const [x, y] = k.split(',').map(Number); return !lvl.has(at(x + 1, y)) && !lvl.has(at(x + 1, y + 1)) && !lvl.has(at(x + 1, y - 1)) && !lvl.has(at(x + 2, y)); });
+  const wall = [...lvl.names].find(([k, name]) => { if (name !== 'ground1_tileset_65') return false; const [x, y] = k.split(',').map(Number); return !lvl.has(at(x + 1, y)) && !lvl.has(at(x + 1, y + 1)) && !lvl.has(at(x + 1, y - 1)) && !lvl.has(at(x + 2, y)) && lvl.has(at(x, y + 1)) && lvl.has(at(x, y - 1)); });
   const [wx, wy] = wall[0].split(',').map(Number);
   T.own.blocks.set(at(wx + 1, wy), 'ground');
-  assert.ok(!T.levelOverrides().cells.has(wall[0]), 'a single block leaves the wall cell\'s own edge');
+  assert.equal(T.levelOverrides().cells.get(wall[0])?.art.tile, 'ground1_tileset_64', 'a single block turns the wall cell into the sheet\'s own centre: one border, not two');
 });
 
 await test('a rail-topped ledge with a block of another sheet hanging under it is one shape', () => {

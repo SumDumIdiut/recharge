@@ -354,6 +354,18 @@ textarea.mm-input { height: auto; min-height: 52px; padding: 6px 8px; resize: ve
   max-width: calc(100% - 700px); min-width: 260px; flex-wrap: nowrap; overflow: hidden; white-space: nowrap;
 }
 
+/* Autosave state: sits below the status bar, shows when the draft was last stored, or that autosave is off */
+.mm-autosave-state {
+  display: flex; justify-content: center; gap: 8px; min-height: 20px; padding: 0 10px;
+  font-size: var(--mm-small); letter-spacing: 0.03em; color: var(--text-dim);
+}
+.mm-autosave-state[hidden] { display: none; }
+.mm-autosave-state.mm-off { color: var(--danger); cursor: pointer; }
+.mm-full > .mm-autosave-state {
+  position: absolute; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 6;
+  max-width: calc(100% - 700px); min-width: 260px; white-space: nowrap;
+}
+
 /* Ctrl+Shift+D debug strip: its JS styles it inline, so the theme wins with !important */
 .mm-canvas-wrap > div[style*="z-index: 50"] { left: 8px !important; bottom: 8px !important; gap: 6px !important; }
 .mm-canvas-wrap > div[style*="z-index: 50"] pre {

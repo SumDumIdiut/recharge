@@ -103,6 +103,12 @@ fn launcher_cmd(m: &Managed) -> Command {
     c
 }
 
+/// The launcher's last line is "stage failed: <friendly message>"; show just the message.
+pub(super) fn stage_error_text(out: &str) -> String {
+    let line = out.lines().rev().find(|l| l.contains("stage failed")).or(out.lines().last()).unwrap_or("launcher failed").trim();
+    line.strip_prefix("stage failed:").map(str::trim).unwrap_or(line).to_string()
+}
+
 fn run_stage(m: &Managed) -> Result<Option<u64>, String> {
     let out = launcher_cmd(m)
         .args(["--stage", "--no-ui"])
@@ -111,7 +117,7 @@ fn run_stage(m: &Managed) -> Result<Option<u64>, String> {
         .map_err(|e| format!("couldn't run the launcher: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        return Err(text.lines().last().unwrap_or("launcher failed").to_string());
+        return Err(stage_error_text(&text));
     }
     Ok(parse_stage_output(&text))
 }
@@ -296,7 +302,11 @@ pub fn launcher_update_failure(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn launcher_open_log(app: AppHandle) -> Result<(), String> {
+pub async fn launcher_open_log(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("launcher_open_log", || launcher_open_log_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn launcher_open_log_sync(app: AppHandle) -> Result<(), String> {
     let m = managed(&app).ok_or("not started by the Recharge launcher")?;
     let log = m.root.join("launcher.log");
     let path = if log.is_file() { log } else { m.root.join("restart.log") };
@@ -404,7 +414,11 @@ pub fn managed_channel(app: &AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn launcher_info(app: AppHandle) -> LauncherInfo {
+pub async fn launcher_info(app: AppHandle) -> LauncherInfo {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("launcher_info", || launcher_info_sync(app))).await.expect("command thread panicked")
+}
+
+pub fn launcher_info_sync(app: AppHandle) -> LauncherInfo {
     match managed(&app) {
         Some(m) => {
             let ready = *app.state::<UpdaterState>().ready.lock().unwrap();
@@ -425,7 +439,11 @@ pub async fn launcher_check_now(app: AppHandle) -> Result<Option<u64>, String> {
 
 /// Writes the launcher's channel.txt and keeps the app's own channel setting in step.
 #[tauri::command]
-pub fn launcher_set_channel(app: AppHandle, channel: String) -> Result<(), String> {
+pub async fn launcher_set_channel(app: AppHandle,channel: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("launcher_set_channel", || launcher_set_channel_sync(app, channel))).await.expect("command thread panicked")
+}
+
+pub fn launcher_set_channel_sync(app: AppHandle, channel: String) -> Result<(), String> {
     if channel != "stable" && channel != "beta" {
         return Err(format!("unknown channel: {channel}"));
     }
@@ -438,7 +456,11 @@ pub fn launcher_set_channel(app: AppHandle, channel: String) -> Result<(), Strin
 
 /// "Restart to update" (repair = false) or "Repair install": hand over to the launcher and quit.
 #[tauri::command]
-pub fn launcher_restart(app: AppHandle, repair: bool) -> Result<(), String> {
+pub async fn launcher_restart(app: AppHandle,repair: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("launcher_restart", || launcher_restart_sync(app, repair))).await.expect("command thread panicked")
+}
+
+pub fn launcher_restart_sync(app: AppHandle, repair: bool) -> Result<(), String> {
     let m = managed(&app).ok_or("not started by the Recharge launcher")?;
     let pid = std::process::id().to_string();
     if repair {
@@ -465,10 +487,14 @@ pub fn launcher_restart(app: AppHandle, repair: bool) -> Result<(), String> {
 
 /// Settings > Uninstall Recharge: optionally restore the game to vanilla, then hand over to the launcher's uninstaller and quit.
 #[tauri::command]
-pub fn launcher_uninstall(app: AppHandle, delete_data: bool, restore_game: bool) -> Result<(), String> {
+pub async fn launcher_uninstall(app: AppHandle,delete_data: bool,restore_game: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::perf::timed("launcher_uninstall", || launcher_uninstall_sync(app, delete_data, restore_game))).await.expect("command thread panicked")
+}
+
+pub fn launcher_uninstall_sync(app: AppHandle, delete_data: bool, restore_game: bool) -> Result<(), String> {
     let m = managed(&app).ok_or("this install isn't managed by the Recharge launcher")?;
     if restore_game {
-        super::loader::uninstall_loader(app.clone())?;
+        super::loader::uninstall_loader_sync(app.clone())?;
     }
     let pid = std::process::id().to_string();
     let mut args = uninstall_args(delete_data);
@@ -516,6 +542,13 @@ mod tests {
     fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         move |k| m.get(k).cloned()
+    }
+
+    #[test]
+    fn stage_error_text_strips_prefix() {
+        assert_eq!(stage_error_text("stage failed: The update server is offline.\n"), "The update server is offline.");
+        assert_eq!(stage_error_text("something else"), "something else");
+        assert_eq!(stage_error_text(""), "launcher failed");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 const TOKEN_KEY = 'rechargeAuthToken';
 const USERNAME_KEY = 'rechargeAuthUsername';
 const ADMIN_KEY = 'rechargeAuthAdmin';
+const MODERATOR_KEY = 'rechargeAuthModerator';
 const EXPIRED_KEY = 'rechargeSessionExpired';
 const NAME_COLOR_KEY = 'rechargeNameColor'; // the account's name colour (a #hex or a gradient), for the home badge
 import { HUB_BASE } from './hub.js';
@@ -29,11 +30,22 @@ export function isAdmin() {
   }
 }
 
-export function setSession(token, username, admin = false) {
+export function isModerator() {
+  try {
+    return localStorage.getItem(MODERATOR_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setSession(token, username, admin = false, moderator = false) {
   try {
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USERNAME_KEY, username);
     localStorage.setItem(ADMIN_KEY, admin ? '1' : '0');
+    // An admin is a moderator either way, so one flag covers both without the UI
+    // having to know which it is.
+    localStorage.setItem(MODERATOR_KEY, moderator || admin ? '1' : '0');
   } catch {
     /* localStorage unavailable - session just won't persist across restarts */
   }
@@ -44,6 +56,7 @@ export function clearSession() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USERNAME_KEY);
     localStorage.removeItem(ADMIN_KEY);
+    localStorage.removeItem(MODERATOR_KEY);
     localStorage.removeItem(NAME_COLOR_KEY);
   } catch {
     /* ignore */
@@ -109,7 +122,7 @@ export async function refreshSession(fetchFn = (...a) => fetch(...a)) {
     }
     if (!res.ok) return 'unchecked';
     const me = await res.json();
-    setSession(token, me.username, !!me.admin);
+    setSession(token, me.username, !!me.admin, !!me.moderator);
     setNameColor(me.name_color || '');
     return 'ok';
   } catch {

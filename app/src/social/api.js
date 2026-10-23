@@ -74,6 +74,15 @@ export const comments = {
   remove: (cid) => hub(`/api/comments/${enc(cid)}`, { method: 'DELETE' }),
 };
 
+// The caller's own uploads, and the admins' view of everybody's. `opts` (e.g. { fetchFn }) goes
+// to hub(), so a test can drive the route without a network.
+export const submissions = {
+  mine: (opts) => hub('/api/me/submissions', opts),
+  admin: (opts) => hub('/api/admin/submissions', opts),
+  patch: (id, body, opts) => hub(`/api/submissions/${enc(id)}`, { ...opts, method: 'PATCH', body }),
+  remove: (id, opts) => hub(`/api/submissions/${enc(id)}`, { ...opts, method: 'DELETE' }),
+};
+
 export const profiles = {
   get: (name) => hub(`/api/users/${enc(name)}`, { auth: false }),
   me: () => hub('/api/me'),
@@ -82,6 +91,19 @@ export const profiles = {
   clearAvatar: () => hub('/api/me/avatar', { method: 'DELETE' }),
   setBanner: (blob) => hub('/api/me/banner', { method: 'POST', body: multipart({}, [blob], 'image') }),
   clearBanner: () => hub('/api/me/banner', { method: 'DELETE' }),
-  // Admins only: give (or clear, with null) someone's title.
-  giveTitle: (name, titles) => hub(`/api/users/${enc(name)}/title`, { method: 'PUT', body: { titles } }),
+  // Admins only. Badges replaced the title labels: the body is the whole list, so leaving
+  // a badge out removes it.
+  giveBadges: (name, badges, note) => hub(`/api/users/${enc(name)}/badges`, { method: 'PUT', body: { badges, note } }),
+  setModerator: (name, moderator) => hub(`/api/users/${enc(name)}/moderator`, { method: 'PUT', body: { moderator } }),
+  badges: () => hub('/api/badges', { auth: false }),
+};
+
+// The moderator chat room, and the public player directory.
+export const moderation = {
+  chat: (after = 0) => hub(`/api/moderator/chat?after=${after}`),
+  say: (body) => hub('/api/moderator/chat', { method: 'POST', body: { body } }),
+  // The maps a moderator can pick from.
+  maps: () => hub('/api/maps', { auth: false }),
+  // The public player directory (hub/users). Search is a name match, prefix first.
+  users: (q) => hub(`/api/users${q ? `?q=${encodeURIComponent(q)}` : ''}`, { auth: false }),
 };

@@ -1,3 +1,4 @@
+import { setWindowBackground } from './activity.js';
 // Video + audio backgrounds: a fixed muted looping <video> behind the UI, optional sound (the video's own or an audio file).
 // Pauses the picture when backgrounded (minimised/hidden/unfocused/game running); sound follows the "keep playing" pref. Sound is off unless the user switches it on.
 import { releaseMedia, manualLoop } from './releasemedia.js';
@@ -123,6 +124,7 @@ function tryPlay(el, what) {
 }
 
 export function applyPlayback() {
+  setWindowBackground(!!(state.win.minimised || state.win.invisible));
   const hidden = typeof document !== 'undefined' && !!document.hidden;
   const prefs = getAudioPrefs();
   const plan = playbackPlan({
@@ -157,10 +159,6 @@ export function setGameRunning(running) {
   if (state.gameRunning === !!running) return;
   state.gameRunning = !!running;
   applyPlayback();
-}
-
-export async function pollGameRunning(invoke) {
-  try { setGameRunning(await invoke('is_game_running')); } catch (e) {}
 }
 
 // sound: null | 'own' | audio file name (library). Keeps playing if it's the same file.

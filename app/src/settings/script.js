@@ -260,13 +260,15 @@ let launcherUpdateInfo = null;
 // Opens the forum's new-post form on the Bug category with the version filled in.
 window.__reportBug = async function () {
   let version = '';
-  try { version = await shownVersion(''); } catch {}
-  window.__forumPreset = { category: 'bug', title: '', body: `Recharge version: ${version || 'unknown'}\n\nWhat happened:\n\nWhat I expected:\n\nSteps to reproduce:\n` };
+  try { version = await shownVersion(); } catch {}
+  window.__forumPreset = { category: 'bug', title: '', body: `Recharge version: ${version}\n\nWhat happened:\n\nWhat I expected:\n\nSteps to reproduce:\n` };
   window.navigate('forum');
 };
 
-// Recharge is delivered as live code, so the shown number is the one shipped with it (version.json), not the installed package's; beta adds its own build counter.
-async function shownVersion(fallback) {
+// Returns the full version tuple: live version, package version (from Tauri), build, channel, mode.
+// Never returns 'unknown' - falls back to package version from Tauri API.
+async function shownVersion() {
+  const { invoke } = window.__TAURI__.core;
   const get = async (file) => {
     try {
       const res = await fetch(`/${file}?t=${Date.now()}`, { cache: 'no-store' });
@@ -275,12 +277,20 @@ async function shownVersion(fallback) {
       return null;
     }
   };
-  const base = (await get('version.json'))?.version || fallback;
-  const { invoke } = window.__TAURI__.core;
+  const ver = await get('version.json');
+  const liveVersion = ver?.live || ver?.version; // support old format
+  const packageVersionFromFile = ver?.package;
+  const build = ver?.build ?? (await get('beta.json'))?.build ?? 0;
   const channel = await invoke('live_get_channel').then((c) => c.channel).catch(() => 'stable');
-  if (channel !== 'beta') return base;
-  const beta = await get('beta.json');
-  return beta?.build != null ? `${base}-beta${beta.build}` : base;
+  // Package version from Tauri API (always available locally)
+  const tauriPkgVersion = (await invoke('live_package_version').catch(() => ({ packageVersion: null }))).packageVersion || packageVersionFromFile || 'unknown';
+  const live = liveVersion || tauriPkgVersion;
+  const pkg = packageVersionFromFile || tauriPkgVersion;
+  const mode = launcherManaged ? 'launcher-managed' : 'automatic';
+  const betaSuffix = channel === 'beta' && build ? `-beta${build}` : '';
+  const liveDisplay = `${live}${betaSuffix}`;
+  // Show both when they differ
+  return live !== pkg ? `Recharge ${liveDisplay} (package ${pkg}) [${channel}, build ${build}, ${mode}]` : `Recharge ${liveDisplay} [${channel}, build ${build}, ${mode}]`;
 }
 
 // Set when the Recharge launcher started us (it then owns package updates and the channel).
@@ -316,6 +326,24 @@ async function refreshManaged() {
   status.title = line.tip;
   document.getElementById('launcher-restart-btn').hidden = !info.ready;
   document.getElementById('launcher-update-btn').hidden = true;
+}
+
+function updateModeLabel(managed, reason) {
+  const el = document.getElementById('update-mode-label');
+  if (!el) return;
+  if (managed) {
+    if (reason === 'launcher') {
+      el.textContent = 'Updates: managed by the Recharge launcher';
+    } else if (reason === 'env') {
+      el.textContent = 'Updates: disabled (RECHARGE_NO_LIVE)';
+    } else {
+      el.textContent = 'Updates: managed';
+    }
+    el.hidden = false;
+  } else {
+    el.textContent = 'Updates: automatic (GitHub live code)';
+    el.hidden = false;
+  }
 }
 
 // ---- uninstall ----
@@ -453,6 +481,9 @@ async function refreshLauncherStatus() {
         updateBtn.hidden = true;
       }
     } catch (err) { notes.hidden = true; }
+    const live = await invoke('live_status').catch(() => null);
+    updateModeLabel(live?.managed, live?.managedReason);
+    if (live?.active && live.sha) status.append(` \u00b7 code ${live.sha.slice(0, 7)}`);
     return;
   }
   try {
@@ -482,6 +513,7 @@ async function refreshLauncherStatus() {
     }
     if (launcherManaged && !info.mapsUpdateAvailable) updateBtn.hidden = true;
     const live = await invoke('live_status').catch(() => null);
+    updateModeLabel(live?.managed, live?.managedReason);
     if (live?.active && live.sha) status.append(` \u00b7 code ${live.sha.slice(0, 7)}`);
   } catch (err) {
     status.textContent = String(err);

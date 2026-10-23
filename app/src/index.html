@@ -18,13 +18,15 @@
     </script>
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/components.css" />
-    <link rel="stylesheet" href="/skins/style.css" />
-    <link rel="stylesheet" href="/account/style.css" />
-    <link rel="stylesheet" href="/settings/style.css" />
-    <link rel="stylesheet" href="/backgrounds/style.css" />
-    <link rel="stylesheet" href="/credits/style.css" />
-    <link rel="stylesheet" href="/maps/style.css" />
+    <!-- Style sheets of the other views load without holding up the first paint (media swap on load); the shared ones above still block. -->
+    <link rel="stylesheet" href="/skins/style.css" media="print" onload="this.media='all'" />
+    <link rel="stylesheet" href="/account/style.css" media="print" onload="this.media='all'" />
+    <link rel="stylesheet" href="/settings/style.css" media="print" onload="this.media='all'" />
+    <link rel="stylesheet" href="/backgrounds/style.css" media="print" onload="this.media='all'" />
+    <link rel="stylesheet" href="/credits/style.css" media="print" onload="this.media='all'" />
+    <link rel="stylesheet" href="/maps/style.css" media="print" onload="this.media='all'" />
     <link rel="stylesheet" href="/social/social.css" />
+    <link rel="stylesheet" href="/notebook/style.css" media="print" onload="this.media='all'" />
     <script type="module" src="/app.js" defer></script>
   </head>
   <body>
@@ -73,6 +75,16 @@
               <span>&gt; Forum</span>
               <span class="home-forum-sub">Bugs, issues, questions</span>
             </button>
+            <button class="home-tile home-forum-tile" onclick="navigate('notebook')">
+              <span>&gt; Notebook</span>
+              <span class="home-forum-sub">How Recharge and IGTAP work</span>
+            </button>
+            <!-- Moderators only, and its own page - just the chat room. The hub refuses the
+                 route to anyone else; this only keeps the tile off everyone else's home. -->
+            <button class="home-tile home-forum-tile" id="home-moderators-tile" onclick="navigate('moderators')" hidden>
+              <span>&gt; Moderators</span>
+              <span class="home-forum-sub">Chat room</span>
+            </button>
           </div>
 
           <div class="home-menu-col">
@@ -97,6 +109,9 @@
               <button class="home-menu-row" id="home-maps-row" onclick="navigate('maps')">
                 <span>&gt; Maps</span>
               </button>
+              <button class="home-menu-row" id="home-players-row" onclick="navigate('players')">
+                <span>&gt; Players</span>
+              </button>
               <button class="home-menu-row" onclick="navigate('backgrounds')">
                 <span>&gt; Backgrounds</span>
               </button>
@@ -105,6 +120,9 @@
               </button>
               <button class="home-menu-row" onclick="navigate('settings')">
                 <span>&gt; Settings</span>
+              </button>
+              <button class="home-menu-row" onclick="navigate('notebook')">
+                <span>&gt; Notebook</span>
               </button>
               <button class="home-menu-row" onclick="navigate('credits')">
                 <span>&gt; Credits</span>
@@ -129,6 +147,9 @@
     <div class="view" id="view-settings"></div>
     <div class="view" id="view-credits"></div>
     <div class="view" id="view-forum"></div>
+    <div class="view" id="view-moderators"></div>
+    <div class="view" id="view-players"></div>
+    <div class="view" id="view-notebook"></div>
 
     <div id="toast-container"></div>
 
