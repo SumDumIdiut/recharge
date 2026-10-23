@@ -25,15 +25,19 @@ fn apply_nvidia_webkit_workarounds() {
     }
 }
 
-// wry already sets the Allow autoplay policy (and WebView2's autoplay flag on Windows), but WebKitGTK still gates play() on a user gesture through this setting, so background playlist sound needs it off.
+// Applies the WebKitGTK settings: media playback without a user gesture (for background playlist sound) and smooth wheel scrolling. wry already sets the Allow autoplay policy (and WebView2's autoplay flag on Windows), but WebKitGTK still gates play() on a user gesture through this setting.
 #[cfg(target_os = "linux")]
-fn allow_media_without_gesture(app: &tauri::AppHandle) {
+fn apply_webkit_settings(app: &tauri::AppHandle) {
     use tauri::Manager;
     use webkit2gtk::{SettingsExt, WebViewExt};
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.with_webview(|wv| {
             if let Some(settings) = wv.inner().settings() {
                 settings.set_media_playback_requires_user_gesture(false);
+                settings.set_enable_smooth_scrolling(true);
+                if std::env::var_os("RECHARGE_PERF").map_or(false, |v| v != "0" && !v.is_empty()) {
+                    eprintln!("[perf] webkit smooth scrolling: {}", settings.enables_smooth_scrolling());
+                }
             }
         });
     }
@@ -63,7 +67,7 @@ pub fn run() {
                 }
             });
             #[cfg(target_os = "linux")]
-            allow_media_without_gesture(app.handle());
+            apply_webkit_settings(app.handle());
             Ok(())
         })
         .invoke_handler({ let inner = perf::typed(tauri::generate_handler![
