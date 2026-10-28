@@ -60,6 +60,7 @@ export const forum = {
   create: (fields, images) => hub('/api/forum', { method: 'POST', body: multipart(fields, images) }),
   edit: (id, fields, images = []) => hub(`/api/forum/${enc(id)}`, { method: 'PUT', body: multipart(fields, images) }),
   remove: (id) => hub(`/api/forum/${enc(id)}`, { method: 'DELETE' }),
+  status: (id, status, opts = {}) => hub(`/api/forum/${enc(id)}/status`, { ...opts, method: 'POST', body: { status } }),
   reply: (id, body, images) => hub(`/api/forum/${enc(id)}/replies`, { method: 'POST', body: multipart({ body }, images) }),
   editReply: (rid, body) => hub(`/api/forum/replies/${enc(rid)}`, { method: 'PUT', body: { body } }),
   removeReply: (rid) => hub(`/api/forum/replies/${enc(rid)}`, { method: 'DELETE' }),

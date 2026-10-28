@@ -1,89 +1,17 @@
-import {
-  getBgTexture, applyBgTexture,
-  getWaveSettings, saveWaveSettings,
-} from '/theme.js';
-import { startWaveform } from '/home.js';
 import { runMigrate } from '/migrate-ui.js';
 import { confirmDestructive } from '/ui.js';
 import { renderInstallList } from '/install-list.js';
 import { loadChangelog, resolveVersion, cleanVersion } from '/whatsnew.js';
-import { clearSession, isLoggedIn } from '/auth.js';
+import { clearSession, isLoggedIn, isAdmin } from '/auth.js';
+import { refreshEvent } from '/halloween.js';
+import { initThemePicker, renderThemePicker } from '/settings/theme-picker.js';
+import { initEventAdmin } from '/settings/event-admin.js';
 
-function readFileAs(file, method) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
-    reader[method](file);
-  });
-}
-
-function renderTexturePreview() {
-  const removeBtn = document.getElementById('texture-remove-btn');
-  removeBtn.hidden = !getBgTexture();
-}
-
-function initTexture() {
-  const input = document.getElementById('texture-input');
-  const removeBtn = document.getElementById('texture-remove-btn');
-  const errorEl = document.getElementById('texture-error');
-
-  renderTexturePreview();
-
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    input.value = '';
-    if (!file) return;
-    errorEl.hidden = true;
-    try {
-      const dataUrl = await readFileAs(file, 'readAsDataURL');
-      applyBgTexture(dataUrl);
-      renderTexturePreview();
-    } catch (err) {
-      errorEl.textContent = 'Could not use that image: ' + (err?.message || err);
-      errorEl.hidden = false;
-    }
-  };
-
-  removeBtn.onclick = () => {
-    applyBgTexture('');
-    renderTexturePreview();
-  };
-}
-
-function initWaveform() {
-  const enabledEl = document.getElementById('wave-enabled');
-  const speedEl = document.getElementById('wave-speed');
-  const amplitudeEl = document.getElementById('wave-amplitude');
-  const densityEl = document.getElementById('wave-density');
-  const slidersEl = document.getElementById('wave-sliders');
-
-  const settings = getWaveSettings();
-  enabledEl.checked = settings.enabled;
-  speedEl.value = settings.speed;
-  amplitudeEl.value = settings.amplitude;
-  densityEl.value = settings.density;
-  slidersEl.style.opacity = settings.enabled ? '1' : '0.4';
-
-  // Debounce: dragging a slider fires 'input' continuously and rebuilding the waveform each tick is wasted work.
-  let applyTimer = null;
-  function apply() {
-    const next = {
-      enabled: enabledEl.checked,
-      speed: Number(speedEl.value),
-      amplitude: Number(amplitudeEl.value),
-      density: Number(densityEl.value),
-    };
-    saveWaveSettings(next);
-    slidersEl.style.opacity = next.enabled ? '1' : '0.4';
-    clearTimeout(applyTimer);
-    applyTimer = setTimeout(startWaveform, 100);
-  }
-
-  enabledEl.oninput = apply;
-  speedEl.oninput = apply;
-  amplitudeEl.oninput = apply;
-  densityEl.oninput = apply;
+// The theme picker (Classic / Halloweencharge 2026).
+function initTheme() {
+  initThemePicker();
+  initEventAdmin();
+  refreshEvent();
 }
 
 window.__settingsBrowse = async function () {
@@ -582,8 +510,7 @@ export async function init() {
   });
   refreshStatus();
   refreshLauncherStatus();
-  initTexture();
-  initWaveform();
+  initTheme();
 }
 
 // Logging out lives here (the Account page is just the profile and uploads).
@@ -597,4 +524,4 @@ function showLogOut() {
   if (b) b.hidden = !isLoggedIn();
 }
 // Each time Settings is opened: Log out only shows while logged in.
-export function onShow() { showLogOut(); }
+export function onShow() { showLogOut(); renderThemePicker(); }

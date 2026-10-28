@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const IMAGE_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 const VIDEO_EXTS: [&str; 2] = ["mp4", "webm"];
@@ -426,49 +426,74 @@ fn set_public_id(app: &AppHandle, id: &str, public_id: Option<String>) -> Result
     save_config(app, &config)
 }
 
-// Flat zip of the images, original file names.
-fn build_playlist_zip(dir: &Path, names: &[String]) -> Result<Vec<u8>, String> {
-    use std::io::Write;
-    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default();
+// Flat zip of the media, original file names, written to `out`. Files are streamed and stored (not deflated): media is
+// already compressed, so a big playlist is neither held in memory nor re-compressed.
+fn write_playlist_zip<W: std::io::Write + std::io::Seek>(out: W, dir: &Path, names: &[String]) -> Result<W, String> {
+    let mut zip = zip::ZipWriter::new(out);
     for name in names {
         sanitize_segment(name)?;
-        let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
-        writer.start_file(name.as_str(), options).map_err(|e| e.to_string())?;
-        writer.write_all(&bytes).map_err(|e| e.to_string())?;
+        add_playlist_entry(&mut zip, name, &dir.join(name))?;
         // a video's poster rides along as "<video>.poster.jpg|png" (not an item)
         if media_kind(Path::new(name)) == Some("video") {
             if let Some(poster) = existing_poster(dir, name) {
-                if let Ok(pb) = std::fs::read(dir.join(&poster)) {
-                    if !pb.is_empty() && pb.len() <= MAX_POSTER_BYTES {
-                        writer.start_file(poster.as_str(), options).map_err(|e| e.to_string())?;
-                        writer.write_all(&pb).map_err(|e| e.to_string())?;
-                    }
+                let path = dir.join(&poster);
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                if size > 0 && size <= MAX_POSTER_BYTES as u64 {
+                    add_playlist_entry(&mut zip, &poster, &path)?;
                 }
             }
         }
     }
-    Ok(writer.finish().map_err(|e| e.to_string())?.into_inner())
+    zip.finish().map_err(|e| e.to_string())
 }
 
-// Playlist zip limits: the same per-file caps as uploads, and 95 MB for the whole set.
-const MAX_PLAYLIST_TOTAL_BYTES: u64 = 95 * 1024 * 1024;
+fn add_playlist_entry<W: std::io::Write + std::io::Seek>(zip: &mut zip::ZipWriter<W>, name: &str, path: &Path) -> Result<(), String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{name}: {e}"))?;
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file(name, options).map_err(|e| e.to_string())?;
+    std::io::copy(&mut file, zip).map_err(|e| format!("{name}: {e}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn build_playlist_zip(dir: &Path, names: &[String]) -> Result<Vec<u8>, String> {
+    Ok(write_playlist_zip(std::io::Cursor::new(Vec::new()), dir, names)?.into_inner())
+}
+
+// The same zip as a temp file, so publishing a big playlist never has to hold the whole thing in memory.
+fn build_playlist_zip_file(dir: &Path, names: &[String]) -> Result<std::path::PathBuf, String> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("recharge-playlist-{}-{stamp}.zip", std::process::id()));
+    let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    match write_playlist_zip(file, dir, names) {
+        Ok(written) => {
+            drop(written);
+            Ok(path)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            Err(e)
+        }
+    }
+}
+
+// Playlist zips have no total size limit: a big one is uploaded in parts (see hub::hub_submit_playlist).
 
 // Saves the pictures, videos and sounds of a playlist zip into `dir` (flat, no name clashes), returns the new file names.
 // Nothing is left behind when it fails half way.
 #[cfg(test)]
 fn extract_playlist_zip(bytes: &[u8], dir: &Path) -> Result<Vec<String>, String> {
-    Ok(extract_playlist_zip_mapped(bytes, dir)?.into_iter().map(|(_, saved)| saved).collect())
+    Ok(extract_playlist_zip_mapped(std::io::Cursor::new(bytes), dir)?.into_iter().map(|(_, saved)| saved).collect())
 }
 
 // Same, but returns (name inside the zip, saved name) pairs. Poster entries ("<entry>.poster.jpg|png") are saved as sidecars of
-// their (possibly renamed) video; they are not items and don't count toward the file limit.
-fn extract_playlist_zip_mapped(bytes: &[u8], dir: &Path) -> Result<Vec<(String, String)>, String> {
+// their (possibly renamed) video; they are not items and don't count toward the file limit. Reads from any seekable source
+// (a downloaded zip is a file, so a big playlist never has to sit in memory).
+fn extract_playlist_zip_mapped<R: std::io::Read + std::io::Seek>(source: R, dir: &Path) -> Result<Vec<(String, String)>, String> {
     use std::io::Read;
     let mut posters: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("bad playlist zip: {e}"))?;
+    let mut archive = zip::ZipArchive::new(source).map_err(|e| format!("bad playlist zip: {e}"))?;
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut total = 0u64;
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(|e| format!("bad playlist zip: {e}"))?;
         if !entry.is_file() {
@@ -498,10 +523,6 @@ fn extract_playlist_zip_mapped(bytes: &[u8], dir: &Path) -> Result<Vec<(String, 
         entry.take(cap + 1).read_to_end(&mut data).map_err(|e| format!("{base}: {e}"))?;
         if data.len() as u64 > cap {
             continue;
-        }
-        total += data.len() as u64;
-        if total > MAX_PLAYLIST_TOTAL_BYTES {
-            return Err(format!("that playlist is too big (max {} MB in total)", MAX_PLAYLIST_TOTAL_BYTES / 1024 / 1024));
         }
         files.push((base, data));
     }
@@ -542,8 +563,15 @@ pub async fn publish_playlist(app: AppHandle, token: String, id: String, author:
         if playlist.images.len() > MAX_PLAYLIST_IMAGES {
             return Err(format!("public playlists can have at most {MAX_PLAYLIST_IMAGES} images"));
         }
-        let zip_bytes = build_playlist_zip(&images_dir(&app)?, &playlist.images)?;
-        let new_id = super::hub::hub_submit_playlist(&token, &playlist.name, &author, &zip_bytes)?;
+        let zip_path = build_playlist_zip_file(&images_dir(&app)?, &playlist.images)?;
+        // A big playlist goes up in parts; report how far along it is (the row shows "Uploading... 40%").
+        let progress = |done: u64, total: u64| {
+            let percent = if total > 0 { done * 100 / total } else { 0 };
+            let _ = app.emit("hub-upload-progress", serde_json::json!({ "id": &id, "done": done, "total": total, "percent": percent }));
+        };
+        let result = super::hub::hub_submit_playlist(&token, &playlist.name, &author, &zip_path, &progress);
+        let _ = std::fs::remove_file(&zip_path);
+        let new_id = result?;
         set_public_id(&app, &id, Some(new_id.clone()))?;
         if let Some(old) = &playlist.public_id {
             let _ = super::hub::hub_delete_submission(&token, old);
@@ -762,9 +790,17 @@ pub fn install_hub_playlist(app: &AppHandle, id: &str, name: &str, author: &str)
             let _ = app.emit("hub-download-progress", serde_json::json!({ "id": id, "done": done, "total": total, "percent": pct }));
         }
     };
-    let bytes = super::hub::hub_download_playlist_zip(id, &emit)?;
     let dir = images_dir(app)?;
-    let mapped = extract_playlist_zip_mapped(&bytes, &dir)?;
+    // A big playlist is streamed to a temp file and read from there, so it never has to fit in memory twice.
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("recharge-playlist-download-{}-{stamp}.zip", std::process::id()));
+    let mapped = (|| {
+        super::hub::hub_download_playlist_zip(id, &tmp, &emit)?;
+        let file = std::fs::File::open(&tmp).map_err(|e| format!("could not read the playlist: {e}"))?;
+        extract_playlist_zip_mapped(file, &dir)
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    let mapped = mapped?;
     let images: Vec<String> = mapped.iter().map(|(_, saved)| saved.clone()).collect();
     if images.is_empty() {
         return Err("that playlist has no usable pictures, videos or sounds".to_string());
@@ -1360,6 +1396,22 @@ mod tests {
     const MP4: &[u8] = b"\0\0\0\x18ftypmp42xxxxxxxx";
 
     #[test]
+    fn publishing_zip_is_a_stored_file_on_disk() {
+        let dir = tmp("zip-file");
+        std::fs::write(dir.join("clip.mp4"), MP4).unwrap();
+        std::fs::write(dir.join("pic.png"), png_bytes()).unwrap();
+        let path = build_playlist_zip_file(&dir, &["clip.mp4".to_string(), "pic.png".to_string()]).unwrap();
+        assert!(path.is_file(), "the zip is written to disk, not kept in memory");
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        assert_eq!(zip.len(), 2);
+        // already-compressed media is stored, not deflated again
+        assert_eq!(zip.by_index(0).unwrap().compression(), zip::CompressionMethod::Stored);
+        assert_eq!(zip.by_index(0).unwrap().name(), "clip.mp4");
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn write_poster_validates_name_and_bytes() {
         let dir = tmp("poster-write");
         std::fs::write(dir.join("clip.mp4"), MP4).unwrap();
@@ -1424,7 +1476,7 @@ mod tests {
         assert!(!names.contains(&"other.mp4.poster.jpg".to_string()));
         // download into a library that already has clip.mp4: the poster follows the renamed video
         std::fs::write(dst.join("clip.mp4"), b"old").unwrap();
-        let mapped = extract_playlist_zip_mapped(&zip_bytes, &dst).unwrap();
+        let mapped = extract_playlist_zip_mapped(std::io::Cursor::new(&zip_bytes), &dst).unwrap();
         assert_eq!(mapped, vec![("clip.mp4".into(), "clip-2.mp4".into()), ("other.mp4".into(), "other.mp4".into()), ("pic.png".into(), "pic.png".into())]);
         assert!(dst.join("clip-2.mp4.poster.jpg").is_file());
         assert!(!dst.join("clip.mp4.poster.jpg").exists());

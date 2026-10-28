@@ -1,7 +1,7 @@
 // Playlist editor logic + Browse has no selection bar.  node tests/playlist-editor.test.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, baseName } from '../src/backgrounds/editor.js';
+import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, baseName, LIMITS_TEXT } from '../src/backgrounds/editor.js';
 import { cardAction } from '../src/backgrounds/media.js';
 
 let n = 0;
@@ -77,6 +77,11 @@ test('dialog results normalise', () => {
   assert.deepEqual(pathsFrom(null), []);
 });
 
+test('the editor names the playlist total and the per-file limits', () => {
+  assert.match(LIMITS_TEXT, /videos 90 MB/);
+  assert.match(LIMITS_TEXT, /up to 2 GB in total/);
+});
+
 test('Browse: no selection bar, no click-to-select, share clicks intact', () => {
   const html = readFileSync(new URL('../src/backgrounds/view.html', import.meta.url), 'utf8');
   const js = readFileSync(new URL('../src/backgrounds/script.js', import.meta.url), 'utf8');
@@ -84,6 +89,7 @@ test('Browse: no selection bar, no click-to-select, share clicks intact', () => 
   assert.ok(!/bg-selection|selected\.(add|has|delete)|bg-card-selected/.test(js));
   assert.ok(html.includes('bg-pl-new') && html.includes('+ New playlist'));
   assert.ok(html.includes('bg-upload-btn') && html.includes('bg-share-btn'));
+  assert.match(html, /up to 2 GB in total/, 'the editor states the playlist total limit');
   assert.equal(cardAction({ shareMode: false, shared: false, loggedIn: true }), 'none');
   assert.equal(cardAction({ shareMode: true, shared: false, loggedIn: true }), 'publish');
   assert.equal(cardAction({ shareMode: true, shared: true, loggedIn: true }), 'unpublish');

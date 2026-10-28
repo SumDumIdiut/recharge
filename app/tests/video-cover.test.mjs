@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readMp4Cover, blobReader, urlReader, imageMime } from '../src/backgrounds/cover.js';
-import { pictureSource, mayNotPlay, PLAY_OVERLAY, addingText, errText } from '../src/backgrounds/media.js';
+import { pictureSource, mayNotPlay, PLAY_OVERLAY, addingText, uploadingText, errText } from '../src/backgrounds/media.js';
 import { placeholderThumb, previewTilesHtml, playlistCardsHtml, imageCardsHtml, hubVideoSource, fillHubCovers, startPreview } from '../src/backgrounds/community.js';
 
 const u32 = (n) => Uint8Array.of(n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255);
@@ -142,6 +142,9 @@ test('preview: the poster comes from the cover before the video has downloaded',
 test('adding a playlist: progress text and a real error message', () => {
   assert.equal(addingText(40, 100), 'Adding... 40%');
   assert.equal(addingText(0, 0), 'Adding...');
+  assert.equal(uploadingText(40, 100), 'Uploading... 40%');
+  assert.equal(uploadingText(0, 0), 'Uploading...');
+  assert.equal(uploadingText(120, 100), 'Uploading... 100%');
   assert.equal(errText('download failed: timeout'), 'download failed: timeout');
   assert.equal(errText({ message: 'boom' }), 'boom');
   assert.equal(errText(null), 'something went wrong');

@@ -5,7 +5,7 @@ import { openAccount } from '../login-prompt.js';
 import { recheckBackground, applySoundSetting } from '../theme.js';
 import { getAudioPrefs, saveAudioPrefs } from '../bgmedia.js';
 import { lazyThumb, loadThumb, hubCoverThumb, schedulePosters, forgetPoster } from './thumbs.js';
-import { mediaKind, countsText, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, addingText, errText, activeTarget, soundOptions, PLAY_OVERLAY, MAY_NOT_PLAY_TEXT, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB, withoutPosters } from './media.js';
+import { mediaKind, countsText, formatDuration, cardAction, SHARE_HINT, activeButtonLabel, addingText, uploadingText, errText, activeTarget, soundOptions, PLAY_OVERLAY, MAY_NOT_PLAY_TEXT, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, LIMITS_MB, withoutPosters } from './media.js';
 
 import { newDraft, draftFromPlaylist, addItems, removeItem, moveItem, editorSoundOptions, validateDraft, savePayload, summarizeImport, progressText, skippedText, pathsFrom, LIMITS_TEXT } from './editor.js';
 import { loadCommunity, imageCardsHtml, playlistCardsHtml, previewTilesHtml, backgroundGalleryUrl, startPreview, fillHubCovers, applyCover, UNSUPPORTED_PLAYLISTS as UNSUPPORTED } from './community.js';
@@ -42,6 +42,8 @@ function showError(msg, withAccountLink = false) {
     el.appendChild(btn);
   }
   el.hidden = false;
+  // A publish can fail after a long upload; make sure the reason is on screen, not above the fold.
+  try { el.scrollIntoView({ block: 'nearest' }); } catch { /* no layout (tests) */ }
 }
 
 function clearError() {
@@ -198,12 +200,22 @@ async function setPublic(row, playlist, on) {
     return;
   }
   setRowStatus(row, on ? 'Uploading...' : 'Removing from the hub...');
+  // A big playlist goes up in parts, which takes minutes: show the percentage the backend reports.
+  let unlisten = null;
+  if (on) {
+    try {
+      unlisten = await window.__TAURI__.event?.listen?.('hub-upload-progress', (e) => {
+        if (e.payload?.id === playlist.id) setRowStatus(row, uploadingText(e.payload.percent, e.payload.total));
+      });
+    } catch { /* no event bridge (tests) */ }
+  }
   try {
     if (on) await invoke('publish_playlist', { token: getToken(), id: playlist.id, author: getUsername() || '' });
     else await invoke('unpublish_playlist', { token: getToken(), id: playlist.id });
   } catch (err) {
-    showError(String(err));
+    showError(errText(err));
   }
+  try { unlisten?.(); } catch { /* already gone */ }
   renderPlaylists();
 }
 
@@ -216,11 +228,20 @@ async function republish(playlist) {
   }
   const row = document.querySelector(`.bg-playlist-row[data-id="${playlist.id}"]`);
   if (row) setRowStatus(row, 'Updating the public copy...');
+  let unlisten = null;
+  if (row) {
+    try {
+      unlisten = await window.__TAURI__.event?.listen?.('hub-upload-progress', (e) => {
+        if (e.payload?.id === playlist.id) setRowStatus(row, uploadingText(e.payload.percent, e.payload.total));
+      });
+    } catch { /* no event bridge (tests) */ }
+  }
   try {
     await invoke('publish_playlist', { token: getToken(), id: playlist.id, author: getUsername() || '' });
   } catch (err) {
-    showError(String(err));
+    showError(errText(err));
   }
+  try { unlisten?.(); } catch { /* already gone */ }
   renderPlaylists();
 }
 

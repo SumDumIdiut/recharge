@@ -301,10 +301,13 @@
 #maps-rate-picker { flex-basis: 100%; margin-top: 8px; }
 .mod-picker { align-items: flex-end; }
 
-/* The Players page. */
+/* The Players page. One panel behind the list, so names never sit directly on the wallpaper.
+   The faint light/dark text shadow keeps both bright and custom dark name colours readable. */
+.mod-board { background: var(--glass-hi); border-radius: var(--radius); box-shadow: var(--hl), var(--shadow-soft); padding: 6px 14px; max-width: 940px; }
 .player-list { display: flex; flex-direction: column; }
-.player-row { display: flex; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent); cursor: pointer; }
-.player-row:hover { background: color-mix(in srgb, var(--green) 7%, transparent); }
+.player-row { display: flex; align-items: center; gap: 12px; padding: 10px 6px; border-bottom: 1px solid color-mix(in srgb, var(--text) 9%, transparent); cursor: pointer; }
+.player-row:last-child { border-bottom: none; }
+.player-row:hover { background: var(--hover); }
 .player-row-main { flex: 1; min-width: 0; }
-.player-row-name { font-size: 17px; }
-.player-row-meta { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+.player-row-name { font-size: 18px; text-shadow: 0 0 1px color-mix(in srgb, var(--text) 55%, transparent), 0 1px 2px rgba(0, 0, 0, 0.85); }
+.player-row-meta { color: color-mix(in srgb, var(--text) 72%, transparent); font-size: 13px; margin-top: 2px; }

@@ -59,6 +59,37 @@
   color-scheme: dark;
 }
 
+/* Halloweencharge 2026 (halloween.js sets data-theme while the event runs and the user hasn't picked Classic). Tokens only, flat
+   colours - no blur or glow, same WebKitGTK scroll-cost rule as above. Aubergine matches assets/bg-halloween.png (#1a0028). */
+:root[data-theme="halloween"] {
+  --bg:      #1a0028;
+  --panel:   #26103a;
+  --line:    rgba(255, 238, 214, 0.18);
+  --line-hi: rgba(255, 238, 214, 0.45);
+  --text:    #fff1de;
+  --text-dim: rgba(255, 241, 222, 0.68);
+  --green:   #ff8a1f;
+  --green-dim: rgba(255, 138, 31, 0.65);
+  --magenta: #c98cff;
+  --magenta-dim: rgba(201, 140, 255, 0.75);
+  --grid-line: rgba(255, 238, 214, 0.04);
+}
+/* The forced background replaces the user's texture without touching it (their --bg-image stays set for Classic). */
+:root[data-theme="halloween"] body::before { background-image: url(/assets/bg-halloween.png); }
+/* The Halloween logo is optional: halloween.js adds has-halloween-logo only once the file loads, otherwise logo.png stays. */
+:root.has-halloween-logo[data-theme="halloween"] .home-logo,
+:root.has-halloween-logo[data-theme="halloween"] .credits-logo { content: url(/assets/logo-halloween.png); }
+/* Notes that only show while the theme owns the background (Settings, Backgrounds). */
+.halloween-note { display: none; margin-top: 8px; color: var(--green); }
+/* Home title: "Recharge" becomes "Halloweencharge 2026" (smaller so it fits; it wraps only at the space). aria-label on the span keeps one sensible name. */
+.ht-event { display: none; }
+:root[data-theme="halloween"] .ht-classic { display: none; }
+:root[data-theme="halloween"] .ht-event { display: inline; }
+:root[data-theme="halloween"] .home-title { font-size: 40px; letter-spacing: 2px; line-height: 1.05; min-width: 0; overflow-wrap: normal; word-break: keep-all; }
+:root[data-theme="halloween"] .home-title-left { min-width: 0; max-width: 100%; }
+:root[data-theme="halloween"] .home-title-row { flex-wrap: wrap; }
+:root[data-theme="halloween"] .halloween-note { display: block; }
+
 body {
   margin: 0;
   font-family: 'VT323', ui-monospace, monospace;

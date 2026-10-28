@@ -2,6 +2,15 @@
   <div class="page-header">Account</div>
 
   <div class="card" id="account-profile"><div class="empty-state">Loading...</div></div>
+  <div class="card account-events" id="account-events" hidden>
+    <div class="settings-label">Events</div>
+    <div class="account-events-row">
+      <div class="account-events-name">Halloweencharge 2026 <span class="account-events-state" id="account-events-state"></span></div>
+      <button class="btn" id="account-events-toggle" type="button">Turn off</button>
+    </div>
+    <div class="account-events-status" id="account-events-status"></div>
+    <div class="account-error" id="account-events-error" hidden></div>
+  </div>
   <div class="page-header account-sub-header" id="account-uploads-header">My Uploads</div>
   <div class="browser-subtabs" id="account-uploads-switch" style="display:none; margin-bottom:12px;">
     <button class="subtab-btn active" data-scope="mine" onclick="window.__acctScope('mine')">Mine</button>

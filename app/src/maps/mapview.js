@@ -36,7 +36,8 @@ function start() {
 }
 
 // map: the parsed map.json. Resolves to a PNG Blob (w x h), or null for a map with no editor data.
-export async function renderMapView(map, w = 960, h = 540) {
+// bg: the map's own background image (a Blob), when it has one - the worker cannot read the map's assets itself.
+export async function renderMapView(map, w = 960, h = 540, bg = null) {
   await start();
   clearTimeout(idle);
   const id = ++seq;
@@ -48,6 +49,6 @@ export async function renderMapView(map, w = 960, h = 540) {
     const poke = () => { if (Date.now() - born > 900000) return; clearTimeout(t); t = setTimeout(fail, 90000); };
     pending.set(id, { poke, resolve: (v) => { clearTimeout(t); resolve(v); }, reject: (e) => { clearTimeout(t); reject(e); } });
   });
-  worker.postMessage({ type: 'view', id, map, w, h });
+  worker.postMessage({ type: 'view', id, map, w, h, bg });
   try { return await done; } finally { if (!pending.size) idle = setTimeout(() => stop(), IDLE_MS); }
 }

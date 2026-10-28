@@ -19,6 +19,11 @@ export const hubStamp = (changed) => 'h' + (changed || '0');
 export const cardImage = (uploaded, drawn) => uploaded || drawn || null;
 // Whether a map still needs its drawn view fetched (it has no uploaded picture and none drawn yet).
 export const needsView = (uploaded, drawn) => !uploaded && !drawn;
+// Bumped whenever the drawing of a view changes (r2: the map's backdrop is drawn behind it), so
+// pictures kept from an older renderer are drawn again once. It is appended to every stamp the
+// picture is kept under, installed or Hub, and the old file is replaced by the new write.
+export const VIEW_RENDERER = 'r2';
+export const versioned = (stamp) => { const s = String(stamp); return s.endsWith('-' + VIEW_RENDERER) ? s : s + '-' + VIEW_RENDERER; };
 export const viewKey = (id, stamp) => id + '@' + stamp;
 
 async function blobToBase64(blob) {
@@ -43,9 +48,21 @@ function failedTry(key, broken) {
   failed.set(key, { tries, at: Date.now() + BACKOFF * Math.pow(2, tries - 1), broken: false });
 }
 
+// The map's own background image as a Blob, when it has one and it can be found (the worker cannot read assets); null draws the level backdrop instead.
+async function ownBackground(map, invoke) {
+  const file = (map.editor?.background || map.background)?.image;
+  if (typeof file !== 'string') return null;
+  try {
+    const bin = atob(await invoke('find_map_asset', { file }));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes]);
+  } catch { return null; }
+}
+
 async function work(id, stamp) {
   const { invoke } = window.__TAURI__.core;
-  stamp = stamp || (await invoke('map_view_stamp', { id }).catch(() => null)) || 'x';
+  stamp = versioned(stamp || (await invoke('map_view_stamp', { id }).catch(() => null)) || 'x');
   const kept = await invoke('read_map_view', { id, stamp }).catch(() => null);
   if (kept) return 'data:image/png;base64,' + kept;
   const key = viewKey(id, stamp);
@@ -60,7 +77,7 @@ async function work(id, stamp) {
   try { map = typeof text === 'string' ? JSON.parse(text) : text; }
   catch (e) { failedTry(key, true); console.warn('map view', id, e); return null; }
   try {
-    const blob = await renderMapView(map);
+    const blob = await renderMapView(map, 960, 540, await ownBackground(map, invoke));
     // No editor data: nothing to draw, and nothing that a later try would change.
     if (!blob) { failedTry(key, true); return null; }
     const data = await blobToBase64(blob);
@@ -106,6 +123,6 @@ export function retryView(id) {
 export async function mapViewFile(id, opts = {}) {
   const { invoke } = window.__TAURI__.core;
   if (!(await mapThumbFor(id, opts))) return null;
-  const stamp = opts.stamp || (await invoke('map_view_stamp', { id }).catch(() => null)) || 'x';
+  const stamp = versioned(opts.stamp || (await invoke('map_view_stamp', { id }).catch(() => null)) || 'x');
   return invoke('map_view_path', { id, stamp }).catch(() => null);
 }

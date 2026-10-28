@@ -4,37 +4,50 @@
   <div class="col-appearance">
   <div class="card">
     <div class="settings-label">Appearance</div>
-    <div class="settings-sublabel">Background texture</div>
-    <div class="texture-row">
-      <div class="texture-preview" id="texture-preview"></div>
-      <div class="texture-actions">
-        <label class="btn" for="texture-input">Upload image…</label>
-        <input type="file" id="texture-input" accept="image/*" hidden />
-        <button class="btn" id="texture-remove-btn" hidden>Remove</button>
-      </div>
+    <div class="settings-sublabel">Theme</div>
+    <div class="theme-picker" id="theme-picker" role="radiogroup" aria-label="Theme">
+      <button type="button" class="theme-card" role="radio" data-theme-choice="classic" aria-checked="false">
+        <span class="theme-preview theme-preview-classic"><img src="/assets/logo.png" alt="" /><i></i></span>
+        <span class="theme-card-name">Classic</span>
+        <span class="theme-card-tag"></span>
+      </button>
+      <button type="button" class="theme-card" role="radio" data-theme-choice="halloween" aria-checked="false">
+        <span class="theme-preview theme-preview-halloween"><img src="/assets/logo-halloween.png" alt="" /><i></i></span>
+        <span class="theme-card-name">Halloweencharge 2026</span>
+        <span class="theme-card-tag"></span>
+      </button>
     </div>
-    <div class="settings-error" id="texture-error" hidden></div>
+    <div class="settings-sub" id="theme-note" hidden></div>
 
-    <div class="settings-sublabel">Waveform</div>
-    <div class="settings-row">
-      <label class="check-field">
-        <input type="checkbox" id="wave-enabled" />
-        Show waveform banner
-      </label>
-    </div>
-    <div class="wave-sliders" id="wave-sliders">
-      <label class="wave-slider-row">
-        Speed
-        <input type="range" id="wave-speed" min="20" max="220" step="5" />
-      </label>
-      <label class="wave-slider-row">
-        Height
-        <input type="range" id="wave-amplitude" min="4" max="40" step="1" />
-      </label>
-      <label class="wave-slider-row">
-        Density
-        <input type="range" id="wave-density" min="120" max="500" step="10" />
-      </label>
+    <div class="event-admin" id="event-admin" hidden>
+      <div class="settings-sublabel">Event for everyone</div>
+      <div class="theme-picker" id="event-picker">
+        <div class="theme-card event-card" id="event-card-off">
+          <button type="button" class="event-card-main" id="event-main-off">
+            <span class="event-preview-slot" data-preview="classic"></span>
+            <span class="theme-card-name">Off &mdash; Classic for everyone</span>
+            <span class="theme-card-tag" id="event-tag-off"></span>
+          </button>
+          <div class="event-confirm" id="event-confirm-off" hidden>
+            <span>Turn off for everyone?</span>
+            <span class="event-confirm-btns"><button type="button" class="btn btn-primary" id="event-yes-off">Confirm</button><button type="button" class="btn" id="event-no-off">Cancel</button></span>
+          </div>
+        </div>
+        <div class="theme-card event-card" id="event-card-on">
+          <button type="button" class="event-card-main" id="event-main-on">
+            <span class="event-preview-slot" data-preview="halloween"></span>
+            <span class="theme-card-name">On &mdash; Halloweencharge 2026</span>
+            <span class="theme-card-tag" id="event-tag-on"></span>
+          </button>
+          <div class="event-confirm" id="event-confirm-on" hidden>
+            <span>Turn on for everyone?</span>
+            <span class="event-confirm-btns"><button type="button" class="btn btn-primary" id="event-yes-on">Confirm</button><button type="button" class="btn" id="event-no-on">Cancel</button></span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-sub event-admin-line" id="event-admin-status"></div>
+      <div class="settings-sub event-admin-line event-admin-error" id="event-admin-error" hidden></div>
+      <div class="settings-sub event-admin-line" id="event-admin-note" hidden>Test build: your own look stays forced on; this changes the hub for everyone.</div>
     </div>
   </div>
 

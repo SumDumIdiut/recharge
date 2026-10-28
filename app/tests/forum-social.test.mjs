@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { richText, safeUrl, linkHtml, timeAgo } from '../src/social/text.js';
 import { avatarHtml, nameHtml, userOf, FRAMES, frameOf, initialOf, safeColor, hubUrl } from '../src/social/avatar.js';
 import { validatePost, validateReply, validateComment, LIMITS } from '../src/social/validate.js';
 import { commentsHtml } from '../src/social/comments.js';
-import { postRowHtml, postHtml, replyHtml, imagesHtml, listHtml } from '../src/forum/lib.js';
+import { postRowHtml, postHtml, replyHtml, imagesHtml, listHtml, statusControlsHtml } from '../src/forum/lib.js';
 import { profileCardHtml } from '../src/social/profile.js';
 import { clampOffset, sourceRect, coverSource, scaleFor, clampZoom } from '../src/social/crop.js';
 import { resolveHubBase, DEFAULT_HUB_BASE } from '../src/hub.js';
-import { errorMessage } from '../src/social/api.js';
+import { errorMessage, forum } from '../src/social/api.js';
 
 const EVIL = '<img src=x onerror=alert(1)>"\'<script>alert(2)</script>';
 const noTags = (html) => { assert.ok(!/<img src=x|<script/i.test(html), html); };
@@ -42,6 +43,41 @@ test('titles, bodies and usernames are escaped in forum markup', () => {
 test('list shows an empty state and fixed row structure', () => {
   assert.match(listHtml({ posts: [] }), /No posts/);
   assert.match(postRowHtml({ id: 3, title: 't', category: 'question', status: 'open', reply_count: 0, author: { username: 'bob' } }), /data-post="3"/);
+});
+
+test('status controls follow the hub permissions and the current status', () => {
+  const open = statusControlsHtml({ status: 'open', can_status: true });
+  assert.match(open, /data-v="solved"[^>]*>Mark solved</);
+  assert.match(open, /data-v="closed"[^>]*>Close</);
+  assert.ok(!open.includes('Reopen'));
+
+  const solved = statusControlsHtml({ status: 'solved', can_status: true });
+  assert.match(solved, /data-v="open"[^>]*>Reopen</);
+  assert.match(solved, /data-v="closed"[^>]*>Close</);
+  assert.ok(!solved.includes('Mark solved'));
+
+  const closed = statusControlsHtml({ status: 'closed', can_status: true });
+  assert.match(closed, /data-v="open"[^>]*>Reopen</);
+  assert.ok(!closed.includes('Close<') && !closed.includes('Mark solved'), 'a closed post is reopened, not closed again');
+
+  assert.equal(statusControlsHtml({ status: 'open', can_status: false }), '', 'no controls once the viewer may not act');
+  assert.equal(statusControlsHtml(null), '');
+});
+
+test('the forum screen wires the status buttons to the hub route', async () => {
+  const src = readFileSync(new URL('../src/forum/script.js', import.meta.url), 'utf8');
+  assert.match(src, /statusControlsHtml\(post\)/);
+  assert.match(src, /case 'set-status'/);
+  assert.match(src, /forum\.status\(current\.id, v\)/);
+
+  let seen;
+  const out = await forum.status(7, 'solved', {
+    fetchFn: async (url, init) => { seen = { url, init }; return { ok: true, status: 200, json: async () => ({ post: { id: 7, status: 'solved' } }) }; },
+  });
+  assert.equal(out.post.status, 'solved');
+  assert.match(seen.url, /\/api\/forum\/7\/status$/);
+  assert.equal(seen.init.method, 'POST');
+  assert.equal(seen.init.body, JSON.stringify({ status: 'solved' }));
 });
 
 test('composer validation', () => {

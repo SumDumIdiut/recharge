@@ -791,29 +791,166 @@ fn playlist_err(what: &str, e: ureq::Error) -> String {
     }
 }
 
-pub fn hub_submit_playlist(token: &str, name: &str, author: &str, zip_bytes: &[u8]) -> Result<String, String> {
-    let tmp_id = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("recharge-playlist-upload-{}-{tmp_id}.zip", std::process::id()));
-    std::fs::write(&tmp, zip_bytes).map_err(|e| e.to_string())?;
+// Posts a submission and reads the hub's own error text for a refusal. ureq's status error drops the
+// body, which turns "a playlist can be at most 95 MB" into the useless "http status 400".
+fn submit_form(token: &str, form: ureq::unversioned::multipart::Form<'_>) -> Result<SubmitResult, String> {
+    let mut res = ureq::post(&format!("{}/api/submit", hub_base()))
+        .header("Authorization", format!("Bearer {token}"))
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
+        .build()
+        .send(form)
+        .map_err(|e| format!("upload failed: {e}"))?;
+    let status = res.status().as_u16();
+    if !(200..300).contains(&status) {
+        let body = res.body_mut().with_config().limit(64 * 1024).read_to_string().unwrap_or_default();
+        return Err(hub_refusal(status, &body));
+    }
+    res.body_mut().with_config().limit(1024 * 1024).read_json().map_err(|e| format!("bad response from library: {e}"))
+}
+
+// The hub answers a refusal with {"error": "..."}; show that sentence, not just the status code.
+fn hub_refusal(status: u16, body: &str) -> String {
+    if status == 404 {
+        return "UNSUPPORTED".to_string();
+    }
+    if status == 413 {
+        return "upload failed: the upload is too large for the hub (HTTP 413)".to_string();
+    }
+    let parsed = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string));
+    let message = parsed.unwrap_or_else(|| body.trim().chars().take(200).collect());
+    // Cloudflare and other proxies answer with an HTML page; its markup is no use to the person.
+    if message.is_empty() || message.starts_with('<') {
+        format!("upload failed: HTTP {status}")
+    } else {
+        format!("upload failed: {message}")
+    }
+}
+
+// Cloudflare in front of the hub drops a single request body over 100 MB, so a playlist bigger than one part travels
+// as numbered parts (POST /api/playlist-upload, PUT /api/playlist-upload/:id/:n, POST .../complete). 48 MB each keeps
+// every request well clear of that cap.
+const PLAYLIST_PART_BYTES: usize = 48 * 1024 * 1024;
+
+/// The byte ranges a playlist zip is sent in; empty for an empty zip.
+fn playlist_parts(len: usize) -> Vec<(usize, usize)> {
+    if len == 0 {
+        return Vec::new();
+    }
+    (0..len).step_by(PLAYLIST_PART_BYTES).map(|start| (start, (start + PLAYLIST_PART_BYTES).min(len))).collect()
+}
+
+// A part goes up as its own raw request. Returns (retryable, message): a refused part (bad id, not yours, bad zip) is
+// not worth sending again, a dropped connection is.
+fn send_playlist_part(token: &str, id: &str, index: usize, bytes: &[u8]) -> Result<(), (bool, String)> {
+    let mut res = ureq::put(&format!("{}/api/playlist-upload/{id}/{index}", hub_base()))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/octet-stream")
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
+        .build()
+        .send(bytes)
+        .map_err(|e| (true, format!("upload failed: {e}")))?;
+    let status = res.status().as_u16();
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    let body = res.body_mut().with_config().limit(64 * 1024).read_to_string().unwrap_or_default();
+    Err((false, hub_refusal(status, &body)))
+}
+
+fn read_zip_range(path: &std::path::Path, start: usize, end: usize) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; end - start];
+    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+fn hub_submit_playlist_parts(token: &str, name: &str, author: &str, zip_path: &std::path::Path, size: usize, progress: &dyn Fn(u64, u64)) -> Result<String, String> {
+    let mut init = ureq::post(&format!("{}/api/playlist-upload", hub_base()))
+        .header("Authorization", format!("Bearer {token}"))
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
+        .build()
+        .send_json(serde_json::json!({ "size": size }))
+        .map_err(|e| format!("upload failed: {e}"))?;
+    let init_status = init.status().as_u16();
+    if init_status == 404 {
+        return Err("UNSUPPORTED".to_string()); // an older hub has no part routes: try one request instead
+    }
+    if !(200..300).contains(&init_status) {
+        let body = init.body_mut().with_config().limit(64 * 1024).read_to_string().unwrap_or_default();
+        return Err(hub_refusal(init_status, &body));
+    }
+    #[derive(serde::Deserialize)]
+    struct Started {
+        id: String,
+    }
+    let started: Started = init.body_mut().with_config().limit(64 * 1024).read_json().map_err(|e| format!("bad response from library: {e}"))?;
+
+    // One part in memory at a time: the zip itself stays on disk.
+    let mut sent = 0u64;
+    for (index, (start, end)) in playlist_parts(size).into_iter().enumerate() {
+        let part = read_zip_range(zip_path, start, end)?;
+        let mut attempt = 0;
+        loop {
+            match send_playlist_part(token, &started.id, index, &part) {
+                Ok(()) => break,
+                Err((retryable, why)) => {
+                    // A dropped connection on a 48 MB part is worth one more go; a refusal is not.
+                    if retryable && attempt == 0 {
+                        attempt = 1;
+                        continue;
+                    }
+                    return Err(why);
+                }
+            }
+        }
+        sent += part.len() as u64;
+        progress(sent, size as u64);
+    }
+
+    let mut done = ureq::post(&format!("{}/api/playlist-upload/{}/complete", hub_base(), started.id))
+        .header("Authorization", format!("Bearer {token}"))
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
+        .build()
+        .send_json(serde_json::json!({ "name": name, "author": author }))
+        .map_err(|e| format!("upload failed: {e}"))?;
+    let done_status = done.status().as_u16();
+    if !(200..300).contains(&done_status) {
+        let body = done.body_mut().with_config().limit(64 * 1024).read_to_string().unwrap_or_default();
+        return Err(hub_refusal(done_status, &body));
+    }
+    let result: SubmitResult = done.body_mut().with_config().limit(1024 * 1024).read_json().map_err(|e| format!("bad response from library: {e}"))?;
+    Ok(result.id)
+}
+
+pub fn hub_submit_playlist(token: &str, name: &str, author: &str, zip_path: &std::path::Path, progress: &dyn Fn(u64, u64)) -> Result<String, String> {
+    let size = std::fs::metadata(zip_path).map_err(|e| e.to_string())?.len() as usize;
+    progress(0, size as u64);
+    // A hub that predates the part routes says UNSUPPORTED; it gets the single request below.
+    if size > PLAYLIST_PART_BYTES {
+        match hub_submit_playlist_parts(token, name, author, zip_path, size, progress) {
+            Err(e) if e == "UNSUPPORTED" => {}
+            other => return other,
+        }
+    }
     let form = ureq::unversioned::multipart::Form::new()
         .text("kind", "playlist")
         .text("name", name)
         .text("author", author)
-        .file("file", &tmp)
+        .file("file", zip_path)
         .map_err(|e| e.to_string())?;
-    let result: Result<SubmitResult, String> = (|| {
-        ureq::post(&format!("{}/api/submit", hub_base()))
-            .header("Authorization", format!("Bearer {token}"))
-            .send(form)
-            .map_err(|e| playlist_err("upload", e))?
-            .body_mut()
-            .with_config()
-            .limit(1024 * 1024)
-            .read_json()
-            .map_err(|e| format!("bad response from library: {e}"))
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    Ok(result?.id)
+    Ok(submit_form(token, form)?.id)
 }
 
 // A missing submission counts as deleted.
@@ -837,16 +974,7 @@ pub fn hub_submit_background(token: &str, name: &str, author: &str, path: &std::
         Some(p) => form.file("poster", p).map_err(|e| e.to_string())?,
         None => form,
     };
-    let res: SubmitResult = ureq::post(&format!("{}/api/submit", hub_base()))
-        .header("Authorization", format!("Bearer {token}"))
-        .send(form)
-        .map_err(|e| playlist_err("upload", e))?
-        .body_mut()
-        .with_config()
-        .limit(1024 * 1024)
-        .read_json()
-        .map_err(|e| format!("bad response from library: {e}"))?;
-    Ok(res.id)
+    Ok(submit_form(token, form)?.id)
 }
 
 // `posters` of a hub row ({ original file name: poster file name }); empty when the hub has none. kind_path: "playlists" | "backgrounds".
@@ -916,9 +1044,12 @@ pub async fn fetch_changelog_cmd(channel: String) -> Result<serde_json::Value, S
     .map_err(|e| format!("task panicked: {e}"))?
 }
 
-// Streams the playlist zip (up to ~95 MB of media on a slow server can take minutes), reporting (done, total) bytes.
-// `total` is 0 when the server sent no length. Generous but finite timeouts so a dead connection ends with a message.
-pub fn hub_download_playlist_zip(id: &str, progress: &dyn Fn(u64, u64)) -> Result<Vec<u8>, String> {
+// Streams a playlist zip to `dest` (a big playlist can be hundreds of MB on a slow server, which takes minutes),
+// reporting (done, total) bytes. `total` is 0 when the server sent no length. Generous but finite timeouts so a dead
+// connection ends with a message. Streaming keeps a large playlist out of memory.
+const MAX_PLAYLIST_ZIP_BYTES: u64 = 5 * 1024 * 1024 * 1024; // 50 files of up to 90 MB each, plus pictures and sounds
+
+pub fn hub_download_playlist_zip(id: &str, dest: &std::path::Path, progress: &dyn Fn(u64, u64)) -> Result<u64, String> {
     sanitize_id(id)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
@@ -927,22 +1058,24 @@ pub fn hub_download_playlist_zip(id: &str, progress: &dyn Fn(u64, u64)) -> Resul
         .into();
     let mut res = agent.get(&format!("{HUB_BASE}/api/playlists/{id}/file")).call().map_err(|e| playlist_err("download", e))?;
     let total = res.body().content_length().unwrap_or(0);
-    let mut reader = res.body_mut().with_config().limit(MAX_PACKAGE_BYTES).reader();
-    let mut out = Vec::with_capacity(total.min(MAX_PACKAGE_BYTES) as usize);
+    let mut reader = res.body_mut().with_config().limit(MAX_PLAYLIST_ZIP_BYTES).reader();
+    let mut file = std::fs::File::create(dest).map_err(|e| format!("could not save the playlist: {e}"))?;
+    let mut done = 0u64;
     let mut buf = vec![0u8; 64 * 1024];
     progress(0, total);
     loop {
-        let n = reader.read(&mut buf).map_err(|e| format!("download interrupted after {} MB: {e}", out.len() / 1024 / 1024))?;
+        let n = reader.read(&mut buf).map_err(|e| format!("download interrupted after {} MB: {e}", done / 1024 / 1024))?;
         if n == 0 {
             break;
         }
-        out.extend_from_slice(&buf[..n]);
-        progress(out.len() as u64, total);
+        file.write_all(&buf[..n]).map_err(|e| format!("could not save the playlist: {e}"))?;
+        done += n as u64;
+        progress(done, total);
     }
-    if total > 0 && (out.len() as u64) < total {
-        return Err(format!("download cut short ({} of {} MB)", out.len() / 1024 / 1024, total / 1024 / 1024));
+    if total > 0 && done < total {
+        return Err(format!("download cut short ({} of {} MB)", done / 1024 / 1024, total / 1024 / 1024));
     }
-    Ok(out)
+    Ok(done)
 }
 
 #[tauri::command]
@@ -1209,5 +1342,26 @@ mod install_tests {
         assert!(install_mod_into(&dir, zip_of(&[("a.txt", "x")]), "h", "n", &v(1)).is_err());
         assert!(folders(&dir).is_empty());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_playlist_is_split_into_parts_under_the_upload_cap() {
+        assert!(playlist_parts(0).is_empty());
+        assert_eq!(playlist_parts(10), vec![(0, 10)]);
+        assert_eq!(playlist_parts(PLAYLIST_PART_BYTES), vec![(0, PLAYLIST_PART_BYTES)]);
+        let parts = playlist_parts(PLAYLIST_PART_BYTES * 2 + 5);
+        assert_eq!(parts, vec![(0, PLAYLIST_PART_BYTES), (PLAYLIST_PART_BYTES, PLAYLIST_PART_BYTES * 2), (PLAYLIST_PART_BYTES * 2, PLAYLIST_PART_BYTES * 2 + 5)]);
+        // Cloudflare drops a request body over 100 MB; the hub refuses a part over 64 MB.
+        assert!(PLAYLIST_PART_BYTES <= 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_hub_refusal_keeps_the_reason_it_gave() {
+        assert_eq!(hub_refusal(400, r#"{"error":"'clip.mp4' is larger than 90 MB (the limit for video files)"}"#), "upload failed: 'clip.mp4' is larger than 90 MB (the limit for video files)");
+        assert_eq!(hub_refusal(400, "  plain text  "), "upload failed: plain text");
+        assert_eq!(hub_refusal(413, ""), "upload failed: the upload is too large for the hub (HTTP 413)");
+        assert_eq!(hub_refusal(404, "{}"), "UNSUPPORTED", "an old hub without playlists still says so");
+        let html = format!("<html>{}</html>", "x".repeat(500));
+        assert_eq!(hub_refusal(502, &html), "upload failed: HTTP 502", "a proxy's HTML page is not shown as the reason");
     }
 }

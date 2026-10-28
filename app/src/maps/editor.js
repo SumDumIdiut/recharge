@@ -1703,9 +1703,27 @@ function allStamps() {
   return [...(base.art.stamps || []), ...pieceStamps];
 }
 function tileTabItems() {
+  if (!base?.art) return [];
   const own = base.art.stamps?.length || 0, all = allStamps(), items = [];
   const order = Object.keys(TILESET_NAMES), rank = (f) => (order.includes(f) ? order.indexOf(f) : order.length);
-  const fams = [...new Set(all.slice(own).map((st) => st.fam))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+
+  // Tile names already covered as individual tiles by single-cell pieces (so they are not added twice).
+  const coveredTiles = new Set();
+  all.forEach((st, si) => { if (si >= own && st.n === 1 && !st.label) coveredTiles.add(st.cells[2]); });
+
+  // Group every art tile by its family prefix (text before the last _).
+  const tilesByFam = new Map();
+  for (const tileName of Object.keys(base.art.tiles || {})) {
+    const i = tileName.lastIndexOf('_');
+    const fam = i < 0 ? tileName : tileName.slice(0, i);
+    if (!tilesByFam.has(fam)) tilesByFam.set(fam, []);
+    tilesByFam.get(fam).push(tileName);
+  }
+
+  // All families that have pieces or are named tilesets, sorted by the TILESET_NAMES order.
+  const famSet = new Set(all.slice(own).map((st) => st.fam));
+  Object.keys(TILESET_NAMES).forEach((f) => famSet.add(f));
+  const fams = [...famSet].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
   for (const fam of fams) {
     const group = TILESET_NAMES[fam] || prettySprite(fam);
     all.forEach((st, si) => {
@@ -1713,6 +1731,13 @@ function tileTabItems() {
       if (st.n > 1 || st.label) items.push({ tool: 'stamp', si, label: st.label ? `${st.label} ${st.w}×${st.h}` : `${st.w}×${st.h}`, group, thumb: { stamp: si } });
       else items.push({ tool: 'tile', tileLayer: st.layer, tile: st.cells[2], label: prettySprite(st.cells[2].replace(/_/g, ' ')), group, thumb: { art: st.cells[2] } });
     });
+    // Every remaining individual tile from this tileset, not already covered by a single-cell piece.
+    const layer = TILESET_LAYER[fam] || 'Background';
+    const tiles = tilesByFam.get(fam) || [];
+    for (const tileName of tiles) {
+      if (coveredTiles.has(tileName)) continue;
+      items.push({ tool: 'tile', tileLayer: layer, tile: tileName, label: prettySprite(tileName.replace(/_/g, ' ')), group, thumb: { art: tileName } });
+    }
   }
   return items;
 }
@@ -6832,11 +6857,30 @@ export function workerRenderTile(z, tx, ty, part = null) {
   return renderTile(z, tx, ty, part, workerTileCanvas).transferToImageBitmap();
 }
 
+// The backdrop the game shows for the map's area (the zone under the view's centre, in the map's base state), drawn once to fill the picture. Only the map view picture uses it; the editor never calls it. A map's own background image (own, handed in by the host) is drawn the same way.
+function drawPreviewBackdrop(W, H, own = null) {
+  if (own) {
+    const k = Math.max(W / own.width, H / own.height), dw = own.width * k, dh = own.height * k;
+    ctx.drawImage(own, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    own.close();
+    return;
+  }
+  const zone = zoneAt(cam.x, cam.y);
+  const bgs = (base?.scene?.backgrounds || []).filter((b) => b.zone === zone && (b.state === 'always' || b.state === draft.baseState)).sort((a, b) => a.o - b.o);
+  for (const b of bgs) {
+    const img = bgImage(b.img);
+    if (!img.complete || !img.naturalWidth) continue;
+    const k = Math.max(W / img.naturalWidth, H / img.naturalHeight), dw = img.naturalWidth * k, dh = img.naturalHeight * k;
+    ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    return;
+  }
+}
+
 // The map view picture: Amplifier zoomed out over the whole map (the level when the map uses it, then its tiles, blocks, spikes, vines, moss and spawns/gates), fitted into W x H. Runs in the tile worker, whose module state is its own, so a live editor is never touched. `map` is a map.json object (v2 maps are converted first). Returns a PNG Blob, or null when the map has no editor data.
 // `onProgress` (optional) is called, throttled, as bands and sprites are drawn, so the host can tell a long render from a hang.
 let viewProgress = null, viewProgressAt = 0;
 function tickProgress() { if (viewProgress) { const n = Date.now(); if (n - viewProgressAt > 500) { viewProgressAt = n; viewProgress(); } } }
-export async function workerRenderMapView(map, W = 960, H = 540, onProgress = null) {
+export async function workerRenderMapView(map, W = 960, H = 540, onProgress = null, ownBg = null) {
   viewProgress = onProgress; viewProgressAt = 0;
   if (isV2(map)) {
     const gridOf = (name) => ({ ...layerGrid(name), mats: base?.mats });
@@ -6876,7 +6920,11 @@ export async function workerRenderMapView(map, W = 960, H = 540, onProgress = nu
     // zoom away, and a whole-map view is about as far out as it goes, so the normal fade would
     // leave nothing drawn at all - and the backdrop is most of what makes a map recognisable at
     // a glance. Passed 1 rather than backdropFade() for that reason.
-    try { drawBackground(w, h, 1); } catch (e) { workerWarn('background: ' + (e?.message || e)); }
+    try {
+      // Zoomed far out (a whole big map) the tiled backdrop is a few pixels per copy, so the picture gets one backdrop, cover-fitted behind everything.
+      if (ownBg) drawPreviewBackdrop(w, h, await createImageBitmap(ownBg));
+      else if (scale < 0.1) drawPreviewBackdrop(w, h); else drawBackground(w, h, 1);
+    } catch (e) { workerWarn('background: ' + (e?.message || e)); }
     const useArt = artReady();
     if (baseOn()) renderBaseLayer(w, h, useArt);
     drawCellLayers(useArt, scale < 0.1 ? 0.6 : 0.5);

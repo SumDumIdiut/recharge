@@ -1,20 +1,20 @@
 // Where a checkpoint's flag and respawn point sit, so the game puts them where the Amplifier shows them.
-// The game's checkpoint is an object (its flag art and the spot the player respawns at are its position) with a
-// trigger box offset from it: a level checkpoint's box reaches CP_LIFT below its position's height up to 350 above.
-// The editor lets the box be dragged and resized on its own, which would strand the flag and respawn point away
-// from the box (inside a wall, below it). So the flag always stands in the box: centred, CP_LIFT above its bottom
-// edge (or at its middle when the box is shorter than twice that). A box the game sized itself comes out unchanged.
+// The flag/respawn is at the object's own position (x, y): that is where the user places it. The trigger box
+// is offset from it by (t.dx, t.dy): the box centre sits at (x + t.dx, y + t.dy). The old CP_LIFT rule pushed the
+// flag to box_top + CP_LIFT, which stranded the respawn far below where the checkpoint was placed whenever the
+// box's dy wasn't exactly h/2 - CP_LIFT.
+// Kept as an export for tests and any external consumers.
 export const CP_LIFT = 50;
 
 // t = the trigger box around the object at (x, y): { w, h, dx, dy } (dx, dy: its centre's offset).
 export function checkpointAnchor(x, y, t) {
-  return { x: x + t.dx, y: y + t.dy - t.h / 2 + Math.min(CP_LIFT, t.h / 2) };
+  return { x: x, y: y };
 }
 
 // The export of a checkpoint at (x, y) with box t: whole-unit object position plus the trigger around it.
 export function checkpointExport(x, y, t) {
   const a = checkpointAnchor(x, y, t), ax = Math.round(a.x), ay = Math.round(a.y);
-  return { x: ax, y: ay, trigger: { w: t.w, h: t.h, dx: x + t.dx - ax, dy: y + t.dy - ay } };
+  return { x: ax, y: ay, trigger: { w: t.w, h: t.h, dx: t.dx, dy: t.dy } };
 }
 
 // Navigator's math (MapCloneConfig.SizeCheckpoint): the trigger's centre in the world, the flag standing at the

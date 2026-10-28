@@ -95,7 +95,7 @@ export function skippedText(skipped, extra = {}) {
   return lines;
 }
 
-export const LIMITS_TEXT = `Limits: pictures ${LIMITS_MB.image} MB, videos ${LIMITS_MB.video} MB, sounds ${LIMITS_MB.audio} MB.`;
+export const LIMITS_TEXT = `Limits: pictures ${LIMITS_MB.image} MB, videos ${LIMITS_MB.video} MB, sounds ${LIMITS_MB.audio} MB each. A playlist shared on the hub can be up to 2 GB in total.`;
 
 // Dialog results come back as a string, an array, or { path } objects.
 export function pathsFrom(chosen) {

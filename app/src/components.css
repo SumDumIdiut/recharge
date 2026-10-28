@@ -338,6 +338,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
   .home-title-left { padding: 8px 20px 8px 14px; }
   .home-logo { width: 96px; height: 96px; }
   .home-title { font-size: 62px; }
+  :root[data-theme="halloween"] .home-title { font-size: 34px; }
   #wave-banner { margin-top: 2px; height: 36px; }
   .home-tile { padding: 20px 24px; font-size: 25px; }
   .home-menu-row { padding: 11px 22px; font-size: 21px; }

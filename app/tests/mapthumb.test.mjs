@@ -27,7 +27,7 @@ globalThis.window = {
   } } },
 };
 
-const { mapThumbFor, cardImage, needsView, hubStamp, viewKey } = await import('../src/maps/mapthumb.js');
+const { mapThumbFor, cardImage, needsView, hubStamp, viewKey, versioned, VIEW_RENDERER } = await import('../src/maps/mapthumb.js');
 
 test('an uploaded picture wins; the drawn view only fills in when there is none', () => {
   assert.equal(cardImage('up.png', 'data:drawn'), 'up.png');
@@ -51,13 +51,13 @@ test('drawn once per stamp, redrawn (and the old one dropped) when the stamp cha
   assert.equal(draws, 1);
   await mapThumbFor('m1', { stamp: 'h2' }); // the map changed
   assert.equal(draws, 2);
-  assert.deepEqual([...kept.keys()], ['m1@h2']);
+  assert.deepEqual([...kept.keys()], ['m1@h2-r2']);
 });
 
 test('an installed map is keyed by its file time; a Hub-only map is fetched from the Hub', async () => {
   calls.length = 0;
   await mapThumbFor('installed');
-  assert.ok(kept.has('installed@1700000000000'));
+  assert.ok(kept.has('installed@1700000000000-r2'));
   assert.ok(calls.some(([c]) => c === 'read_map'));
   const before = calls.length;
   await mapThumbFor('installed');
@@ -66,5 +66,12 @@ test('an installed map is keyed by its file time; a Hub-only map is fetched from
   const n = draws;
   await mapThumbFor('installed');
   assert.equal(draws, n + 1);
-  assert.deepEqual([...kept.keys()].filter((k) => k.startsWith('installed@')), ['installed@1800000000000']);
+  assert.deepEqual([...kept.keys()].filter((k) => k.startsWith('installed@')), ['installed@1800000000000-r2']);
+});
+
+test('kept pictures carry a renderer suffix, once, so older pictures are drawn again', () => {
+  assert.equal(VIEW_RENDERER, 'r2');
+  assert.equal(versioned('1700000000000'), '1700000000000-r2');
+  assert.equal(versioned('h2026-10-01T02:12:09.594Z|3'), 'h2026-10-01T02:12:09.594Z|3-r2');
+  assert.equal(versioned(versioned('x')), 'x-r2');
 });

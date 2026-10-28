@@ -14,3 +14,9 @@
 .account-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
 .account-username { font-size: 20px; color: var(--green); text-transform: uppercase; }
 .account-sub-header { font-size: 18px; margin-bottom: 16px; }
+
+.account-events[hidden] { display: none; }
+.account-events-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.account-events-name { font-size: 16px; }
+.account-events-state { color: var(--green); text-transform: uppercase; font-size: 13px; margin-left: 6px; }
+.account-events-status { color: var(--text-dim); font-size: 14px; margin-top: 8px; }

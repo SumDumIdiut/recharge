@@ -72,7 +72,7 @@ export function confirmDestructive({ title, body, confirmLabel, name }) {
 
 // A two-step delete on the button itself: the first click turns it into a red "Delete?" button for a few seconds (or until
 // the pointer leaves it), the second click goes ahead. Returns true on the confirming click.
-export function armConfirm(btn, label = 'Delete?') {
+export function armConfirm(btn, label = 'Delete?', hint = 'Click again to delete') {
   if (!btn) return false;
   if (btn._armed) { btn._armed.reset(); return true; }
   const was = btn.innerHTML, title = btn.title;
@@ -89,7 +89,7 @@ export function armConfirm(btn, label = 'Delete?') {
   btn._armed = { reset };
   btn.classList.add('is-armed');
   btn.textContent = label;
-  btn.title = 'Click again to delete';
+  btn.title = hint;
   btn.addEventListener('mouseleave', leave);
   timer = setTimeout(reset, 4000);
   return false;

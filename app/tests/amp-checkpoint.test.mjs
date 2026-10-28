@@ -16,12 +16,14 @@ test('the game\'s own sized boxes leave the checkpoint where it was', () => {
   assert.deepEqual([e.x, e.y, e.trigger.dx, e.trigger.dy], [0, 0, 0, 150]);
 });
 
-test('the user\'s draft: a 112x96 box 150 above the click puts the flag in the box, not 150 below it', () => {
+test('the flag is always at the object position the user placed it at, whatever the trigger box', () => {
   for (const [x, y] of [[2960, -103], [3104, 64]]) {
     const t = { w: 112, h: 96, dx: 0, dy: 150 }, e = checkpointExport(x, y, t);
-    const boxBottom = y + 150 - 48, boxTop = y + 150 + 48;
-    assert.ok(e.y >= boxBottom && e.y <= boxTop, 'flag y ' + e.y + ' within box ' + boxBottom + '..' + boxTop);
-    assert.equal(e.x, x);
+    assert.equal(e.x, x, 'flag x at the placement point');
+    assert.equal(e.y, y, 'flag y at the placement point');
+    // the trigger box centre is offset from the flag by (dx, dy)
+    assert.equal(e.trigger.dx, t.dx, 'trigger dx');
+    assert.equal(e.trigger.dy, t.dy, 'trigger dy');
     // Navigator: flag at the clone's position, trigger centre at clone + (dx, dy) = the editor's box centre.
     const g = gameCheckpoint([e.x, e.y], e.trigger, [e.x + 7, e.y - 3], [1, 1]);
     near(g.trigger[0], x + t.dx); near(g.trigger[1], y + t.dy);
@@ -29,13 +31,13 @@ test('the user\'s draft: a 112x96 box 150 above the click puts the flag in the b
   }
 });
 
-test('any box: the exported trigger covers exactly the editor box, the flag stands in it', () => {
+test('any box: the exported trigger centre is the editor box centre, the flag is where it was placed', () => {
   for (const t of [{ w: 16, h: 16, dx: 80, dy: -300 }, { w: 640, h: 48, dx: -32, dy: 10 }, { w: 112, h: 96, dx: 0, dy: 150 }]) {
     const e = checkpointExport(321, -77, t), a = checkpointAnchor(321, -77, t);
     near(e.x + e.trigger.dx, 321 + t.dx); near(e.y + e.trigger.dy, -77 + t.dy);
     assert.ok(Math.abs(e.x - a.x) <= 0.5 && Math.abs(e.y - a.y) <= 0.5);
-    const top = e.y + e.trigger.dy + t.h / 2, bottom = e.y + e.trigger.dy - t.h / 2;
-    assert.ok(e.y >= bottom - 0.5 && e.y <= top + 0.5);
+    assert.equal(e.x, 321, 'flag x at the placement point');
+    assert.equal(e.y, -77, 'flag y at the placement point');
   }
 });
 console.log(n + ' passed');

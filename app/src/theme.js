@@ -1,4 +1,5 @@
 import { isActive, onActivity } from './activity.js';
+import { isHalloween, onThemeChange } from './halloween.js';
 import { mediaBase, mediaUrl, showVideo, clearVideo, setSound, soundFor, setGameRunning, currentVideo, currentSound } from './bgmedia.js';
 
 // Old theming storage keys, removed at startup (the colour scheme is now fixed in style.css).
@@ -65,6 +66,19 @@ function setHasBg(on) {
   document.documentElement.classList.toggle('has-bg', !!on);
 }
 
+// While the Halloween theme is on its own background replaces the user's: no rotation, video or sound (their settings stay as they are).
+// On the way back the normal path decides again (restores the current item, or rotates if due).
+onThemeChange((theme) => {
+  if (theme === 'halloween') {
+    setHasBg(true);
+    clearVideo();
+    setSound(null);
+  } else {
+    setHasBg(!!bgLoad(BG_CUR_KEY));
+    changeBackground('tick');
+  }
+});
+
 function bgLoad(key) {
   try { return localStorage.getItem(key); } catch (e) { return null; }
 }
@@ -98,6 +112,7 @@ function crossfadeTexture(url, persistUrl = url) {
 
 // Not due yet (e.g. restarted within the interval): bring back the current item's video and sound without rotating.
 async function restoreCurrent(invoke, playlist) {
+  if (isHalloween()) return;
   const cur = bgLoad(BG_CUR_KEY);
   if (!cur || !(playlist.images || []).includes(cur)) return;
   const isVideo = /\.(mp4|webm)$/i.test(cur);
@@ -119,6 +134,7 @@ async function syncSound(invoke, playlist) {
 }
 
 export async function applySoundSetting() {
+  if (isHalloween()) return;
   try {
     const { invoke } = window.__TAURI__.core;
     const config = await invoke('get_backgrounds_config');
@@ -129,6 +145,7 @@ export async function applySoundSetting() {
 
 // mode 'launch': change if the active playlist is every-launch or due; 'tick': only timed playlists that are due; 'force': always.
 export async function changeBackground(mode = 'launch') {
+  if (isHalloween()) { setHasBg(true); return false; }
   if (bgBusy) return false;
   bgBusy = true;
   try {
@@ -199,7 +216,7 @@ let gameUnlisten = null;
 export function startBackgroundTimer({ periodMs = 15000, now } = {}) {
   if (now) bgClock = now;
   if (bgTimer) clearInterval(bgTimer);
-  setHasBg(!!bgLoad(BG_CUR_KEY));
+  setHasBg(isHalloween() || !!bgLoad(BG_CUR_KEY));
   // No ticking while the window is hidden or minimised; one catch-up check when it comes back.
   const arm = () => { clearInterval(bgTimer); bgTimer = setInterval(() => changeBackground('tick'), periodMs); };
   if (bgActivityOff) bgActivityOff();

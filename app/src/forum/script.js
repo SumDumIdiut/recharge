@@ -4,7 +4,7 @@ import { openAccount } from '../login-prompt.js';
 import { forum } from '../social/api.js';
 import { CATEGORIES, LIMITS, validatePost, validateReply, firstError } from '../social/validate.js';
 import { createImageStrip, openLightbox } from '../social/images.js';
-import { listHtml, pagerHtml, postHtml, replyHtml } from './lib.js';
+import { listHtml, pagerHtml, postHtml, replyHtml, statusControlsHtml } from './lib.js';
 
 const DRAFT_KEY = 'rechargeForumDraft';
 let root = null;
@@ -53,7 +53,7 @@ async function showList() {
       <button class="btn btn-primary" data-act="new" type="button">New post</button>
     </div>
     <div class="fm-toolbar">
-      ${seg('status', filters.status, [['', 'Any'], ['open', 'Open'], ['solved', 'Solved']])}
+      ${seg('status', filters.status, [['', 'Any'], ['open', 'Open'], ['solved', 'Solved'], ['closed', 'Closed']])}
       ${seg('sort', filters.sort, [['new', 'New'], ['active', 'Active']])}
       <input class="browser-search fm-search" type="text" maxlength="100" placeholder="Search posts..." value="${escapeHtml(filters.q)}" />
     </div>
@@ -85,6 +85,8 @@ async function showPost(id, { scrollToReply = false } = {}) {
   if (seq !== loadSeq) return;
   const { post, replies } = data;
   const controls = [];
+  const statusButtons = statusControlsHtml(post);
+  if (statusButtons) controls.push(statusButtons);
   if (post.can_edit) controls.push('<button class="btn" data-act="edit-post" type="button">Edit</button>');
   if (post.can_delete) controls.push('<button class="btn btn-danger" data-act="del-post" type="button">Delete</button>');
   const locked = post.status === 'closed';
@@ -237,6 +239,10 @@ async function onClick(e) {
     case 'reply': submitReply(btn); break;
     case 'del-post':
       if (armConfirm(btn)) guarded(btn, async () => { await forum.remove(current.id); await showList(); });
+      break;
+    case 'set-status':
+      if (v === 'closed' && !armConfirm(btn, 'Close?', 'Click again to close')) break;
+      guarded(btn, async () => { await forum.status(current.id, v); await showPost(current.id); });
       break;
     case 'edit-post': startEditPost(); break;
     case 'cancel-edit': showPost(current.id); break;

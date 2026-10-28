@@ -158,6 +158,8 @@ export const PLAY_OVERLAY = '<span class="bg-play" aria-hidden="true"></span>';
 
 // "Adding... 40%" (just "Adding..." until the size is known)
 export const addingText = (percent, total) => (total > 0 && Number.isFinite(percent) ? `Adding... ${Math.max(0, Math.min(100, Math.round(percent)))}%` : 'Adding...');
+// "Uploading... 40%" for a playlist going up in parts (a 30-video set takes minutes)
+export const uploadingText = (percent, total) => (total > 0 && Number.isFinite(percent) ? `Uploading... ${Math.max(0, Math.min(100, Math.round(percent)))}%` : 'Uploading...');
 // The message of a failed invoke (a string, an Error or { message }), never "[object Object]".
 export function errText(err) {
   if (!err) return 'something went wrong';

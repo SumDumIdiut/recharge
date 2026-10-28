@@ -6,13 +6,21 @@
     <title>Recharge</title>
     <script src="/live-boot.js"></script>
     <script>
-      // Applied before any CSS paints so the background texture doesn't flash in. Also drops the
+      // Applied before any CSS paints so the background texture (or the Halloween theme) doesn't flash in. Also drops the
       // legacy saved colours / custom CSS keys (theming was removed; theme.js clears them too).
       (function () {
         try { localStorage.removeItem('rechargeColors'); localStorage.removeItem('rechargeCustomCss'); } catch (e) {}
         try {
           var tex = localStorage.getItem('rechargeBgTexture');
           if (tex) document.documentElement.style.setProperty('--bg-image', 'url("' + tex + '")');
+        } catch (e) {}
+        // Halloweencharge 2026 (same rule as halloween.js effectiveTheme): the cached event flag plus the saved choice.
+        // style.css puts the forced background on data-theme; has-bg gives the panels their see-through look.
+        try {
+          if (localStorage.getItem('rechargeEvent') === '1' && localStorage.getItem('rechargeTheme') !== 'classic') {
+            document.documentElement.setAttribute('data-theme', 'halloween');
+            document.documentElement.classList.add('has-bg');
+          }
         } catch (e) {}
       })();
     </script>
@@ -44,7 +52,7 @@
           <div class="home-title-row">
             <div class="home-title-left">
               <img class="home-logo" src="/assets/logo.png" alt="" />
-              <span class="home-title">Recharge</span>
+              <span class="home-title"><span class="ht-classic">Recharge</span><span class="ht-event">Halloweencharge 2026</span></span>
             </div>
             <div class="home-title-right">
               <a class="home-patreon-link" href="https://www.patreon.com/c/FlippedRecharger" target="_blank" rel="noopener" title="Support on Patreon">
@@ -114,9 +122,6 @@
               </button>
               <button class="home-menu-row" onclick="navigate('settings')">
                 <span>&gt; Settings</span>
-              </button>
-              <button class="home-menu-row" onclick="navigate('notebook')">
-                <span>&gt; Notebook</span>
               </button>
               <button class="home-menu-row" onclick="navigate('credits')">
                 <span>&gt; Credits</span>

@@ -19,7 +19,7 @@ self.onmessage = async (e) => {
     // The map view picture (mapthumb.js): one whole map in, one bitmap out.
     try {
       await ready;
-      const blob = await workerRenderMapView(m.map, m.w, m.h, () => self.postMessage({ type: 'progress', id: m.id }));
+      const blob = await workerRenderMapView(m.map, m.w, m.h, () => self.postMessage({ type: 'progress', id: m.id }), m.bg || null);
       self.postMessage({ type: 'view', id: m.id, blob });
     } catch (err) {
       self.postMessage({ type: 'view', id: m.id, error: String(err && err.stack || err) });

@@ -15,6 +15,18 @@ export function statusBadge(status) {
 }
 export const categoryTag = (cat) => `<span class="tag fm-cat fm-cat-${escapeHtml(cat)}">${escapeHtml(CATEGORY_LABEL[cat] || cat)}</span>`;
 
+// The status actions this viewer may take. The hub decides via can_status: an author while the
+// post is open or solved, an admin always. A closed post can therefore only be reopened by an admin.
+export function statusControlsHtml(post) {
+  if (!post || !post.can_status) return '';
+  const status = post.status || 'open';
+  const buttons = status === 'open'
+    ? ['<button class="btn" data-act="set-status" data-v="solved" type="button">Mark solved</button>']
+    : ['<button class="btn" data-act="set-status" data-v="open" type="button">Reopen</button>'];
+  if (status !== 'closed') buttons.push('<button class="btn" data-act="set-status" data-v="closed" type="button">Close</button>');
+  return buttons.join('');
+}
+
 export function postRowHtml(p) {
   const u = userOf(p);
   return `<div class="fm-row" data-post="${escapeHtml(p.id)}" role="button" tabindex="0">

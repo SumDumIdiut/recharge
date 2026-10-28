@@ -6,6 +6,7 @@ import { mountProfileEditor } from './deco.js';
 import { profiles, submissions } from '../social/api.js';
 import { uploaderHtml } from '../social/avatar.js';
 import { isTestMap } from '../maps/test-map.js';
+import { initEventsCard, renderEventsCard } from './events-card.js';
 let editor = null;
 
 let myUploads = [];
@@ -211,6 +212,7 @@ window.__acctDelete = async function (id, name) {
 
 async function refreshAll() {
   if (!isLoggedIn()) { window.goHome(); return; }
+  renderEventsCard();
   editor?.destroy();
   editor = null;
   const host = document.getElementById('account-profile');
@@ -227,6 +229,7 @@ export async function init() {
   }
   document.getElementById('account-edit-cancel').addEventListener('click', closeEditModal);
   document.getElementById('account-edit-save').addEventListener('click', saveEdit);
+  initEventsCard();
   await refreshAll();
 }
 
