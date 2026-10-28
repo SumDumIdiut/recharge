@@ -1,3 +1,4 @@
+import { uidIsShared } from '../upload-update.js';
 import { isV2, toV1State } from './fromv2.js';
 import { TileIndex, TrackedMap, TrackedSet, TrackedTiles, CHUNK } from './tileindex.js';
 import { pickPieces, connector, connectorRoles } from './tiling.js';
@@ -3987,6 +3988,10 @@ async function openMap(map, label, installedId = null) {
   syncBaseUi();
   draft.savedId = installedId && installedId !== TEST_MAP_ID ? installedId : null;
   draft.mapUid = typeof map.uid === 'string' && map.uid ? map.uid : undefined; // an older map gets its id on its next save
+  // A folder copied from another map keeps that map's id; a map sharing its id with another installed folder gets one of its own on its next save.
+  if (draft.mapUid && window.__TAURI__?.core?.invoke) {
+    try { if (uidIsShared(await window.__TAURI__.core.invoke('list_maps'), draft.savedId, draft.mapUid)) draft.mapUid = undefined; } catch { /* listing unavailable: keep the id */ }
+  }
   if (installedId && window.__TAURI__) fetchInstalledAssets(installedId).then(requestDraw);
   draft.savedAt = null;
   saveDraft();

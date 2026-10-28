@@ -9,7 +9,7 @@ import { escapeHtml, galleryImages, sleep, thumb, openModal, closeModal, setBadg
 
 import { HUB_BASE } from '../hub.js';
 import { checkTab } from '../autoupdate.js';
-import { fillUpdateSelect, chosenUpdate } from '../upload-update.js';
+import { fillUpdateSelect, chosenUpdate, mapIdentityCounts } from '../upload-update.js';
 import { isTestMap } from './test-map.js';
 import { submissions } from '../social/api.js';
 
@@ -366,7 +366,7 @@ function fillUploadFields() {
   document.getElementById('maps-upload-name').value = m?.name || '';
   document.getElementById('maps-upload-description').value = m?.description || '';
   // A new version of one of your uploads: pre-picked when it is the same map (map id), or the upload this folder came from.
-  fillUpdateSelect(document, 'maps', 'maps', myUploads, { mapUid: m?.uid, hubId: m?.hub, name: m?.name }, escapeHtml);
+  fillUpdateSelect(document, 'maps', 'maps', myUploads, { mapUid: m?.uid, hubId: m?.hub, name: m?.name, ...mapIdentityCounts(installedCache, m) }, escapeHtml);
 }
 
 function closeUploadModal() {

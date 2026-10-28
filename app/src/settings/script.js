@@ -278,12 +278,18 @@ function updateModeLabel(managed, reason) {
 
 function manualUninstallText(platform) {
   const p = String(platform || '').toLowerCase();
-  if (p.includes('win')) return 'This copy of Recharge was not installed by the Recharge launcher. Uninstall it from Windows Settings > Apps > Installed apps > Recharge (or the "Uninstall Recharge" shortcut in the Start menu).';
-  return 'This copy of Recharge was not installed by the Recharge launcher. Remove it the way you installed it: "sudo apt remove recharge" (Debian/Ubuntu), "sudo pacman -R recharge" (Arch), or delete the AppImage / the files install.sh put in ~/.local (bin/recharge, lib/Recharge, share/applications/Recharge.desktop).';
+  if (p.includes('win')) return 'This copy of Recharge was not installed by the Recharge launcher. Uninstall it from Windows Settings > Apps > Installed apps > Recharge (or the "Uninstall Recharge" shortcut in the Start menu). To delete your settings and cached data too, remove the "co.za.codecade.recharge" folders in %APPDATA% and %LOCALAPPDATA%.';
+  return 'This copy of Recharge was not installed by the Recharge launcher. Remove it the way you installed it: "sudo apt remove recharge" (Debian/Ubuntu), "sudo pacman -R recharge" (Arch), or delete the AppImage / the files install.sh put in ~/.local (bin/recharge, lib/Recharge, share/applications/Recharge.desktop). Your data lives in ~/.local/share/co.za.codecade.recharge (and ~/.cache/Recharge.App); delete those too to remove everything.';
 }
 
 function uninstallBody({ deleteData, restoreGame }) {
-  return `Recharge will be removed from this computer. ${deleteData ? 'Your settings, mods, skins and map saves will be deleted too. ' : 'Your settings, mods, skins and map saves are kept. '}${restoreGame ? 'RechargeLoader will be removed and the original game restored. ' : 'RechargeLoader stays in the game. '}Type UNINSTALL to go ahead.`;
+  const data = deleteData
+    ? 'Your settings, downloaded games, mods, skins, backgrounds and cached data will be deleted too. '
+    : 'Your settings, downloaded games, mods, backgrounds and cached data are kept. ';
+  const game = restoreGame
+    ? 'RechargeLoader will be removed and the original game restored; mods, skins and map saves deployed into the game folder (Recharge/Mods) are removed with it. '
+    : 'RechargeLoader stays in the game, so it keeps running modded until you restore it. ';
+  return `Recharge will be removed from this computer. ${data}${game}Type UNINSTALL to go ahead.`;
 }
 
 function refreshUninstall() {
@@ -324,7 +330,7 @@ window.__uninstallRecharge = async function () {
     await invoke('launcher_uninstall', { deleteData, restoreGame });
   } catch (err) {
     btn.disabled = false;
-    note.textContent = String(err);
+    note.textContent = `Uninstall did not finish: ${String(err)}. Fix that and try again.`;
   }
 };
 

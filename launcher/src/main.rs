@@ -112,13 +112,17 @@ fn main() -> ExitCode {
             run::wait_exit(pid, std::time::Duration::from_secs(30)); // the app that asked for this
         }
         let res = install::uninstall(&root, o.yes, o.delete_data);
-        install::schedule_self_delete();
+        install::schedule_self_delete(&install::leftovers(&root, o.delete_data));
         return match res {
             Ok(()) => {
                 println!("Recharge removed.");
                 ExitCode::SUCCESS
             }
             Err(e) => {
+                // Unattended (started by the app, which has already quit) nobody sees stderr: say so in a dialog.
+                if o.yes && e != "cancelled" {
+                    return fatal(&format!("Recharge could not be fully removed: {e}. Close anything using those folders and delete them by hand; see {}", std::env::temp_dir().join("recharge-uninstall.log").display()));
+                }
                 eprintln!("uninstall: {e}");
                 ExitCode::FAILURE
             }

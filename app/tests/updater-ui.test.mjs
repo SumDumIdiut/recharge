@@ -123,6 +123,12 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   assert.equal(line({ channel: 'stable', ready: 3 }).text, 'Recharge (Stable) - update ready - restart to apply');
   assert.match(vm.runInContext("manualUninstallText('Win32')", t.ctx), /Windows Settings/);
   assert.match(vm.runInContext("manualUninstallText('Linux x86_64')", t.ctx), /apt remove recharge/);
+  assert.match(vm.runInContext("manualUninstallText('Win32')", t.ctx), /%LOCALAPPDATA%/, 'manual text names the data folders');
+  assert.match(vm.runInContext("manualUninstallText('Linux x86_64')", t.ctx), /\.local\/share\/co\.za\.codecade\.recharge/);
+  const body = (o) => vm.runInContext(`uninstallBody(${JSON.stringify(o)})`, t.ctx);
+  assert.match(body({ deleteData: false, restoreGame: true }), /skins and map saves deployed into the game folder/, 'restore warns about game-side mods');
+  assert.match(body({ deleteData: false, restoreGame: false }), /keeps running modded/);
+  assert.match(body({ deleteData: false, restoreGame: false }), /cached data are kept/);
 
   // uninstall flow: first click arms, second asks (typed confirm), then the command carries both choices
   const asked = [];
@@ -133,7 +139,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   assert.ok(!t.calls.some((c) => c[0] === 'launcher_uninstall') && asked.length === 0, 'first click only arms');
   await t.window.__uninstallRecharge();
   assert.equal(asked.length, 1);
-  assert.match(asked[0].body, /settings, mods, skins and map saves will be deleted/);
+  assert.match(asked[0].body, /settings, downloaded games, mods, skins, backgrounds and cached data will be deleted/);
   assert.match(asked[0].body, /RechargeLoader stays/);
   assert.ok(!t.calls.some((c) => c[0] === 'launcher_uninstall'), 'declined: nothing happens');
   t.ctx.__answer = true;
@@ -141,6 +147,21 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   await t.window.__uninstallRecharge();
   await t.window.__uninstallRecharge();
   assert.deepEqual(t.calls.find((c) => c[0] === 'launcher_uninstall'), ['launcher_uninstall', { deleteData: true, restoreGame: true }]);
+}
+// --- uninstall: restore-to-vanilla stays off by default until the loader uninstall keeps skins and map saves; a failed uninstall is reported and re-enabled ---
+{
+  const html = fs.readFileSync(new URL('../src/settings/view.html', import.meta.url), 'utf8');
+  assert.doesNotMatch(html, /id="uninstall-restore" checked/);
+  const t = setup({ managed: true });
+  t.ctx.cleanVersion = cleanVersion;
+  vm.runInContext('var runMigrate = () => {};' + src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, ''), t.ctx);
+  vm.runInContext('var confirmDestructive = async () => true', t.ctx);
+  t.window.__TAURI__.core.invoke = async () => { throw 'no game found'; };
+  const btn = t.byId.get('uninstall-btn');
+  await t.window.__uninstallRecharge();
+  await t.window.__uninstallRecharge();
+  assert.equal(btn.disabled, false);
+  assert.match(t.byId.get('uninstall-note').textContent, /did not finish: no game found/);
 }
 // --- failed restart is shown with Try again / Open log ---
 {

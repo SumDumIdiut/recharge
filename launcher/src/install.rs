@@ -322,6 +322,18 @@ pub fn data_dirs() -> Vec<PathBuf> {
     v
 }
 
+/// WebKitGTK keeps its HTTP cache under ~/.cache/<program name>, which for Recharge is "Recharge.App" (not the app identifier).
+pub const LINUX_WEBKIT_CACHE: &str = "Recharge.App";
+
+/// Everything `--delete-data` removes: the identifier folders plus (Linux) the WebKit cache folder.
+pub fn delete_dirs() -> Vec<PathBuf> {
+    let mut v = data_dirs();
+    if cfg!(target_os = "linux") {
+        v.extend(dirs::cache_dir().map(|c| c.join(LINUX_WEBKIT_CACHE)));
+    }
+    v
+}
+
 /// y/n question on the terminal, else a dialog; no way to ask means no.
 fn ask(question: &str) -> bool {
     use std::io::IsTerminal;
@@ -581,7 +593,11 @@ pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String>
     close_app(root);
     #[cfg(unix)]
     if let Some(p) = desktop_file() {
-        let _ = fs::remove_file(p);
+        let _ = fs::remove_file(&p);
+        // Menus that cache entries (KDE, GNOME) drop the stale launcher; best effort, the tool may not exist.
+        if let Some(dir) = p.parent() {
+            let _ = std::process::Command::new("update-desktop-database").arg(dir).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        }
     }
     #[cfg(windows)]
     {
@@ -598,7 +614,7 @@ pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String>
         failed.push(format!("{}: {e}", root.display()));
     }
     if delete {
-        for d in data_dirs() {
+        for d in delete_dirs() {
             if d.exists() {
                 match remove_dir_retry(&d) {
                     Ok(()) => log!("removed {}", d.display()),
@@ -613,18 +629,87 @@ pub fn uninstall(root: &Path, yes: bool, mut delete: bool) -> Result<(), String>
     if failed.is_empty() { Ok(()) } else { Err(format!("some files could not be removed: {}", failed.join("; "))) }
 }
 
-/// The temp copy deletes itself after it exits.
-pub fn schedule_self_delete() {
+/// Windows helper command line: delete this exe (retrying while it is still locked), then remove the `leftover` folders that were locked while the app ran.
+pub fn win_cleanup_cmdline(me: &Path, leftover: &[PathBuf]) -> String {
+    let mut parts = vec![format!(
+        "for /l %i in (1,1,30) do @if exist \"{0}\" (del /f /q \"{0}\" 2>nul & ping -n 2 127.0.0.1 >nul)",
+        me.display()
+    )];
+    parts.extend(leftover.iter().map(|d| format!("rmdir /s /q \"{}\" 2>nul", d.display())));
+    parts.join(" & ")
+}
+
+/// Folders an uninstall was asked to remove that still exist (the root, plus the data folders with `delete`).
+pub fn leftovers(root: &Path, delete: bool) -> Vec<PathBuf> {
+    let mut v = vec![root.to_path_buf()];
+    if delete {
+        v.extend(delete_dirs());
+    }
+    v.retain(|p| p.exists());
+    v
+}
+
+/// The temp copy deletes itself after it exits; on Windows the same helper also clears folders we could not remove while running.
+pub fn schedule_self_delete(leftover: &[PathBuf]) {
     if !is_uninstall_copy() {
         return;
     }
     let Ok(me) = std::env::current_exe() else { return };
     #[cfg(windows)]
     {
-        let _ = hidden("cmd").args(["/C", &format!("ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"", me.display())]).spawn();
+        // Delete our own exe first (the loop), then retry the folders that were locked while we ran.
+        let _ = hidden("cmd").args(["/C", &win_cleanup_cmdline(&me, leftover)]).spawn();
     }
     #[cfg(unix)]
     {
+        let _ = leftover;
         let _ = fs::remove_file(me);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_dirs_cover_data_config_cache_and_webkit_cache() {
+        let d = delete_dirs();
+        for base in [dirs::data_dir(), dirs::data_local_dir(), dirs::config_dir(), dirs::cache_dir()].into_iter().flatten() {
+            assert!(d.contains(&base.join(APP_IDENTIFIER)), "{base:?}");
+        }
+        if cfg!(target_os = "linux") {
+            assert!(d.contains(&dirs::cache_dir().unwrap().join(LINUX_WEBKIT_CACHE)));
+        }
+        assert!(!data_dirs().iter().any(|p| p.ends_with(LINUX_WEBKIT_CACHE)), "channel lookup must not read the cache dir");
+    }
+
+    #[test]
+    fn win_cleanup_waits_for_exe_then_retries_folders() {
+        let c = win_cleanup_cmdline(Path::new(r"C:\t\u.exe"), &[PathBuf::from(r"C:\r"), PathBuf::from(r"C:\d")]);
+        let (del, rm) = (c.find("del /f").unwrap(), c.find("rmdir").unwrap());
+        assert!(del < rm, "exe first: {c}");
+        assert!(c.contains("for /l") && c.contains(r#"rmdir /s /q "C:\r""#) && c.contains(r#"rmdir /s /q "C:\d""#), "{c}");
+        assert!(!win_cleanup_cmdline(Path::new("x.exe"), &[]).contains("rmdir"));
+    }
+
+    #[test]
+    fn leftovers_lists_only_existing_folders() {
+        let t = std::env::temp_dir().join(format!("rl-left-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&t);
+        assert!(leftovers(&t, false).is_empty());
+        fs::create_dir_all(&t).unwrap();
+        assert_eq!(leftovers(&t, false), vec![t.clone()]);
+        let _ = fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn uninstall_refuses_a_non_install() {
+        let t = std::env::temp_dir().join(format!("rl-un-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&t);
+        fs::create_dir_all(&t).unwrap();
+        assert!(uninstall(&t, true, false).is_err(), "no launcher/state.json: refuse");
+        assert!(t.exists());
+        // The success path also deletes the real shortcut, so it stays in tests/integration.sh (sandboxed XDG dirs).
+        let _ = fs::remove_dir_all(&t);
     }
 }

@@ -55,31 +55,73 @@ fn live_root(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_local_data_dir().ok().map(|d| d.join("live"))
 }
 
-/// Launcher-managed installs carry src/, loader/, live.json and a started-<build>.ok marker next to the binary (the launcher keeps it current), so the GitHub live updater stays out; None otherwise.
-fn packaged_dir(_app: &AppHandle) -> Option<PathBuf> {
-    let dir = super::updater::packaged_root()?;
-    let has_layout = dir.join("src").join("index.html").is_file();
-    let has_marker = std::fs::read_dir(&dir)
+/// True when `dir` holds a started-<build>.ok marker.
+fn has_started_marker(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
         .ok()
-        .and_then(|mut it| it.find(|e| e.as_ref().map(|e| e.file_name().to_string_lossy().starts_with("started-") && e.file_name().to_string_lossy().ends_with(".ok")).unwrap_or(false)))
-        .is_some();
-    (has_layout && has_marker).then_some(dir)
+        .map(|mut it| {
+            it.any(|e| {
+                e.map(|e| {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    n.starts_with("started-") && n.ends_with(".ok")
+                })
+                .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// The layout check behind packaged_dir: src/index.html in `dir`, plus a started marker in `dir` or in its parent (the launcher writes it in the install root, with the app in root/app).
+fn packaged_layout_ok(dir: &Path) -> bool {
+    dir.join("src").join("index.html").is_file() && (has_started_marker(dir) || dir.parent().map(has_started_marker).unwrap_or(false))
+}
+
+/// Launcher-managed installs carry src/, loader/ and live.json next to the binary (the launcher keeps them current), so the GitHub live updater stays out; None otherwise.
+fn packaged_dir(_app: &AppHandle) -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent().map(Path::to_path_buf)?;
+    let env_managed = super::updater::is_managed();
+    let has_src = dir.join("src").join("index.html").is_file();
+    ((env_managed && has_src) || packaged_layout_ok(&dir)).then_some(dir)
+}
+
+/// Pure decision: (managed, reason). RECHARGE_NO_LIVE is "env", a launcher start or a marker layout is "launcher".
+fn managed_reason(no_live: bool, launcher_env: bool, layout_marker: bool) -> (bool, &'static str) {
+    if no_live {
+        (true, "env")
+    } else if launcher_env || layout_marker {
+        (true, "launcher")
+    } else {
+        (false, "none")
+    }
 }
 
 /// Detects if this is a launcher-managed install and returns the reason.
 fn detect_managed(app: &AppHandle) -> (bool, String) {
-    // RECHARGE_NO_LIVE env var explicitly disables live updates
-    if std::env::var_os("RECHARGE_NO_LIVE").is_some() {
-        return (true, "env".to_string());
+    let no_live = std::env::var_os("RECHARGE_NO_LIVE").is_some();
+    let launcher_env = super::updater::is_managed();
+    let layout_marker = packaged_dir(app).is_some();
+    let (m, r) = managed_reason(no_live, launcher_env, layout_marker);
+    (m, r.to_string())
+}
+
+/// The channel the GitHub live updater follows: RECHARGE_CHANNEL (set by the launcher) wins over settings.
+fn resolve_channel(env: Option<&str>, settings: &str) -> String {
+    match env {
+        Some("beta") => "beta".to_string(),
+        Some("stable") => "stable".to_string(),
+        _ => settings.to_string(),
     }
-    // Check for launcher-managed install: layout + started marker (written by launcher on successful start)
-    if packaged_dir(app).is_some() {
-        return (true, "launcher".to_string());
-    }
-    (false, "none".to_string())
+}
+
+fn live_channel(app: &AppHandle) -> String {
+    resolve_channel(std::env::var("RECHARGE_CHANNEL").ok().as_deref(), &super::settings::update_channel(app))
 }
 
 fn current_dir(app: &AppHandle) -> Option<PathBuf> {
+    // Managed installs never fall back to a downloaded live/current bundle (it may be stale, e.g. from master).
+    if detect_managed(app).0 {
+        return packaged_dir(app);
+    }
     packaged_dir(app).or_else(|| live_root(app).map(|r| r.join("current")))
 }
 
@@ -426,7 +468,7 @@ fn fetch_bundle(app: &AppHandle, next: &Path) -> Result<Option<String>, String> 
         return Ok(Some("local".to_string()));
     }
 
-    let sha = remote_sha(app, branch_for(&super::settings::update_channel(app)))?;
+    let sha = remote_sha(app, branch_for(&live_channel(app)))?;
     if current_dir(app).and_then(|d| read_file(&d.join("sha"))).as_deref() == Some(sha.as_str()) {
         return Ok(None);
     }
@@ -555,4 +597,71 @@ pub async fn live_set_channel(app: AppHandle, channel: String) -> Result<String,
         Outcome::NeedsPackage => "needsPackage",
     }
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("rl-live-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("app").join("src")).unwrap();
+        std::fs::write(d.join("app").join("src").join("index.html"), "x").unwrap();
+        d
+    }
+
+    #[test]
+    fn launcher_env_is_managed_without_marker() {
+        assert_eq!(managed_reason(false, true, false), (true, "launcher"));
+    }
+
+    #[test]
+    fn marker_layout_is_managed() {
+        assert_eq!(managed_reason(false, false, true), (true, "launcher"));
+        assert_eq!(managed_reason(false, false, false), (false, "none"));
+    }
+
+    #[test]
+    fn no_live_stays_env() {
+        assert_eq!(managed_reason(true, true, true), (true, "env"));
+        assert_eq!(managed_reason(true, false, false), (true, "env"));
+    }
+
+    #[test]
+    fn marker_in_install_root_is_found() {
+        let d = tmp("root");
+        let app = d.join("app");
+        assert!(!packaged_layout_ok(&app));
+        std::fs::write(d.join("started-35.ok"), "ok").unwrap();
+        assert!(packaged_layout_ok(&app));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn marker_beside_binary_still_found() {
+        let d = tmp("beside");
+        let app = d.join("app");
+        std::fs::write(app.join("started-1.ok"), "ok").unwrap();
+        assert!(packaged_layout_ok(&app));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn marker_without_layout_is_not_enough() {
+        let d = tmp("nolayout");
+        std::fs::write(d.join("started-35.ok"), "ok").unwrap();
+        std::fs::remove_file(d.join("app").join("src").join("index.html")).unwrap();
+        assert!(!packaged_layout_ok(&d.join("app")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn channel_prefers_env() {
+        assert_eq!(resolve_channel(Some("beta"), "stable"), "beta");
+        assert_eq!(resolve_channel(Some("stable"), "beta"), "stable");
+        assert_eq!(resolve_channel(None, "beta"), "beta");
+        assert_eq!(resolve_channel(Some("junk"), "stable"), "stable");
+        assert_eq!(branch_for(&resolve_channel(Some("beta"), "stable")), "dev");
+    }
 }

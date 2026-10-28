@@ -13,8 +13,9 @@ const MINE = [
   { id: 'h2', name: 'Renamed', version: '2.0.0', revision: 4, mapUid: 'other' },
 ];
 
-test('a map with the same map id updates the upload that carried it', () => {
-  assert.equal(defaultUpdateTarget('maps', MINE, { mapUid: 'flip', name: 'Anything' }), 'h1');
+test('a map with the same map id and name updates the upload that carried it; a differently named one is new', () => {
+  assert.equal(defaultUpdateTarget('maps', MINE, { mapUid: 'flip', name: 'flip sides' }), 'h1');
+  assert.equal(defaultUpdateTarget('maps', MINE, { mapUid: 'flip', name: 'Anything' }), '');
 });
 
 test('an id-less package only matches an upload that has no map id of its own', () => {
