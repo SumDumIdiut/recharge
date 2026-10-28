@@ -80,6 +80,8 @@
 .theme-preview-halloween i { background: #ff8a1f; }
 
 #theme-note { margin-top: 10px; }
+.music-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+.music-row[hidden] { display: none; }
 .event-admin { margin-top: 18px; }
 .event-admin[hidden], .event-confirm[hidden], .event-admin-line[hidden] { display: none; }
 .event-admin-line { margin-top: 10px; }

@@ -4,6 +4,7 @@ import './live-update.js';
 import { maybeShowUpdatedBanner } from './whatsnew-banner.js';
 import { startBackgroundTimer } from './theme.js';
 import { startEventWatch } from './halloween.js';
+import { startHalloweenMusic } from './halloween-music.js';
 import { initSocial } from './social/profile.js';
 
 const _tabLoaded = {};
@@ -166,6 +167,7 @@ window.addEventListener('keydown', async (e) => {
 initHome();
 initSocial();
 startBackgroundTimer();
+startHalloweenMusic();
 startEventWatch();
 maybeShowUpdatedBanner();
 

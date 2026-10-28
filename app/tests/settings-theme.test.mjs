@@ -5,7 +5,7 @@ import fs from 'node:fs';
 
 const store = {};
 globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
-globalThis.document = { documentElement: { setAttribute() {}, removeAttribute() {}, classList: { add() {} } } };
+globalThis.document = { addEventListener() {}, documentElement: { setAttribute() {}, removeAttribute() {}, classList: { add() {} } } };
 const H = await import('../src/halloween.js');
 const { renderThemePicker, initThemePicker } = await import('../src/settings/theme-picker.js');
 

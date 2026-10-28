@@ -123,6 +123,10 @@ function tryPlay(el, what) {
   });
 }
 
+// Other sound users (the Halloween theme music) follow the same background policy: they get { background, keepPlaying, volume } on every applyPlayback.
+const playbackListeners = new Set();
+export function onPlayback(fn) { playbackListeners.add(fn); return () => playbackListeners.delete(fn); }
+
 export function applyPlayback() {
   setWindowBackground(!!(state.win.minimised || state.win.invisible));
   const hidden = typeof document !== 'undefined' && !!document.hidden;
@@ -141,6 +145,7 @@ export function applyPlayback() {
     mlog(`background ${reason ? `ON (${reason})` : 'OFF (foreground)'} keepPlaying=${prefs.keepPlaying}`);
   }
   mlog(`applyPlayback sound=${state.sound} enabled=${prefs.enabled} volume=${plan.volume} plan=${JSON.stringify({ video: plan.video, videoMuted: plan.videoMuted, audio: plan.audio })} reason=${reason} game=${state.gameRunning}`);
+  for (const fn of [...playbackListeners]) { try { fn({ background: plan.background, keepPlaying: prefs.keepPlaying, volume: prefs.volume }); } catch (e) {} }
   const v = state.video;
   if (v) {
     v.muted = plan.videoMuted;

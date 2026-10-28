@@ -44,9 +44,11 @@ jobs:
       - name: Install ilspycmd (bundled decompiler tool)
         shell: bash
         run: |
-          dotnet tool install ilspycmd --tool-path .ilspycmd-install-tmp
+          dotnet tool install ilspycmd --version 11.1.0.9782 --tool-path .ilspycmd-install-tmp  # pinned: 11.2 changed the package layout and broke the copy below
           mkdir -p loader/tools/ilspycmd
-          src=$(dirname "$(find .ilspycmd-install-tmp/.store -name ilspycmd.dll)")
+          dll=$(find .ilspycmd-install-tmp/.store -name ilspycmd.dll | head -1)
+          [ -n "$dll" ] || { echo "ilspycmd.dll not found in the installed tool" >&2; exit 1; }
+          src=$(dirname "$dll")
           cp -r "$src"/* loader/tools/ilspycmd/
           rm -rf .ilspycmd-install-tmp
 
