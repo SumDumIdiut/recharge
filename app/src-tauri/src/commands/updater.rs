@@ -493,8 +493,11 @@ pub async fn launcher_uninstall(app: AppHandle,delete_data: bool,restore_game: b
 
 pub fn launcher_uninstall_sync(app: AppHandle, delete_data: bool, restore_game: bool) -> Result<(), String> {
     let m = managed(&app).ok_or("this install isn't managed by the Recharge launcher")?;
-    if restore_game {
+    if restore_game && game_restorable(&app) {
         super::loader::uninstall_loader_sync(app.clone())?;
+    }
+    if !delete_data {
+        remove_live_cache(&app);
     }
     let pid = std::process::id().to_string();
     let mut args = uninstall_args(delete_data);
@@ -503,6 +506,20 @@ pub fn launcher_uninstall_sync(app: AppHandle, delete_data: bool, restore_game: 
     spawn_detached(&m, &refs)?;
     app.exit(0);
     Ok(())
+}
+
+/// True when there is a game folder with a Managed folder to restore. If the game was moved or removed there is nothing to restore, and that must not block uninstalling Recharge (a real failure, like the assembly being in use, still errors).
+fn game_restorable(app: &AppHandle) -> bool {
+    super::settings::get_game_path_sync(app.clone())
+        .map(|g| super::steam::managed_dir(Path::new(&g)).is_some())
+        .unwrap_or(false)
+}
+
+/// The downloaded UI bundle (`live/`) is only a cache; a plain uninstall removes it so a reinstall can't serve an old one over the fresh app. The app is exiting, so nothing is serving it.
+fn remove_live_cache(app: &AppHandle) {
+    for dir in [app.path().app_local_data_dir(), app.path().app_data_dir()].into_iter().flatten() {
+        let _ = std::fs::remove_dir_all(dir.join("live"));
+    }
 }
 
 fn uninstall_args(delete_data: bool) -> Vec<String> {

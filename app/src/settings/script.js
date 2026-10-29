@@ -285,9 +285,9 @@ function manualUninstallText(platform) {
 function uninstallBody({ deleteData, restoreGame }) {
   const data = deleteData
     ? 'Your settings, downloaded games, mods, skins, backgrounds and cached data will be deleted too. '
-    : 'Your settings, downloaded games, mods, backgrounds and cached data are kept. ';
+    : 'Your settings, downloaded games, mods and backgrounds are kept (only the cached app bundle is cleared). ';
   const game = restoreGame
-    ? 'RechargeLoader will be removed and the original game restored; mods, skins and map saves deployed into the game folder (Recharge/Mods) are removed with it. '
+    ? 'RechargeLoader will be removed and the original game restored; the mods deployed into the game folder (Recharge/Mods) are removed with it, but your skins and map saves there are kept. '
     : 'RechargeLoader stays in the game, so it keeps running modded until you restore it. ';
   return `Recharge will be removed from this computer. ${data}${game}Type UNINSTALL to go ahead.`;
 }

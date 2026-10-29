@@ -317,6 +317,39 @@ pub async fn uninstall_loader(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || crate::perf::timed("uninstall_loader", || uninstall_loader_sync(app))).await.expect("command thread panicked")
 }
 
+/// Folders under `<game>/Recharge/Mods` that hold the user's own content and must survive a restore: custom skins and saved maps.
+const USER_DATA_PATHS: [&str; 2] = ["recharge.customskins/data/skins", "recharge.maps/maps"];
+
+/// Deletes every loader/mod payload file under `mods_dir` except the `USER_DATA_PATHS` (and the folders leading to them); folders left empty are removed. A file that is locked (a loaded DLL) is moved aside instead, for a later sweep.
+fn remove_mods_keeping_user_data(mods_dir: &std::path::Path) -> Result<(), String> {
+    let keep: Vec<PathBuf> = USER_DATA_PATHS.iter().map(|p| mods_dir.join(p)).collect();
+    prune_keeping(mods_dir, &keep)?;
+    let _ = std::fs::remove_dir(mods_dir); // only if empty
+    Ok(())
+}
+
+fn prune_keeping(dir: &std::path::Path, keep: &[PathBuf]) -> Result<(), String> {
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if keep.iter().any(|k| *k == path) {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir && keep.iter().any(|k| k.starts_with(&path)) {
+            prune_keeping(&path, keep)?;
+            let _ = std::fs::remove_dir(&path); // only if empty
+            continue;
+        }
+        let removed = if is_dir { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        if removed.is_err() {
+            // Some mod DLL is loaded: renaming is allowed, and a later run sweeps the aside.
+            let aside = super::safe_fs::aside_name(&path, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+            std::fs::rename(&path, &aside).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 pub fn uninstall_loader_sync(app: AppHandle) -> Result<(), String> {
     let game_path = settings_game_path(&app)
         .ok_or_else(|| "IGTAP install not found - set the game path in Settings.".to_string())?;
@@ -335,11 +368,11 @@ pub fn uninstall_loader_sync(app: AppHandle) -> Result<(), String> {
         let _ = safe_remove(&RealFs, &managed.join(name), &BACKOFF_MS);
     }
 
+    // Deployed mods go, the user's own skins and map saves stay.
     let mods_dir = PathBuf::from(&game_path).join("Recharge").join("Mods");
-    if mods_dir.is_dir() && std::fs::remove_dir_all(&mods_dir).is_err() {
-        // Some mod DLL is loaded: move the whole folder aside (renaming is allowed) and let a later run sweep it.
-        let aside = super::safe_fs::aside_name(&mods_dir, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
-        std::fs::rename(&mods_dir, &aside).map_err(|e| format!("Failed to remove deployed mods: {e} - close the game and try again."))?;
+    if mods_dir.is_dir() {
+        remove_mods_keeping_user_data(&mods_dir)
+            .map_err(|e| format!("Failed to remove deployed mods: {e} - close the game and try again."))?;
     }
 
     // Drop the loader's stamps too, or a later launch reads them as state that's no longer there.
@@ -364,5 +397,35 @@ mod build_missing_tests {
         std::fs::write(d.join("Assembly-CSharp.RECHARGE.dll"), b"x").unwrap();
         assert!(!managed_modded_build_missing(&d));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn restore_keeps_user_skins_and_map_saves_and_removes_the_rest() {
+        let game = std::env::temp_dir().join(format!("rl-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&game);
+        let mods = game.join("Recharge").join("Mods");
+        let skin = mods.join("recharge.customskins/data/skins/mine/skin.png");
+        let save = mods.join("recharge.maps/maps/my-map/map.json");
+        for (p, c) in [
+            (&skin, "skin"), (&save, "save"),
+            (&mods.join("recharge.maps/mod.json"), "{}"), (&mods.join("recharge.maps/Maps.dll"), "dll"),
+            (&mods.join("recharge.customskins/mod.json"), "{}"), (&mods.join("recharge.customskins/data/other.txt"), "x"),
+            (&mods.join("other.mod/mod.json"), "{}"),
+        ] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, c).unwrap();
+        }
+        remove_mods_keeping_user_data(&mods).unwrap();
+        assert_eq!(std::fs::read_to_string(&skin).unwrap(), "skin");
+        assert_eq!(std::fs::read_to_string(&save).unwrap(), "save");
+        assert!(!mods.join("recharge.maps/mod.json").exists() && !mods.join("recharge.maps/Maps.dll").exists());
+        assert!(!mods.join("recharge.customskins/mod.json").exists() && !mods.join("recharge.customskins/data/other.txt").exists());
+        assert!(!mods.join("other.mod").exists());
+        // with no user content the whole Mods folder goes
+        std::fs::remove_dir_all(mods.join("recharge.customskins/data/skins")).unwrap();
+        std::fs::remove_dir_all(mods.join("recharge.maps/maps")).unwrap();
+        remove_mods_keeping_user_data(&mods).unwrap();
+        assert!(!mods.exists());
+        let _ = std::fs::remove_dir_all(&game);
     }
 }

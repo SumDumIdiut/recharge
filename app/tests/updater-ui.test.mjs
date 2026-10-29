@@ -126,9 +126,9 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   assert.match(vm.runInContext("manualUninstallText('Win32')", t.ctx), /%LOCALAPPDATA%/, 'manual text names the data folders');
   assert.match(vm.runInContext("manualUninstallText('Linux x86_64')", t.ctx), /\.local\/share\/co\.za\.codecade\.recharge/);
   const body = (o) => vm.runInContext(`uninstallBody(${JSON.stringify(o)})`, t.ctx);
-  assert.match(body({ deleteData: false, restoreGame: true }), /skins and map saves deployed into the game folder/, 'restore warns about game-side mods');
+  assert.match(body({ deleteData: false, restoreGame: true }), /your skins and map saves there are kept/, 'restore says skins and map saves stay');
   assert.match(body({ deleteData: false, restoreGame: false }), /keeps running modded/);
-  assert.match(body({ deleteData: false, restoreGame: false }), /cached data are kept/);
+  assert.match(body({ deleteData: false, restoreGame: false }), /only the cached app bundle is cleared/);
 
   // uninstall flow: first click arms, second asks (typed confirm), then the command carries both choices
   const asked = [];
@@ -148,10 +148,10 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   await t.window.__uninstallRecharge();
   assert.deepEqual(t.calls.find((c) => c[0] === 'launcher_uninstall'), ['launcher_uninstall', { deleteData: true, restoreGame: true }]);
 }
-// --- uninstall: restore-to-vanilla stays off by default until the loader uninstall keeps skins and map saves; a failed uninstall is reported and re-enabled ---
+// --- uninstall: restore-to-vanilla is on by default (the loader uninstall keeps skins and map saves); a failed uninstall is reported and re-enabled ---
 {
   const html = fs.readFileSync(new URL('../src/settings/view.html', import.meta.url), 'utf8');
-  assert.doesNotMatch(html, /id="uninstall-restore" checked/);
+  assert.match(html, /id="uninstall-restore" checked/);
   const t = setup({ managed: true });
   t.ctx.cleanVersion = cleanVersion;
   vm.runInContext('var runMigrate = () => {};' + src('settings/script.js').replace(/^import[\s\S]*?from '[^']+';\n/gm, '').replace(/^export /gm, ''), t.ctx);

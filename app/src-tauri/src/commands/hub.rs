@@ -97,18 +97,6 @@ fn meta_hub_id(folder: &std::path::Path) -> Option<String> {
     read_json_file(&folder.join(HUB_META_FILE))?.get("hubId")?.as_str().map(str::to_string)
 }
 
-/// The map's own id (map.json "uid"), the same across every copy and save of it.
-fn map_uid_of_folder(folder: &std::path::Path) -> Option<String> {
-    read_json_file(&folder.join("map.json"))?.get("uid")?.as_str().filter(|u| !u.is_empty()).map(str::to_string)
-}
-
-fn zip_map_uid(bytes: &[u8]) -> Option<String> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
-    let mut text = String::new();
-    archive.by_name("map.json").ok()?.read_to_string(&mut text).ok()?;
-    serde_json::from_str::<serde_json::Value>(&text).ok()?.get("uid")?.as_str().filter(|u| !u.is_empty()).map(str::to_string)
-}
-
 fn sorted_dirs(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     v.sort();
@@ -121,6 +109,16 @@ fn extract_swap(
     target: &std::path::Path,
     finish: impl FnOnce(&std::path::Path) -> Result<(), String>,
 ) -> Result<(), String> {
+    extract_swap_backed(bytes, target, None, finish)
+}
+
+/// `extract_swap`, and when `backups` is given the folder being replaced is first copied into it (see `backup_folder`). The copy happens only once the new package extracted fine.
+fn extract_swap_backed(
+    bytes: Vec<u8>,
+    target: &std::path::Path,
+    backups: Option<&std::path::Path>,
+    finish: impl FnOnce(&std::path::Path) -> Result<(), String>,
+) -> Result<(), String> {
     let parent = target.parent().ok_or("bad install folder")?;
     let tmp = parent.join(format!(".beam-tmp-{}-{}", std::process::id(), NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -129,6 +127,9 @@ fn extract_swap(
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid package: {e}"))?;
         archive.extract(&tmp).map_err(|e| format!("couldn't extract package: {e}"))?;
         finish(&tmp)?;
+        if let (Some(b), true) = (backups, target.is_dir()) {
+            backup_folder(target, b)?;
+        }
         let _ = std::fs::remove_dir_all(target);
         std::fs::rename(&tmp, target).map_err(|e| e.to_string())
     })();
@@ -136,6 +137,69 @@ fn extract_swap(
         let _ = std::fs::remove_dir_all(&tmp);
     }
     result
+}
+
+/// How many backups of one folder are kept (the same as Recharge Next's FolderStore.BackupsKept).
+const BACKUPS_KEPT: usize = 3;
+
+fn copy_dir_all(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let dest = to.join(e.file_name());
+        if e.file_type()?.is_dir() { copy_dir_all(&e.path(), &dest)?; } else { std::fs::copy(e.path(), &dest)?; }
+    }
+    Ok(())
+}
+
+/// `yyyymmdd-HHMMSS` (UTC) of now.
+fn backup_stamp() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // civil-from-days (Howard Hinnant)
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// Copies `folder` to `<backups>/<folder name>-<stamp>[-NNN]` and keeps only the newest `BACKUPS_KEPT` backups of that folder name.
+fn backup_folder(folder: &std::path::Path, backups: &std::path::Path) -> Result<PathBuf, String> {
+    let name = folder.file_name().ok_or("bad folder")?.to_string_lossy().to_string();
+    std::fs::create_dir_all(backups).map_err(|e| format!("couldn't create the backup folder: {e}"))?;
+    let stamp = backup_stamp();
+    // Same second as an existing backup: count up past the highest suffix there (a pruned lower one must not be reused, or the order breaks).
+    let same = format!("{name}-{stamp}");
+    let mut top = 0u32;
+    for e in std::fs::read_dir(backups).into_iter().flatten().flatten() {
+        let f = e.file_name().to_string_lossy().to_string();
+        if f == same { top = top.max(1); }
+        else if let Some(n) = f.strip_prefix(&format!("{same}-")).and_then(|r| r.parse::<u32>().ok()) { top = top.max(n); }
+    }
+    let dest = if top == 0 { backups.join(&same) } else { backups.join(format!("{same}-{:03}", top + 1)) };
+    if let Err(e) = copy_dir_all(folder, &dest) {
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(format!("couldn't back up '{name}': {e}"));
+    }
+    // Backups of this folder: "<name>-<8 digits>-<6 digits>[-NNN]"; another folder whose name merely starts with this one is not matched.
+    let prefix = format!("{name}-");
+    let is_backup = |f: &str| {
+        f.strip_prefix(&prefix).map(|r| r.len() >= 15 && r.as_bytes()[..8].iter().all(u8::is_ascii_digit) && r.as_bytes()[8] == b'-' && r.as_bytes()[9..15].iter().all(u8::is_ascii_digit)).unwrap_or(false)
+    };
+    let mut mine: Vec<String> = std::fs::read_dir(backups).into_iter().flatten().flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string()).filter(|f| is_backup(f)).collect();
+    mine.sort();
+    mine.reverse();
+    for old in mine.into_iter().skip(BACKUPS_KEPT) {
+        let _ = std::fs::remove_dir_all(backups.join(old));
+    }
+    Ok(dest)
 }
 
 #[derive(Deserialize)]
@@ -219,53 +283,58 @@ fn install_mod_into(dir: &std::path::Path, bytes: Vec<u8>, hub_id: &str, name: &
 
 fn install_map_zip(app: &AppHandle, bytes: Vec<u8>, hub_id: &str, name: &str, ver: &HubVersion) -> Result<(), String> {
     let dir = maps_dir(app).ok_or("game path not set")?;
-    install_map_into(&dir, bytes, hub_id, name, ver).map(|_| ())
+    install_map_into(&dir, map_backups_dir(app).as_deref(), bytes, hub_id, name, ver).map(|_| ())
 }
 
-/// Installs a map package into `dir` (the game's maps folder) and returns its folder.
-/// - The folder that already holds this hub id is reused (and replaced), whatever the map is called now.
-/// - Installed hub copies of the same map (the same map.json uid) under another hub id are replaced too: the first is reused as the folder, any others removed. Local-only copies are left alone: they may hold edits.
-/// - Otherwise the folder is a slug of the name; a slug owned by a different map gets a hub-id suffix.
-fn install_map_into(dir: &std::path::Path, bytes: Vec<u8>, hub_id: &str, name: &str, ver: &HubVersion) -> Result<PathBuf, String> {
+/// Where replaced map folders are backed up: `<app local data>/map-backups` (the app's data, never the game folder, so the game doesn't load a backup as a map).
+fn map_backups_dir(app: &AppHandle) -> Option<PathBuf> {
+    Some(app.path().app_local_data_dir().ok()?.join("map-backups"))
+}
+
+/// A folder name nothing lives at: `slug`, else `slug-<hubid8>`, else `slug-<hubid8>-2`, `-3`...
+fn free_map_folder(dir: &std::path::Path, slug: &str, hub_id: &str) -> PathBuf {
+    let taken = |p: &PathBuf| p.exists() || p.symlink_metadata().is_ok();
+    let t = dir.join(slug);
+    if !taken(&t) { return t; }
+    let suffixed = format!("{slug}-{}", &hub_id[..8.min(hub_id.len())]);
+    let t = dir.join(&suffixed);
+    if !taken(&t) { return t; }
+    (2..).map(|n| dir.join(format!("{suffixed}-{n}"))).find(|p| !taken(p)).unwrap()
+}
+
+/// Installs a map package into `dir` (the game's maps folder) and returns its folder. Installing never touches another hub entry's folder.
+/// - The folder whose hub.json id is this hub id is reused (and replaced, after a backup into `backups` when given), whatever the map is called now. A folder whose recorded name belongs to another installed hub entry is the legacy collided state (an old install wrote this entry's stamp into another map's folder) and is not reused.
+/// - Otherwise a new folder: a slug of the name; if that is taken (by anything), `slug-<hubid8>`, then a counter.
+/// - Same-uid copies are not duplicates: two entries may share a map.json uid (a copied map), and both stay.
+fn install_map_into(dir: &std::path::Path, backups: Option<&std::path::Path>, bytes: Vec<u8>, hub_id: &str, name: &str, ver: &HubVersion) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let uid = zip_map_uid(&bytes);
     let folders = sorted_dirs(dir);
-    let linked = folders.iter().find(|p| map_hub_id(p).as_deref() == Some(hub_id)).cloned();
-    let duplicates: Vec<PathBuf> = match &uid {
-        Some(u) => folders.iter()
-            .filter(|p| Some(*p) != linked.as_ref())
-            .filter(|p| map_hub_id(p).is_some() && map_uid_of_folder(p).as_deref() == Some(u.as_str()))
-            .cloned()
-            .collect(),
-        None => Vec::new(),
-    };
-    let target = match linked.clone().or_else(|| duplicates.first().cloned()) {
+    let hub_json_name = |p: &std::path::Path| read_json_file(&p.join("hub.json")).and_then(|j| j.get("name").and_then(|v| v.as_str()).map(str::to_string));
+    // Names of the other hub entries installed here.
+    let others: Vec<String> = folders.iter()
+        .filter(|p| map_hub_id(p).map(|h| h != hub_id).unwrap_or(false))
+        .filter_map(|p| hub_json_name(p))
+        .collect();
+    let linked = folders.iter()
+        .filter(|p| map_hub_id(p).as_deref() == Some(hub_id))
+        .find(|p| match hub_json_name(p) {
+            Some(n) => n == name || !others.contains(&n),
+            None => true,
+        })
+        .cloned();
+    let target = match linked {
         Some(t) => t,
         None => {
-            let slug = {
-                let s = slugify(name);
-                if s.is_empty() { hub_id.to_string() } else { s }
-            };
-            // A slug owned by another map gets a hub-id suffix instead of being clobbered.
-            let t = dir.join(&slug);
-            let name_of = |p: &std::path::Path| read_json_file(&p.join("map.json")).and_then(|j| j.get("name").and_then(|v| v.as_str()).map(str::to_string));
-            if t.is_dir() && (name_of(&t).map(|n| n != name).unwrap_or(false) || map_hub_id(&t).map(|h| h != hub_id).unwrap_or(false)) {
-                dir.join(format!("{}-{}", slug, &hub_id[..8.min(hub_id.len())]))
-            } else {
-                t
-            }
+            let slug = slugify(name);
+            let slug = if slug.is_empty() { hub_id.to_string() } else { slug };
+            free_map_folder(dir, &slug, hub_id)
         }
     };
-    extract_swap(bytes, &target, |tmp| {
+    extract_swap_backed(bytes, &target, backups, |tmp| {
         // Remember the hub id, name and revision alongside, so the list can show them, upload knows the id, and the app can tell when the hub has a newer one.
         let hub_json = serde_json::json!({ "name": name, "id": hub_id, "revision": ver.revision, "updatedAt": ver.updated_at }).to_string();
         std::fs::write(tmp.join("hub.json"), hub_json).map_err(|e| e.to_string())
     })?;
-    for d in duplicates {
-        if d != target {
-            let _ = std::fs::remove_dir_all(d);
-        }
-    }
     Ok(target)
 }
 
@@ -1225,10 +1294,10 @@ mod install_tests {
     #[test]
     fn map_update_reuses_the_folder_even_when_renamed() {
         let dir = tmp("map-rename");
-        let first = install_map_into(&dir, map_zip("Clau v0.3A", Some("u1"), "one"), "hub-aaaaaaaa", "Clau v0.3A", &v(1)).unwrap();
+        let first = install_map_into(&dir, None, map_zip("Clau v0.3A", Some("u1"), "one"), "hub-aaaaaaaa", "Clau v0.3A", &v(1)).unwrap();
         assert_eq!(folders(&dir), ["clau-v0-3a"]);
         // renamed on the hub: same hub id, new name
-        let second = install_map_into(&dir, map_zip("Clau v0.3B", Some("u1"), "two"), "hub-aaaaaaaa", "Clau v0.3B", &v(2)).unwrap();
+        let second = install_map_into(&dir, None, map_zip("Clau v0.3B", Some("u1"), "two"), "hub-aaaaaaaa", "Clau v0.3B", &v(2)).unwrap();
         assert_eq!(first, second, "same folder");
         assert_eq!(folders(&dir), ["clau-v0-3a"], "no second folder");
         assert_eq!(marker(&second), "two");
@@ -1240,38 +1309,104 @@ mod install_tests {
     }
 
     #[test]
-    fn map_with_the_same_uid_under_another_hub_id_replaces_the_old_copy() {
+    fn map_with_the_same_uid_under_another_hub_id_keeps_both_folders() {
         let dir = tmp("map-dup");
-        install_map_into(&dir, map_zip("Clau v0.3A", Some("u1"), "one"), "hub-aaaaaaaa", "Clau v0.3A", &v(1)).unwrap();
-        install_map_into(&dir, map_zip("Other", Some("u2"), "other"), "hub-cccccccc", "Other", &v(1)).unwrap();
-        let t = install_map_into(&dir, map_zip("Clau v0.3B", Some("u1"), "two"), "hub-bbbbbbbb", "Clau v0.3B", &v(1)).unwrap();
-        assert_eq!(folders(&dir), ["clau-v0-3a", "other"], "the old copy's folder is reused, the unrelated map untouched");
+        install_map_into(&dir, None, map_zip("igtech", Some("u1"), "one"), "hub-aaaaaaaa", "igtech", &v(1)).unwrap();
+        install_map_into(&dir, None, map_zip("Other", Some("u2"), "other"), "hub-cccccccc", "Other", &v(1)).unwrap();
+        let t = install_map_into(&dir, None, map_zip("Cosmic Ocean", Some("u1"), "two"), "hub-bbbbbbbb", "Cosmic Ocean", &v(1)).unwrap();
+        assert_eq!(folders(&dir), ["cosmic-ocean", "igtech", "other"], "the copy gets its own folder, nothing is removed");
+        assert_eq!(t, dir.join("cosmic-ocean"));
+        assert_eq!(marker(&dir.join("igtech")), "one", "the other entry's folder is untouched");
+        assert_eq!(read_json_file(&dir.join("igtech").join("hub.json")).unwrap()["id"].as_str(), Some("hub-aaaaaaaa"));
         assert_eq!(marker(&t), "two");
         assert_eq!(read_json_file(&t.join("hub.json")).unwrap()["id"].as_str(), Some("hub-bbbbbbbb"));
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
-    fn extra_duplicates_are_removed_and_local_only_copies_kept() {
+    fn same_uid_copies_and_local_only_folders_are_never_removed() {
         let dir = tmp("map-dup2");
-        install_map_into(&dir, map_zip("A", Some("u1"), "a"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
-        install_map_into(&dir, map_zip("B", Some("u9"), "b"), "hub-bbbbbbbb", "B", &v(1)).unwrap();
-        // make B a second copy of u1 (as if installed before it carried the same id as A)
-        std::fs::write(dir.join("b").join("map.json"), r#"{"uid":"u1","name":"B","marker":"b"}"#).unwrap();
-        // a local-only copy of the same map (the user's own edits, never on the hub)
+        install_map_into(&dir, None, map_zip("A", Some("u1"), "a"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
+        install_map_into(&dir, None, map_zip("B", Some("u1"), "b"), "hub-bbbbbbbb", "B", &v(1)).unwrap();
         std::fs::create_dir_all(dir.join("mine")).unwrap();
         std::fs::write(dir.join("mine").join("map.json"), r#"{"uid":"u1","name":"mine","marker":"mine"}"#).unwrap();
-        install_map_into(&dir, map_zip("C", Some("u1"), "c"), "hub-cccccccc", "C", &v(1)).unwrap();
-        assert_eq!(folders(&dir), ["a", "mine"], "one hub copy remains (reused), the other removed, the local copy kept");
-        assert_eq!(marker(&dir.join("a")), "c");
+        install_map_into(&dir, None, map_zip("C", Some("u1"), "c"), "hub-cccccccc", "C", &v(1)).unwrap();
+        assert_eq!(folders(&dir), ["a", "b", "c", "mine"]);
+        assert_eq!((marker(&dir.join("a")), marker(&dir.join("b")), marker(&dir.join("mine"))), ("a".into(), "b".into(), "mine".into()));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_slug_taken_by_another_entry_or_a_local_folder_gets_a_suffix_then_a_counter() {
+        let dir = tmp("map-slugtaken");
+        // taken by a local-only folder (no hub.json)
+        std::fs::create_dir_all(dir.join("same")).unwrap();
+        std::fs::write(dir.join("same").join("map.json"), r#"{"name":"Same","marker":"mine"}"#).unwrap();
+        let a = install_map_into(&dir, None, map_zip("Same", None, "one"), "hub-aaaaaaaa", "Same", &v(1)).unwrap();
+        assert_eq!(a, dir.join("same-hub-aaaa"));
+        // the suffixed name is taken too
+        std::fs::create_dir_all(dir.join("same-hub-bbbb")).unwrap();
+        let b = install_map_into(&dir, None, map_zip("Same", None, "two"), "hub-bbbbbbbb", "Same", &v(1)).unwrap();
+        assert_eq!(b, dir.join("same-hub-bbbb-2"));
+        assert_eq!(marker(&dir.join("same")), "mine");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn updating_backs_up_the_old_folder_and_keeps_the_last_three() {
+        let dir = tmp("map-backup");
+        let bk = dir.join("backups-outside");
+        let maps = dir.join("maps");
+        let t = install_map_into(&maps, Some(&bk), map_zip("A", Some("u1"), "r1"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
+        assert!(!bk.exists(), "a first install has nothing to back up");
+        install_map_into(&maps, Some(&bk), map_zip("B", Some("u2"), "other"), "hub-bbbbbbbb", "B", &v(1)).unwrap();
+        for r in 2..=6 {
+            install_map_into(&maps, Some(&bk), map_zip("A", Some("u1"), &format!("r{r}")), "hub-aaaaaaaa", "A", &v(r)).unwrap();
+        }
+        assert_eq!(marker(&t), "r6");
+        let mut kept: Vec<String> = sorted_dirs(&bk).iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+        kept.sort();
+        assert_eq!(kept.len(), 3, "only the last three backups remain: {kept:?}");
+        assert!(kept.iter().all(|k| k.starts_with("a-")));
+        let markers: Vec<String> = kept.iter().map(|k| marker(&bk.join(k))).collect();
+        assert_eq!(markers, ["r3", "r4", "r5"], "the newest three previous versions");
+        assert_eq!(folders(&maps), ["a", "b"], "backups live outside the maps folder");
+        assert_eq!(marker(&maps.join("b")), "other");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_failed_update_makes_no_backup() {
+        let dir = tmp("map-backup-bad");
+        let bk = dir.join("bk");
+        let maps = dir.join("maps");
+        install_map_into(&maps, Some(&bk), map_zip("A", None, "good"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
+        assert!(install_map_into(&maps, Some(&bk), b"nope".to_vec(), "hub-aaaaaaaa", "A", &v(2)).is_err());
+        assert!(!bk.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_legacy_collided_folder_is_not_reused() {
+        let dir = tmp("map-legacy");
+        install_map_into(&dir, None, map_zip("igtech", Some("u1"), "igtech"), "hub-iiiiiiii", "igtech", &v(6)).unwrap();
+        // legacy state: another folder carries Cosmic Ocean's hub id but igtech's recorded name
+        std::fs::create_dir_all(dir.join("old")).unwrap();
+        std::fs::write(dir.join("old").join("map.json"), r#"{"uid":"u1","name":"igtech","marker":"legacy"}"#).unwrap();
+        std::fs::write(dir.join("old").join("hub.json"), r#"{"name":"igtech","id":"hub-cccccccc","revision":6}"#).unwrap();
+        let t = install_map_into(&dir, None, map_zip("Cosmic Ocean", Some("u1"), "cosmic"), "hub-cccccccc", "Cosmic Ocean", &v(7)).unwrap();
+        assert_eq!(t, dir.join("cosmic-ocean"));
+        assert_eq!(folders(&dir), ["cosmic-ocean", "igtech", "old"]);
+        assert_eq!(marker(&dir.join("old")), "legacy");
+        assert_eq!(marker(&dir.join("igtech")), "igtech");
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
     fn maps_without_uid_never_count_as_duplicates() {
         let dir = tmp("map-nouid");
-        install_map_into(&dir, map_zip("A", None, "a"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
-        install_map_into(&dir, map_zip("B", None, "b"), "hub-bbbbbbbb", "B", &v(1)).unwrap();
+        install_map_into(&dir, None, map_zip("A", None, "a"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
+        install_map_into(&dir, None, map_zip("B", None, "b"), "hub-bbbbbbbb", "B", &v(1)).unwrap();
         assert_eq!(folders(&dir), ["a", "b"]);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -1279,8 +1414,8 @@ mod install_tests {
     #[test]
     fn a_slug_owned_by_another_hub_map_gets_a_suffix() {
         let dir = tmp("map-slug");
-        install_map_into(&dir, map_zip("Same", Some("u1"), "one"), "hub-aaaaaaaa", "Same", &v(1)).unwrap();
-        install_map_into(&dir, map_zip("Same", Some("u2"), "two"), "hub-bbbbbbbb", "Same", &v(1)).unwrap();
+        install_map_into(&dir, None, map_zip("Same", Some("u1"), "one"), "hub-aaaaaaaa", "Same", &v(1)).unwrap();
+        install_map_into(&dir, None, map_zip("Same", Some("u2"), "two"), "hub-bbbbbbbb", "Same", &v(1)).unwrap();
         assert_eq!(folders(&dir), ["same", "same-hub-bbbb"]);
         assert_eq!(marker(&dir.join("same")), "one");
         std::fs::remove_dir_all(dir).ok();
@@ -1289,8 +1424,8 @@ mod install_tests {
     #[test]
     fn a_broken_package_leaves_the_installed_map_alone() {
         let dir = tmp("map-bad");
-        let t = install_map_into(&dir, map_zip("A", Some("u1"), "good"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
-        assert!(install_map_into(&dir, b"not a zip".to_vec(), "hub-aaaaaaaa", "A", &v(2)).is_err());
+        let t = install_map_into(&dir, None, map_zip("A", Some("u1"), "good"), "hub-aaaaaaaa", "A", &v(1)).unwrap();
+        assert!(install_map_into(&dir, None, b"not a zip".to_vec(), "hub-aaaaaaaa", "A", &v(2)).is_err());
         assert_eq!(marker(&t), "good");
         assert_eq!(folders(&dir), ["a"]);
         std::fs::remove_dir_all(dir).ok();
