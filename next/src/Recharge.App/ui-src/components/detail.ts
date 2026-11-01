@@ -166,6 +166,16 @@ export interface DetailOptions {
 
 const PAST: Record<string, string> = { install: 'Installed', update: 'Updated', remove: 'Removed' };
 
+/** Launch an installed map in IGTAP straight from its detail panel. */
+function playMapButton(item: Item): HTMLButtonElement {
+  const folder = item.installed!.folder!;
+  const btn = button('Play', { kind: 'primary', icon: 'play', title: 'Launch IGTAP with this map' });
+  btn.addEventListener('click', () => {
+    go('#/play?map=' + encodeURIComponent(folder) + '&modded=false');
+  });
+  return btn;
+}
+
 /** An installed map opens in the Amplifier once it is back in Recharge Next; until then the button says so. */
 function amplifierButton(): HTMLButtonElement {
   const amp = button('Amplifier: coming soon', { kind: 'secondary', icon: 'amplifier', title: 'Editing maps in Recharge is coming soon' });
@@ -262,7 +272,7 @@ function actionButtons(item: Item, options: DetailOptions): HTMLElement {
   if (item.kind === 'skins' && item.installed && item.installed.folder) {
     actions.appendChild(skinApplyButton(item.installed.folder, item.name));
   }
-  if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(amplifierButton());
+  if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(playMapButton(item));
   // an installed background or playlist can be shown behind the app straight from its page
   if ((item.kind === 'backgrounds' || item.kind === 'playlists') && item.installed && item.installed.folder) {
     actions.appendChild(backgroundApplyButton(item.kind, item.installed.folder, item.name));
