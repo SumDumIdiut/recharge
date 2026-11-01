@@ -168,8 +168,11 @@ namespace Recharge.App.Windows
             {
                 Log("startup failed: " + ex);
                 _exitCode = 4;
-                Win32.MessageBoxW(_hwnd, "Recharge could not start its web view.\n\n" + ex.Message +
-                    "\n\nThe Microsoft Edge WebView2 Runtime is required.", "Recharge", 0x10);
+                Win32.MessageBoxW(_hwnd, "Recharge could not start its web view.\n\n" +
+                    "The Microsoft Edge WebView2 Runtime is required but was not found on this machine.\n" +
+                    "Download and install it from:\n" +
+                    "https://developer.microsoft.com/en-us/microsoft-edge/webview2/\n" +
+                    "Then restart Recharge.", "Recharge", 0x10);
                 Win32.PostQuitMessage(4);
             }
         }
