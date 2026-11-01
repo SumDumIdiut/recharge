@@ -1,6 +1,12 @@
 name: Publish to update hub
 
-# Builds the launcher + app for windows-x64 and linux-x64 (tools/build-update-dir.*) and publishes them to the update hub with tools/publish-update.mjs. master -> stable, dev -> beta.
+# Builds the app for windows-x64 and linux-x64 and publishes it to the update hub with tools/publish-update.mjs. master -> stable, dev -> beta.
+#   master (stable): the old Tauri app (tools/build-update-dir.*), unchanged.
+#   dev (beta):      Recharge, the .NET rewrite whose source lives in next/ (synced from the recharge-next tree by its tools/sync-to-recharge.sh):
+#                    dotnet publish self-contained for each platform + the built UI, assembled by tools/build-next-dir.sh. Its manifest version is
+#                    the csproj Version without a trailing ".0" (0.1.0 -> "0.1"); the build number is this workflow's run number, as always.
+# Note for the launcher: a beta install takes whichever of the beta and stable manifests has the HIGHER build number, so a later master (old app) publish outranks the newest dev
+# (Recharge) build until dev is published again.
 #
 # Runs alongside the legacy autorelease.yml / release.yml until every install has migrated to the launcher.
 #
@@ -26,10 +32,12 @@ on:
       - '!app/src/maps/**'
       - 'loader/**'
       - 'electron/**'
+      - 'next/**'
       - 'content/**'
       - 'launcher/**'
       - 'tools/publish-update.mjs'
       - 'tools/build-update-dir.*'
+      - 'tools/build-next-dir.sh'
       - '.github/workflows/update-hub.yml'
 
 # One publish at a time per channel; a newer push supersedes a running one.
@@ -45,6 +53,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       api_level: ${{ steps.v.outputs.api_level }}
       launcher_version: ${{ steps.v.outputs.launcher_version }}
+      product: ${{ steps.v.outputs.product }}
       publish_launcher: ${{ steps.v.outputs.publish_launcher }}
     steps:
       - uses: actions/checkout@v4
@@ -57,10 +66,18 @@ jobs:
         run: |
           set -euo pipefail
           base=$(python3 -c "import json; print(json.load(open('app/src/version.json'))['version'])")
+          product=app
           if [ "${{ github.ref_name }}" = dev ]; then
             channel=beta
-            build=$(python3 -c "import json; print(json.load(open('app/src/beta.json'))['build'])")
-            version="$base-beta$build"
+            product=next
+            # Recharge: the csproj Version, "0.1.0" published as "0.1".
+            version=$(python3 - <<'PY'
+          import re
+          v = re.search(r'<Version>([^<]+)</Version>', open('next/src/Recharge.App/Recharge.App.csproj').read()).group(1).strip()
+          print(re.sub(r'^(\d+\.\d+)\.0$', r'\1', v))
+          PY
+            )
+            [ -n "$version" ] || { echo "no Version in next/src/Recharge.App/Recharge.App.csproj" >&2; exit 1; }
           elif [ "${{ github.ref_name }}" = master ]; then
             channel=stable
             version="$base"
@@ -77,11 +94,13 @@ jobs:
           elif ! git cat-file -e "$BEFORE" 2>/dev/null; then
             pub=true   # first push of a branch / unknown base: be safe
           fi
-          { echo "channel=$channel"; echo "version=$version"; echo "api_level=$api"; echo "launcher_version=$lv"; echo "publish_launcher=$pub"; } >> "$GITHUB_OUTPUT"
+          { echo "channel=$channel"; echo "version=$version"; echo "api_level=$api"; echo "launcher_version=$lv"; echo "publish_launcher=$pub"; echo "product=$product"; } >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
+  # Old app (master/stable).
   build:
     needs: prepare
+    if: needs.prepare.outputs.product == 'app'
     strategy:
       # Each platform runs to the end so one failure doesn't hide the other's result (publish still needs both).
       fail-fast: false
@@ -183,8 +202,82 @@ jobs:
             dist/launcher/*
           if-no-files-found: error
 
+  # Recharge (dev/beta): next/ is the recharge-next source tree.
+  build-next:
+    needs: prepare
+    if: needs.prepare.outputs.product == 'next'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            name: linux-x64
+            rid: linux-x64
+          - platform: windows-latest
+            name: windows-x64
+            rid: win-x64
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the UI
+        shell: bash
+        run: node next/tools/build-ui.mjs
+
+      - name: Publish the app
+        shell: bash
+        run: |
+          dotnet publish next/src/Recharge.App -c Release -r ${{ matrix.rid }} --self-contained -p:NuGetAudit=false -o next/publish/${{ matrix.name }}
+
+      - name: Assemble the platform dir
+        shell: bash
+        run: bash tools/build-next-dir.sh --platform ${{ matrix.name }} --publish next/publish/${{ matrix.name }} --out dist/${{ matrix.name }}
+
+      - name: Package (Linux)
+        if: matrix.name == 'linux-x64'
+        run: |
+          # tar keeps the exec bits through the artifact upload
+          tar -C dist -czf dist/linux-x64.tar.gz linux-x64
+
+      - name: Package (Windows)
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: Compress-Archive -Path dist/windows-x64 -DestinationPath dist/windows-x64.zip
+
+      # The launcher binary ships only when launcher/** changed (see prepare); the old job's cargo build is not run here.
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.prepare.outputs.publish_launcher == 'true'
+
+      - name: Build the launcher
+        if: needs.prepare.outputs.publish_launcher == 'true'
+        shell: bash
+        run: |
+          cargo build --release --manifest-path launcher/Cargo.toml
+          mkdir -p dist/launcher
+          if [ "${{ matrix.name }}" = windows-x64 ]; then cp launcher/target/release/recharge-launcher.exe dist/launcher/Recharge.exe
+          else cp launcher/target/release/recharge-launcher dist/launcher/recharge; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update-${{ matrix.name }}
+          path: |
+            dist/linux-x64.tar.gz
+            dist/windows-x64.zip
+            dist/launcher/*
+          if-no-files-found: error
+
   publish:
-    needs: [prepare, build]
+    needs: [prepare, build, build-next]
+    # Whichever build job ran must have succeeded; the other one is skipped.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.build.result != 'failure' && needs.build-next.result != 'failure' && (needs.build.result == 'success' || needs.build-next.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

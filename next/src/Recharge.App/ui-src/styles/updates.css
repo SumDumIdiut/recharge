@@ -1,0 +1,32 @@
+/* The "update ready" bar at the top of the main column. */
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--green) 14%, var(--panel));
+  border-bottom: 1px solid var(--green-dim);
+  color: var(--text);
+}
+
+.update-bar[hidden] {
+  display: none;
+}
+
+.update-bar > svg {
+  flex: none;
+  color: var(--green);
+}
+
+.update-bar-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-bar-close {
+  flex: none;
+}

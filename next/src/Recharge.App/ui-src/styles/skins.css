@@ -1,0 +1,49 @@
+/* The Skins page's picker (skins/picker.ts): a stage that plays the chosen skin, and a grid of every skin you have. */
+.skin-picker { display: grid; gap: 18px; }
+
+.sp-stage { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 24px; align-items: center; padding: 20px; overflow: hidden; position: relative; }
+.sp-stage::before { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(60% 80% at 18% 60%, color-mix(in srgb, var(--green) 16%, transparent), transparent 70%); }
+.sp-stage-art { position: relative; height: 300px; border-radius: var(--radius); overflow: hidden;
+  background: linear-gradient(180deg, #0d1a12 0%, #10241a 70%, #0a140e 100%);
+  background-image: linear-gradient(rgba(249, 255, 228, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(249, 255, 228, .045) 1px, transparent 1px), linear-gradient(180deg, #0d1a12 0%, #10241a 70%, #0a140e 100%);
+  background-size: 24px 24px, 24px 24px, auto; border: 1px solid var(--line); }
+.sp-canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; z-index: 1; }
+.sp-floor { position: absolute; left: 10%; right: 10%; bottom: 7%; height: 10px; border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(65, 248, 141, .35), transparent); filter: blur(1px); }
+.sp-stage.is-vanilla .sp-canvas { display: none; }
+.sp-stage.is-vanilla .sp-stage-art::after { content: ''; position: absolute; inset: 30% 35%; opacity: .25;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f9ffe4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4 21c0-4 3.5-7 8-7s8 3 8 7'/%3E%3C/svg%3E") center / contain no-repeat; }
+
+.sp-stage-info { position: relative; display: grid; gap: 10px; align-content: center; min-width: 0; }
+.sp-eyebrow { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
+.sp-eyebrow.is-worn { color: var(--green); }
+.sp-title { margin: 0; font-size: 34px; line-height: 1.1; overflow-wrap: anywhere; }
+.sp-note { margin: 0; }
+.sp-rows { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-rows .chip[disabled] { opacity: .35; cursor: default; }
+.sp-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
+.sp-worn { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border-radius: var(--radius);
+  color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 45%, transparent); background: color-mix(in srgb, var(--green) 10%, transparent); }
+
+.sp-head { display: flex; align-items: baseline; gap: 10px; }
+.sp-heading { margin: 0; font-size: 22px; color: var(--green); }
+.sp-count { color: var(--text-dim); }
+.sp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; }
+.sp-tile { position: relative; display: grid; gap: 8px; padding: 10px; border-radius: var(--radius); cursor: pointer; text-align: center;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text); font: inherit; transition: border-color .12s ease, transform .12s ease; }
+.sp-tile:hover { border-color: var(--line-hi); transform: translateY(-2px); }
+.sp-tile:focus-visible { outline: none; border-color: var(--green); }
+.sp-tile.is-selected { border-color: var(--green); box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 30%, transparent); }
+.sp-tile.is-worn::after { content: '✓'; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--green); color: #0c1a10; font-size: 14px; font-weight: 700; }
+.sp-tile-art { aspect-ratio: 1; display: grid; place-items: center; border-radius: var(--radius-sm); overflow: hidden;
+  background: linear-gradient(180deg, #0d1a12, #10241a); }
+.sp-tile-art canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+.sp-vanilla { color: var(--text-dim); opacity: .7; }
+.sp-vanilla.is-empty { opacity: .35; }
+.sp-tile-name { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-tile-badge { position: absolute; top: 6px; left: 6px; }
+
+@media (max-width: 760px) { .sp-stage { grid-template-columns: 1fr; } .sp-stage-art { height: 220px; } }
+@media (prefers-reduced-motion: reduce) { .sp-tile { transition: none; } .sp-tile:hover { transform: none; } }

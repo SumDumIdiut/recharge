@@ -1,0 +1,15 @@
+/* Create page. */
+.create-tab { display: flex; flex-direction: column; gap: var(--gap); }
+.create-card { position: relative; }
+.create-card[hidden] { display: none; }
+.create-meta { display: flex; gap: 8px; align-items: center; margin-top: 2px; }
+.create-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.create-card .btn { height: 32px; padding: 0 12px; font-size: 18px; }
+.create-card .card-media { cursor: default; }
+.card-media .card-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.template-banner { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.template-banner .empty-icon { margin: 0; flex: none; }
+.template-copy { flex: 1; min-width: 240px; }
+.template-copy .panel-title { margin-bottom: 2px; }
+.template-copy p { margin: 0; }
+.template-banner .create-actions { margin: 0; }

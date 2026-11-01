@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The app ⇄ game channel (task N3). Shared by the app and RechargeLoader 2, so netstandard2.1 with no packages. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Recharge.Link</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Recharge.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recharge.Core/Recharge.Core.csproj" />
+  </ItemGroup>
+</Project>

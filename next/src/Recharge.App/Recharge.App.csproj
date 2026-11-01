@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Recharge.App</RootNamespace>
+    <AssemblyName>Recharge.App</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>0.1.0</Version>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <!-- lets `dotnet publish -r win-x64` run from Linux -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ApplicationIcon Condition="Exists('$(MSBuildProjectDirectory)/Windows/recharge.ico')">Windows/recharge.ico</ApplicationIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <!-- a GUI exe: no console window; the WebView2 loader DLL ships beside it -->
+    <OutputType>WinExe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recharge.Core/Recharge.Core.csproj" />
+    <ProjectReference Include="../Recharge.Net/Recharge.Net.csproj" />
+    <ProjectReference Include="../Recharge.Link/Recharge.Link.csproj" />
+    <ProjectReference Include="../Recharge.Patcher/Recharge.Patcher.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Core API only (no WinForms/WPF), used by the plain Win32 shell in Windows/ -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" PrivateAssets="all" />
+  </ItemGroup>
+  <!-- The package's targets also reference its WPF and WinForms assemblies; the shell uses neither (plain Win32 + Core API), so drop them. -->
+  <Target Name="DropWebView2Ui" BeforeTargets="ResolveAssemblyReferences;ResolveAssemblyReferencesDesignTime;FindReferenceAssembliesForReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="$([System.String]::Copy('%(Filename)').EndsWith('WebView2.Wpf')) Or $([System.String]::Copy('%(Filename)').EndsWith('WebView2.WinForms'))" />
+    </ItemGroup>
+  </Target>
+  <ItemGroup>
+    <Content Include="ui/**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../assets/logo.png" Link="icon.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

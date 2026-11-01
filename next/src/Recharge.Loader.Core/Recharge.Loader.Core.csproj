@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- RechargeLoader 2's Unity-free logic (task N6): mod discovery, version checks, ordering, event bus, built-in handover. Unit-tested. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Recharge.Loader.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recharge.Core/Recharge.Core.csproj" />
+  </ItemGroup>
+</Project>

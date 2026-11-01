@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- RechargeLoader 2's Unity runtime (task N6): bootstrap, host, ticker; the logic lives in Recharge.Loader.Core.
+       Unity comes from the game's own DLLs, referenced in place (never copied); without the game this project builds nothing. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>Recharge.Loader</RootNamespace>
+    <Nullable>disable</Nullable>
+    <NoWarn>CS0649</NoWarn>
+    <GameManagedDir Condition="'$(GameManagedDir)' == ''">$(HOME)/.local/share/Steam/steamapps/common/IGTAP an Incremental Game That's Also a Platformer/IGTAPfullGame_Data/Managed</GameManagedDir>
+    <HasGame Condition="Exists('$(GameManagedDir)/UnityEngine.CoreModule.dll')">true</HasGame>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recharge.Loader.Core/Recharge.Loader.Core.csproj" />
+    <ProjectReference Include="../Recharge.ModApi/Recharge.ModApi.csproj" />
+    <ProjectReference Include="../Recharge.Module.Maps/Recharge.Module.Maps.csproj" />
+    <ProjectReference Include="../Recharge.Module.Skins/Recharge.Module.Skins.csproj" />
+    <ProjectReference Include="../Recharge.Module.Net/Recharge.Module.Net.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(HasGame)' == 'true'">
+    <Reference Include="Assembly-CSharp"><HintPath>$(GameManagedDir)/Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(GameManagedDir)/UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameManagedDir)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(GameManagedDir)/UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(GameManagedDir)/UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(GameManagedDir)/UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AnimationModule"><HintPath>$(GameManagedDir)/UnityEngine.AnimationModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(GameManagedDir)/Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.Localization"><HintPath>$(GameManagedDir)/Unity.Localization.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.InputSystem"><HintPath>$(GameManagedDir)/Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>$(GameManagedDir)/Newtonsoft.Json.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(HasGame)' != 'true'">
+    <Compile Remove="**/*.cs" />
+  </ItemGroup>
+</Project>
