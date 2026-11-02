@@ -142,7 +142,7 @@ export const homePage: PageModule = {
         onChange: (v) => { selectedMapId = v; },
       }
     );
-    const modded = button('Play modded', { kind: 'secondary', icon: 'sparkles', title: 'Starts the game with the selected map and mods', onClick: () => {
+    const modded = button('Play modded', { kind: 'secondary', icon: 'sparkles', title: installedMaps.length > 0 ? 'Starts the game with the selected map and mods' : 'Install a map first', disabled: installedMaps.length === 0, onClick: () => {
       const map = installedMaps.find((m) => m.id === selectedMapId);
       launch(true, map?.installed?.folder);
     } });
