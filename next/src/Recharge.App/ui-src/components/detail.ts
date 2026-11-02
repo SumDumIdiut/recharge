@@ -8,7 +8,7 @@ import { skinApplyButton } from '../lib/skinApply.js';
 import { backgroundApplyButton } from '../backgrounds/applyButton.js';
 import { imageBlobUrl } from '../lib/hub.js';
 import { actionsOf, itemWebUrl, KIND_LABEL, type Item } from '../lib/library.js';
-import { loadComments, type Comment } from '../lib/hub.js';
+import { loadComments, postComment, type Comment } from '../lib/hub.js';
 
 function date(value: string): string {
   const ms = Date.parse(value);
@@ -116,23 +116,97 @@ function commentsSection(item: Item): HTMLElement {
   const body = h('div', { className: 'comment-list' });
   body.appendChild(h('p', { className: 'dim', text: 'Loading comments…' }));
   section.appendChild(body);
+
+  let comments: Comment[] = [];
+  let replyingTo: number | null = null;
+  let replyingEl: HTMLElement | null = null;
+
+  function render() {
+    const topLevel = comments.filter((c) => c.replyTo === null);
+    const byParent = new Map<number, Comment[]>();
+    for (const c of comments) if (c.replyTo !== null) {
+      const list = byParent.get(c.replyTo) ?? [];
+      list.push(c);
+      byParent.set(c.replyTo, list);
+    }
+
+    body.replaceChildren();
+
+    const renderComment = (c: Comment, depth = 0): HTMLElement => {
+      const row = h('div', { className: 'comment' + (depth > 0 ? ' reply' : '') });
+      row.style.paddingLeft = (depth * 20) + 'px';
+      const head = h('div', { className: 'comment-head' }, h('strong', {}, authorName(c.author, c.authorColor)));
+      const when = date(c.time);
+      if (when) head.appendChild(h('span', { className: 'dim', text: when }));
+      row.appendChild(head);
+      row.appendChild(h('div', { className: 'comment-text', text: c.text }));
+
+      const actions = h('div', { className: 'comment-actions' });
+      const replyBtn = h('a', { className: 'link-btn', text: 'Reply', attrs: { href: '#' } });
+      replyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (replyingTo === c.id && replyingEl) {
+          replyingEl.remove(); replyingEl = null; replyingTo = null;
+        } else {
+          if (replyingEl) { replyingEl.remove(); replyingEl = null; }
+          replyingTo = c.id;
+          replyingEl = commentInput((text) => {
+            void postComment(item.kind, item.id, text, c.id).then(() => {
+              replyingTo = null; replyingEl = null;
+              void loadComments(item.kind, item.id).then((cs) => { comments = cs; render(); });
+            }).catch((err) => toast(describeError(err), 'error'));
+          }, 'Reply to ' + c.author + '…');
+          row.parentNode?.insertBefore(replyingEl, row.nextSibling);
+        }
+      });
+      actions.appendChild(replyBtn);
+      row.appendChild(actions);
+
+      const kids = byParent.get(c.id);
+      if (kids?.length) {
+        const kidsEl = h('div', { className: 'comment-replies' });
+        for (const kid of kids) kidsEl.appendChild(renderComment(kid, depth + 1));
+        row.appendChild(kidsEl);
+      }
+      return row;
+    };
+
+    for (const c of topLevel) body.appendChild(renderComment(c));
+
+    const topInput = commentInput((text) => {
+      void postComment(item.kind, item.id, text).then(() => {
+        void loadComments(item.kind, item.id).then((cs) => { comments = cs; render(); });
+      }).catch((err) => toast(describeError(err), 'error'));
+    }, 'Add a comment…');
+    body.appendChild(topInput);
+  }
+
+  function commentInput(onSubmit: (text: string) => void, placeholder: string): HTMLElement {
+    const wrap = h('div', { className: 'comment-input' });
+    const textarea = h('textarea', {
+      attrs: { placeholder, rows: '2' },
+    });
+    textarea.style.width = '100%';
+    textarea.style.fontFamily = 'inherit';
+    textarea.style.fontSize = 'inherit';
+    const submit = h('button', { className: 'btn btn-primary', text: 'Post', attrs: { type: 'button' } });
+    submit.disabled = true;
+    let sending = false;
+    const enable = () => { submit.disabled = !textarea.value.trim() || sending; };
+    textarea.addEventListener('input', enable);
+    submit.addEventListener('click', () => {
+      const text = textarea.value.trim();
+      if (!text || sending) return;
+      sending = true; submit.disabled = true; submit.textContent = 'Posting…';
+      onSubmit(text).finally(() => { sending = false; submit.disabled = false; submit.textContent = 'Post'; textarea.value = ''; enable(); });
+    });
+    wrap.appendChild(textarea);
+    wrap.appendChild(submit);
+    return wrap;
+  }
+
   loadComments(item.kind, item.id).then(
-    (comments: Comment[]) => {
-      body.replaceChildren();
-      if (comments.length === 0) {
-        body.appendChild(h('p', { className: 'dim', text: 'No comments yet.' }));
-        return;
-      }
-      for (const comment of comments) {
-        const row = h('div', { className: 'comment' });
-        const head = h('div', { className: 'comment-head' }, h('strong', {}, authorName(comment.author, comment.authorColor)));
-        const when = date(comment.time);
-        if (when) head.appendChild(h('span', { className: 'dim', text: when }));
-        row.appendChild(head);
-        row.appendChild(h('div', { className: 'comment-text', text: comment.text }));
-        body.appendChild(row);
-      }
-    },
+    (cs) => { comments = cs; render(); },
     (error) => {
       console.error('comments failed for ' + item.kind + '/' + item.id + ': ' + describeError(error));
       body.replaceChildren(h('p', { className: 'dim', text: "Comments couldn't be loaded" }));

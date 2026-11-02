@@ -50,7 +50,7 @@ function paintGame(info: GameInfo | null, error?: unknown): void {
 }
 
 let playButtons: HTMLButtonElement[] = [];
-let moddedButton: HTMLButtonElement | null = null;
+let moddedControl: HTMLElement | null = null;
 let launching = false;
 let installedMaps: Item[] = [];
 let selectedMapId: string | null = null;
@@ -94,12 +94,12 @@ async function loadInstalledMapsForPlay(): Promise<Item[]> {
 
 /** Play modded is only offered when a loader can provide the modded build; the reason shows on hover otherwise. */
 function paintMode(): void {
-  const target = moddedButton;
+  const target = moddedControl;
   if (!target) return;
   call<LoaderMode>('loader.mode', {}).then((mode) => {
-    if (target !== moddedButton || launching) return;
-    target.disabled = !mode.canModded;
-    target.title = mode.canModded ? (mode.loader === 'legacy' ? 'Uses the loader the current Recharge app installed' : 'Starts the game with Recharge') : mode.detail;
+    if (target !== moddedControl || launching) return;
+    (target as HTMLSelectElement).disabled = !mode.canModded;
+    target.title = mode.canModded ? (mode.loader === 'legacy' ? 'Uses the loader the current Recharge app installed' : 'Starts the game with mods') : mode.detail;
   }, () => { /* the game wasn't found: the status row already says so */ });
 }
 
@@ -121,7 +121,6 @@ export const homePage: PageModule = {
 
     // Load installed maps early so the modded-play dropdown can be populated.
     installedMaps = await loadInstalledMapsForPlay();
-    selectedMapId = installedMaps.length > 0 ? installedMaps[0].id : null;
 
     const hero = h('section', { className: 'home-hero panel' });
     hero.appendChild(
@@ -133,25 +132,26 @@ export const homePage: PageModule = {
     const copy = h('div', { className: 'hero-copy' });
     const actions = h('div', { className: 'hero-actions' });
     const vanilla = button('Play', { kind: 'primary', icon: 'play', title: 'Starts the game without mods', onClick: () => launch(false) });
-    const moddedGroup = h('div', { className: 'modded-play', attrs: { style: 'display:flex; gap:8px; align-items:center' } });
-    const mapSelect = selectControl(
-      installedMaps.map((m) => ({ value: m.id, label: m.name })),
-      {
-        label: 'Map',
-        value: selectedMapId,
-        onChange: (v) => { selectedMapId = v; },
-      }
-    );
-    const modded = button('Play modded', { kind: 'secondary', icon: 'sparkles', title: installedMaps.length > 0 ? 'Starts the game with the selected map and mods' : 'Install a map first', disabled: installedMaps.length === 0, onClick: () => {
-      const map = installedMaps.find((m) => m.id === selectedMapId);
-      launch(true, map?.installed?.folder);
-    } });
-    moddedButton = modded;
-    playButtons = [vanilla, modded];
-    moddedGroup.appendChild(mapSelect);
-    moddedGroup.appendChild(modded);
+    const moddedMapOptions = [
+      { value: '__base__', label: 'Base Game' },
+      ...installedMaps.map((m) => ({ value: m.id, label: m.name })),
+    ];
+    const moddedSelect = selectControl(moddedMapOptions, {
+      label: 'Play modded',
+      value: '__base__',
+      onChange: (v) => {
+        if (v === '__base__') {
+          launch(true);
+          return;
+        }
+        const map = installedMaps.find((m) => m.id === v);
+        launch(true, map?.installed?.folder);
+      },
+    });
+    playButtons = [vanilla, moddedSelect.querySelector('select') as HTMLButtonElement];
+    moddedControl = moddedSelect.querySelector('select') as HTMLSelectElement;
     actions.appendChild(vanilla);
-    actions.appendChild(moddedGroup);
+    actions.appendChild(moddedSelect);
     paintMode();
     copy.appendChild(actions);
 
@@ -192,7 +192,7 @@ export const homePage: PageModule = {
     continueHost = updatesHost = newHost = null;
     gameRow = null;
     playButtons = [];
-    moddedButton = null;
+    moddedControl = null;
     filterNote = null;
     noMatches = null;
   },
