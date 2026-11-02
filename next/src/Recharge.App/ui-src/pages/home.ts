@@ -8,7 +8,6 @@ import { toast } from '../components/toast.js';
 import { emptyState, errorState } from '../components/emptyState.js';
 import { itemCard, imagesSettled, KIND_ICON } from '../components/itemCard.js';
 import { cardGrid } from '../components/cardGrid.js';
-import { selectControl } from '../components/select.js';
 import { loadInstalled, loadKind } from '../lib/hub.js';
 import {
   annotate, installedItems, isEmbeddedMod, itemRoute, KINDS, newestAcross, updatesOf,
@@ -50,55 +49,32 @@ function paintGame(info: GameInfo | null, error?: unknown): void {
 }
 
 let playButtons: HTMLButtonElement[] = [];
-let moddedControl: HTMLElement | null = null;
+let moddedButton: HTMLButtonElement | null = null;
 let launching = false;
-let installedMaps: Item[] = [];
-let selectedMapId: string | null = null;
 
 interface LoaderMode { modded: boolean; loader: string; canModded: boolean; detail: string }
 
-/** Starts IGTAP with the vanilla or the modded build (game.launch switches the game folder to it first).
- *  When `mapFolder` is given, also sends a `play.map` intent so the map loads automatically. */
-function launch(modded: boolean, mapFolder?: string): void {
+/** Starts IGTAP with the vanilla or the modded build (game.launch switches the game folder to it first). */
+function launch(modded: boolean): void {
   if (launching) return;
   launching = true;
   for (const b of playButtons) b.disabled = true;
-  const args: Record<string, unknown> = { modded };
-  if (mapFolder) {
-    args.intent = { kind: 'play.map', args: { folder: mapFolder } };
-  }
-  call<{ launched?: boolean; build?: string }>('game.launch', args).then((reply) => {
+  call<{ launched?: boolean; build?: string }>('game.launch', { modded }).then((reply) => {
     toast(reply && reply.launched === false ? 'The game is already running.' : 'Starting IGTAP ' + (modded ? 'modded' : 'vanilla') + '…', 'success');
   }, (error) => {
     toast('Could not start the game: ' + describeError(error), 'error');
   }).finally(() => {
-    // Steam takes a moment to start the game; keep the buttons resting so a double click doesn't launch twice.
     window.setTimeout(() => { launching = false; for (const b of playButtons) b.disabled = false; paintMode(); }, 4000);
   });
 }
 
-/** Loads installed maps for the modded-play dropdown. */
-async function loadInstalledMapsForPlay(): Promise<Item[]> {
-  try {
-    const installed = await loadInstalled(false);
-    const lists = {} as Lists;
-    await Promise.all(KINDS.map(kind =>
-      loadKind(kind, false).then(items => { lists[kind] = items; })
-    ));
-    const mine = installedItems(installed, lists);
-    return mine.filter((item) => item.kind === 'maps');
-  } catch {
-    return [];
-  }
-}
-
 /** Play modded is only offered when a loader can provide the modded build; the reason shows on hover otherwise. */
 function paintMode(): void {
-  const target = moddedControl;
+  const target = moddedButton;
   if (!target) return;
   call<LoaderMode>('loader.mode', {}).then((mode) => {
-    if (target !== moddedControl || launching) return;
-    (target as HTMLSelectElement).disabled = !mode.canModded;
+    if (target !== moddedButton || launching) return;
+    target.disabled = !mode.canModded;
     target.title = mode.canModded ? (mode.loader === 'legacy' ? 'Uses the loader the current Recharge app installed' : 'Starts the game with mods') : mode.detail;
   }, () => { /* the game wasn't found: the status row already says so */ });
 }
@@ -119,9 +95,6 @@ export const homePage: PageModule = {
     });
     root = page;
 
-    // Load installed maps early so the modded-play dropdown can be populated.
-    installedMaps = await loadInstalledMapsForPlay();
-
     const hero = h('section', { className: 'home-hero panel' });
     hero.appendChild(
       h('img', {
@@ -132,26 +105,11 @@ export const homePage: PageModule = {
     const copy = h('div', { className: 'hero-copy' });
     const actions = h('div', { className: 'hero-actions' });
     const vanilla = button('Play', { kind: 'primary', icon: 'play', title: 'Starts the game without mods', onClick: () => launch(false) });
-    const moddedMapOptions = [
-      { value: '__base__', label: 'Base Game' },
-      ...installedMaps.map((m) => ({ value: m.id, label: m.name })),
-    ];
-    const moddedSelect = selectControl(moddedMapOptions, {
-      label: 'Play modded',
-      value: '__base__',
-      onChange: (v) => {
-        if (v === '__base__') {
-          launch(true);
-          return;
-        }
-        const map = installedMaps.find((m) => m.id === v);
-        launch(true, map?.installed?.folder);
-      },
-    });
-    playButtons = [vanilla, moddedSelect.querySelector('select') as HTMLButtonElement];
-    moddedControl = moddedSelect.querySelector('select') as HTMLSelectElement;
+    const modded = button('Play modded', { kind: 'secondary', icon: 'sparkles', title: 'Starts the game with mods', onClick: () => launch(true) });
+    playButtons = [vanilla, modded];
+    moddedButton = modded;
     actions.appendChild(vanilla);
-    actions.appendChild(moddedSelect);
+    actions.appendChild(modded);
     paintMode();
     copy.appendChild(actions);
 
@@ -192,7 +150,7 @@ export const homePage: PageModule = {
     continueHost = updatesHost = newHost = null;
     gameRow = null;
     playButtons = [];
-    moddedControl = null;
+    moddedButton = null;
     filterNote = null;
     noMatches = null;
   },
