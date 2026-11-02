@@ -128,13 +128,12 @@ export const homePage: PageModule = {
     page.content.appendChild(noMatches);
 
     const grid = h('div', { className: 'home-grid' });
-    continueHost = card('Continue', 'continue installed maps resume library');
+    continueHost = card('Your maps', 'your installed maps');
     updatesHost = card('Updates available', 'updates available installed library refresh');
     newHost = card('New on the hub', 'new on the hub newest recent items');
     newHost.classList.add('home-card-wide');
-    for (const host of [continueHost, updatesHost, newHost]) host.appendChild(loadingRow());
+    for (const host of [continueHost, newHost]) host.appendChild(loadingRow());
     grid.appendChild(continueHost);
-    grid.appendChild(updatesHost);
     grid.appendChild(newHost);
     page.content.appendChild(grid);
 
@@ -221,11 +220,11 @@ async function loadData(token: number): Promise<void> {
   if (token !== generation) return;
 
   const mine = installedItems(installed, lists);
-  const maps = mine.filter((item) => item.kind === 'maps').slice(0, 3);
-  if (maps.length > 0) {
-    fillCard(continueHost, ...maps.map((item) => miniRow(item, item.local ? 'Local map' : 'Map · rev ' + (item.installed?.revision ?? '?'))));
+  const myMaps = mine.filter((item) => item.kind === 'maps');
+  if (myMaps.length > 0) {
+    fillCard(continueHost, ...myMaps.map((item) => miniRow(item, item.local ? 'Local map' : 'Map · rev ' + (item.installed?.revision ?? '?'))));
   } else {
-    fillCard(continueHost, emptyState('clock', 'Nothing to continue yet', 'Install a map from the Library and it will show up here.', {
+    fillCard(continueHost, emptyState('clock', 'No maps yet', 'Install maps from the Library to play them here.', {
       label: 'Browse library', kind: 'secondary', onClick: () => go('#/library'),
     }));
   }
@@ -235,10 +234,7 @@ async function loadData(token: number): Promise<void> {
     const head = h('p', { className: 'updates-count' }, h('strong', { text: String(updates.length) }), updates.length === 1 ? ' update available' : ' updates available');
     const more = h('a', { className: 'link-btn', attrs: { href: '#/library?mode=updates' }, text: 'See all updates' });
     fillCard(updatesHost, head, ...updates.slice(0, 3).map((item) => miniRow(item, item.kind === 'maps' ? 'Revision ' + (item.installed?.revision ?? '?') + ' → ' + item.revision : (item.installed?.version || '?') + ' → ' + item.version)), more);
-  } else {
-    fillCard(updatesHost, emptyState('download', 'You are up to date', 'Updates for installed maps and mods will appear here.', {
-      label: 'Your maps', kind: 'secondary', onClick: () => go('#/maps'),
-    }));
+    grid.appendChild(updatesHost);
   }
 
   const annotated = {} as Lists;
