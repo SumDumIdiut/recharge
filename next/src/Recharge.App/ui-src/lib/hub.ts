@@ -102,13 +102,51 @@ export function peekLists(): Lists {
   return out;
 }
 
-export interface Comment { author: string; authorColor: string | null; text: string; time: string; replyTo: number | null }
+export interface Comment { id: number; author: string; authorColor: string | null; text: string; time: string; replyTo: number | null }
 
 /** Read comments, tolerating several response shapes. Throws when the shape is unexpected. */
 export async function loadComments(kind: Kind, id: string): Promise<Comment[]> {
   const reply = await call<{ status: number; body: string }>('hub.get', { path: '/api/' + kind + '/' + id + '/comments' });
   if (reply.status !== 200) throw new Error('the hub answered ' + reply.status);
   return parseComments(JSON.parse(reply.body));
+}
+
+/** Post a comment (or a reply when parentId is given). */
+export async function postComment(kind: Kind, id: string, text: string, parentId: number | null = null): Promise<Comment> {
+  const body: Record<string, unknown> = { text };
+  if (parentId !== null) body.parent_id = parentId;
+  const reply = await call<{ status: number; body: string }>('hub.request', {
+    method: 'POST',
+    path: '/api/' + kind + '/' + id + '/comments',
+    body,
+  });
+  if (reply.status !== 200 && reply.status !== 201) throw new Error('the hub answered ' + reply.status);
+  return parseComment(JSON.parse(reply.body));
+}
+
+function parseComment(json: unknown): Comment {
+  const c = json as Record<string, unknown>;
+  const pick = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = c[key];
+      if (typeof value === 'string' && value) return value;
+    }
+    return '';
+  };
+  const text = pick('text', 'body', 'content', 'message', 'comment');
+  if (!text) throw new Error('comment has no text');
+  const who = c.author && typeof c.author === 'object' ? c.author as Record<string, unknown> : null;
+  const whoName = who && typeof who.username === 'string' ? who.username : '';
+  const whoColor = who && typeof who.name_color === 'string' ? who.name_color : null;
+  const id = typeof c.id === 'number' ? c.id : typeof c.id === 'string' ? parseInt(c.id, 10) : 0;
+  return {
+    id,
+    author: whoName || pick('author', 'username', 'user', 'name', 'uploader') || 'Someone',
+    authorColor: whoColor,
+    text,
+    time: pick('createdAt', 'created_at', 'time', 'date', 'updatedAt'),
+    replyTo: typeof c.parent_id === 'number' ? c.parent_id : null,
+  };
 }
 
 export function parseComments(json: unknown): Comment[] {
