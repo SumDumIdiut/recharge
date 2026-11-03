@@ -6,7 +6,7 @@ import { pageTemplate } from '../components/page.js';
 import { button } from '../components/button.js';
 import { toast } from '../components/toast.js';
 import { emptyState, errorState } from '../components/emptyState.js';
-import { imagesSettled, itemMedia, KIND_ICON } from '../components/itemCard.js';
+import { authorName, imagesSettled, itemMedia, KIND_ICON } from '../components/itemCard.js';
 import { loadInstalled, loadKind } from '../lib/hub.js';
 import {
   annotate, installedItems, isEmbeddedMod, itemRoute, KINDS, newestAcross, updatesOf,
@@ -128,6 +128,7 @@ export const homePage: PageModule = {
     const grid = h('div', { className: 'home-grid' });
     continueHost = card('New on the hub', 'new on the hub newest recent items');
     updatesHost = card('Updates available', 'updates available installed library refresh');
+    continueHost.classList.add('home-card-wide');
     continueHost.appendChild(loadingRow());
     grid.appendChild(continueHost);
     page.content.appendChild(grid);
@@ -199,13 +200,19 @@ function fillCard(host: HTMLElement | null, ...nodes: Node[]): void {
   host.replaceChildren(...(title ? [title] : []), ...nodes);
 }
 
-/** A New-on-the-hub tile: just the item's picture, with the name on hover. A 3×2 grid of these keeps the card short. */
+/** A New-on-the-hub tile: the item's picture, then its name, creator and a two-line description. The card is full
+ *  width and the tiles sit three per row, so two rows of them fill the home screen's what's-new area. */
 function hubTile(item: Item): HTMLElement {
   const tile = h('a', {
     className: 'hub-tile',
-    attrs: { href: itemRoute(item), 'aria-label': item.name, title: item.name },
+    attrs: { href: itemRoute(item), 'aria-label': item.name },
   });
   tile.appendChild(itemMedia(item));
+  const body = h('div', { className: 'hub-tile-body' });
+  body.appendChild(h('div', { className: 'hub-tile-name', text: item.name, title: item.name }));
+  if (item.author) body.appendChild(authorName(item.author, item.color, 'hub-tile-author'));
+  if (item.description) body.appendChild(h('p', { className: 'hub-tile-desc', text: item.description, title: item.description }));
+  tile.appendChild(body);
   return tile;
 }
 
