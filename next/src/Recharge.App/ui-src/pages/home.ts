@@ -235,7 +235,7 @@ async function loadData(token: number): Promise<void> {
 
   const annotated = {} as Lists;
   for (const kind of KINDS) annotated[kind] = lists[kind] ? annotate((lists[kind] as Item[]).filter((item) => !isEmbeddedMod(item)), installed) : null;
-  const fresh = newestAcross(annotated, 6);
+  const fresh = newestAcross(annotated, 12);
   if (fresh.length > 0) {
     const tiles = h('div', { className: 'hub-tile-grid' });
     for (const item of fresh) tiles.appendChild(hubTile(item));
