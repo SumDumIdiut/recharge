@@ -6,8 +6,7 @@ import { pageTemplate } from '../components/page.js';
 import { button } from '../components/button.js';
 import { toast } from '../components/toast.js';
 import { emptyState, errorState } from '../components/emptyState.js';
-import { itemCard, imagesSettled, KIND_ICON } from '../components/itemCard.js';
-import { cardGrid } from '../components/cardGrid.js';
+import { imagesSettled, itemMedia, KIND_ICON } from '../components/itemCard.js';
 import { loadInstalled, loadKind } from '../lib/hub.js';
 import {
   annotate, installedItems, isEmbeddedMod, itemRoute, KINDS, newestAcross, updatesOf,
@@ -21,7 +20,6 @@ let filterNote: HTMLElement | null = null;
 let noMatches: HTMLElement | null = null;
 let continueHost: HTMLElement | null = null;
 let updatesHost: HTMLElement | null = null;
-let newHost: HTMLElement | null = null;
 let generation = 0;
 
 function paintGame(info: GameInfo | null, error?: unknown): void {
@@ -128,13 +126,10 @@ export const homePage: PageModule = {
     page.content.appendChild(noMatches);
 
     const grid = h('div', { className: 'home-grid' });
-    continueHost = card('Your maps', 'your installed maps');
+    continueHost = card('New on the hub', 'new on the hub newest recent items');
     updatesHost = card('Updates available', 'updates available installed library refresh');
-    newHost = card('New on the hub', 'new on the hub newest recent items');
-    newHost.classList.add('home-card-wide');
-    for (const host of [continueHost, newHost]) host.appendChild(loadingRow());
+    continueHost.appendChild(loadingRow());
     grid.appendChild(continueHost);
-    grid.appendChild(newHost);
     page.content.appendChild(grid);
 
     el.appendChild(page);
@@ -146,7 +141,7 @@ export const homePage: PageModule = {
   unmount(): void {
     generation += 1;
     root = null;
-    continueHost = updatesHost = newHost = null;
+    continueHost = updatesHost = null;
     gameRow = null;
     playButtons = [];
     moddedButton = null;
@@ -204,6 +199,16 @@ function fillCard(host: HTMLElement | null, ...nodes: Node[]): void {
   host.replaceChildren(...(title ? [title] : []), ...nodes);
 }
 
+/** A New-on-the-hub tile: just the item's picture, with the name on hover. A 3×2 grid of these keeps the card short. */
+function hubTile(item: Item): HTMLElement {
+  const tile = h('a', {
+    className: 'hub-tile',
+    attrs: { href: itemRoute(item), 'aria-label': item.name, title: item.name },
+  });
+  tile.appendChild(itemMedia(item));
+  return tile;
+}
+
 async function loadData(token: number): Promise<void> {
   const lists = { maps: null, mods: null, skins: null, backgrounds: null, playlists: null, games: null } as Lists;
   const failed: Kind[] = [];
@@ -220,13 +225,16 @@ async function loadData(token: number): Promise<void> {
   if (token !== generation) return;
 
   const mine = installedItems(installed, lists);
-  const myMaps = mine.filter((item) => item.kind === 'maps');
-  if (myMaps.length > 0) {
-    fillCard(continueHost, ...myMaps.map((item) => miniRow(item, item.local ? 'Local map' : 'Map · rev ' + (item.installed?.revision ?? '?'))));
+
+  const annotated = {} as Lists;
+  for (const kind of KINDS) annotated[kind] = lists[kind] ? annotate((lists[kind] as Item[]).filter((item) => !isEmbeddedMod(item)), installed) : null;
+  const fresh = newestAcross(annotated, 6);
+  if (fresh.length > 0) {
+    const tiles = h('div', { className: 'hub-tile-grid' });
+    for (const item of fresh) tiles.appendChild(hubTile(item));
+    fillCard(continueHost, tiles);
   } else {
-    fillCard(continueHost, emptyState('clock', 'No maps yet', 'Install maps from the Library to play them here.', {
-      label: 'Browse library', kind: 'secondary', onClick: () => go('#/library'),
-    }));
+    fillCard(continueHost, emptyState('sparkles', 'Nothing yet', 'New items from the hub will show up here.'));
   }
 
   const updates = updatesOf(mine);
@@ -235,16 +243,5 @@ async function loadData(token: number): Promise<void> {
     const more = h('a', { className: 'link-btn', attrs: { href: '#/library?mode=updates' }, text: 'See all updates' });
     fillCard(updatesHost, head, ...updates.slice(0, 3).map((item) => miniRow(item, item.kind === 'maps' ? 'Revision ' + (item.installed?.revision ?? '?') + ' → ' + item.revision : (item.installed?.version || '?') + ' → ' + item.version)), more);
     grid.appendChild(updatesHost);
-  }
-
-  const annotated = {} as Lists;
-  for (const kind of KINDS) annotated[kind] = lists[kind] ? annotate((lists[kind] as Item[]).filter((item) => !isEmbeddedMod(item)), installed) : null;
-  const fresh = newestAcross(annotated, 6);
-  if (fresh.length > 0) {
-    fillCard(newHost, cardGrid(fresh, (item) => itemCard(item), { minWidth: 180 }));
-  } else if (failed.length > 0) {
-    fillCard(newHost, errorState("The hub couldn't be reached.", () => { void loadData(token); }));
-  } else {
-    fillCard(newHost, emptyState('sparkles', 'Nothing yet', 'New items from the hub will show up here.'));
   }
 }

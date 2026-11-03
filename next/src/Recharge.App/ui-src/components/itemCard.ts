@@ -114,6 +114,17 @@ function hubMedia(item: Item, media: HTMLElement): HTMLElement {
   return box;
 }
 
+/** Just an item's picture (placeholder or gallery image) — no name, author or badges. Used by image-only tiles like home's "New on the hub". */
+export function itemMedia(item: Item): HTMLElement {
+  const media = h('div', { className: 'card-media kind-' + item.kind });
+  media.appendChild(kindPlaceholder(item.kind, ''));
+  if (item.gallery.length > 0 && !item.local) {
+    if (item.kind === 'skins') media.appendChild(skinMedia(item, media));
+    else media.appendChild(hubMedia(item, media));
+  }
+  return media;
+}
+
 /** A library card: image (or placeholder), name, author, kind and status badges. */
 export function itemCard(item: Item): HTMLElement {
   const card = h('a', {
@@ -153,7 +164,7 @@ export function imagesSettled(root: HTMLElement, ms: number): Promise<void> {
       const pending = Array.from(root.querySelectorAll('img')).filter(
         (image) => (image.getAttribute('src') || image.dataset.src) && !image.complete && !image.classList.contains('is-broken')
       );
-      quiet = pending.length === 0 && root.querySelector('.item-card, .mini-row') ? quiet + 1 : 0;
+      quiet = pending.length === 0 && root.querySelector('.item-card, .mini-row, .hub-tile') ? quiet + 1 : 0;
       if (quiet >= 3 || Date.now() - started > ms) {
         resolve();
         return;

@@ -316,6 +316,9 @@
 .home-card-wide { grid-column: 1 / -1; }
 .home-card[hidden], .no-matches[hidden], .filter-note[hidden] { display: none; }
 .home-card .empty-state { padding: 16px 10px; }
+.hub-tile-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.hub-tile { display: block; }
+.hub-tile .card-media { border-radius: var(--radius-sm); }
 .filter-note { margin: 0 0 10px; color: var(--green); }
 .no-matches { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; color: var(--text-dim); }
 .news-row { display: flex; align-items: center; gap: 10px; color: var(--green); }
