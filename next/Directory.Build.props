@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
+    <!-- Debug info inside each DLL: crash logs from players get file and line numbers, and there are no .pdb files to ship. -->
+    <DebugType>embedded</DebugType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

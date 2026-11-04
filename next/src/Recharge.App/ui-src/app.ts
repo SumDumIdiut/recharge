@@ -7,7 +7,6 @@ import { communityPage } from './pages/community.js';
 import { lobbiesPage } from './pages/lobbies.js';
 import { notebookPage } from './pages/notebook.js';
 import { settingsPage } from './pages/settings.js';
-import { playPage } from './pages/play.js';
 import './settings/boot.js';
 import { notFoundPage } from './pages/notFound.js';
 import { themeAllSelects } from './components/dropdown.js';
@@ -19,7 +18,6 @@ const routes: PageRegistry = {
   lobbies: lobbiesPage,
   notebook: notebookPage,
   settings: settingsPage,
-  play: playPage,
 };
 
 const outlet = document.getElementById('page') as HTMLElement;

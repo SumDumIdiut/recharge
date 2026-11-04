@@ -173,9 +173,6 @@ export function parseRoute(hash: string): ParsedRoute {
     }
     return base;
   }
-  if (first === 'play' && segments.length === 1) {
-    return { ...base, name: 'play', page: 'play', sidebar: '', params: { map: query.map ?? '', modded: query.modded ?? 'false' } };
-  }
   if (first === 'community') {
     if (segments.length === 1) {
       return {
@@ -386,7 +383,7 @@ export class Router {
       try {
         this.current.page.unmount?.();
       } catch (error) {
-        console.error('unmount failed', error);
+        console.error('unmount failed: ' + (error instanceof Error ? error.message : String(error)));
       }
     }
     this.previousHash = this.current ? this.current.key : '';
@@ -403,7 +400,8 @@ export class Router {
         await mounted;
       }
     } catch (error) {
-      console.error('mount failed for ' + route.hash, error);
+      // The bridge's console relay turns objects into {}, so log the message and stack as text.
+      console.error('mount failed for ' + route.hash + ': ' + (error instanceof Error ? error.message + '\n' + (error.stack || '') : String(error)));
       element.replaceChildren();
       const problem = document.createElement('div');
       problem.className = 'mount-error';

@@ -23,6 +23,12 @@ namespace Recharge.App.Updates
         public string Launch { get; set; } = "";
         public IReadOnlyList<UpdateManifest.UpdateFile> Files { get; set; } = Array.Empty<UpdateManifest.UpdateFile>();
 
+        /// <summary>
+        /// Whether this is a build of this app (Recharge.App.dll is in it). The stable channel still carries the old Tauri app, and
+        /// "beta also takes stable" would otherwise hand a Recharge install the old app as an "update".
+        /// </summary>
+        public bool IsRechargeApp => Files.Any(f => UpdateRules.IsAppAssembly(f.Path));
+
         /// <summary>Reads the manifest the launcher also reads: {format:1, channel, version, build, apiLevel, platforms:{id:{launch, files:[{path,size,sha256,component}]}}}.</summary>
         public static ManifestInfo Parse(string text, string platform)
         {
@@ -85,6 +91,25 @@ namespace Recharge.App.Updates
             if (other == null) return own;
             return other.Build > own.Build ? other : own;
         }
+
+        /// <summary>
+        /// A development build runs from the project's own bin/&lt;config&gt;/&lt;tfm&gt;[/&lt;rid&gt;] output. It must never update itself: the
+        /// self-updater would replace the build folder with whatever the channel carries (it once swapped in the old app).
+        /// </summary>
+        public static bool IsDevBuild(string appDir, Func<string, bool> fileExists)
+        {
+            DirectoryInfo? dir = new DirectoryInfo(Path.TrimEndingDirectorySeparator(appDir));
+            for (int up = 0; up < 5 && dir != null; up++, dir = dir.Parent)
+            {
+                if (fileExists(Path.Combine(dir.FullName, "Recharge.App.csproj"))) return true;
+            }
+            return false;
+        }
+
+        public static bool IsDevBuild() => IsDevBuild(AppContext.BaseDirectory, File.Exists);
+
+        /// <summary>The main assembly of this app, which only its own builds carry.</summary>
+        public static bool IsAppAssembly(string path) => string.Equals(path, "Recharge.App.dll", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>The launcher-side channel names; anything but beta is stable.</summary>
         public static string NormalizeChannel(string? channel) => string.Equals(channel?.Trim(), "beta", StringComparison.OrdinalIgnoreCase) ? "beta" : "stable";

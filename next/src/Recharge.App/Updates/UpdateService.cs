@@ -73,6 +73,7 @@ namespace Recharge.App.Updates
         {
             if (Environment.GetEnvironmentVariable("RECHARGE_NO_UPDATE") == "1") return;
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "--snapshot") >= 0) return;
+            if (UpdateRules.IsDevBuild()) return;
             lock (Gate)
             {
                 if (_started) return;
@@ -98,6 +99,7 @@ namespace Recharge.App.Updates
         /// <summary>One check; with <paramref name="download"/> a found update is also downloaded (always so for managed installs: the launcher's check is the download).</summary>
         public static async Task<UpdateOutcome> RunAsync(bool download)
         {
+            if (UpdateRules.IsDevBuild()) throw new InvalidOperationException("This is a development build (run from the project's bin folder), so it doesn't update itself.");
             await Busy.WaitAsync().ConfigureAwait(false);
             SettingsService settings = SettingsService.Default();
             try
@@ -193,6 +195,13 @@ namespace Recharge.App.Updates
             int? staged = LauncherProtocol.ParseStageOutput(text);
             if (staged == null || (Mode.Build > 0 && staged == Mode.Build)) return new UpdateOutcome { State = "up-to-date", Build = Mode.Build, Version = Mode.Version };
             string version = ReadStagedVersion(Mode.Root, staged.Value);
+            // The launcher takes the newest build across channels, which can be the old app while stable still carries it: never
+            // offer that as an update (the launcher only swaps on a restart it is asked for).
+            if (!File.Exists(Path.Combine(Mode.Root, "app.new", "Recharge.App.dll")))
+            {
+                Console.Error.WriteLine("update: staged build " + staged.Value + " (" + version + ") isn't Recharge; not offered");
+                return new UpdateOutcome { State = "up-to-date", Build = Mode.Build, Version = Mode.Version };
+            }
             return new UpdateOutcome { State = "ready", Version = version, Build = staged.Value };
         }
 

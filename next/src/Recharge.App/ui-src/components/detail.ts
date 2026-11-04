@@ -9,6 +9,8 @@ import { backgroundApplyButton } from '../backgrounds/applyButton.js';
 import { imageBlobUrl } from '../lib/hub.js';
 import { actionsOf, itemWebUrl, KIND_LABEL, type Item } from '../lib/library.js';
 import { loadComments, postComment, type Comment } from '../lib/hub.js';
+import { currentUser } from '../account/session.js';
+import { openAuthModal } from '../account/index.js';
 
 function date(value: string): string {
   const ms = Date.parse(value);
@@ -118,100 +120,93 @@ function commentsSection(item: Item): HTMLElement {
   section.appendChild(body);
 
   let comments: Comment[] = [];
-  let replyingTo: number | null = null;
-  let replyingEl: HTMLElement | null = null;
+  let replyBox: { to: number; el: HTMLElement } | null = null;
 
-  function render() {
-    const topLevel = comments.filter((c) => c.replyTo === null);
+  const reload = (): Promise<void> => loadComments(item.kind, item.id).then((cs) => { comments = cs; render(); });
+  /** Posts, then reloads the thread; a failure is shown and rethrown so the box keeps its text. */
+  const send = (text: string, parentId: number | null): Promise<void> =>
+    postComment(item.kind, item.id, text, parentId).then(() => { replyBox = null; return reload(); }, (error) => {
+      toast(describeError(error), 'error');
+      throw error;
+    });
+
+  function render(): void {
     const byParent = new Map<number, Comment[]>();
-    for (const c of comments) if (c.replyTo !== null) {
+    for (const c of comments) {
+      if (c.replyTo === null) continue;
       const list = byParent.get(c.replyTo) ?? [];
       list.push(c);
       byParent.set(c.replyTo, list);
     }
-
     body.replaceChildren();
+    if (comments.length === 0) body.appendChild(h('p', { className: 'dim', text: 'No comments yet.' }));
 
-    const renderComment = (c: Comment, depth = 0): HTMLElement => {
-      const row = h('div', { className: 'comment' + (depth > 0 ? ' reply' : '') });
-      row.style.paddingLeft = (depth * 20) + 'px';
+    const renderComment = (c: Comment, isReply: boolean): HTMLElement => {
+      const row = h('div', { className: 'comment' + (isReply ? ' reply' : '') });
       const head = h('div', { className: 'comment-head' }, h('strong', {}, authorName(c.author, c.authorColor)));
-      const when = date(c.time);
+      const when = c.time ? new Date(c.time).toLocaleDateString() : '';
       if (when) head.appendChild(h('span', { className: 'dim', text: when }));
       row.appendChild(head);
       row.appendChild(h('div', { className: 'comment-text', text: c.text }));
 
+      // The hub threads one level deep: a reply to a reply joins its thread's top comment.
+      const threadId = c.replyTo ?? c.id;
       const actions = h('div', { className: 'comment-actions' });
-      const replyBtn = h('a', { className: 'link-btn', text: 'Reply', attrs: { href: '#' } });
-      replyBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (replyingTo === c.id && replyingEl) {
-          replyingEl.remove(); replyingEl = null; replyingTo = null;
-        } else {
-          if (replyingEl) { replyingEl.remove(); replyingEl = null; }
-          replyingTo = c.id;
-          replyingEl = commentInput((text) => {
-            void postComment(item.kind, item.id, text, c.id).then(() => {
-              replyingTo = null; replyingEl = null;
-              void loadComments(item.kind, item.id).then((cs) => { comments = cs; render(); });
-            }).catch((err) => toast(describeError(err), 'error'));
-          }, 'Reply to ' + c.author + '…');
-          row.parentNode?.insertBefore(replyingEl, row.nextSibling);
-        }
+      const replyBtn = h('button', { className: 'link-btn', text: 'Reply', attrs: { type: 'button' } });
+      replyBtn.addEventListener('click', () => {
+        const again = replyBox && replyBox.to === c.id;
+        if (replyBox) { replyBox.el.remove(); replyBox = null; }
+        if (again) return;
+        const el = commentInput((text) => send(text, threadId), 'Reply to ' + c.author + '…');
+        replyBox = { to: c.id, el };
+        row.appendChild(el);
+        el.querySelector('textarea')?.focus();
       });
       actions.appendChild(replyBtn);
       row.appendChild(actions);
 
-      const kids = byParent.get(c.id);
+      const kids = isReply ? undefined : byParent.get(c.id);
       if (kids?.length) {
         const kidsEl = h('div', { className: 'comment-replies' });
-        for (const kid of kids) kidsEl.appendChild(renderComment(kid, depth + 1));
+        for (const kid of kids) kidsEl.appendChild(renderComment(kid, true));
         row.appendChild(kidsEl);
       }
       return row;
     };
 
-    for (const c of topLevel) body.appendChild(renderComment(c));
-
-    const topInput = commentInput((text) => {
-      void postComment(item.kind, item.id, text).then(() => {
-        void loadComments(item.kind, item.id).then((cs) => { comments = cs; render(); });
-      }).catch((err) => toast(describeError(err), 'error'));
-    }, 'Add a comment…');
-    body.appendChild(topInput);
+    for (const c of comments) if (c.replyTo === null) body.appendChild(renderComment(c, false));
+    body.appendChild(commentInput((text) => send(text, null), 'Add a comment…'));
   }
 
-  function commentInput(onSubmit: (text: string) => void, placeholder: string): HTMLElement {
+  /** A comment box; signed out, a button to log in instead (the hub only takes comments from accounts). */
+  function commentInput(onSubmit: (text: string) => Promise<void>, placeholder: string): HTMLElement {
     const wrap = h('div', { className: 'comment-input' });
-    const textarea = h('textarea', {
-      attrs: { placeholder, rows: '2' },
-    });
-    textarea.style.width = '100%';
-    textarea.style.fontFamily = 'inherit';
-    textarea.style.fontSize = 'inherit';
-    const submit = h('button', { className: 'btn btn-primary', text: 'Post', attrs: { type: 'button' } });
+    if (!currentUser()) {
+      wrap.appendChild(button('Log in to comment', { kind: 'secondary', icon: 'user', onClick: () => openAuthModal('login', () => render()) }));
+      return wrap;
+    }
+    const textarea = h('textarea', { attrs: { placeholder, rows: '2', maxlength: '1000' } }) as HTMLTextAreaElement;
+    const submit = button('Post', { kind: 'primary' });
     submit.disabled = true;
     let sending = false;
-    const enable = () => { submit.disabled = !textarea.value.trim() || sending; };
+    const enable = (): void => { submit.disabled = !textarea.value.trim() || sending; };
     textarea.addEventListener('input', enable);
     submit.addEventListener('click', () => {
       const text = textarea.value.trim();
       if (!text || sending) return;
-      sending = true; submit.disabled = true; submit.textContent = 'Posting…';
-      onSubmit(text).finally(() => { sending = false; submit.disabled = false; submit.textContent = 'Post'; textarea.value = ''; enable(); });
+      sending = true;
+      enable();
+      onSubmit(text).then(() => { textarea.value = ''; }, () => { /* shown by send; the text stays for another try */ })
+        .finally(() => { sending = false; enable(); });
     });
-    wrap.appendChild(textarea);
-    wrap.appendChild(submit);
+    wrap.append(textarea, submit);
     return wrap;
   }
 
-  loadComments(item.kind, item.id).then(
-    (cs) => { comments = cs; render(); },
-    (error) => {
-      console.error('comments failed for ' + item.kind + '/' + item.id + ': ' + describeError(error));
-      body.replaceChildren(h('p', { className: 'dim', text: "Comments couldn't be loaded" }));
-    }
-  );
+  reload().catch((error) => {
+    console.error('comments failed for ' + item.kind + '/' + item.id + ': ' + describeError(error));
+    body.replaceChildren(h('p', { className: 'dim', text: "Comments couldn't be loaded." }));
+  });
   return section;
 }
 
@@ -240,17 +235,7 @@ export interface DetailOptions {
 
 const PAST: Record<string, string> = { install: 'Installed', update: 'Updated', remove: 'Removed' };
 
-/** Launch an installed map in IGTAP straight from its detail panel. */
-function playMapButton(item: Item): HTMLButtonElement {
-  const folder = item.installed!.folder!;
-  const btn = button('Play', { kind: 'primary', icon: 'play', title: 'Launch IGTAP with this map' });
-  btn.addEventListener('click', () => {
-    go('#/play?map=' + encodeURIComponent(folder) + '&modded=false');
-  });
-  return btn;
-}
-
-/** An installed map opens in the Amplifier once it is back in Recharge Next; until then the button says so. */
+/** An installed map opens in the Amplifier once it is back in Recharge; until then the button says so. */
 function amplifierButton(): HTMLButtonElement {
   const amp = button('Amplifier: coming soon', { kind: 'secondary', icon: 'amplifier', title: 'Editing maps in Recharge is coming soon' });
   amp.addEventListener('click', () => toast('The Amplifier is coming soon.', 'info'));
@@ -346,7 +331,7 @@ function actionButtons(item: Item, options: DetailOptions): HTMLElement {
   if (item.kind === 'skins' && item.installed && item.installed.folder) {
     actions.appendChild(skinApplyButton(item.installed.folder, item.name));
   }
-  if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(playMapButton(item));
+  if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(amplifierButton());
   // an installed background or playlist can be shown behind the app straight from its page
   if ((item.kind === 'backgrounds' || item.kind === 'playlists') && item.installed && item.installed.folder) {
     actions.appendChild(backgroundApplyButton(item.kind, item.installed.folder, item.name));

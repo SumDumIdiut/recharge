@@ -79,7 +79,9 @@ export function skinPicker(): SkinPicker {
   const stage = h('section', { className: 'sp-stage panel' }, stageArt, info);
   const head = h('div', { className: 'sp-head' });
   const grid = h('div', { className: 'sp-grid', attrs: { role: 'listbox', 'aria-label': 'Your skins' } });
-  root.append(stage, head, grid);
+  // The empty state sits outside the grid: inside it, it would be squeezed into one tile-wide column.
+  const empty = h('div', { className: 'sp-empty' });
+  root.append(stage, head, grid, empty);
 
   let sheet: Sheet | null = null;
   let frame = 0;
@@ -228,13 +230,14 @@ export function skinPicker(): SkinPicker {
   function update(next: Item[], loading: boolean): void {
     items = next;
     const skins = items.filter((i) => i.installed?.folder);
-    if (loading && skins.length === 0) { grid.replaceChildren(skeletonCards(6)); return; }
-    if (!loading && skins.length === 0 && first) {
+    if (skins.length === 0) {
       stage.hidden = true;
       head.replaceChildren();
-      grid.replaceChildren(emptyState('skins', 'No skins yet', 'Get skins from the hub, or drop your own in the skins folder.', { label: 'Open skins folder', kind: 'secondary', onClick: () => void call('open.folder', { kind: 'skins' }).catch(() => {}) }));
+      grid.replaceChildren();
+      empty.replaceChildren(loading ? skeletonCards(3) : emptyState('skins', 'No skins yet', 'Get skins from the hub, or drop your own in the skins folder.', { label: 'Open skins folder', kind: 'secondary', onClick: () => void call('open.folder', { kind: 'skins' }).catch(() => {}) }));
       return;
     }
+    empty.replaceChildren();
     stage.hidden = false;
     paintGrid();
     if (first) {

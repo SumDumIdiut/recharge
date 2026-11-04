@@ -465,8 +465,9 @@ export const libraryPage: PageModule = {
 
     render();
     const load = loadAll(false);
-    if (route.isPanel) void showPanel(route, token);
-    await Promise.race([load, new Promise((resolve) => window.setTimeout(resolve, 15000))]);
+    // An item panel counts as part of the page: it's ready once both the list and the panel have loaded.
+    const panel = route.isPanel ? showPanel(route, token) : Promise.resolve();
+    await Promise.race([Promise.all([load, panel]), new Promise((resolve) => window.setTimeout(resolve, 15000))]);
     if (token !== generation) return;
     render();
     await imagesSettled(el, 8000);

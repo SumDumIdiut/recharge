@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -107,12 +108,14 @@ namespace Recharge.App.Windows
             {
                 string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Recharge", "webview");
                 Directory.CreateDirectory(data);
-                var options = new CoreWebView2EnvironmentOptions();
-                options.CustomSchemeRegistrations.Add(new CoreWebView2CustomSchemeRegistration("recharge")
+                // The scheme list must go in through the constructor: CustomSchemeRegistrations is get-only and stays null otherwise
+                // (adding to it threw the NullReferenceException that stopped every Windows start).
+                var schemes = new List<CoreWebView2CustomSchemeRegistration>
                 {
-                    TreatAsSecure = true,
-                    HasAuthorityComponent = true,
-                });
+                    new CoreWebView2CustomSchemeRegistration("recharge") { TreatAsSecure = true, HasAuthorityComponent = true },
+                };
+                var options = new CoreWebView2EnvironmentOptions(null, null, null, false, schemes);
+                Log("web view: creating environment (runtime " + RuntimeVersion() + ")");
                 _env = await CoreWebView2Environment.CreateAsync(null, data, options);
                 Log("web view started: WebView2 " + _env.BrowserVersionString);
                 _controller = await _env.CreateCoreWebView2ControllerAsync(_hwnd);
@@ -171,12 +174,12 @@ namespace Recharge.App.Windows
                 _exitCode = 4;
                 // Say what actually happened: a thrown CreateAsync can be a missing runtime or a present-but-broken one,
                 // and users reply with screenshots of this dialog, so it must carry the real detail.
-                string? runtime = null;
-                try { runtime = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
-                catch (Exception probe) { Log("web view: no WebView2 runtime found (" + probe.GetType().Name + ")"); }
+                string? runtime = RuntimeVersion();
                 string logPath = Recharge.App.Settings.SettingsStore.DataDir() is { Length: > 0 } dir
                     ? Path.Combine(dir, "shell.log") : "shell.log";
-                string body = runtime == null
+                string body = ex is DllNotFoundException
+                    ? "A file Recharge needs is missing (" + FirstLines(ex) + ").\nReinstall Recharge, then start it again.\n\nThe full detail is in:\n" + logPath
+                    : runtime == null
                     ? "The Microsoft Edge WebView2 Runtime is required but was not found on this machine.\n" +
                       "Download and install it from:\n" +
                       "https://developer.microsoft.com/en-us/microsoft-edge/webview2/\n" +
@@ -186,6 +189,14 @@ namespace Recharge.App.Windows
                 Win32.MessageBoxW(_hwnd, "Recharge could not start its web view.\n\n" + body, "Recharge", 0x10);
                 Win32.PostQuitMessage(4);
             }
+        }
+
+        /// <summary>The installed WebView2 runtime's version, or null when there is none (or it can't be asked: see the log).</summary>
+        private static string? RuntimeVersion()
+        {
+            try { return CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+            catch (DllNotFoundException) { Log("web view: WebView2Loader.dll is missing beside Recharge.App.exe"); return null; }
+            catch (Exception probe) { Log("web view: no WebView2 runtime found (" + probe.GetType().Name + ")"); return null; }
         }
 
         /// <summary>The exception type and message, newline-wrapped and capped so the dialog stays readable.</summary>

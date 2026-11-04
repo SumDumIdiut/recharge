@@ -5,16 +5,22 @@
     <RootNamespace>Recharge.App</RootNamespace>
     <AssemblyName>Recharge.App</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.1.0</Version>
+    <Version>0.1.0-beta1</Version>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <!-- lets `dotnet publish -r win-x64` run from Linux -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationIcon Condition="Exists('$(MSBuildProjectDirectory)/Windows/recharge.ico')">Windows/recharge.ico</ApplicationIcon>
   </PropertyGroup>
   <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
-    <!-- a GUI exe: no console window; the WebView2 loader DLL ships beside it -->
+    <!-- a GUI exe: no console window -->
     <OutputType>WinExe</OutputType>
   </PropertyGroup>
+  <!-- WebView2Loader.dll must sit beside the exe: the package leaves it in runtimes/win-x64/native, where nothing finds it at run
+       time (DllNotFoundException on the first CoreWebView2Environment call, seen in the Windows VM). -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <None Include="$(NuGetPackageRoot)microsoft.web.webview2/1.0.4314.35/runtimes/win-x64/native/WebView2Loader.dll" Link="WebView2Loader.dll"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Recharge.Core/Recharge.Core.csproj" />
     <ProjectReference Include="../Recharge.Net/Recharge.Net.csproj" />

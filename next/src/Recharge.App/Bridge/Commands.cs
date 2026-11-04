@@ -40,11 +40,19 @@ namespace Recharge.App.Bridge
             result["name"] = new JsonString("Recharge");
             result["version"] = new JsonString(AppVersion.Value);
             result["dotnet"] = new JsonString(Environment.Version.ToString());
-            result["webkit"] = new JsonString(
-                WebKit.webkit_get_major_version() + "." +
-                WebKit.webkit_get_minor_version() + "." +
-                WebKit.webkit_get_micro_version());
+            result["engine"] = new JsonString(WebEngine());
             return Task.FromResult<JsonNode>(result);
+        }
+
+        /// <summary>The web engine drawing the app: WebView2 on Windows, WebKitGTK on Linux.</summary>
+        private static string WebEngine()
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                try { return "WebView2 " + Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+                catch (Exception) { return "WebView2"; }
+            }
+            return "WebKitGTK " + WebKit.webkit_get_major_version() + "." + WebKit.webkit_get_minor_version() + "." + WebKit.webkit_get_micro_version();
         }
 
         private static async Task<JsonNode> HubGet(JsonObject args)

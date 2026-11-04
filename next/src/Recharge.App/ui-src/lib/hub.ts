@@ -106,25 +106,44 @@ export interface Comment { id: number; author: string; authorColor: string | nul
 
 /** Read comments, tolerating several response shapes. Throws when the shape is unexpected. */
 export async function loadComments(kind: Kind, id: string): Promise<Comment[]> {
-  const reply = await call<{ status: number; body: string }>('hub.get', { path: '/api/' + kind + '/' + id + '/comments' });
+  const reply = await call<{ status: number; body: string }>('hub.get', { path: '/api/' + kind + '/' + encodeURIComponent(id) + '/comments' });
   if (reply.status !== 200) throw new Error('the hub answered ' + reply.status);
   return parseComments(JSON.parse(reply.body));
 }
 
-/** Post a comment (or a reply when parentId is given). */
+/**
+ * Posts a comment, or a reply when parentId is given. The hub takes { body, parent_id } and only allows replies to top-level
+ * comments, so a reply to a reply goes to its thread's top comment. Answers the stored comment.
+ */
 export async function postComment(kind: Kind, id: string, text: string, parentId: number | null = null): Promise<Comment> {
-  const body: Record<string, unknown> = { text };
+  const body: Record<string, unknown> = { body: text };
   if (parentId !== null) body.parent_id = parentId;
   const reply = await call<{ status: number; body: string }>('hub.request', {
     method: 'POST',
-    path: '/api/' + kind + '/' + id + '/comments',
+    path: '/api/' + kind + '/' + encodeURIComponent(id) + '/comments',
     body,
   });
-  if (reply.status !== 200 && reply.status !== 201) throw new Error('the hub answered ' + reply.status);
-  return parseComment(JSON.parse(reply.body));
+  if (reply.status === 401) throw new Error('Log in to comment.');
+  if (reply.status !== 200 && reply.status !== 201) throw new Error(hubErrorText(reply.body) || 'the hub answered ' + reply.status);
+  const json = JSON.parse(reply.body) as Record<string, unknown>;
+  const stored = parseComment(json && typeof json === 'object' && 'comment' in json ? json.comment : json);
+  if (!stored) throw new Error('The hub sent an unreadable comment.');
+  return stored;
 }
 
-function parseComment(json: unknown): Comment {
+/** The hub's { error } message, when it sent one. */
+function hubErrorText(body: string): string {
+  try {
+    const j = JSON.parse(body) as { error?: unknown };
+    return typeof j.error === 'string' ? j.error : '';
+  } catch {
+    return '';
+  }
+}
+
+/** One comment from the hub ({ id, parent_id, body, created_at, author: { username, name_color } }), tolerating older shapes. Null without text. */
+export function parseComment(json: unknown): Comment | null {
+  if (!json || typeof json !== 'object') return null;
   const c = json as Record<string, unknown>;
   const pick = (...keys: string[]): string => {
     for (const key of keys) {
@@ -133,50 +152,38 @@ function parseComment(json: unknown): Comment {
     }
     return '';
   };
-  const text = pick('text', 'body', 'content', 'message', 'comment');
-  if (!text) throw new Error('comment has no text');
+  const text = pick('body', 'text', 'content', 'message', 'comment');
+  if (!text) return null;
   const who = c.author && typeof c.author === 'object' ? c.author as Record<string, unknown> : null;
   const whoName = who && typeof who.username === 'string' ? who.username : '';
   const whoColor = who && typeof who.name_color === 'string' ? who.name_color : null;
-  const id = typeof c.id === 'number' ? c.id : typeof c.id === 'string' ? parseInt(c.id, 10) : 0;
+  const id = typeof c.id === 'number' ? c.id : typeof c.id === 'string' && /^\d+$/.test(c.id) ? parseInt(c.id, 10) : 0;
   return {
     id,
     author: whoName || pick('author', 'username', 'user', 'name', 'uploader') || 'Someone',
     authorColor: whoColor,
     text,
-    time: pick('createdAt', 'created_at', 'time', 'date', 'updatedAt'),
+    time: pick('created_at', 'createdAt', 'time', 'date', 'updatedAt'),
     replyTo: typeof c.parent_id === 'number' ? c.parent_id : null,
   };
 }
 
+/** A comments page, flattened: each top-level comment followed by its replies (the hub nests them under "replies"). */
 export function parseComments(json: unknown): Comment[] {
   let rows: unknown = json;
   if (json && typeof json === 'object' && !Array.isArray(json)) rows = (json as Record<string, unknown>).comments;
   if (!Array.isArray(rows)) throw new Error('unexpected comments shape');
   const out: Comment[] = [];
   for (const row of rows) {
-    if (!row || typeof row !== 'object') continue;
-    const c = row as Record<string, unknown>;
-    const pick = (...keys: string[]): string => {
-      for (const key of keys) {
-        const value = c[key];
-        if (typeof value === 'string' && value) return value;
-      }
-      return '';
-    };
-    const text = pick('text', 'body', 'content', 'message', 'comment');
-    if (!text) continue;
-    // The hub sends author as an object: { username, avatar_url, frame, frame_colors, name_color }.
-    const who = c.author && typeof c.author === 'object' ? c.author as Record<string, unknown> : null;
-    const whoName = who && typeof who.username === 'string' ? who.username : '';
-    const whoColor = who && typeof who.name_color === 'string' ? who.name_color : null;
-    out.push({
-      author: whoName || pick('author', 'username', 'user', 'name', 'uploader') || 'Someone',
-      authorColor: whoColor,
-      text,
-      time: pick('createdAt', 'created_at', 'time', 'date', 'updatedAt'),
-      replyTo: typeof c.parent_id === 'number' ? c.parent_id : null,
-    });
+    const top = parseComment(row);
+    if (!top) continue;
+    out.push(top);
+    const replies = (row as Record<string, unknown>).replies;
+    if (!Array.isArray(replies)) continue;
+    for (const raw of replies) {
+      const r = parseComment(raw);
+      if (r) out.push({ ...r, replyTo: r.replyTo ?? top.id });
+    }
   }
   return out;
 }

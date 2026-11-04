@@ -1,6 +1,7 @@
 /* The Skins page's picker (skins/picker.ts): a stage that plays the chosen skin, and a grid of every skin you have. */
 .skin-picker { display: grid; gap: 18px; }
 
+.sp-stage[hidden] { display: none; }
 .sp-stage { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 24px; align-items: center; padding: 20px; overflow: hidden; position: relative; }
 .sp-stage::before { content: ''; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(60% 80% at 18% 60%, color-mix(in srgb, var(--green) 16%, transparent), transparent 70%); }

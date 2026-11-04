@@ -18,8 +18,10 @@ let root: HTMLElement | null = null;
 let gameRow: HTMLElement | null = null;
 let filterNote: HTMLElement | null = null;
 let noMatches: HTMLElement | null = null;
-let continueHost: HTMLElement | null = null;
+let newHost: HTMLElement | null = null;
 let updatesHost: HTMLElement | null = null;
+/** The cards' grid: the updates card joins it only when there is an update to show. */
+let homeGrid: HTMLElement | null = null;
 let generation = 0;
 
 function paintGame(info: GameInfo | null, error?: unknown): void {
@@ -125,12 +127,12 @@ export const homePage: PageModule = {
     noMatches.appendChild(h('span', { text: 'Nothing on this page matches that search.' }));
     page.content.appendChild(noMatches);
 
-    const grid = h('div', { className: 'home-grid' });
-    continueHost = card('New on the hub', 'new on the hub newest recent items');
+    const grid = (homeGrid = h('div', { className: 'home-grid' }));
+    newHost = card('New on the hub', 'new on the hub newest recent items');
     updatesHost = card('Updates available', 'updates available installed library refresh');
-    continueHost.classList.add('home-card-wide');
-    continueHost.appendChild(loadingRow());
-    grid.appendChild(continueHost);
+    newHost.classList.add('home-card-wide');
+    newHost.appendChild(loadingRow());
+    grid.appendChild(newHost);
     page.content.appendChild(grid);
 
     el.appendChild(page);
@@ -142,7 +144,7 @@ export const homePage: PageModule = {
   unmount(): void {
     generation += 1;
     root = null;
-    continueHost = updatesHost = null;
+    newHost = updatesHost = homeGrid = null;
     gameRow = null;
     playButtons = [];
     moddedButton = null;
@@ -239,9 +241,11 @@ async function loadData(token: number): Promise<void> {
   if (fresh.length > 0) {
     const tiles = h('div', { className: 'hub-tile-grid' });
     for (const item of fresh) tiles.appendChild(hubTile(item));
-    fillCard(continueHost, tiles);
+    fillCard(newHost, tiles);
+  } else if (failed.length > 0) {
+    fillCard(newHost, errorState('The hub could not be reached, so there is nothing new to show.', () => { void loadData(generation); }));
   } else {
-    fillCard(continueHost, emptyState('sparkles', 'Nothing yet', 'New items from the hub will show up here.'));
+    fillCard(newHost, emptyState('sparkles', 'Nothing yet', 'New items from the hub will show up here.'));
   }
 
   const updates = updatesOf(mine);
@@ -249,6 +253,6 @@ async function loadData(token: number): Promise<void> {
     const head = h('p', { className: 'updates-count' }, h('strong', { text: String(updates.length) }), updates.length === 1 ? ' update available' : ' updates available');
     const more = h('a', { className: 'link-btn', attrs: { href: '#/library?mode=updates' }, text: 'See all updates' });
     fillCard(updatesHost, head, ...updates.slice(0, 3).map((item) => miniRow(item, item.kind === 'maps' ? 'Revision ' + (item.installed?.revision ?? '?') + ' → ' + item.revision : (item.installed?.version || '?') + ' → ' + item.version)), more);
-    grid.appendChild(updatesHost);
+    if (updatesHost && homeGrid && !updatesHost.isConnected) homeGrid.appendChild(updatesHost);
   }
 }

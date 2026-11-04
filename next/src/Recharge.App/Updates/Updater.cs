@@ -138,6 +138,9 @@ namespace Recharge.App.Updates
             try { ownInfo = await own.ConfigureAwait(false); } catch (Exception e) { ownError = e; }
             ManifestInfo? altInfo = await SafeAsync(alt).ConfigureAwait(false);
             if (ownError != null && altInfo == null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ownError).Throw();
+            // Only builds of this app count: the other product on a channel (the old app on stable) is never an update.
+            if (ownInfo != null && !ownInfo.IsRechargeApp) ownInfo = null;
+            if (altInfo != null && !altInfo.IsRechargeApp) altInfo = null;
             ManifestInfo? m = UpdateRules.PickNewest(ownInfo, altInfo);
             if (m == null) return new CheckResult { State = CheckState.NoneYet };
 

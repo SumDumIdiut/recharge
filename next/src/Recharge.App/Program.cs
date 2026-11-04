@@ -28,7 +28,8 @@ namespace Recharge.App
 
             // Updates: swap in a downloaded version, or roll back one that never confirmed a start, then restart into it.
             // Not for snapshot runs (tests) or when RECHARGE_NO_UPDATE is set.
-            bool updates = !options.IsSnapshot && Environment.GetEnvironmentVariable("RECHARGE_NO_UPDATE") != "1";
+            // Never for a development build (run from the project's bin/ folder): it must not replace its own build output.
+            bool updates = !options.IsSnapshot && Environment.GetEnvironmentVariable("RECHARGE_NO_UPDATE") != "1" && !Updates.UpdateRules.IsDevBuild();
             if (updates)
             {
                 try
@@ -78,11 +79,6 @@ namespace Recharge.App
             if (route.Length > 0 && !route.StartsWith("#", StringComparison.Ordinal))
             {
                 route = "#" + route;
-            }
-            // Auto-play: launch the game and load a map, skipping the main menu.
-            if (options.IsAutoPlay && route.Length == 0)
-            {
-                route = "#/play?map=" + Uri.EscapeDataString(options.MapFolder!) + "&modded=" + options.Modded;
             }
             if (updates)
             {

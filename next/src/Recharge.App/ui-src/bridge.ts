@@ -2,7 +2,8 @@ export interface AppInfo {
   name?: string;
   version?: string;
   dotnet?: string;
-  webkit?: string;
+  /** "WebView2 <version>" on Windows, "WebKitGTK <version>" on Linux. */
+  engine?: string;
 }
 
 export interface GameInfo {

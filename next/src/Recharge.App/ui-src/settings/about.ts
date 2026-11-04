@@ -16,7 +16,7 @@ export function aboutSection(): Section {
       add('App', info.name || 'Recharge');
       add('Version', info.version || 'unknown');
       add('.NET', info.dotnet || 'unknown');
-      add('WebKitGTK', info.webkit || 'unknown');
+      add('Web engine', info.engine || 'unknown');
     },
     (error) => {
       list.replaceChildren();

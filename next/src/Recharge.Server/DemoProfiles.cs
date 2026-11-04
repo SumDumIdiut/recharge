@@ -134,7 +134,7 @@ namespace Recharge.Server
              "avatar":{"shape":"circle","frame":"x-flipped-frost","ornament":"sparkles","ornamentColor":"#e6f6ff","glow":"neon","status":"pulse"},
              "banner":{"mode":"gradient","colors":["#040f22","#0e2b52","#5cb4ff"],"angle":160,"pattern":"hex","anim":"frostfall","tint":"#bfe8ff","height":"hero"},
              "theme":{"accent":"#9fdcff","card":"glass","bg":"stars","bgColors":["#030a18","#0c2140"],"corner":"round","preset":"flipped-frost"},
-             "content":{"status":{"emoji":"❄️","text":"Building Recharge Next","expires":0},"bio":"Maker of **Recharge**.","links":[{"url":"https://github.com/flipped","label":"GitHub"}],
+             "content":{"status":{"emoji":"❄️","text":"Building the new Recharge","expires":0},"bio":"Maker of **Recharge**.","links":[{"url":"https://github.com/flipped","label":"GitHub"}],
                "showcase":[{"kind":"map","id":"map-cliffside","name":"Cliffside Run"}]},
              "stats":{"show":["uploads","threads","replies","comments","friends"],"style":"big"}}
             """,

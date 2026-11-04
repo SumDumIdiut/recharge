@@ -283,7 +283,7 @@ function localItem(kind: Kind, id: string, name: string, version: string, ref: I
 
 /** Everything that is installed, merged with its hub row when there is one. */
 /**
- * Mods Recharge Next has built in (Navigator, DOTnet, Skinmod): its loader does their jobs, so they are not offered or listed as mods.
+ * Mods Recharge has built in (Navigator, DOTnet, Skinmod): its loader does their jobs, so they are not offered or listed as mods.
  * The folders stay where they are (the maps and skins live inside them).
  */
 export const EMBEDDED_MODS: readonly string[] = ['recharge.maps', 'recharge.multiplayer', 'recharge.customskins'];
