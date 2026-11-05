@@ -56,6 +56,13 @@ namespace Recharge.App.Bridge
                 return Task.FromResult<JsonNode>(CreateService.Image(string.Empty));
             }
             string dir = CreateService.ResolveFolder(game, "skin", folder);
+            // An optional other sheet in the folder (a skin whose template is empty keeps its art in doublejump.png).
+            string? file = args.TryGetValue("file", out JsonNode f) && f is JsonString fs ? fs.Value : null;
+            if (!string.IsNullOrEmpty(file) && file == Path.GetFileName(file) && file.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            {
+                string other = Path.Combine(dir, file);
+                return Task.FromResult<JsonNode>(CreateService.Image(File.Exists(other) ? other : string.Empty));
+            }
             return Task.FromResult<JsonNode>(CreateService.Image(CreateService.PlayerImage(dir) ?? string.Empty));
         }
 

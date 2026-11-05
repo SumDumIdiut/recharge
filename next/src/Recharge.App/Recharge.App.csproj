@@ -5,7 +5,7 @@
     <RootNamespace>Recharge.App</RootNamespace>
     <AssemblyName>Recharge.App</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.1.0-beta1</Version>
+    <Version>0.1.1</Version>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <!-- lets `dotnet publish -r win-x64` run from Linux -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -39,6 +39,8 @@
   </Target>
   <ItemGroup>
     <Content Include="ui/**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- RechargeLoader 2: shipped as loader/, installed into the game by Settings > Game (refreshed by tools/stage-loader.sh, committed because CI has no game to compile it) -->
+    <Content Include="loader/*.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../assets/logo.png" Link="icon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

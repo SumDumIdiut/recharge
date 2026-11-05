@@ -22,14 +22,19 @@ namespace Recharge.App.Game
         private readonly IGameLauncher _launcher;
         private readonly LinkOptions? _options;
         private readonly Func<string, bool, string>? _switchBuild;
+        private readonly Func<string, bool>? _isRunning;
+        private readonly TimeSpan _closeWait;
         private readonly object _gate = new object();
         private LinkServer? _server;
         private (string Kind, JsonNode? Args)? _pending;
         private bool _disposed;
 
         /// <param name="switchBuild">Deploys the vanilla (false) or modded (true) build in the game folder before a launch; returns a detail line.</param>
-        public GameSession(Func<string?> findGame, IGameLauncher launcher, LinkOptions? options = null, Func<string, bool, string>? switchBuild = null)
+        public GameSession(Func<string?> findGame, IGameLauncher launcher, LinkOptions? options = null, Func<string, bool, string>? switchBuild = null,
+            Func<string, bool>? isRunning = null, TimeSpan? closeWait = null)
         {
+            _isRunning = isRunning;
+            _closeWait = closeWait ?? TimeSpan.FromSeconds(20);
             _findGame = findGame;
             _launcher = launcher;
             _options = options;
@@ -100,6 +105,7 @@ namespace Recharge.App.Game
 
             string game = _findGame() ?? throw new InvalidOperationException("io: IGTAP wasn't found");
             string appId = ReadAppId(game) ?? throw new InvalidOperationException("io: no steam_appid.txt in the game folder");
+            await WaitForPreviousGameToExit(game).ConfigureAwait(false);
             if (modded != null && _switchBuild != null)
             {
                 try { result["build"] = new JsonString(_switchBuild(game, modded.Value)); }
@@ -113,6 +119,26 @@ namespace Recharge.App.Game
             _launcher.Launch(game, appId, server.EnvironmentValue);
             result["launched"] = JsonBool.True;
             return result;
+        }
+
+        /// <summary>
+        /// A game that was just closed can still be shutting down; starting Steam's launch then (or switching builds under it) leaves the new one
+        /// on a black window. Waits for the old process to go, and refuses with a plain reason when it doesn't within the limit.
+        /// </summary>
+        private async Task WaitForPreviousGameToExit(string game)
+        {
+            if (_isRunning == null || !_isRunning(game)) return;
+            DateTime until = DateTime.UtcNow + _closeWait;
+            while (_isRunning(game))
+            {
+                if (DateTime.UtcNow >= until)
+                {
+                    lock (_gate) _pending = null;
+                    throw new InvalidOperationException("game: IGTAP is still running or closing - wait for it to close, then try again");
+                }
+                await Task.Delay(250).ConfigureAwait(false);
+            }
+            await Task.Delay(1000).ConfigureAwait(false); // let Steam notice the exit before it is asked to launch again
         }
 
         /// <summary>game.intent: sends to a connected game; throws when none is connected.</summary>

@@ -1,6 +1,6 @@
 import { h } from '../dom.js';
 import { icon } from '../icons.js';
-import { authorName, kindPlaceholder } from '../components/itemCard.js';
+import { authorName, fitImage, kindPlaceholder } from '../components/itemCard.js';
 import { imageBlobUrl } from '../lib/hub.js';
 import type { LobbyCardData } from './model.js';
 
@@ -17,7 +17,7 @@ export function lobbyCard(data: LobbyCardData, onJoin?: (data: LobbyCardData, do
     box.style.aspectRatio = '16 / 9';
     const image = h('img', { attrs: { alt: '', decoding: 'async', loading: 'lazy' } });
     imageBlobUrl('maps', data.hubMap.id, data.picture).then((url) => {
-      image.onload = () => { media.classList.add('has-img'); };
+      image.onload = () => { media.classList.add('has-img'); fitImage(image, box); };
       image.onerror = () => { /* cover stays */ };
       image.src = url;
     }, () => { /* cover stays */ });

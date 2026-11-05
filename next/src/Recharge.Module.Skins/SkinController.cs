@@ -381,6 +381,35 @@ namespace Recharge.Module.Skins
             return _fallbackMaterial;
         }
 
+        // The game records the player's SpriteRenderer.sprite every physics step while a course is tracked and later
+        // looks each one up in its own table when saving (courseScript.save -> playerSpriteLookup.lookup[sprite]).
+        // A custom sprite isn't in that table, so every save after a course run threw KeyNotFoundException and
+        // nothing past the course was written (lost upgrades). So the custom sprite only lives during rendering:
+        // it is put back to the animator's own sprite at the end of each frame, before any game code runs again.
+        private Sprite _vanillaSprite;
+        private Sprite _customSprite;
+
+        private void Start() => StartCoroutine(RestoreVanillaAtEndOfFrame());
+
+        private System.Collections.IEnumerator RestoreVanillaAtEndOfFrame()
+        {
+            var wait = new WaitForEndOfFrame();
+            while (true)
+            {
+                yield return wait;
+                if (_customSprite != null && _spriteRenderer != null && _spriteRenderer.sprite == _customSprite)
+                    _spriteRenderer.sprite = _vanillaSprite;
+                _customSprite = null;
+            }
+        }
+
+        private void SetRenderedSprite(Sprite custom)
+        {
+            if (_customSprite == null || _spriteRenderer.sprite != _customSprite) _vanillaSprite = _spriteRenderer.sprite;
+            _spriteRenderer.sprite = custom;
+            _customSprite = custom;
+        }
+
         private void LateUpdate()
         {
             if (!EnsurePlayer()) return;
@@ -393,7 +422,7 @@ namespace Recharge.Module.Skins
                 var sprite = runtime == null ? null : (runtime.IsSheet ? PickSheetSprite(runtime) : runtime.FlatSprite);
                 if (sprite != null)
                 {
-                    _spriteRenderer.sprite = sprite;
+                    SetRenderedSprite(sprite);
                     var fallback = GetFallbackMaterial();
                     if (_spriteRenderer.sharedMaterial != fallback) _spriteRenderer.material = fallback;
                     if (_spriteRenderer.color != Color.white) _spriteRenderer.color = Color.white;

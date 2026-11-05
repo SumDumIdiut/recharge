@@ -173,13 +173,11 @@ namespace Recharge.App.Bridge
             return client;
         }
 
-        public static async Task<(int Status, string Body)> GetAsync(string path)
-        {
-            string uri = HubPath.BuildUri(path);
-            using var response = await Client.GetAsync(uri).ConfigureAwait(false);
-            string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            return ((int)response.StatusCode, body);
-        }
+        private static readonly ConditionalGetCache Revalidated = new ConditionalGetCache();
+
+        /// <summary>A hub GET; repeat requests revalidate with the ETag, so an unchanged list costs the server no body.</summary>
+        public static Task<(int Status, string Body)> GetAsync(string path) =>
+            Revalidated.GetAsync(Client, HubPath.BuildUri(path), null);
     }
 
     /// <summary>The application's short version string.</summary>

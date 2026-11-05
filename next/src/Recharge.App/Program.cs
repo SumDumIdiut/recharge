@@ -26,10 +26,12 @@ namespace Recharge.App
                 return 0;
             }
 
+            Bridge.PerfConfig.Sequence = options.RouteSequence;
+
             // Updates: swap in a downloaded version, or roll back one that never confirmed a start, then restart into it.
             // Not for snapshot runs (tests) or when RECHARGE_NO_UPDATE is set.
             // Never for a development build (run from the project's bin/ folder): it must not replace its own build output.
-            bool updates = !options.IsSnapshot && Environment.GetEnvironmentVariable("RECHARGE_NO_UPDATE") != "1" && !Updates.UpdateRules.IsDevBuild();
+            bool updates = !options.IsSnapshot && options.RouteSequence.Length == 0 && Environment.GetEnvironmentVariable("RECHARGE_NO_UPDATE") != "1" && !Updates.UpdateRules.IsDevBuild();
             if (updates)
             {
                 try
@@ -89,6 +91,7 @@ namespace Recharge.App
                     catch (Exception ex) { Console.Error.WriteLine("update confirm failed: " + ex.Message); }
                 };
             }
+            if (Bridge.PerfConfig.Enabled && options.EvalLog) Console.WriteLine("[console.log] [perf] load-uri t=" + Bridge.PerfConfig.UptimeMs());
             shell.Load("recharge://app/index.html" + route);
 
             Gtk.gtk_main();

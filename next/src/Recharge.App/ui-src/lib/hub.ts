@@ -1,31 +1,138 @@
-/** Hub and installed-data loading with a 60 s in-memory cache. */
-import { call, describeError } from '../bridge.js';
+/**
+ * Hub and installed-data loading with a session cache that is stale-while-revalidate: a list that is older than TTL_MS is still
+ * answered at once, and refreshed in the background (one request at a time per list); pages that care subscribe with onHubChange
+ * and redraw when the refreshed data differs. Lists and the installed scan are also kept in localStorage, so the next start shows
+ * them before the network answers. Anything that changes what the lists or the scan say clears the entry (invalidatesFor).
+ */
+import { call, describeError, onCallSettled } from '../bridge.js';
 import { KINDS, rowsToItems, str, type InstalledData, type Item, type Kind, type Lists } from './library.js';
 
 export const TTL_MS = 60_000;
 
-interface Entry<T> { at: number; value: T }
+interface Entry<T> { at: number; value: T; raw: string }
+
+export type HubChange = { kind: Kind } | { installed: true };
 
 const lists = new Map<Kind, Entry<Item[]>>();
 const inflight = new Map<string, Promise<unknown>>();
+const listeners = new Set<(change: HubChange) => void>();
 let installedEntry: Entry<InstalledData> | null = null;
+let hydrated = false;
 
-function fresh<T>(entry: Entry<T> | null | undefined): T | null {
-  return entry && Date.now() - entry.at < TTL_MS ? entry.value : null;
+const STORE_PREFIX = 'recharge.cache.v1.';
+
+function store(): Storage | null {
+  try { return window.localStorage; } catch { return null; }
 }
 
-/** Cached list, or null when it needs fetching. */
+function persist(name: string, raw: string): void {
+  try { store()?.setItem(STORE_PREFIX + name, raw); } catch { /* full or blocked: the cache is only a head start */ }
+}
+
+function unpersist(name: string): void {
+  try { store()?.removeItem(STORE_PREFIX + name); } catch { /* ignore */ }
+}
+
+/** Entries saved by an earlier run, loaded once. They count as stale (at = 0), so the first use refreshes them. */
+function hydrate(): void {
+  if (hydrated) return;
+  hydrated = true;
+  const area = store();
+  if (!area) return;
+  for (const kind of KINDS) {
+    try {
+      const raw = area.getItem(STORE_PREFIX + kind);
+      if (raw && !lists.has(kind)) lists.set(kind, { at: 0, value: rowsToItems(kind, JSON.parse(raw)), raw });
+    } catch { /* unreadable: fetch instead */ }
+  }
+  try {
+    const raw = area.getItem(STORE_PREFIX + 'installed');
+    if (raw && !installedEntry) installedEntry = { at: 0, value: normalizeInstalled(JSON.parse(raw)), raw };
+  } catch { /* unreadable: scan instead */ }
+}
+
+function isFresh(entry: Entry<unknown> | null | undefined, now = Date.now()): boolean {
+  return !!entry && now - entry.at < TTL_MS;
+}
+
+/** Whether a cache entry saved at `at` still counts as fresh at `now`. */
+export function isFreshAt(at: number, now: number): boolean {
+  return now - at < TTL_MS;
+}
+
+/** Cached list (possibly stale: pair it with loadKind, which refreshes it), or null when there is none. */
 export function peekKind(kind: Kind): Item[] | null {
-  return fresh(lists.get(kind));
+  hydrate();
+  return lists.get(kind)?.value ?? null;
 }
 
 export function peekInstalled(): InstalledData | null {
-  return fresh(installedEntry);
+  hydrate();
+  return installedEntry?.value ?? null;
 }
 
+/** Forget everything cached (memory and storage). */
 export function clearCache(): void {
   lists.clear();
   installedEntry = null;
+  hydrated = true;
+  for (const kind of KINDS) unpersist(kind);
+  unpersist('installed');
+}
+
+/** Forget what is installed (after an install, removal, game change...). The next read asks the app again. */
+export function invalidateInstalled(): void {
+  installedEntry = null;
+  unpersist('installed');
+}
+
+/** Forget some hub lists (after something was uploaded, edited or deleted there). */
+export function invalidateKinds(kinds: Kind[]): void {
+  for (const kind of kinds) { lists.delete(kind); unpersist(kind); }
+}
+
+/** Called for every finished bridge call; clears the cache entries the command can have made wrong. */
+export function invalidatesFor(command: string, args: Record<string, unknown> | undefined): { installed: boolean; kinds: Kind[] } {
+  const none = { installed: false, kinds: [] as Kind[] };
+  if (command === 'library.install' || command === 'library.update' || command === 'library.remove' || command === 'library.removeFolder') {
+    return { installed: true, kinds: [] };
+  }
+  if (command === 'settings.setGamePath' || (command.startsWith('backgrounds.') && !['backgrounds.list', 'backgrounds.mediaBase', 'backgrounds.pickFile'].includes(command))) {
+    return { installed: true, kinds: [] };
+  }
+  if (command === 'hub.submit' && args) {
+    const fields = (args.fields && typeof args.fields === 'object' ? args.fields : {}) as Record<string, unknown>;
+    const kind = typeof fields.kind === 'string' ? fields.kind + 's' : '';
+    return { installed: false, kinds: (KINDS as string[]).includes(kind) ? [kind as Kind] : [...KINDS] };
+  }
+  if (command === 'hub.request' && args) {
+    const method = String(args.method || 'GET').toUpperCase();
+    const path = typeof args.path === 'string' ? args.path : '';
+    if (method !== 'GET') {
+      const match = /^\/api\/(maps|mods|skins|backgrounds|playlists|games)(\/|$)/.exec(path);
+      if (match) return { installed: false, kinds: [match[1] as Kind] };
+      if (path.startsWith('/api/me/')) return { installed: false, kinds: [...KINDS] }; // an upload or removal from your account
+    }
+  }
+  return none;
+}
+
+onCallSettled((command, args) => {
+  const effect = invalidatesFor(command, args);
+  if (effect.installed) invalidateInstalled();
+  if (effect.kinds.length) invalidateKinds(effect.kinds);
+});
+
+/** Subscribe to background refreshes that changed a list or the installed scan. Returns the unsubscribe function. */
+export function onHubChange(listener: (change: HubChange) => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+function notify(change: HubChange): void {
+  for (const listener of [...listeners]) {
+    try { listener(change); } catch (error) { console.error('hub listener failed: ' + describeError(error)); }
+  }
 }
 
 function dedupe<T>(key: string, make: () => Promise<T>): Promise<T> {
@@ -36,14 +143,15 @@ function dedupe<T>(key: string, make: () => Promise<T>): Promise<T> {
   return promise;
 }
 
-export function loadKind(kind: Kind, force = false): Promise<Item[]> {
-  if (!force) {
-    const cached = peekKind(kind);
-    if (cached) return Promise.resolve(cached);
-  }
+function fetchKindNow(kind: Kind): Promise<Item[]> {
   return dedupe('kind:' + kind, async () => {
     const reply = await call<{ status: number; body: string }>('hub.get', { path: '/api/' + kind });
     if (reply.status !== 200) throw new Error('the hub answered ' + reply.status);
+    const previous = lists.get(kind);
+    if (previous && previous.raw === reply.body) {
+      previous.at = Date.now(); // nothing changed: keep the parsed items (and the pages' references to them)
+      return previous.value;
+    }
     let json: unknown;
     try {
       json = JSON.parse(reply.body);
@@ -51,22 +159,49 @@ export function loadKind(kind: Kind, force = false): Promise<Item[]> {
       throw new Error('the hub sent something unreadable');
     }
     const items = rowsToItems(kind, json);
-    lists.set(kind, { at: Date.now(), value: items });
+    lists.set(kind, { at: Date.now(), value: items, raw: reply.body });
+    persist(kind, reply.body);
+    if (previous) notify({ kind });
     return items;
   });
 }
 
-export function loadInstalled(force = false): Promise<InstalledData> {
+export function loadKind(kind: Kind, force = false): Promise<Item[]> {
+  hydrate();
   if (!force) {
-    const cached = peekInstalled();
-    if (cached) return Promise.resolve(cached);
+    const cached = lists.get(kind);
+    if (cached) {
+      if (!isFresh(cached)) fetchKindNow(kind).catch((error) => console.error('hub list ' + kind + ' refresh failed: ' + describeError(error)));
+      return Promise.resolve(cached.value);
+    }
   }
+  return fetchKindNow(kind);
+}
+
+function fetchInstalledNow(): Promise<InstalledData> {
   return dedupe('installed', async () => {
     const raw = await call<Record<string, unknown>>('library.installed', {});
+    const text = JSON.stringify(raw);
+    const previous = installedEntry;
+    if (previous && previous.raw === text) {
+      previous.at = Date.now();
+      return previous.value;
+    }
     const value = normalizeInstalled(raw);
-    installedEntry = { at: Date.now(), value };
+    installedEntry = { at: Date.now(), value, raw: text };
+    persist('installed', text);
+    if (previous) notify({ installed: true });
     return value;
   });
+}
+
+export function loadInstalled(force = false): Promise<InstalledData> {
+  hydrate();
+  if (!force && installedEntry) {
+    if (!isFresh(installedEntry)) fetchInstalledNow().catch((error) => console.error('installed refresh failed: ' + describeError(error)));
+    return Promise.resolve(installedEntry.value);
+  }
+  return fetchInstalledNow();
 }
 
 export function normalizeInstalled(raw: unknown): InstalledData {
@@ -202,12 +337,11 @@ export function imageBlobUrl(kind: Kind, id: string, file: string): Promise<stri
   const path = galleryPath(kind, id, file);
   let pending = blobs.get(path);
   if (!pending) {
-    pending = call<{ status: number; mime: string; data: string }>('hub.image', { path }).then((reply) => {
+    pending = call<{ status: number; mime: string; data: string }>('hub.image', { path }).then(async (reply) => {
       if (reply.status !== 200 || !reply.data) throw new Error('the hub answered ' + reply.status);
-      const raw = atob(reply.data);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      return URL.createObjectURL(new Blob([bytes], { type: reply.mime }));
+      // the engine decodes the base64 natively and off the main thread's byte loop
+      const blob = await (await fetch('data:' + reply.mime + ';base64,' + reply.data)).blob();
+      return URL.createObjectURL(blob);
     });
     pending.catch(() => blobs.delete(path)); // a failure can be retried later
     blobs.set(path, pending);

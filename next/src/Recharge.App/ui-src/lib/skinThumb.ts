@@ -52,6 +52,17 @@ export function keyOut(data: Uint8ClampedArray, w: number, x0: number, y0: numbe
   }
 }
 
+/** True when every pixel of [x0,x1) x [y0,y1) is (nearly) the given opaque colour. */
+function isSolid(data: Uint8ClampedArray, w: number, x0: number, y0: number, x1: number, y1: number, br: number, bg: number, bb: number): boolean {
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      if (data[i + 3] < 250 || Math.abs(data[i] - br) + Math.abs(data[i + 1] - bg) + Math.abs(data[i + 2] - bb) > 12) return false;
+    }
+  }
+  return true;
+}
+
 /** RGBA bytes → the first non-empty frame's visible pixels (plus a margin), or null. Keys a flat background out of `data` in place. */
 /** The art in one cell (row, col) of a sheet, keyed and cropped to its visible pixels; null for an empty or non-character cell. */
 export function cellArt(data: Uint8ClampedArray, w: number, h: number, row: number, col: number): Rect | null {
@@ -68,6 +79,9 @@ export function cellArt(data: Uint8ClampedArray, w: number, h: number, row: numb
   // so the same colour inside the character stays.
   const flat = ba >= 250 && !isGuide(br, bg, bb, ba) &&
     corners.every((c) => Math.abs(c[0] - br) + Math.abs(c[1] - bg) + Math.abs(c[2] - bb) <= 12 && c[3] >= 250);
+  // A cell that is one opaque colour edge to edge is a solid-block skin (the Box skin is a plain black square), not a background:
+  // the whole cell is the character.
+  if (flat && isSolid(data, w, x0, y0, x1, y1, br, bg, bb)) return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   if (flat) keyOut(data, w, x0, y0, x1, y1, br, bg, bb);
   let minX = Infinity, minY = Infinity, maxX = -1, maxY = -1, n = 0;
   for (let y = y0; y < y1; y++) {

@@ -1,8 +1,11 @@
 import { h } from '../dom.js';
 import { call, describeError } from '../bridge.js';
 import { button } from './button.js';
+import { modSwitch } from './modSwitch.js';
 import { toast } from './toast.js';
-import { authorName, kindPlaceholder, statusBadge } from './itemCard.js';
+import { gunSettingsSection } from './gunSettings.js';
+import { sourceBadge, sourceCodeLink } from './sourceLink.js';
+import { authorName, fitImage, kindPlaceholder, statusBadge } from './itemCard.js';
 import { skinCanvas } from '../lib/skinThumb.js';
 import { skinApplyButton } from '../lib/skinApply.js';
 import { backgroundApplyButton } from '../backgrounds/applyButton.js';
@@ -20,6 +23,20 @@ function date(value: string): string {
 export interface Detail {
   element: HTMLElement;
   dispose(): void;
+}
+
+/** The picture alone over the whole window. */
+function openLightbox(src: string, name: string, pixel: boolean): void {
+  const box = h('div', { className: 'lightbox', attrs: { role: 'dialog', 'aria-label': name, tabindex: '-1' } });
+  const image = h('img', { attrs: { alt: name, src } });
+  image.addEventListener('load', () => fitImage(image, box, 'contain', pixel));
+  const close = () => { document.removeEventListener('keydown', onKey, true); box.remove(); };
+  const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  box.addEventListener('click', close);
+  box.appendChild(image);
+  document.body.appendChild(box);
+  box.focus();
 }
 
 function gallery(item: Item, dispose: Array<() => void>): HTMLElement {
@@ -47,6 +64,10 @@ function gallery(item: Item, dispose: Array<() => void>): HTMLElement {
       main.classList.toggle('is-covered', !!canvas);
     });
   }
+  if (!skins) main.addEventListener('load', () => fitImage(main, stage, 'contain'));
+  // Click the picture to see it large; Esc or a click closes it again.
+  stage.classList.add('is-zoomable');
+  stage.addEventListener('click', () => { if (main.src && !main.classList.contains('is-broken')) openLightbox(main.src, item.name, skins); });
   stage.appendChild(kindPlaceholder(item.kind));
   stage.appendChild(main);
   stage.appendChild(frame);
@@ -271,6 +292,8 @@ function localActions(item: Item, folder: string, options: DetailOptions): HTMLE
     });
   });
   actions.appendChild(remove);
+  const toggle = modSwitch(item, () => options.onChanged?.(item));
+  if (toggle) actions.appendChild(toggle);
   box.append(actions, status);
   return box;
 }
@@ -327,6 +350,8 @@ function actionButtons(item: Item, options: DetailOptions): HTMLElement {
 
   actions.appendChild(main);
   actions.appendChild(remove);
+  const toggle = modSwitch(item, () => options.onChanged?.(item));
+  if (toggle) actions.appendChild(toggle);
   // an installed skin can be worn straight from its page
   if (item.kind === 'skins' && item.installed && item.installed.folder) {
     actions.appendChild(skinApplyButton(item.installed.folder, item.name));
@@ -355,17 +380,24 @@ function actionButtons(item: Item, options: DetailOptions): HTMLElement {
 export function buildDetail(item: Item, options: DetailOptions = {}): Detail {
   const dispose: Array<() => void> = [];
   const root = h('div', { className: 'detail-panel' });
-  root.appendChild(gallery(item, dispose));
+  // left column: the picture, then (for some mods) settings and the comments; right column: the details. No dead space under the shorter column.
+  const main = h('div', { className: 'detail-main' });
+  root.appendChild(main);
+  main.appendChild(gallery(item, dispose));
+  const info = h('div', { className: 'detail-info' });
+  root.appendChild(info);
 
   const head = h('div', { className: 'detail-head' });
   head.appendChild(h('p', { className: 'detail-kind', text: KIND_LABEL[item.kind] }));
-  head.appendChild(h('h2', { className: 'detail-title', text: item.name }));
+  const title = h('h2', { className: 'detail-title', text: item.name });
+  const titleMark = sourceBadge(item, 20);
+  head.appendChild(titleMark ? h('div', { className: 'detail-title-row' }, title, titleMark) : title);
   if (item.author) {
     head.appendChild(h('p', { className: 'detail-by' }, 'by ', authorName(item.author, item.color)));
   }
   const badge = statusBadge(item);
   if (badge) head.appendChild(badge);
-  root.appendChild(head);
+  info.appendChild(head);
 
   const meta = h('dl', { className: 'detail-meta' });
   const add = (label: string, value: string) => {
@@ -385,14 +417,17 @@ export function buildDetail(item: Item, options: DetailOptions = {}): Detail {
     add('Installed revision', item.installed.revision === null ? '' : String(item.installed.revision));
   }
   if (item.local) add('Source', 'Local only, not on the hub');
-  root.appendChild(meta);
+  info.appendChild(meta);
 
-  if (item.description) root.appendChild(h('p', { className: 'detail-desc', text: item.description }));
+  if (item.description) info.appendChild(h('p', { className: 'detail-desc', text: item.description }));
+  const sourceLink = sourceCodeLink(item); // mods: the repository of the source code
+  if (sourceLink) info.appendChild(h('div', { className: 'detail-actions detail-source-row' }, sourceLink));
 
-  if (item.local && item.installed && item.installed.folder) root.appendChild(localActions(item, item.installed.folder, options));
+  if (item.local && item.installed && item.installed.folder) info.appendChild(localActions(item, item.installed.folder, options));
   if (!item.local) {
-    root.appendChild(actionButtons(item, options));
-    if (item.kind !== 'games') root.appendChild(commentsSection(item));
+    info.appendChild(actionButtons(item, options));
+    if (item.kind === 'mods' && item.installed && (item.modId === 'recharge.gun' || item.installed.folder === 'recharge.gun')) main.appendChild(gunSettingsSection());
+    if (item.kind !== 'games') main.appendChild(commentsSection(item));
   }
   return { element: root, dispose: () => dispose.forEach((fn) => fn()) };
 }

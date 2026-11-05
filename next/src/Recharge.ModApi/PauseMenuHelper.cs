@@ -36,19 +36,25 @@ namespace Recharge.ModApi
         /// <summary>The pause menu's settings container (the template every mod panel is cloned from), or null.</summary>
         public static GameObject SettingsBit(pauseMenuScript menu) => menu != null ? MenuReflection.SettingsBit(menu) : null;
 
-        public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick)
+        // The overloads without "visible" stay as separate methods: mods compiled against the older signatures bind to them by exact shape.
+        public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick) => AddRow(menu, rowName, label, onClick, null);
+
+        public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick, Func<bool> visible)
         {
             if (!HasExpectedShape(menu)) return null;
-            MenuRowRegistry.Upsert(rowName, label, onClick);
+            MenuRowRegistry.Upsert(rowName, label, onClick, visible);
             return MenuPager.EnsureBuilt(menu);
         }
 
-        public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label)
+        public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label) => AddPanelRow(menu, rowName, label, null);
+
+        /// <param name="visible">Optional: the row is listed only while this returns true (checked each time the menu is shown).</param>
+        public static GameObject AddPanelRow(pauseMenuScript menu, string rowName, string label, Func<bool> visible)
         {
             if (!HasExpectedShape(menu)) return null;
 
             var panel = MenuPanelRegistry.GetOrCreate(menu, rowName, label);
-            MenuRowRegistry.Upsert(rowName, label, () => panel.SetActive(true));
+            MenuRowRegistry.Upsert(rowName, label, () => panel.SetActive(true), visible);
             MenuPager.EnsureBuilt(menu);
             return panel;
         }

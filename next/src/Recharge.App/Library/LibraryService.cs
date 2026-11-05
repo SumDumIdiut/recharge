@@ -84,6 +84,12 @@ namespace Recharge.App.Library
         /// <summary>Installs or updates (same thing: an install over the linked folder, with a backup).</summary>
         public async Task<JsonObject> Install(string kind, string id, IReadOnlyCollection<string>? otherNames = null)
         {
+            try { return await InstallCore(kind, id, otherNames).ConfigureAwait(false); }
+            finally { InstalledCache.Invalidate(); } // even a failed install may have moved folders
+        }
+
+        private async Task<JsonObject> InstallCore(string kind, string id, IReadOnlyCollection<string>? otherNames)
+        {
             Guard(kind, id);
             string api = "/api/" + kind + "/" + Uri.EscapeDataString(id);
             (int status, string body) = await _hub.GetJson(api).ConfigureAwait(false);
@@ -118,7 +124,12 @@ namespace Recharge.App.Library
                 else
                 {
                     byte[] package = await _hub.GetPackage(api + "/file", installer.PackageLimit).ConfigureAwait(false);
-                    done = installer.Install(package, id, name, revision, updatedAt, author);
+                    // A mod re-uploaded as a new hub entry: the folder may still carry the old entry's id. Ask the hub whether that
+                    // entry is still listed; if it's gone, this entry takes the folder over.
+                    Func<string, bool>? stillListed = kind == "mods"
+                        ? other => { try { return _hub.GetJson("/api/mods/" + Uri.EscapeDataString(other)).GetAwaiter().GetResult().Status == 200; } catch { return true; } }
+                        : null;
+                    done = installer.Install(package, id, name, revision, updatedAt, author, stillListed);
                 }
                 folder = done.Folder; backedUp = done.BackedUp;
             }
@@ -134,6 +145,12 @@ namespace Recharge.App.Library
 
         /// <summary>Removes the folder linked to this hub id (to the backup store). Nothing linked is an error, never a guess.</summary>
         public JsonObject Remove(string kind, string id)
+        {
+            try { return RemoveCore(kind, id); }
+            finally { InstalledCache.Invalidate(); }
+        }
+
+        private JsonObject RemoveCore(string kind, string id)
         {
             Guard(kind, id);
             string? folder, backedUp;
@@ -163,6 +180,12 @@ namespace Recharge.App.Library
         /// </summary>
         public JsonObject RemoveFolder(string kind, string folder)
         {
+            try { return RemoveFolderCore(kind, folder); }
+            finally { InstalledCache.Invalidate(); }
+        }
+
+        private JsonObject RemoveFolderCore(string kind, string folder)
+        {
             if (!Kinds.Contains(kind)) throw new ArgumentException("unknown kind: " + kind);
             if (string.IsNullOrWhiteSpace(folder) || folder.Length > 200 || folder == "." || folder == ".." ||
                 folder.IndexOfAny(new[] { '/', '\\', '\0' }) >= 0 || folder != folder.Trim())
@@ -185,8 +208,72 @@ namespace Recharge.App.Library
             return result;
         }
 
+        /// <summary>Ids of mods RechargeLoader 2 carries built in. Their folders, when present, are skipped by the loader, so an on/off switch means nothing for them.</summary>
+        public static readonly string[] BuiltInModIds = { "recharge.maps", "recharge.multiplayer", "recharge.customskins", "Skins", "Skinmod" };
+
+        /// <summary>
+        /// Switches an installed mod on or off by writing "enabled" in its mod.json (the loader skips a disabled mod). <paramref name="folderOrId"/> is the
+        /// mod's folder name or its id. Refused while IGTAP runs and for built-in modules; every other field in the file is kept, and the write is a temp file then a rename.
+        /// </summary>
+        public JsonObject SetModEnabled(string folderOrId, bool enabled)
+        {
+            try { return SetModEnabledCore(folderOrId, enabled); }
+            finally { InstalledCache.Invalidate(); }
+        }
+
+        private JsonObject SetModEnabledCore(string folderOrId, bool enabled)
+        {
+            if (string.IsNullOrEmpty(folderOrId) || folderOrId.IndexOfAny(new[] { '/', '\\' }) >= 0 || folderOrId.StartsWith(".", StringComparison.Ordinal))
+                throw new ArgumentException("bad mod name");
+            if (_game == null) throw new InvalidOperationException("IGTAP wasn't found");
+            if (_gameRunning()) throw new InvalidOperationException("IGTAP is running - close the game before changing mods.");
+            string mods = ModsDir;
+            string? dir = null;
+            string direct = Path.Combine(mods, folderOrId);
+            if (File.Exists(Path.Combine(direct, "mod.json"))) dir = direct;
+            else
+            {
+                foreach (string d in FolderStore.Folders(mods))
+                {
+                    try
+                    {
+                        if (JsonReader.Parse(File.ReadAllText(Path.Combine(d, "mod.json"))) is JsonObject o && o.TryGetValue("id", out JsonNode idNode)
+                            && idNode is JsonString ids && ids.Value == folderOrId) { dir = d; break; }
+                    }
+                    catch { /* not a mod folder */ }
+                }
+            }
+            if (dir == null) throw new InvalidOperationException("that mod isn't installed");
+            if ((File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0) throw new InvalidOperationException("that mod isn't installed");
+
+            string file = Path.Combine(dir, "mod.json");
+            JsonObject manifest = JsonReader.Parse(File.ReadAllText(file)) as JsonObject ?? throw new InvalidOperationException("mod.json isn't a JSON object");
+            string id = manifest.TryGetValue("id", out JsonNode n) && n is JsonString js ? js.Value : "";
+            if (Array.IndexOf(BuiltInModIds, id) >= 0 || Array.IndexOf(BuiltInModIds, Path.GetFileName(dir)) >= 0)
+                throw new InvalidOperationException("that module is built into Recharge and can't be switched off");
+
+            manifest["enabled"] = enabled ? JsonBool.True : JsonBool.False;
+            string tmp = file + ".rn-tmp";
+            File.WriteAllText(tmp, JsonWriter.Write(manifest, 2) + "\n");
+            File.Move(tmp, file, true);
+
+            var result = new JsonObject();
+            result["folder"] = new JsonString(Path.GetFileName(dir));
+            result["id"] = new JsonString(id);
+            result["enabled"] = enabled ? JsonBool.True : JsonBool.False;
+            return result;
+        }
+
         /// <summary>Everything installed: the game's mods, maps and skins (when the game is found) and the app's backgrounds and playlists.</summary>
         public JsonObject Installed()
+        {
+            string[] roots = _game == null
+                ? new[] { Root("backgrounds"), Root("playlists") }
+                : new[] { ModsDir, Root("maps"), Root("skins"), Root("backgrounds"), Root("playlists") };
+            return InstalledCache.Get((_game ?? "") + "|" + _data, roots, ScanInstalled);
+        }
+
+        private JsonObject ScanInstalled()
         {
             JsonObject result = _game == null
                 ? new JsonObject { ["mods"] = new JsonArray(), ["maps"] = new JsonArray(), ["skins"] = new JsonArray(), ["warnings"] = new JsonArray() }

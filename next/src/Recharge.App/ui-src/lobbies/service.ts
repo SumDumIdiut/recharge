@@ -1,5 +1,6 @@
 /** Talks to lobbies.* while the page is open: polls the app's cached list and keeps the watch alive. */
 import { call, describeError } from '../bridge.js';
+import { ensureRechargeLoader } from './loaderGuard.js';
 import { joinRequest, normalizeReply, type LobbyReply } from './model.js';
 
 export const POLL_MS = 2000;
@@ -66,6 +67,7 @@ export class LobbyPoller {
 /** Starts the game and joins the lobby (game.launch with a lobby.join intent). Resolves to the text the button shows afterwards. */
 export async function joinLobby(lobbyId: number): Promise<string> {
   try {
+    if (!(await ensureRechargeLoader('Joining from Recharge'))) return 'Needs the loader';
     await call('game.launch', joinRequest(lobbyId));
     return 'Game starting…';
   } catch (error) {

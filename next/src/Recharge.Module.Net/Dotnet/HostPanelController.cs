@@ -57,9 +57,41 @@ internal class HostPanelController : MonoBehaviour
 
 	private readonly Dictionary<int, bool> _readyStates = new Dictionary<int, bool>();
 
+	public static HostPanelController Instance { get; private set; }
+
 	public void Init(IRechargeHost host)
 	{
 		_host = host;
+		Instance = this;
+	}
+
+	// ---- entering the world after a host / join from the Recharge app ----
+	// In the in-game menu the host or guest enters the world by pressing Ready (TryConsumePendingMapLoad). From the app nobody presses it, so
+	// the lobby would sit on the title screen; this does that step once the title menu is really up (the app's intent can arrive while the
+	// game is still starting, before its menu exists, and a scene change that early leaves a black screen).
+	private bool _enterWorldPending;
+	private float _enterWorldAfter, _enterWorldGiveUp;
+	private static readonly System.Reflection.FieldInfo StartHasRunField = Reflect.FieldOf<pauseMenuScript>("startHasRun");
+
+	/// <summary>Main thread. Called after the relay accepted lobby.host or lobby.join.</summary>
+	public void RequestEnterWorld()
+	{
+		_enterWorldPending = true;
+		_enterWorldAfter = Time.unscaledTime + 3f;
+		_enterWorldGiveUp = Time.unscaledTime + 120f;
+	}
+
+	private void TryEnterWorld()
+	{
+		if (!_enterWorldPending) return;
+		if (Time.unscaledTime > _enterWorldGiveUp) { _enterWorldPending = false; Debug.Log("[HostPanel] enter-world gave up (no title menu)"); return; }
+		var mgr = MpNetworkManager.Instance;
+		if (mgr == null || !mgr.InLobby || _menu == null || Time.unscaledTime < _enterWorldAfter) return;
+		if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "MainMenu") { _enterWorldPending = false; return; } // already in a world
+		if (StartHasRunField != null && StartHasRunField.GetValue(_menu) is bool started && !started) return;
+		_enterWorldPending = false;
+		Debug.Log("[HostPanel] entering the lobby's world from the title screen");
+		TryConsumePendingMapLoad();
 	}
 
 	public void InstallMenuRow(pauseMenuScript menu)
@@ -592,12 +624,33 @@ internal class HostPanelController : MonoBehaviour
 
 	private Movement _localMovement;
 
+	/// <summary>No pause-menu row for DOTnet: in a lobby, F4 in the pause menu opens its panel (Ready / Host Panel, Leave Lobby, Colour).</summary>
+	public const Key PanelKey = Key.F4;
+	private bool _wasInLobby;
+
+	private void HandlePanelKey(MpNetworkManager mgr)
+	{
+		bool inLobby = mgr.InLobby;
+		if (inLobby && !_wasInLobby)
+			mgr.ChatLines.Add("[DOTnet] In the pause menu, press " + PanelKey + " for Ready, the Host Panel and Leave Lobby.");
+		_wasInLobby = inLobby;
+		var kb = Keyboard.current;
+		if (!inLobby || kb == null || !kb[PanelKey].wasPressedThisFrame) return;
+		if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "MainMenu") return;
+		var main = MpNetworkManager.LatestMainBit;
+		var panel = MpNetworkManager.LatestMpPanel;
+		if (main == null || panel == null || !main.activeInHierarchy) return; // only from the pause menu's main page
+		main.SetActive(false);
+		panel.SetActive(true);
+	}
+
 	private void Update()
 	{
 		RefreshMenu();
 
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null) return;
+		HandlePanelKey(mgr);
 
 		mgr.OnGameMessage -= OnGameMessage;
 		mgr.OnGameMessage += OnGameMessage;
@@ -617,6 +670,7 @@ internal class HostPanelController : MonoBehaviour
 		TryApplyPendingAbilities();
 		TryStartModeEconomy();
 		TryCloseMenuIfNeeded();
+		TryEnterWorld();
 		TryApplyPendingSceneChange();
 		TryTeleportToStartSpawn();
 

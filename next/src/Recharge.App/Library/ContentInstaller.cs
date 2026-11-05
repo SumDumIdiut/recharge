@@ -59,11 +59,16 @@ namespace Recharge.App.Library
 
         public long PackageLimit => _kind == ContentKind.Playlist ? MaxPlaylistBytes : _kind == ContentKind.Background ? MaxBackgroundBytes : MaxPackageBytes;
 
-        public Result Install(byte[] package, string hubId, string name, long revision, string? updatedAt, string author = "") =>
-            Install(new MemoryStream(package, false), hubId, name, revision, updatedAt, author);
+        public Result Install(byte[] package, string hubId, string name, long revision, string? updatedAt, string author = "", Func<string, bool>? otherEntryListed = null) =>
+            Install(new MemoryStream(package, false), hubId, name, revision, updatedAt, author, otherEntryListed);
 
         /// <summary>Installs or updates. The stream must be seekable (a playlist is read from its downloaded file).</summary>
-        public Result Install(Stream package, string hubId, string name, long revision, string? updatedAt, string author = "")
+        /// <param name="otherEntryListed">
+        /// For mods: whether the hub entry an installed folder of the same mod id came from is still on the hub. A mod re-uploaded
+        /// as a new entry leaves the old one gone, and then the new entry may take the folder over (backed up as usual). Without
+        /// it (or when the old entry is still listed) a second entry for the same mod id is refused.
+        /// </param>
+        public Result Install(Stream package, string hubId, string name, long revision, string? updatedAt, string author = "", Func<string, bool>? otherEntryListed = null)
         {
             if (package.Length > PackageLimit) throw new InvalidOperationException("the package is larger than " + PackageLimit / (1024 * 1024) + " MB");
             if (!FolderStore.SafeId(hubId)) throw new ArgumentException("bad hub id", nameof(hubId));
@@ -85,7 +90,7 @@ namespace Recharge.App.Library
                 {
                     target = Path.Combine(_root, modId!);
                     string? existing = HubIdOf(target);
-                    if (Directory.Exists(target) && existing != null && existing != hubId)
+                    if (Directory.Exists(target) && existing != null && existing != hubId && (otherEntryListed == null || otherEntryListed(existing)))
                         throw new InvalidOperationException("the mod \"" + modId + "\" is already installed from another hub entry");
                     oldCopies = folders.Where(d => d != target && HubIdOf(d) == hubId).ToList();
                     KeepEnabled(target, tmp);

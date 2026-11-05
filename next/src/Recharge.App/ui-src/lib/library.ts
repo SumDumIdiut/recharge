@@ -1,6 +1,7 @@
 /** Pure Library logic: kinds, rows, colours, search, sort, install matching, updates. No DOM. */
 import { slug } from '../util.js';
 import { isNewer } from './version.js';
+import { githubRepoUrl } from './sourceUrl.js';
 
 export type Kind = 'maps' | 'mods' | 'skins' | 'backgrounds' | 'playlists' | 'games';
 export const KINDS: Kind[] = ['maps', 'mods', 'skins', 'backgrounds', 'playlists', 'games'];
@@ -41,6 +42,8 @@ export interface Item {
   updatedAt: string;
   revision: number | null;
   modId: string | null;
+  /** The mod's source code on GitHub (a clean https://github.com/owner/repo address), or null. */
+  sourceUrl: string | null;
   /** True for installed items that have no hub row. */
   local: boolean;
   status: Status;
@@ -117,6 +120,7 @@ export function rowToItem(kind: Kind, row: unknown): Item | null {
     updatedAt: str(r.updatedAt),
     revision,
     modId: r.modId === null || r.modId === undefined ? null : str(r.modId),
+    sourceUrl: githubRepoUrl(r.sourceUrl),
     local: false,
     status: null,
     installed: null,
@@ -273,6 +277,7 @@ function localItem(kind: Kind, id: string, name: string, version: string, ref: I
     updatedAt: '',
     revision: ref.revision,
     modId: null,
+    sourceUrl: null,
     local: true,
     status: 'installed',
     installed: ref,

@@ -1,8 +1,8 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
-import { toast } from './components/toast.js';
 import { initAccountChip } from './account/index.js';
 import { initUpdateBar } from './components/updateBar.js';
+import { initBell } from './account/notifications.js';
 
 export interface NavEntry {
   id: string;
@@ -15,11 +15,6 @@ const NAV: NavEntry[] = [
   { id: 'home', label: 'Home', icon: 'home', hash: '#/home' },
   { id: 'lobbies', label: 'Lobbies', icon: 'lobbies', hash: '#/lobbies' },
   { id: 'library', label: 'Library', icon: 'library', hash: '#/library' },
-  { id: 'maps', label: 'Maps', icon: 'maps', hash: '#/maps' },
-  { id: 'mods', label: 'Mods', icon: 'mods', hash: '#/mods' },
-  { id: 'skins', label: 'Skins', icon: 'skins', hash: '#/skins' },
-  { id: 'games', label: 'Games', icon: 'gamepad', hash: '#/games' },
-  { id: 'backgrounds', label: 'Backgrounds', icon: 'backgrounds', hash: '#/backgrounds' },
   { id: 'community', label: 'Community', icon: 'community', hash: '#/community' },
   { id: 'notebook', label: 'Notebook', icon: 'notebook', hash: '#/notebook' },
 ];
@@ -171,7 +166,7 @@ export function initShell(options: ShellOptions = {}): void {
   const bell = document.getElementById('topbar-bell');
   if (bell) {
     bell.appendChild(icon('bell', 20));
-    bell.addEventListener('click', () => toast('No notifications yet.', 'info'));
+    initBell(bell);
   }
 
   const account = document.getElementById('topbar-account');

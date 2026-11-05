@@ -8,41 +8,68 @@ import { panel, row, wrap, type Section } from './ui.js';
 const LOADER_WORDS: Record<string, string> = {
   installed: 'Installed',
   notinstalled: 'Not installed',
-  missing: 'Not installed',
-  damaged: 'Needs repair',
-  outdated: 'Out of date',
+  outdated: 'Update available',
+  broken: 'Needs repair',
+  foreign: 'Another mod tool found',
+  off: 'Installed (vanilla build selected)',
 };
+
+/** The patcher's errors start with a short code ("busy: ...", "io: ..."); show just the sentence. */
+function plainError(error: unknown): string {
+  return describeError(error).replace(/^(busy|io|foreign|shape):\s*/i, '');
+}
 
 function loaderRow(): HTMLElement {
   const status = h('span', { className: 'path-value', text: 'Checking…' });
   const detail = h('div', { className: 'setting-hint' });
   const actions = h('div', { className: 'settings-row-wrap' });
+  const explain = h('div', { className: 'setting-hint' });
+  explain.textContent =
+    'Install adds the Recharge mod loader to your IGTAP game. It replaces the old Recharge loader if you have one, and brings maps, skins and multiplayer into the game itself. ' +
+    'Repair puts the loader files back if something is missing or changed. Uninstall removes the loader and restores your original game file exactly as it was. ' +
+    'IGTAP has to be closed for any of these.';
+  let busy = false;
+  let key = '';
+  let hasBackup = false;
 
   const run = async (command: string, done: string): Promise<void> => {
+    if (busy) return;
+    busy = true;
+    apply();
     try {
       const result = await call<LoaderStatus>(command);
       toast(done, 'success');
       show(result);
     } catch (error) {
-      toast(describeError(error), 'error');
+      toast(plainError(error), 'error');
+    } finally {
+      busy = false;
+      apply();
     }
   };
   const mk = (label: string, command: string, done: string, kind: 'primary' | 'secondary' | 'danger'): HTMLButtonElement =>
     button(label, { kind, onClick: () => void run(command, done) });
   const install = mk('Install', 'loader.install', 'RechargeLoader installed.', 'primary');
   const repair = mk('Repair', 'loader.repair', 'RechargeLoader repaired.', 'secondary');
-  const uninstall = mk('Uninstall', 'loader.uninstall', 'RechargeLoader removed.', 'danger');
+  const uninstall = mk('Uninstall', 'loader.uninstall', 'RechargeLoader removed. Your original game file is back.', 'danger');
   actions.append(install, repair, uninstall);
 
+  function apply(): void {
+    const installed = key === 'installed' || key === 'off';
+    install.textContent = key === 'outdated' ? 'Update' : 'Install';
+    install.disabled = busy || !(key === 'notinstalled' || key === 'outdated');
+    repair.disabled = busy || !(installed || key === 'broken' || key === 'outdated');
+    uninstall.disabled = busy || !(installed || key === 'outdated' || (key === 'broken' && hasBackup));
+  }
+
   function show(s: LoaderStatus): void {
-    const key = String(s.state || '').toLowerCase();
-    status.textContent = LOADER_WORDS[key] || s.state || 'Unknown';
-    status.classList.toggle('is-missing', key !== 'installed');
+    key = String(s.state || '').toLowerCase();
+    hasBackup = !!s.hasBackup;
+    status.textContent = s.legacy && key === 'outdated' ? 'Old loader installed' : LOADER_WORDS[key] || s.state || 'Unknown';
+    status.classList.toggle('is-missing', key !== 'installed' && key !== 'off');
     detail.textContent = s.detail || '';
     actions.hidden = false;
-    install.disabled = key === 'installed';
-    repair.disabled = key !== 'damaged' && key !== 'outdated' && key !== 'installed';
-    uninstall.disabled = key !== 'installed' && key !== 'damaged' && key !== 'outdated';
+    apply();
   }
 
   void (async () => {
@@ -56,24 +83,18 @@ function loaderRow(): HTMLElement {
     try {
       show(await call<LoaderStatus>('loader.status'));
     } catch (error) {
-      const text = describeError(error);
-      if (/unknown command/i.test(text)) {
-        status.textContent = 'Coming soon';
-        detail.textContent = 'Installing the loader from here is not ready yet.';
-        status.classList.remove('is-missing');
-        actions.hidden = true;
-      } else {
-        status.textContent = 'Unavailable';
-        status.classList.add('is-missing');
-        detail.textContent = text;
-        actions.hidden = true;
-      }
+      status.textContent = 'Unavailable';
+      status.classList.add('is-missing');
+      detail.textContent = plainError(error);
+      actions.hidden = true;
     }
   })();
 
   const control = h('div', { className: 'path-box' }, status);
   const outer = row('RechargeLoader', 'The mod loader inside the game.', wrap(control, actions));
-  outer.querySelector('.setting-copy')?.appendChild(detail);
+  const copy = outer.querySelector('.setting-copy');
+  copy?.appendChild(detail);
+  copy?.appendChild(explain);
   return outer;
 }
 

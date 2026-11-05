@@ -22,6 +22,8 @@ export interface BgConfig {
   fit: Fit;
   position: Position;
   dim: number;
+  /** Background strength, 0 (hidden) to 100 (as visible as the adaptive dim allows). */
+  strength: number;
   tint: string | null;
   blur: number;
   interval: number;
@@ -33,7 +35,7 @@ export interface BgConfig {
 }
 
 export const DEFAULTS: BgConfig = {
-  source: 'none', background: null, playlist: null, fit: 'cover', position: 'center', dim: 35, tint: null, blur: 0,
+  source: 'none', background: null, playlist: null, fit: 'cover', position: 'center', dim: 35, strength: 50, tint: null, blur: 0,
   interval: 300, shuffle: false, fadeMs: 1000, pauseUnfocused: true, stillOnly: false, pageDim: {},
 };
 
@@ -75,6 +77,7 @@ export function configFromSettings(raw: unknown): BgConfig {
     fit: oneOf(s.bgFit, FITS, DEFAULTS.fit),
     position: oneOf(s.bgPosition, POSITIONS, DEFAULTS.position),
     dim: clampInt(s.bgDim, 0, 90, DEFAULTS.dim),
+    strength: clampInt(s.bgStrength, 0, 100, DEFAULTS.strength),
     tint: validHex(s.bgTint),
     blur: clampInt(s.bgBlur, 0, 24, 0),
     interval: clampInt(s.bgInterval, 5, 86400, DEFAULTS.interval),
@@ -90,7 +93,7 @@ export function configFromSettings(raw: unknown): BgConfig {
 export function configToPatch(c: BgConfig): Record<string, unknown> {
   return {
     backgroundSource: c.source, background: c.background, backgroundPlaylist: c.playlist, bgFit: c.fit, bgPosition: c.position,
-    bgDim: c.dim, bgTint: c.tint, bgBlur: c.blur, bgInterval: c.interval, bgShuffle: c.shuffle, bgFadeMs: c.fadeMs,
+    bgDim: c.dim, bgStrength: c.strength, bgTint: c.tint, bgBlur: c.blur, bgInterval: c.interval, bgShuffle: c.shuffle, bgFadeMs: c.fadeMs,
     bgPauseUnfocused: c.pauseUnfocused, bgStillOnly: c.stillOnly, bgPageDim: c.pageDim,
   };
 }

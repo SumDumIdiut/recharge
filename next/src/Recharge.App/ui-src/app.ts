@@ -9,6 +9,7 @@ import { notebookPage } from './pages/notebook.js';
 import { settingsPage } from './pages/settings.js';
 import './settings/boot.js';
 import { notFoundPage } from './pages/notFound.js';
+import { initPerf } from './perf.js';
 import { themeAllSelects } from './components/dropdown.js';
 
 const routes: PageRegistry = {
@@ -32,3 +33,4 @@ themeAllSelects();
 bindRouter(router);
 initShell({ onSearch: (query) => router.filter(query) });
 void router.start();
+void initPerf();

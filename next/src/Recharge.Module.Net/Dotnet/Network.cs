@@ -597,6 +597,13 @@ public class MpNetworkManager : MonoBehaviour
 		var playerName = await OnMain(() => { _joinFailure = null; IsHost = false; return GetDisplayName(); }).ConfigureAwait(false);
 		var joined = await _net.JoinAsync(lobbyId, playerName).ConfigureAwait(false);
 		if (joined == null) throw new InvalidOperationException(_joinFailure ?? "the relay refused the join");
+		await OnMain(() =>
+		{
+			// a base-game lobby has no map to load; the guest goes to the same scene the host picked
+			if (string.IsNullOrEmpty(joined.MapHubId) && string.IsNullOrEmpty(PendingLocalMapId)) PendingBaseGameHard = joined.Hard;
+			HostPanelController.Instance?.RequestEnterWorld();
+			return 0;
+		}).ConfigureAwait(false);
 	}
 
 	/// <summary>Host from the app (the lobby.host intent): connects to the relay if needed and opens the lobby the way the in-game host menu does; throws the relay's reason when refused.</summary>
@@ -617,6 +624,7 @@ public class MpNetworkManager : MonoBehaviour
 		}).ConfigureAwait(false);
 		var hosted = await _net.HostAsync(lobbyName, playerName, string.IsNullOrEmpty(mapLocalId) ? null : mapHubId, string.IsNullOrEmpty(mapLocalId) ? null : mapName, hard).ConfigureAwait(false);
 		if (hosted == null) throw new InvalidOperationException(_joinFailure ?? "the relay refused the lobby");
+		await OnMain(() => { HostPanelController.Instance?.RequestEnterWorld(); return 0; }).ConfigureAwait(false);
 	}
 
 	private async Task RunNet<T>(Func<Task<T>> work, string what)

@@ -33,6 +33,8 @@ namespace Recharge.ModApi
             public int CurrentPage;
             public float QuitTargetY;
             public bool LayoutLogged;
+            public System.Collections.Generic.List<GameObject> VanillaDividers = new System.Collections.Generic.List<GameObject>();
+            public System.Collections.Generic.List<GameObject> PagerDividers = new System.Collections.Generic.List<GameObject>();
 
             // Re-apply the layout whenever the pager is shown again (e.g. a mod
             // panel that borrowed the Quit row closed), so Quit always lands
@@ -205,7 +207,8 @@ namespace Recharge.ModApi
                     Debug.Log("[Recharge] MenuPager pause bottomMargin=" + bottomMargin + " (quitY=" + originalQuitY + " panelBottom=" + panelBottomEdge + " panelTop=" + panelTopY + " scaleY=" + backgroundScaleY + ")");
             }
 
-            HideVanillaDividersInPagerRegion(mainBitGo.transform, topY, originalQuitY, out var dividerTemplate);
+            var vanillaDividers = new System.Collections.Generic.List<GameObject>();
+            HideVanillaDividersInPagerRegion(mainBitGo.transform, topY, originalQuitY, vanillaDividers, out var dividerTemplate);
 
             var pagerGo = new GameObject("ModsPager", typeof(RectTransform));
             pagerGo.transform.SetParent(quit.parent, false);
@@ -230,7 +233,8 @@ namespace Recharge.ModApi
             rt.QuitTargetY = quitY;
             ResizeBackgroundToFit(background, panelTopY, quitY, bottomMargin, backgroundScaleY, childBackground);
 
-            CreateDividers(dividerTemplate, topY, rowSpacing);
+            rt.VanillaDividers = vanillaDividers;
+            rt.PagerDividers = CreateDividers(dividerTemplate, topY, rowSpacing);
             rt.Slots = CreateSlots(quit, settings);
             rt.PageButton = CreatePageButton(rt, pagerGo, quit, settings);
 
@@ -238,7 +242,7 @@ namespace Recharge.ModApi
             return pagerGo;
         }
 
-        private static void HideVanillaDividersInPagerRegion(Transform mainBit, float topY, float originalQuitY, out Transform dividerTemplate)
+        private static void HideVanillaDividersInPagerRegion(Transform mainBit, float topY, float originalQuitY, System.Collections.Generic.List<GameObject> hidden, out Transform dividerTemplate)
         {
             float regionTop = topY - 0.01f;
             float regionBottom = originalQuitY + 0.01f;
@@ -249,7 +253,7 @@ namespace Recharge.ModApi
                 var lineRt = child as RectTransform;
                 if (lineRt == null) continue;
                 if (lineRt.anchoredPosition.y <= regionTop && lineRt.anchoredPosition.y >= regionBottom)
-                    child.gameObject.SetActive(false);
+                { child.gameObject.SetActive(false); hidden.Add(child.gameObject); }
                 else if (dividerTemplate == null && child.gameObject.activeSelf)
                     dividerTemplate = child;
             }
@@ -293,16 +297,19 @@ namespace Recharge.ModApi
             background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * background.sizeDelta.y);
         }
 
-        private static void CreateDividers(Transform dividerTemplate, float topY, float rowSpacing)
+        private static System.Collections.Generic.List<GameObject> CreateDividers(Transform dividerTemplate, float topY, float rowSpacing)
         {
-            if (dividerTemplate == null) return;
+            var made = new System.Collections.Generic.List<GameObject>();
+            if (dividerTemplate == null) return made;
             for (int i = 0; i < MaxRowsPerPage + 1; i++)
             {
                 var divider = UnityEngine.Object.Instantiate(dividerTemplate.gameObject, dividerTemplate.parent);
                 divider.name = "ModsPagerDivider" + i;
                 var dividerRt = (RectTransform)divider.transform;
                 dividerRt.anchoredPosition = new Vector2(dividerRt.anchoredPosition.x, topY - (i + 0.5f) * rowSpacing);
+                made.Add(divider);
             }
+            return made;
         }
 
         private static GameObject[] CreateSlots(RectTransform quit, RectTransform settings)
@@ -345,7 +352,7 @@ namespace Recharge.ModApi
 
         private static void ShowPage(Runtime rt, int page)
         {
-            var rows = MenuRowRegistry.All;
+            var rows = MenuRowRegistry.Visible();
             int modPageCount = rows.Count == 0 ? 0 : (int)Math.Ceiling(rows.Count / (double)MaxRowsPerPage);
             int totalPages = 1 + modPageCount;
             if (page < 0) page = totalPages - 1;
@@ -356,6 +363,9 @@ namespace Recharge.ModApi
             if (rt.PageButton != null)
             {
                 bool paged = totalPages > 1;
+                // No mod rows to show: the menu is the vanilla one again (vanilla dividers back, none of ours, no page row).
+                foreach (var d in rt.VanillaDividers) if (d != null) d.SetActive(!paged);
+                foreach (var d in rt.PagerDividers) if (d != null) d.SetActive(paged);
                 rt.PageButton.SetActive(paged);
                 if (paged) MenuUiUtil.SetButtonLabel(rt.PageButton, "Page " + (page + 1) + "/" + totalPages + "  >");
                 float bottomY = paged ? rt.QuitY : rt.QuitY + rt.RowSpacing;

@@ -2,6 +2,9 @@ import { h } from '../dom.js';
 import { icon } from '../icons.js';
 import { skinCanvas } from '../lib/skinThumb.js';
 import { imageBlobUrl } from '../lib/hub.js';
+import { loadInstalled } from '../lib/hub.js';
+import { modSwitch } from './modSwitch.js';
+import { sourceBadge } from './sourceLink.js';
 import { styleName } from '../profile/render.js';
 import { watchStyle } from '../profile/store.js';
 import { itemRoute, KIND_LABEL, nameStyle, type Item, type Kind } from '../lib/library.js';
@@ -74,17 +77,24 @@ export function statusBadge(item: Item): HTMLElement | null {
   return null;
 }
 
-/** A skin card's picture: its sheet's first frame, loaded (through the bridge) once the card scrolls near the view. */
+/**
+ * A skin card's picture: the first character frame of its sheet, loaded (through the bridge) once the card scrolls near the view.
+ * A sheet with no character (an empty template) tries the next gallery picture; when none has one, the card keeps its
+ * placeholder. The raw sheet is never shown.
+ */
 function skinMedia(item: Item, media: HTMLElement): HTMLElement {
   const box = h('div', { className: 'media-box card-img' });
-  const start = () => {
-    imageBlobUrl(item.kind, item.id, item.gallery[0]).then((url) => {
+  const tryFile = (index: number) => {
+    if (index >= Math.min(item.gallery.length, 3)) return;
+    imageBlobUrl(item.kind, item.id, item.gallery[index]).then((url) => {
       const image = new Image();
-      image.className = 'pixel';
-      image.onload = () => { box.appendChild(image); if (showSkinFrame(box, image)) media.classList.add('has-img'); };
+      image.decoding = 'async';
+      image.onload = () => { if (showSkinFrame(box, image)) media.classList.add('has-img'); else tryFile(index + 1); };
+      image.onerror = () => tryFile(index + 1);
       image.src = url;
-    }, () => { /* the cover stays */ });
+    }, () => { /* the placeholder stays */ });
   };
+  const start = () => tryFile(0);
   if (typeof IntersectionObserver === 'undefined') { start(); return box; }
   const seen = new IntersectionObserver((entries) => {
     if (entries.some((e) => e.isIntersecting)) { seen.disconnect(); start(); }
@@ -100,8 +110,9 @@ function hubMedia(item: Item, media: HTMLElement): HTMLElement {
   const start = () => {
     imageBlobUrl(item.kind, item.id, item.gallery[0]).then((url) => {
       const image = new Image();
+      image.decoding = 'async';
       image.className = 'pixel';
-      image.onload = () => { box.appendChild(image); media.classList.add('has-img'); };
+      image.onload = () => { box.appendChild(image); media.classList.add('has-img'); fitImage(image, box); };
       image.onerror = () => { /* the cover stays */ };
       image.src = url;
     }, () => { /* the cover stays */ });
@@ -123,6 +134,77 @@ export function itemMedia(item: Item): HTMLElement {
     else media.appendChild(hubMedia(item, media));
   }
   return media;
+}
+
+/**
+ * Picks how a loaded picture sits in its box. Pictures that fit are shown 1:1 and never blown up; very wide or tall ones are shown
+ * whole on the dark box instead of cropped; others fill the box. Pixel art that is scaled up stays sharp (pixelated), scaled down it is smooth.
+ */
+export function fitImage(image: HTMLImageElement, box: HTMLElement, mode: 'cover' | 'contain' = 'cover', forcePixel = false): void {
+  const nw = image.naturalWidth, nh = image.naturalHeight;
+  const bw = box.clientWidth, bh = box.clientHeight;
+  if (!nw || !nh || !bw || !bh) return;
+  const ratio = nw / nh;
+  let fit: string = mode;
+  if (mode === 'cover' && (ratio > 2.4 || ratio < 1.2)) fit = 'contain';
+  const scale = fit === 'cover' ? Math.max(bw / nw, bh / nh) : Math.min(bw / nw, bh / nh);
+  if (mode === 'cover' && scale > 1) fit = 'none'; // a small source is not zoomed past 1:1
+  image.style.objectFit = fit;
+  const shown = fit === 'none' ? 1 : scale;
+  image.classList.toggle('pixel', forcePixel || shown * (window.devicePixelRatio || 1) > 1);
+}
+
+/** Queueing for install: shown as a corner check on a card, with a progress line once the queue runs. */
+export interface CardSelect {
+  selected: boolean;
+  /** Where this card is in a running queue. */
+  state?: 'queued' | 'installing' | 'installed' | 'failed';
+  /** Why it failed. */
+  message?: string;
+  /** Whether it can be queued (already-installed items cannot). */
+  canSelect: boolean;
+  onToggle: () => void;
+  /** Installs (or updates) this card straight away. */
+  onInstall?: () => void;
+  busy?: boolean;
+}
+
+const QUEUE_TEXT = { queued: 'Queued', installing: 'Installing…', installed: 'Installed', failed: 'Failed' };
+
+/**
+ * A library card that can also be queued: the body still opens the details; the corner check toggles the queue
+ * (a real button, so Tab and Space work). The card sits in a cell so the button is not nested inside the link.
+ */
+export function selectableCard(item: Item, select: CardSelect): HTMLElement {
+  const cell = h('div', { className: 'item-cell' + (select.selected ? ' is-selected' : '') + (select.state ? ' is-' + select.state : '') });
+  cell.appendChild(itemCard(item));
+  if (select.canSelect || select.selected) {
+    const check = h('button', {
+      className: 'card-select',
+      title: select.selected ? 'Remove from the install queue' : 'Add to the install queue',
+      attrs: { type: 'button', role: 'checkbox', 'aria-checked': select.selected ? 'true' : 'false', 'aria-label': 'Queue ' + item.name + ' to install' },
+    });
+    if (select.selected) check.appendChild(icon('check', 18));
+    check.addEventListener('click', select.onToggle);
+    cell.appendChild(check);
+  }
+  if (select.onInstall && select.canSelect && !select.busy) {
+    const update = item.status === 'update';
+    const go = h('button', {
+      className: 'card-install',
+      title: (update ? 'Update ' : 'Install ') + item.name,
+      attrs: { type: 'button', 'aria-label': (update ? 'Update ' : 'Install ') + item.name },
+    });
+    go.appendChild(icon(update ? 'refresh' : 'download', 18));
+    go.addEventListener('click', select.onInstall);
+    cell.appendChild(go);
+  }
+  if (select.state) {
+    const line = h('div', { className: 'card-queue', text: QUEUE_TEXT[select.state] + (select.state === 'failed' && select.message ? ': ' + select.message : ''), attrs: { role: 'status' } });
+    if (select.state === 'failed') line.title = select.message || '';
+    cell.appendChild(line);
+  }
+  return cell;
 }
 
 /** A library card: image (or placeholder), name, author, kind and status badges. */
@@ -151,6 +233,10 @@ export function itemCard(item: Item): HTMLElement {
   const status = statusBadge(item);
   if (status) badges.appendChild(status);
   body.appendChild(badges);
+  const source = sourceBadge(item);
+  if (source) badges.appendChild(source);
+  const toggle = modSwitch(item, () => { void loadInstalled(true); });
+  if (toggle) badges.appendChild(toggle);
   card.appendChild(body);
   return card;
 }

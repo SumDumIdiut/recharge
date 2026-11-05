@@ -44,6 +44,7 @@ public static class RechargeLoaderBootstrap
 
         ConnectSharedLink();
         LoadBuiltins(menu);
+        if (SharedLink != null) _ = SharedLink.ConnectAsync();
 
         var modsRoot = ModsRoot;
         if (!Directory.Exists(modsRoot))
@@ -86,7 +87,8 @@ public static class RechargeLoaderBootstrap
                 ?? LinkLaunchFile.Consume(Path.GetDirectoryName(Application.dataPath) ?? ".");
             Recharge.Module.Skins.SkinsModule.SharedLink = SharedLink;
             Recharge.Module.Net.RechargeNetModule.SharedLink = SharedLink;
-            if (SharedLink != null) _ = SharedLink.ConnectAsync();
+            // Connecting waits until the built-in modules have registered their intent handlers (see Init): the app sends its first
+            // intent the moment the game connects, and the Navigator alone takes seconds to load.
         }
         catch (Exception e) { Debug.LogError("[Recharge] app link failed: " + e); }
     }

@@ -147,6 +147,9 @@ namespace Recharge.App.Settings
                     case "bgDim":
                         s.BgDim = Int(v, kv.Key, 0, BgRules.MaxDim);
                         break;
+                    case "bgStrength":
+                        s.BgStrength = Int(v, kv.Key, 0, 100);
+                        break;
                     case "bgBlur":
                         s.BgBlur = Int(v, kv.Key, 0, BgRules.MaxBlur);
                         break;

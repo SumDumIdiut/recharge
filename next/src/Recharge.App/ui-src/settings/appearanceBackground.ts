@@ -146,8 +146,10 @@ export function backgroundSection(): { nodes: HTMLElement[]; dispose: () => void
       selectControl(FITS.map((f) => ({ value: f, label: FIT_LABEL[f] })), { value: config.fit, onChange: (v) => change({ fit: v as BgConfig['fit'] }) })));
     settingsHost.appendChild(row('Position', 'Which part stays in view when it is cropped.',
       selectControl(POSITIONS.map((p) => ({ value: p, label: POSITION_LABEL[p] })), { value: config.position, onChange: (v) => change({ position: v as BgConfig['position'] }) })));
-    settingsHost.appendChild(row('Dim', 'Darken the background so text is easy to read.',
-      slider(0, 90, config.dim, '%', (v) => change({ dim: v }), 'Dim')));
+    settingsHost.appendChild(row('Background strength', 'How much of the picture shows. Recharge dims bright pictures by itself so the app stays easy to read; lower this for a calmer backdrop.',
+      slider(0, 100, config.strength, '%', (v) => change({ strength: v }), 'Background strength')));
+    settingsHost.appendChild(row('Extra dim', 'Darken the background further, on top of the automatic dim.',
+      slider(0, 90, config.dim, '%', (v) => change({ dim: v }), 'Extra dim')));
 
     const color = h('input', { attrs: { type: 'color', 'aria-label': 'Tint colour' } });
     color.value = config.tint || '#000000';

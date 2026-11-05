@@ -12,7 +12,7 @@ import { currentUser } from '../account/session.js';
 import { HubError, hubForm, hubImage, hubJson } from './api.js';
 import { categoryBadge, needLogin, statusBadge, type View } from './forum.js';
 import {
-  CATEGORIES, LIM, STATUSES, normalizeThread, validateImages, validateReply, validateThread,
+  CATEGORIES, LIM, normalizeThread, validateImages, validateReply, validateThread,
   type Post, type Reply, type Thread,
 } from './format.js';
 import { counter, field, formError, imagePicker, textArea, textInput } from './forms.js';
@@ -125,30 +125,31 @@ export function threadView(id: number): View {
     if (pics) head.appendChild(pics);
 
     const tools = h('div', { className: 'post-tools' });
-    if (post.can.edit) tools.appendChild(button('Edit', { kind: 'secondary', onClick: () => editPost(post) }));
+    const left = h('div', { className: 'tool-group' });
+    const right = h('div', { className: 'tool-group' });
+    const isAdmin = currentUser()?.admin === true;
+    const closed = post.status === 'closed';
+    if (post.can.edit) left.appendChild(button('Edit', { kind: 'secondary', onClick: () => editPost(post) }));
     if (post.can.status) {
-      const current = post.status;
-      const select = selectControl(STATUSES, {
-        value: current,
-        onChange: (value) => {
-          hubJson('POST', '/api/forum/' + post.id + '/status', { status: value }).then(() => { toast('Marked ' + value + '.', 'success'); void load(); }, (e) => { toast(describeError(e), 'error'); void load(); });
-        },
-      });
-      select.title = 'Thread status';
-      tools.appendChild(select);
+      if (post.status === 'open') left.appendChild(button('Mark solved', { kind: 'secondary', icon: 'check', onClick: () => setStatus(post, 'solved') }));
+      if (isAdmin && post.status === 'solved') left.appendChild(button('Reopen', { kind: 'secondary', onClick: () => setStatus(post, 'open') }));
+      if (isAdmin && closed) left.appendChild(button('Reopen thread', { kind: 'secondary', onClick: () => setStatus(post, 'open') }));
+      if (isAdmin && !closed) left.appendChild(button('Close thread', { kind: 'secondary', onClick: () => confirmClose(post) }));
     }
     if (post.can.pin) {
-      tools.appendChild(button(post.pinned ? 'Unpin' : 'Pin', {
+      right.appendChild(button(post.pinned ? 'Unpin' : 'Pin', {
         kind: 'secondary',
         onClick: () => { hubJson('POST', '/api/forum/' + post.id + '/pin', { pinned: !post.pinned }).then(() => load(), (e) => toast(describeError(e), 'error')); },
       }));
     }
     if (post.can.remove) {
-      tools.appendChild(button('Delete', {
+      right.appendChild(button('Delete', {
         kind: 'danger',
         onClick: () => confirmDelete('thread', async () => { await hubJson('DELETE', '/api/forum/' + post.id); toast('Thread deleted.', 'success'); go('#/community/forum'); }),
       }));
     }
+    if (left.childNodes.length > 0) tools.appendChild(left);
+    if (right.childNodes.length > 0) tools.appendChild(right);
     if (tools.childNodes.length > 0) head.appendChild(tools);
     root.appendChild(head);
 
@@ -157,6 +158,25 @@ export function threadView(id: number): View {
     for (const reply of replies) list.appendChild(replyCard(reply));
     root.appendChild(list);
     root.appendChild(composer(post));
+  }
+
+  function setStatus(post: Post, status: string): void {
+    const text = status === 'open' ? 'Thread reopened.' : status === 'closed' ? 'Thread closed.' : 'Marked as solved.';
+    hubJson('POST', '/api/forum/' + post.id + '/status', { status }).then(() => { toast(text, 'success'); void load(); }, (e) => { toast(describeError(e), 'error'); void load(); });
+  }
+
+  function confirmClose(post: Post): void {
+    const overlay = modal({
+      title: 'Close thread',
+      body: h('p', { text: 'Close this thread? Nobody but admins will be able to reply. You can reopen it later.' }),
+      actions: [
+        { label: 'Cancel' },
+        {
+          label: 'Close thread', kind: 'danger',
+          onClick: () => { setStatus(post, 'closed'); (overlay.querySelector('.modal-head .icon-btn') as HTMLElement | null)?.click(); return false; },
+        },
+      ],
+    });
   }
 
   function replyCard(reply: Reply): HTMLElement {
@@ -182,13 +202,19 @@ export function threadView(id: number): View {
   function composer(post: Post): HTMLElement {
     const box = h('section', { className: 'panel composer' });
     const me = currentUser();
+    if (post.status === 'closed') {
+      box.classList.add('is-closed');
+      box.appendChild(h('p', { className: 'dim', text: 'This thread is closed.' }));
+      return box;
+    }
     if (!me) {
       box.appendChild(h('p', { className: 'dim', text: 'Log in to join the conversation.' }));
       box.appendChild(button('Log in to reply', { kind: 'primary', onClick: () => { needLogin(() => { void load(); }); } }));
       return box;
     }
-    if (post.status === 'closed' && !me.admin) {
-      box.appendChild(h('p', { className: 'dim', text: 'This thread is closed, so it cannot be replied to.' }));
+    if (post.status === 'closed') {
+      box.classList.add('is-closed');
+      box.appendChild(h('p', { className: 'dim', text: 'This thread is closed.' }));
       return box;
     }
     const body = textArea('', 'Write a reply...', 4);

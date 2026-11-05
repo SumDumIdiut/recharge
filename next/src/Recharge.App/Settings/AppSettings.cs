@@ -30,6 +30,8 @@ namespace Recharge.App.Settings
         public string BgPosition { get; set; } = "center";
         /// <summary>How dark the picture is made, 0 to 90 percent.</summary>
         public int BgDim { get; set; } = 35;
+        /// <summary>Background strength (0 to 100): how much of the picture shows through the adaptive dim; 0 hides it, 100 is the most visible the app allows.</summary>
+        public int BgStrength { get; set; } = 50;
         /// <summary>The colour the dimming layer uses (#rrggbb); null means black.</summary>
         public string? BgTint { get; set; }
         /// <summary>Blur in pixels, 0 to 24. Costly for the video decoder and the compositor: off by default.</summary>
@@ -138,6 +140,7 @@ namespace Recharge.App.Settings
             if (Array.IndexOf(BgRules.Fits, s.BgFit) < 0) s.BgFit = "cover";
             if (Array.IndexOf(BgRules.Positions, s.BgPosition) < 0) s.BgPosition = "center";
             s.BgDim = Math.Clamp(s.BgDim, 0, BgRules.MaxDim);
+            s.BgStrength = Math.Clamp(s.BgStrength, 0, 100);
             s.BgBlur = Math.Clamp(s.BgBlur, 0, BgRules.MaxBlur);
             s.BgInterval = Math.Clamp(s.BgInterval, BgRules.MinInterval, BgRules.MaxInterval);
             s.BgFadeMs = Math.Clamp(s.BgFadeMs, 0, BgRules.MaxFadeMs);

@@ -1182,6 +1182,9 @@ internal static class MpMenuBuilder
 		MpNetworkManager.LatestMpPanel = mpPanel;
 	}
 
+	// DOTnet has no pause-menu row (the ModApi hides the "Multiplayer" row): lobbies are managed in the Recharge app, and the in-lobby
+	// controls (Ready, Host Panel, Leave, Colour) open with F4 from the pause menu (HostPanelController.Update).
+
 	private static TMP_FontAsset FindTitleFont(GameObject panel)
 	{
 		var title = panel.transform.Find("Settings") ?? (panel.transform.childCount > 0 ? panel.transform.GetChild(0) : null);

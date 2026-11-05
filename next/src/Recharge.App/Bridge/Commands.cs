@@ -9,6 +9,14 @@ namespace Recharge.App.Bridge
     /// <summary>The built-in bridge commands.</summary>
     public static class Commands
     {
+        /// <summary>Commands that can change the installed listing (library.* clears the memo itself as well).</summary>
+        public static readonly string[] InvalidatesInstalled =
+        {
+            "library.install", "library.update", "library.remove", "library.setModEnabled", "library.removeFolder", "settings.setGamePath",
+            "backgrounds.import", "backgrounds.createPlaylist", "backgrounds.addFile", "backgrounds.addInstalled",
+            "backgrounds.saveOrder", "backgrounds.renamePlaylist", "backgrounds.deletePlaylist",
+        };
+
         public static CommandRegistry CreateRegistry()
         {
             var registry = new CommandRegistry();
@@ -21,16 +29,36 @@ namespace Recharge.App.Bridge
             registry.Register("library.install", LibraryInstall);
             registry.Register("library.update", LibraryInstall);
             registry.Register("library.remove", LibraryRemove);
+            // library.setModEnabled {folder|id: string, enabled: bool}: writes "enabled" in that mod's mod.json (not while the game runs, not for built-ins)
+            registry.Register("library.setModEnabled", args =>
+            {
+                string key = args.TryGetValue("folder", out JsonNode f) && f is JsonString fs && fs.Value.Length > 0 ? fs.Value : RequiredString(args, "id");
+                bool on = args.TryGetValue("enabled", out JsonNode e) && e is JsonBool eb ? eb.Value : throw new ArgumentException("enabled (true or false) is required");
+                return Task.FromResult<JsonNode>(Service().SetModEnabled(key, on));
+            });
             registry.Register("library.removeFolder", args => Task.FromResult<JsonNode>(Service().RemoveFolder(RequiredString(args, "kind"), RequiredString(args, "folder"))));
             CreateCommands.Register(registry);
             IconCommands.Register(registry);
             AccountCommands.Register(registry);
+            UploadCommands.Register(registry);
             LobbyCommands.Register(registry);
             SocialCommands.Register(registry);
             SkinCommands.Register(registry);
             LoaderCommands.Register(registry);
+            GunCommands.Register(registry);
             GameCommands.Register(registry);
             UpdateCommands.Register(registry);
+            PerfCommands.Register(registry);
+            // whatever changes what is installed also drops the installed-scan memo (it checks file times as well; this is the exact rule)
+            foreach (string name in InvalidatesInstalled)
+            {
+                if (!registry.TryGet(name, out CommandHandler inner)) continue;
+                registry.Register(name, async args =>
+                {
+                    try { return await inner(args).ConfigureAwait(false); }
+                    finally { Library.InstalledCache.Invalidate(); }
+                });
+            }
             return registry;
         }
 

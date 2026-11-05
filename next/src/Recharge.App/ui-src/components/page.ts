@@ -18,13 +18,14 @@ export interface PageTemplateElement extends HTMLElement {
 }
 
 /**
- * The shared page frame: green title, actions, optional tabs and filters, the
+ * The shared page frame: a solid sticky bar (green title, actions, optional tabs and filters), the
  * content area, and an optional 380 px side panel.
  */
 export function pageTemplate(options: PageTemplateOptions): PageTemplateElement {
   const root = document.createElement('article') as PageTemplateElement;
   root.className = 'page-template';
 
+  const bar = h('div', { className: 'page-bar' });
   const header = h('header', { className: 'page-head' });
   const titles = h('div', { className: 'page-titles' });
   titles.appendChild(h('h1', { className: 'page-title', text: options.title }));
@@ -32,20 +33,28 @@ export function pageTemplate(options: PageTemplateOptions): PageTemplateElement 
   if (options.subtitle) root.setAttribute('aria-description', options.subtitle);
   header.appendChild(titles);
 
-  const actionRow = h('div', { className: 'page-actions' });
-  for (const action of options.actions || []) actionRow.appendChild(action);
-  if (actionRow.childNodes.length > 0) header.appendChild(actionRow);
-  root.appendChild(header);
-
+  // Tabs share the title row, so the bar stays one line high; narrow windows wrap them below.
   if (options.tabs) {
     const row = h('div', { className: 'page-tabs' });
     row.appendChild(options.tabs);
-    root.appendChild(row);
+    header.appendChild(row);
   }
+
+  const actionRow = h('div', { className: 'page-actions' });
+  for (const action of options.actions || []) actionRow.appendChild(action);
+  if (actionRow.childNodes.length > 0) header.appendChild(actionRow);
+  bar.appendChild(header);
+
   if (options.filters) {
     const row = h('div', { className: 'page-filters' });
     row.appendChild(options.filters);
-    root.appendChild(row);
+    bar.appendChild(row);
+  }
+  root.appendChild(bar);
+
+  // The sticky side panel sits below the bar: publish the bar's height as a variable.
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => root.style.setProperty('--page-bar-h', bar.offsetHeight + 'px')).observe(bar);
   }
 
   const body = h('div', { className: 'page-body' });
@@ -68,11 +77,12 @@ export function pageTemplate(options: PageTemplateOptions): PageTemplateElement 
     }
     panelSlot.replaceChildren();
     const close = h('button', {
-      className: 'icon-btn panel-close',
-      title: 'Close panel',
-      attrs: { type: 'button', 'aria-label': 'Close panel' },
+      className: 'btn btn-secondary panel-close',
+      title: 'Back to the list (Esc)',
+      attrs: { type: 'button', 'aria-label': 'Back to the list' },
     });
-    close.appendChild(icon('x', 18));
+    close.appendChild(icon('chevron-left', 18));
+    close.appendChild(h('span', { text: 'Back' }));
     close.addEventListener('click', () => {
       if (options.onPanelClose) options.onPanelClose();
       else root.setSidePanel(null);

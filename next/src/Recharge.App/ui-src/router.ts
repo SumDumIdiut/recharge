@@ -1,10 +1,11 @@
 /** Hash routing, route state, and page mounting. The pure helpers are DOM-free. */
+import { perfRouteContent, perfRouteSettled, perfRouteStart } from './perf.js';
 
 export type Query = Record<string, string>;
 
 /** Sidebar pages that show one kind of installed content. */
-export const SCOPES = ['maps', 'mods', 'skins', 'games', 'backgrounds'] as const;
-export type Scope = typeof SCOPES[number];
+/** Old top-level content links (the sidebar used to list these) and the Library kind each one now opens. */
+const LEGACY_KIND: Record<string, string> = { maps: 'maps', mods: 'mods', skins: 'skins', games: 'games', backgrounds: 'backgrounds', create: 'maps', amplifier: 'maps' };
 
 export interface ParsedRoute {
   /** Canonical hash, including the query string. */
@@ -161,15 +162,14 @@ export function parseRoute(hash: string): ParsedRoute {
     }
     return base;
   }
-  // The installed-content pages (sidebar Maps, Mods, Skins, Games, Backgrounds): the Library page scoped to one kind, with its own item panels.
-  // The old Create and Amplifier links land on Maps.
-  if (first === 'create' || first === 'amplifier') {
-    return { ...base, name: 'maps', page: 'library', sidebar: 'maps', params: { scope: 'maps' } };
-  }
-  if ((SCOPES as string[]).includes(first)) {
-    if (segments.length === 1) return { ...base, name: first, page: 'library', sidebar: first, params: { scope: first } };
+  // Old content links (#/maps, #/skins, #/create, #/amplifier ...) land on the Library with that kind chosen; the page rewrites the hash.
+  if (Object.prototype.hasOwnProperty.call(LEGACY_KIND, first)) {
+    const kind = LEGACY_KIND[first];
     if (segments.length === 4 && second === 'item') {
-      return { ...base, name: first + '-item', page: 'library', sidebar: first, params: { scope: first, kind: third, id: fourth }, isPanel: true };
+      return { ...base, name: 'library-item', page: 'library', sidebar: 'library', params: { kind: third, id: fourth }, isPanel: true, query: { kind, ...query } };
+    }
+    if (segments.length === 1 || first === 'create' || first === 'amplifier') {
+      return { ...base, name: 'library', page: 'library', sidebar: 'library', query: { kind, ...query } };
     }
     return base;
   }
@@ -377,6 +377,7 @@ export class Router {
   private async show(route: ParsedRoute): Promise<void> {
     if (this.current && this.current.key === route.hash) return;
     const token = ++this.token;
+    perfRouteStart(route.hash);
 
     this.saveCurrent();
     if (this.current) {
@@ -396,6 +397,14 @@ export class Router {
 
     try {
       const mounted = page.mount(element, route);
+      perfRouteContent(route.hash);
+      // The page's own content is in place: it counts as the current route (sidebar, title, unmount on leaving) while its
+      // data is still loading, instead of after the slowest request.
+      if (token === this.token) {
+        this.current = { key: route.hash, route, page };
+        document.title = page.title + ' · Recharge';
+        if (this.onRoute) this.onRoute(route);
+      }
       if (mounted && typeof (mounted as Promise<void>).then === 'function') {
         await mounted;
       }
@@ -423,7 +432,7 @@ export class Router {
     document.title = page.title + ' · Recharge';
     this.outlet.scrollTop = saved ? saved.scroll : 0;
     this.current = { key: route.hash, route, page };
-    if (this.onRoute) this.onRoute(route);
+    perfRouteSettled(route.hash);
     this.ready();
   }
 

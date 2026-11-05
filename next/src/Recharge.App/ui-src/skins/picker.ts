@@ -21,7 +21,15 @@ const sheets = new Map<string, Promise<Sheet | null>>();
 function loadSheet(folder: string): Promise<Sheet | null> {
   let pending = sheets.get(folder);
   if (!pending) {
-    pending = call<{ mime?: string; data?: string | null }>('create.skinSheet', { folder }).then((reply) => {
+    // A skin whose template sheet is empty keeps its art in doublejump.png, so that is the second try.
+    pending = readSheet(folder).then((sheet) => (sheet && sheet.rows.some((r) => r.length > 0) ? sheet : readSheet(folder, 'doublejump.png').then((alt) => (alt && alt.rows.some((r) => r.length > 0) ? alt : sheet))));
+    sheets.set(folder, pending);
+  }
+  return pending;
+}
+
+function readSheet(folder: string, file?: string): Promise<Sheet | null> {
+    return call<{ mime?: string; data?: string | null }>('create.skinSheet', file ? { folder, file } : { folder }).then((reply) => {
       const url = blobUrlFromReply(reply);
       if (!url) return null;
       return new Promise<Sheet | null>((resolve) => {
@@ -46,9 +54,6 @@ function loadSheet(folder: string): Promise<Sheet | null> {
         image.src = url;
       });
     }, () => null);
-    sheets.set(folder, pending);
-  }
-  return pending;
 }
 
 export interface SkinPicker {

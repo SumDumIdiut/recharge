@@ -28,7 +28,20 @@ function messageOf(status: number, body: string): string {
 }
 
 /** A JSON request. Throws HubError with the hub's own message for any non-2xx answer. */
-export async function hubJson<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+export function hubJson<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  if (method !== 'GET' || body !== undefined) return hubJsonNow<T>(method, path, body);
+  // the same read asked twice at once (two panels, a quick page switch back) shares one request
+  const key = path;
+  const running = reads.get(key);
+  if (running) return running as Promise<T>;
+  const pending = hubJsonNow<T>(method, path, body).finally(() => reads.delete(key));
+  reads.set(key, pending);
+  return pending;
+}
+
+const reads = new Map<string, Promise<unknown>>();
+
+async function hubJsonNow<T>(method: string, path: string, body?: unknown): Promise<T> {
   const reply = await call<Reply>('hub.request', body === undefined ? { method, path } : { method, path, body });
   if (reply.status === 401 && currentUser()) void refreshSession();
   if (reply.status < 200 || reply.status >= 300) throw new HubError(reply.status, messageOf(reply.status, reply.body));

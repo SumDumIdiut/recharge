@@ -7,6 +7,7 @@ import { call, describeError } from '../bridge.js';
 import { currentUser } from '../account/session.js';
 import { counter, field, formError, textInput } from '../community/forms.js';
 import type { InstalledData } from '../lib/library.js';
+import { ensureRechargeLoader } from './loaderGuard.js';
 import { hostProblem, hostRequest, LOBBY_NAME_MAX, type HostChoice } from './model.js';
 
 const BASE = '@base';
@@ -43,14 +44,17 @@ export function openHostDialog(installed: InstalledData | null): void {
     busy = true;
     start.disabled = true;
     error.show(null);
-    call<{ launched?: boolean; intent?: { ok?: boolean; error?: string } }>('game.launch', hostRequest(choice)).then((reply) => {
-      if (reply && reply.intent && reply.intent.ok === false) throw new Error(reply.intent.error || 'the game could not host');
-      (overlay.querySelector('.modal-head .icon-btn') as HTMLElement | null)?.click();
-      toast(reply && reply.launched ? 'Starting the game. Your lobby opens when it loads.' : 'Lobby opened in the game.', 'success');
-    }).catch((failure) => {
-      busy = false;
-      start.disabled = false;
-      error.show(describeError(failure));
+    void ensureRechargeLoader('Hosting from Recharge').then((ok) => {
+      if (!ok) { busy = false; start.disabled = false; return undefined; }
+      return call<{ launched?: boolean; intent?: { ok?: boolean; error?: string } }>('game.launch', hostRequest(choice)).then((reply) => {
+        if (reply && reply.intent && reply.intent.ok === false) throw new Error(reply.intent.error || 'the game could not host');
+        (overlay.querySelector('.modal-head .icon-btn') as HTMLElement | null)?.click();
+        toast(reply && reply.launched ? 'Starting the game. Your lobby opens when it loads.' : 'Lobby opened in the game.', 'success');
+      }).catch((failure) => {
+        busy = false;
+        start.disabled = false;
+        error.show(describeError(failure));
+      });
     });
   });
 

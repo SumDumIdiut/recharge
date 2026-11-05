@@ -24,7 +24,25 @@ namespace Recharge.ModApi
             var tmp = label.GetComponent<TMP_Text>();
             tmp.textWrappingMode = TextWrappingModes.NoWrap;
             tmp.overflowMode = TextOverflowModes.Ellipsis;
+            FitLabel(tmp);
         }
+
+        /// <summary>
+        /// A long mod name shrinks to fit its row instead of being cut off: auto-size from the label's current size down to
+        /// <see cref="MinFitFraction"/> of it (never below <see cref="MinFitSize"/>). Only a name too long even at that size is still cut with an ellipsis.
+        /// </summary>
+        internal static void FitLabel(TMP_Text tmp)
+        {
+            if (tmp == null) return;
+            float max = tmp.enableAutoSizing && tmp.fontSizeMax > 0f ? tmp.fontSizeMax : tmp.fontSize;
+            if (max <= 0f) return;
+            tmp.enableAutoSizing = true;
+            tmp.fontSizeMax = max;
+            tmp.fontSizeMin = Mathf.Min(max, Mathf.Max(MinFitSize, max * MinFitFraction));
+        }
+
+        internal const float MinFitFraction = 0.4f;
+        internal const float MinFitSize = 10f;
 
         // A cloned button's TMP `.color` reads as opaque white even when the
         // source renders visibly colored - real color comes from faceColor.

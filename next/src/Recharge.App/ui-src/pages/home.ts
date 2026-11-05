@@ -7,7 +7,8 @@ import { button } from '../components/button.js';
 import { toast } from '../components/toast.js';
 import { emptyState, errorState } from '../components/emptyState.js';
 import { authorName, imagesSettled, itemMedia, KIND_ICON } from '../components/itemCard.js';
-import { loadInstalled, loadKind } from '../lib/hub.js';
+import { loadInstalled, loadKind, onHubChange } from '../lib/hub.js';
+import { perfRouteData } from '../perf.js';
 import {
   annotate, installedItems, isEmbeddedMod, itemRoute, KINDS, newestAcross, updatesOf,
   type Item, type Kind, type Lists,
@@ -50,7 +51,37 @@ function paintGame(info: GameInfo | null, error?: unknown): void {
 
 let playButtons: HTMLButtonElement[] = [];
 let moddedButton: HTMLButtonElement | null = null;
+let closeButton: HTMLButtonElement | null = null;
 let launching = false;
+let runningTimer = 0;
+const RUNNING_POLL_MS = 3000;
+
+interface RunningState { running: boolean; modded: boolean | null }
+
+/** While IGTAP runs, Play and Play modded give way to one button that closes it (saying which build is running). */
+function paintRunning(state: RunningState): void {
+  if (!closeButton) return;
+  for (const b of playButtons) b.hidden = state.running;
+  closeButton.hidden = !state.running;
+  const label = closeButton.querySelector('span');
+  if (label) label.textContent = state.modded === null ? 'Close IGTAP' : state.modded ? 'Close IGTAP (modded)' : 'Close IGTAP (vanilla)';
+}
+
+function pollRunning(): void {
+  call<RunningState>('game.running', {}).then(paintRunning, () => { /* the game wasn't found: the status row says so */ });
+}
+
+function closeGame(): void {
+  if (!closeButton) return;
+  closeButton.disabled = true;
+  call<{ closed?: number }>('game.close', {}).then((reply) => {
+    toast(reply && reply.closed ? 'IGTAP closed.' : 'IGTAP had already closed.', 'success');
+  }, (error) => {
+    toast('Could not close the game: ' + describeError(error), 'error');
+  }).finally(() => {
+    window.setTimeout(() => { if (closeButton) closeButton.disabled = false; pollRunning(); }, 1500);
+  });
+}
 
 interface LoaderMode { modded: boolean; loader: string; canModded: boolean; detail: string }
 
@@ -61,6 +92,7 @@ function launch(modded: boolean): void {
   for (const b of playButtons) b.disabled = true;
   call<{ launched?: boolean; build?: string }>('game.launch', { modded }).then((reply) => {
     toast(reply && reply.launched === false ? 'The game is already running.' : 'Starting IGTAP ' + (modded ? 'modded' : 'vanilla') + '…', 'success');
+    window.setTimeout(pollRunning, 2500);
   }, (error) => {
     toast('Could not start the game: ' + describeError(error), 'error');
   }).finally(() => {
@@ -108,9 +140,14 @@ export const homePage: PageModule = {
     const modded = button('Play modded', { kind: 'secondary', icon: 'sparkles', title: 'Starts the game with mods', onClick: () => launch(true) });
     playButtons = [vanilla, modded];
     moddedButton = modded;
-    actions.appendChild(vanilla);
-    actions.appendChild(modded);
+    const close = button('Close IGTAP', { kind: 'danger', icon: 'x', title: 'Closes the running game', onClick: closeGame });
+    close.hidden = true;
+    closeButton = close;
+    actions.append(vanilla, modded, close);
     paintMode();
+    pollRunning();
+    window.clearInterval(runningTimer);
+    runningTimer = window.setInterval(pollRunning, RUNNING_POLL_MS);
     copy.appendChild(actions);
 
     gameRow = h('div', { className: 'game-status', attrs: { role: 'status' } });
@@ -137,17 +174,25 @@ export const homePage: PageModule = {
 
     el.appendChild(page);
     const token = ++generation;
+    unsubscribe?.();
+    unsubscribe = onHubChange(() => { if (token === generation) void loadData(token); });
     await Promise.race([Promise.all([loadGame(), loadData(token)]), new Promise((resolve) => window.setTimeout(resolve, 15000))]);
+    if (token === generation) perfRouteData();
     if (token === generation) await imagesSettled(el, 8000);
   },
 
   unmount(): void {
     generation += 1;
+    unsubscribe?.();
+    unsubscribe = null;
     root = null;
     newHost = updatesHost = homeGrid = null;
     gameRow = null;
     playButtons = [];
     moddedButton = null;
+    closeButton = null;
+    window.clearInterval(runningTimer);
+    runningTimer = 0;
     filterNote = null;
     noMatches = null;
   },
@@ -170,6 +215,8 @@ export const homePage: PageModule = {
     if (noMatches) noMatches.hidden = !term || shown > 0;
   },
 };
+
+let unsubscribe: (() => void) | null = null;
 
 async function loadGame(): Promise<void> {
   try {
@@ -203,7 +250,7 @@ function fillCard(host: HTMLElement | null, ...nodes: Node[]): void {
 }
 
 /** A New-on-the-hub tile: the item's picture, then its name, creator and a two-line description. The card is full
- *  width and the tiles sit three per row, so two rows of them fill the home screen's what's-new area. */
+ *  width and the tiles sit four per row, two rows of them (8), so the card stays compact. */
 function hubTile(item: Item): HTMLElement {
   const tile = h('a', {
     className: 'hub-tile',
@@ -237,7 +284,8 @@ async function loadData(token: number): Promise<void> {
 
   const annotated = {} as Lists;
   for (const kind of KINDS) annotated[kind] = lists[kind] ? annotate((lists[kind] as Item[]).filter((item) => !isEmbeddedMod(item)), installed) : null;
-  const fresh = newestAcross(annotated, 12);
+  // Two rows of the four-column grid, so the card stays compact.
+  const fresh = newestAcross(annotated, 8);
   if (fresh.length > 0) {
     const tiles = h('div', { className: 'hub-tile-grid' });
     for (const item of fresh) tiles.appendChild(hubTile(item));

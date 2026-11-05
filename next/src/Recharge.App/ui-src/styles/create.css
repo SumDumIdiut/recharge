@@ -13,3 +13,26 @@
 .template-copy .panel-title { margin-bottom: 2px; }
 .template-copy p { margin: 0; }
 .template-banner .create-actions { margin: 0; }
+
+/* Upload form (account/uploadForm.ts) */
+.upload-form { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; width: 100%; min-width: min(480px, 80vw); max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+.upload-form .input, .upload-form .select-wrap, .upload-form .select { box-sizing: border-box; width: 100%; }
+.upload-form .form-field { min-width: 0; }
+.upload-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 10px; }
+.upload-release-line { min-height: 1.2em; }
+.upload-release-line.is-problem, .upload-gh-line.is-error { color: var(--danger); }
+.upload-radio { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; cursor: pointer; }
+.upload-radio.is-disabled { opacity: .5; cursor: default; }
+.upload-inline, .upload-line { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.upload-file { overflow-wrap: anywhere; }
+.upload-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.upload-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); }
+.upload-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.upload-chip-x { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
+.upload-chip-x:hover { color: var(--text); background: var(--panel); }
+/* the GitHub auto-update block on an upload card */
+.upload-github { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.upload-gh-line { color: var(--text-dim); font-size: 16px; overflow-wrap: anywhere; }
+.upload-gh-line.is-off { opacity: .8; }
+.upload-gh-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.upload-gh-actions .mod-switch { margin-left: auto; }

@@ -1,4 +1,5 @@
 import { h } from '../dom.js';
+import { setSearchText } from '../shell.js';
 import { icon } from '../icons.js';
 import type { PageModule } from '../router.js';
 import { pageTemplate, type PageTemplateElement } from '../components/page.js';
@@ -19,7 +20,6 @@ let page: PageTemplateElement | null = null;
 let poller: LobbyPoller | null = null;
 let statusEl: HTMLElement | null = null;
 let ageTimer = 0;
-let searchBox: HTMLInputElement | null = null;
 
 let lobbies: Lobby[] = [];
 let lastSig = '';
@@ -89,13 +89,12 @@ function render(force = false): void {
   }
   if (shown.length === 0) {
     page.content.replaceChildren(emptyState('search', 'No lobbies match', 'Try a different search, or clear the filters.', {
-      label: 'Clear filters', kind: 'secondary', onClick: () => { filters = { ...NO_FILTERS }; if (searchBox) searchBox.value = ''; paintFilters(); render(true); },
+      label: 'Clear filters', kind: 'secondary', onClick: () => { filters = { ...NO_FILTERS }; setSearchText(''); paintFilters(); render(true); },
     }));
     return;
   }
-  const summary = h('p', { className: 'lobbies-note', text: shown.length === lobbies.length ? shown.length + (shown.length === 1 ? ' lobby' : ' lobbies') : shown.length + ' of ' + lobbies.length + ' lobbies' });
   const grid = cardGrid(shown, (lobby) => lobbyCard(cardData(lobby, hubMaps, installed), (data, done) => { void joinLobby(data.id).then(done); }), { minWidth: 300 });
-  page.content.replaceChildren(summary, grid);
+  page.content.replaceChildren(grid);
 }
 
 let filterHost: HTMLElement | null = null;
@@ -103,14 +102,6 @@ let filterHost: HTMLElement | null = null;
 function paintFilters(): void {
   if (!filterHost) return;
   filterHost.replaceChildren();
-  const search = h('input', {
-    className: 'lobby-search',
-    attrs: { type: 'search', placeholder: 'Search lobbies', 'aria-label': 'Search lobbies' },
-  }) as HTMLInputElement;
-  search.value = filters.q;
-  search.addEventListener('input', () => { filters = { ...filters, q: search.value.trim() }; render(); });
-  searchBox = search;
-  filterHost.appendChild(search);
   const values = [filters.hasMap ? 'hasMap' : '', filters.notHard ? 'notHard' : ''].filter(Boolean);
   filterHost.appendChild(chips(
     [{ value: 'hasMap', label: 'Has map' }, { value: 'notHard', label: 'Not hard' }],
@@ -194,11 +185,10 @@ export const lobbiesPage: PageModule = {
     poller?.stop();
     poller = null;
     window.clearInterval(ageTimer);
-    page = null; statusEl = null; filterHost = null; searchBox = null;
+    page = null; statusEl = null; filterHost = null;
   },
   filter(query: string): void {
     filters = { ...filters, q: query };
-    if (searchBox && searchBox.value !== query) searchBox.value = query;
     render();
   },
 };

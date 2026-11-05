@@ -19,6 +19,7 @@ body::before {
   --text: #fff1de; --text-dim: rgba(255, 241, 222, 0.68);
   --green: #ff8a1f; --green-dim: rgba(255, 138, 31, 0.65);
   --magenta: #c98cff; --magenta-dim: rgba(201, 140, 255, 0.75);
+  --surface-0: #1a0028; --surface-1: rgba(30, 10, 46, 0.86); --surface-2: #31194a; --surface-nav: rgba(32, 10, 51, 0.9);
 }
 :root[data-theme="halloween"] body::before { background-image: url("settings/bg-halloween.png"); }
 /* The event look wins over your own background (it stays saved, and comes back with Classic), and the logo turns Halloween. */

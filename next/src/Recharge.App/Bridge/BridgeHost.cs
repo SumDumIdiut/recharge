@@ -179,6 +179,11 @@ namespace Recharge.App.Bridge
         {
             if (_evalLog)
             {
+                // The dev timing harness (RECHARGE_PERF) gets each of its marks stamped with the process uptime.
+                if (message.StartsWith("[perf]", StringComparison.Ordinal))
+                {
+                    message += " t=" + PerfConfig.UptimeMs();
+                }
                 Console.WriteLine("[console." + level + "] " + message);
             }
         }

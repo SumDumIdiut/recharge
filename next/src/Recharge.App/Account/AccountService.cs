@@ -19,6 +19,7 @@ namespace Recharge.App.Account
     {
         private const int MaxImageBytes = 8 * 1024 * 1024;
         private static readonly HttpClient Client = CreateClient();
+        private static readonly ConditionalGetCache Revalidated = new ConditionalGetCache();
         private static readonly Regex PlainFile = new Regex("^[A-Za-z0-9._-]{1,160}$", RegexOptions.CultureInvariant);
         /// <summary>A username as one URL-encoded path segment (encodeURIComponent output: letters, digits, -_.!~*'() and %XX).</summary>
         private static readonly Regex UserSegment = new Regex("^(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-F]{2}){1,120}$", RegexOptions.CultureInvariant);
@@ -252,6 +253,12 @@ namespace Recharge.App.Account
         private static async Task<(int Status, string Body)> SendAsync(
             HttpMethod method, string path, JsonNode? body, string? token)
         {
+            if (method == HttpMethod.Get && body is null)
+            {
+                // reads revalidate (ETag) per session token; a 401 or any non-200 answer is passed on and never kept
+                return await Revalidated.GetAsync(Client, HubPath.BuildUri(path), token).ConfigureAwait(false);
+            }
+
             using var request = new HttpRequestMessage(method, HubPath.BuildUri(path));
             if (!string.IsNullOrEmpty(token))
             {

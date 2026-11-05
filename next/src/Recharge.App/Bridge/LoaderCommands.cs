@@ -14,15 +14,15 @@ namespace Recharge.App.Bridge
         public static void Register(CommandRegistry registry)
         {
             registry.Register("loader.status", args => Run(t => LoaderPatcher.Inspect(t.Game, t.Files), args));
-            registry.Register("loader.install", args => { Gate(args); return Run(t => LoaderPatcher.Install(t.Game, t.Files, GameProcess.IsRunning), args); });
-            registry.Register("loader.repair", args => { Gate(args); return Run(t => LoaderPatcher.Repair(t.Game, t.Files, GameProcess.IsRunning), args); });
+            registry.Register("loader.install", args => Run(t => LoaderPatcher.Install(t.Game, t.Files, GameProcess.IsRunning), args));
+            registry.Register("loader.repair", args => Run(t => LoaderPatcher.Repair(t.Game, t.Files, GameProcess.IsRunning), args));
             registry.Register("loader.mode", args =>
             {
                 string game = GameFinder.Find() ?? throw new InvalidOperationException("io: IGTAP wasn't found");
                 try { return Task.FromResult(ModeJson(LoaderPatcher.Mode(game))); }
                 catch (PatcherException e) { throw new InvalidOperationException(e.Message); }
             });
-            registry.Register("loader.uninstall", args => { Gate(args); return Run(t => LoaderPatcher.Uninstall(t.Game, GameProcess.IsRunning), args); });
+            registry.Register("loader.uninstall", args => Run(t => LoaderPatcher.Uninstall(t.Game, GameProcess.IsRunning), args));
         }
 
         private readonly record struct Target(string Game, string Files);
@@ -44,26 +44,11 @@ namespace Recharge.App.Bridge
             return o;
         }
 
-        /// <summary>
-        /// RechargeLoader 2 hasn't been run in the game yet, so changing the real game is off unless RECHARGE_LOADER_DEV=1, or the
-        /// game folder is a test folder given through RECHARGE_GAME_DIR (tests, staging). Lifted once the in-game check passes.
-        /// </summary>
-        public static bool WritesAllowed() =>
-            Environment.GetEnvironmentVariable("RECHARGE_LOADER_DEV") == "1" ||
-            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RECHARGE_GAME_DIR_TEST"));
-
-        private static void Gate(JsonObject args)
-        {
-            if (!WritesAllowed())
-                throw new InvalidOperationException("RechargeLoader 2 is still being tested in the game - installing it from Recharge comes after that. Your current loader is untouched.");
-        }
-
-        /// <summary>The loader DLLs ship in a "loader" folder next to the app, or beside it; an optional "files" argument overrides.</summary>
+        /// <summary>The loader DLLs ship in the "loader" folder next to the app (see Recharge.App.csproj and tools/stage-loader.sh); an optional "files" argument overrides.</summary>
         public static string DefaultFilesDir()
         {
             string baseDir = AppContext.BaseDirectory;
-            string sub = Path.Combine(baseDir, "loader");
-            return Directory.Exists(sub) ? sub : baseDir;
+            return Path.Combine(baseDir, "loader");
         }
 
         private static Task<JsonNode> Run(Func<Target, LoaderStatus> action, JsonObject args)

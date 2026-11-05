@@ -10,6 +10,7 @@ export interface Settings {
   bgFit: string;
   bgPosition: string;
   bgDim: number;
+  bgStrength: number;
   bgTint: string | null;
   bgBlur: number;
   bgInterval: number;

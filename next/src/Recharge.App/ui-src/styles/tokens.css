@@ -30,9 +30,15 @@
 :root{
   --bg:#141414; --panel:#1c1c1c; --line:rgba(249,255,228,.14); --line-hi:rgba(249,255,228,.4);
   --text:#f9ffe4; --text-dim:rgba(249,255,228,.55); --green:#41f88d; --green-dim:rgba(65,248,141,.6);
-  --magenta:#c63ed8; --magenta-dim:rgba(198,62,216,.6); --danger:oklch(75% .19 25); --overlay:rgba(0,0,0,.65);
+  --magenta:#dc72ec; --magenta-dim:rgba(198,62,216,.6); --danger:oklch(75% .19 25); --overlay:rgba(0,0,0,.65);
   --radius:6px; --radius-sm:4px;
-  --glass:color-mix(in srgb,var(--panel) 74%,transparent); --glass-hi:color-mix(in srgb,var(--panel) 88%,transparent);
+  /* Surfaces: nothing readable is ever drawn straight on the app background.
+     0 = the backdrop scrim (also the colour of the dim layer), 1 = panels, cards and bars (86% opaque, so the background picture shows faintly through; the dim layer stays solid), 2 = raised: menus, modals,
+     the sidebar and the top bar. Themes override --bg and --panel plus these four (see settings/theme.ts). */
+  --surface-0:#141414; --surface-1:rgba(18,18,18,.87); --surface-2:#242424; --surface-nav:rgba(16,16,16,.92);
+  --border:var(--line); --border-hi:var(--line-hi);
+  --shadow-1:0 1px 0 rgba(0,0,0,.35),0 4px 14px -6px rgba(0,0,0,.6); --shadow-2:0 14px 36px -10px rgba(0,0,0,.7),0 0 0 1px rgba(0,0,0,.3);
+  --glass:var(--surface-1); --glass-hi:var(--surface-2);
   --hl:inset 0 0 0 1px color-mix(in srgb,var(--text) 8%,transparent); --hover:color-mix(in srgb,var(--text) 9%,transparent);
   --sidebar-w:220px; --sidebar-w-collapsed:64px; --topbar-h:56px; --gap:16px;
   color-scheme:dark;

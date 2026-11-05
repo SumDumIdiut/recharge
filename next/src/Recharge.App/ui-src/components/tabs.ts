@@ -5,6 +5,8 @@ export interface TabItem {
   value: string;
   label: string;
   icon?: string;
+  /** A small count after the label. */
+  count?: number;
 }
 
 export interface TabOptions {
@@ -34,6 +36,7 @@ export function tabs(items: TabItem[], options: TabOptions = {}): HTMLElement {
     });
     if (item.icon) tab.appendChild(icon(item.icon, 18));
     tab.appendChild(h('span', { text: item.label }));
+    if (item.count !== undefined) tab.appendChild(h('span', { className: 'tab-count', text: String(item.count) }));
     tab.addEventListener('click', () => {
       if (value === item.value) return;
       value = item.value;

@@ -6,14 +6,13 @@ using Recharge.Link;
 using Recharge.Loader.Core;
 using Recharge.Loader.Core.Skins;
 using Recharge.ModApi;
-using TMPro;
 using UnityEngine;
 
 namespace Recharge.Module.Skins
 {
     /// <summary>
-    /// SkinMod built into RechargeLoader 2: custom player sprites, dash / double-jump indicators, sounds and the pause-menu
-    /// picker. It replaces the hub mod <c>recharge.customskins</c> but keeps that mod's data folder, so installed skins
+    /// SkinMod built into RechargeLoader 2: custom player sprites, dash / double-jump indicators, sounds (chosen in the Recharge app,
+    /// applied live over the link; no in-game menu row). It replaces the hub mod <c>recharge.customskins</c> but keeps that mod's data folder, so installed skins
     /// and the chosen skin carry over. Over the app link it answers the <c>skin.apply</c> intent and reports state <c>skin</c>.
     /// </summary>
     public sealed class SkinsModule : IRechargeMod, IBuiltinModule
@@ -56,7 +55,6 @@ namespace Recharge.Module.Skins
             _controller = go.AddComponent<SkinController>();
             _controller.Init(host);
 
-            PauseMenuHelper.OnMenuReady(host, InstallMenuRow);
             ConnectLink(host);
         }
 
@@ -110,41 +108,6 @@ namespace Recharge.Module.Skins
                 try { request.done.TrySetResult(_controller.ApplyFolder(request.folder)); }
                 catch (Exception e) { request.done.TrySetException(e); }
             }
-        }
-
-        private void InstallMenuRow(pauseMenuScript menu)
-        {
-            if (PauseMenuHelper.MainBit(menu) == null) return;
-            var panel = PauseMenuHelper.AddPanelRow(menu, "CustomSkins", "Skinmod");
-            if (panel == null) return;
-            if (panel.GetComponent<SkinPanelUI>() != null) return;
-
-            var title = panel.transform.Find("Settings") ?? (panel.transform.childCount > 0 ? panel.transform.GetChild(0) : null);
-            var font = title != null ? title.GetComponent<TMP_Text>()?.font : null;
-
-            var ui = panel.AddComponent<SkinPanelUI>();
-            try
-            {
-                ui.Build(panel, font, _controller);
-            }
-            catch (Exception e)
-            {
-                _host.LogError("[CustomSkins] couldn't build the skin panel: " + e);
-                ShowBuildFailure(panel, font);
-            }
-        }
-
-        private static void ShowBuildFailure(GameObject panel, TMP_FontAsset font)
-        {
-            var go = new GameObject("BuildFailure", typeof(RectTransform));
-            go.transform.SetParent(panel.transform, false);
-            var rt = (RectTransform)go.transform;
-            rt.sizeDelta = new Vector2(520f, 200f);
-            var text = go.AddComponent<TextMeshProUGUI>();
-            text.font = font;
-            text.fontSize = 22f;
-            text.alignment = TextAlignmentOptions.Center;
-            text.text = "Skinmod couldn't build its menu.\nYour Recharge loader is out of date - open the Recharge app and let it finish updating, then restart the game.";
         }
 
         public void OnUnload()

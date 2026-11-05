@@ -1,3 +1,4 @@
+import { autoDimOpacity, combineDim, sampleBrightness } from './dim.js';
 import {
   blurStyle, dimStyle, fitStyle, pageOf, playbackPlan, Rotation,
   type BgConfig, type PageId,
@@ -20,7 +21,7 @@ const CSS = `
 #bg-media { position: absolute; inset: 0; }
 .bg-slot { position: absolute; inset: 0; opacity: 0; }
 .bg-slot > .bg-el { display: block; width: 100%; height: 100%; }
-#bg-dim { position: absolute; inset: 0; opacity: 0; }
+#bg-dim { position: absolute; inset: 0; opacity: 1; transition: opacity 500ms ease; }
 :root[data-bg="on"] body::before { display: none !important; }
 `;
 
@@ -48,6 +49,9 @@ export class BackgroundLayer {
   private focused = true;
   private reducedMotion = false;
   private page: PageId | null = null;
+  /** Measured brightness of what is shown (0 dark to 1 white), per item url; null until known. */
+  private brightness: number | null = null;
+  private readonly brightnessCache = new Map<string, number | null>();
   private readonly cleanup: Array<() => void> = [];
   /** How many items were shown, for tests and the readout. */
   shown = 0;
@@ -131,8 +135,10 @@ export class BackgroundLayer {
   private paintDim(): void {
     if (!this.config) return;
     const d = dimStyle(this.config, this.page);
-    this.dim.style.background = d.background;
-    this.dim.style.opacity = d.opacity;
+    // Adaptive dim (from the measured brightness and the strength setting) with the manual dim stacked on top.
+    const auto = autoDimOpacity(this.brightness, this.config.strength);
+    this.dim.style.background = this.config.tint ? d.background : 'var(--surface-0, #000)';
+    this.dim.style.opacity = String(Math.round(combineDim(auto, Number(d.opacity)) * 1000) / 1000);
   }
 
   private styleEl(el: HTMLElement | null): void {
@@ -196,6 +202,7 @@ export class BackgroundLayer {
     const timeout = new Promise<void>((resolve) => this.win.setTimeout(resolve, 8000));
     void Promise.race([ready, timeout]).then(() => {
       if (generation !== this.generation || !this.slots.includes(slot)) return;
+      this.measure(item, el);
       if (el instanceof HTMLVideoElement && el.paused && el.readyState >= 2 && el.currentTime === 0) el.currentTime = 0.001;
       if (fadeMs <= 0) {
         slot.style.opacity = '1';
@@ -212,6 +219,32 @@ export class BackgroundLayer {
       }
       this.restartTimer();
     });
+  }
+
+  /** Measures the shown item's brightness once (cached per url) and repaints the dim. Videos use the poster, else the first frame. */
+  private measure(item: LayerItem, el: HTMLImageElement | HTMLVideoElement): void {
+    if (this.brightnessCache.has(item.url)) {
+      this.brightness = this.brightnessCache.get(item.url) ?? null;
+      this.paintDim();
+      return;
+    }
+    const done = (value: number | null): void => {
+      this.brightnessCache.set(item.url, value);
+      if (this.items.some((it) => it.url === item.url) && this.slots.some((s) => s.firstElementChild === el)) {
+        this.brightness = value;
+        this.paintDim();
+      }
+    };
+    if (el instanceof HTMLImageElement) { done(el.naturalWidth > 0 ? sampleBrightness(el, this.doc) : null); return; }
+    if (el.readyState >= 2 && el.videoWidth > 0) { done(sampleBrightness(el, this.doc)); return; }
+    if (item.poster) {
+      const probe = new Image();
+      probe.onload = () => done(sampleBrightness(probe, this.doc));
+      probe.onerror = () => done(null);
+      probe.src = item.poster;
+      return;
+    }
+    el.addEventListener('loadeddata', () => done(sampleBrightness(el, this.doc)), { once: true });
   }
 
   private removeSlots(slots: HTMLDivElement[], _delay: number): void {
