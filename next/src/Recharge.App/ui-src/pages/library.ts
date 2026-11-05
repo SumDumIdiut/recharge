@@ -11,7 +11,7 @@ import { skeletonCards } from '../components/skeleton.js';
 import { button } from '../components/button.js';
 import { cardGrid } from '../components/cardGrid.js';
 import { emptyState, errorState } from '../components/emptyState.js';
-import { itemCard, selectableCard, imagesSettled } from '../components/itemCard.js';
+import { itemCard, selectableCard, setCellSelected, imagesSettled } from '../components/itemCard.js';
 import { call } from '../bridge.js';
 import { toast } from '../components/toast.js';
 import { uploadsView } from '../account/uploads.js';
@@ -224,13 +224,23 @@ function startUpload(preset: { repo?: string } = {}): void {
   }, preset);
 }
 
+/** How many items the hub offers for a group (summed over its kinds); -1 until every kind's list has loaded. */
+export function availableCount(group: Group, loaded: Lists): number {
+  let total = 0;
+  for (const kind of GROUPS[group].kinds) {
+    const list = loaded[kind];
+    if (!list) return -1;
+    total += list.filter((item) => !isEmbeddedMod(item)).length;
+  }
+  return total;
+}
 function installedCount(group: Group): number {
   return installed ? installedItems(installed, lists).filter((item) => GROUPS[group].kinds.includes(item.kind)).length : -1;
 }
 
 function renderBar(shown: number): void {
   const uploadsOn = state.view === 'uploads';
-  const counts = GROUP_IDS.map(installedCount);
+  const counts = GROUP_IDS.map((id) => availableCount(id, lists));
   paintInto(kindHost, GROUP_IDS.map((id, i) => id + counts[i]).join() + (uploadsOn ? '|u' : '|' + state.kind), () => [
     tabs(
       GROUP_IDS.map((id, i) => ({ value: id, label: GROUPS[id].label, icon: GROUPS[id].icon, count: counts[i] > 0 ? counts[i] : undefined })),
@@ -303,14 +313,25 @@ function toggleQueued(item: Item): void {
   if (queueRunning) return;
   const key = itemKey(item);
   if (queue.has(key)) { queue.delete(key); queueState.delete(key); } else { queue.set(key, item); queueState.delete(key); }
-  render();
+  // Incremental: touch only this card and the queue bar, so no thumbnail is rebuilt or refetched.
+  const cell = findCell(key);
+  if (cell) { setCellSelected(cell, item.name, queue.has(key)); renderQueueBar(); } else render();
+}
+
+function findCell(key: string): HTMLElement | null {
+  return listHost ? Array.from(listHost.querySelectorAll<HTMLElement>('.item-cell')).find((c) => c.dataset.key === key) || null : null;
 }
 
 function clearQueue(): void {
   if (queueRunning) return;
+  const keys = Array.from(queue.keys());
   queue.clear();
   queueState.clear();
-  render();
+  for (const key of keys) {
+    const cell = findCell(key);
+    if (cell) setCellSelected(cell, cell.querySelector('.card-name')?.textContent || '', false);
+  }
+  renderQueueBar();
 }
 
 function renderQueueBar(): void {
@@ -439,6 +460,7 @@ function render(): void {
       const key = itemKey(item);
       if (!canQueue(item) && !queue.has(key)) return itemCard(item);
       return selectableCard(item, {
+        key,
         selected: queue.has(key),
         canSelect: canQueue(item) && !queueRunning,
         state: queueState.get(key)?.state,

@@ -123,6 +123,17 @@ public class MpNetworkManager : MonoBehaviour
 		});
 		_net.Hosted += h => RunOnMain(() =>
 		{
+			// Host migration: the relay re-sends "hosted" for the lobby we are already in when the host left and we were
+			// next in line. Keep the map, round and chat as they are and just take over the host role.
+			if (CurrentLobbyId == h.LobbyId && h.LobbyId != 0 && !IsHost)
+			{
+				IsHost = true;
+				LobbyChanged?.Invoke(CurrentLobbyId, CurrentLobbyName, true);
+				ChatLines.Add("<color=#FFD700>You are now the host</color>");
+				while (ChatLines.Count > MaxChatLines) ChatLines.RemoveAt(0);
+				Debug.Log("[MpNet] host migration: this client is now the host of lobby " + h.LobbyId);
+				return;
+			}
 			SetLobby(h.LobbyId, h.Name);
 			StatusText = "Connected";
 			ChatLines.Clear();

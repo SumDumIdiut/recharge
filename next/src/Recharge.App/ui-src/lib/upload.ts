@@ -1,12 +1,20 @@
 /** Pure pieces of the Upload form and the upload cards' GitHub auto-update line (no DOM, so they can be tested). */
 import { githubRepoUrl } from './sourceUrl.js';
 
-export type UploadKind = 'mod' | 'map' | 'skin';
+export type UploadKind = 'mod' | 'map' | 'skin' | 'background' | 'playlist';
 export const UPLOAD_KINDS: Array<{ value: UploadKind; label: string }> = [
   { value: 'mod', label: 'Mod' },
   { value: 'map', label: 'Map' },
   { value: 'skin', label: 'Skin' },
+  { value: 'background', label: 'Background' },
+  { value: 'playlist', label: 'Playlist' },
 ];
+/** Backgrounds take a single image or video; the hub derives the preview from it. */
+export const BACKGROUND_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm'];
+/** The kinds whose preview the hub builds from the uploaded file itself, so the form hides the screenshots picker. */
+export function derivesGallery(kind: UploadKind): boolean {
+  return kind === 'background' || kind === 'playlist';
+}
 export const MAX_GALLERY = 8;
 export const NAME_MAX = 80;
 export const DESCRIPTION_MAX = 2000;
@@ -97,7 +105,10 @@ export function validateUpload(form: UploadForm): string | null {
   if (form.kind === 'mod' && form.source === 'release') {
     if (!form.release?.asset) return form.release?.problem || 'That release has no zip. Choose a zip instead.';
   } else if (!form.zipPath) {
-    return form.kind === 'mod' ? 'Choose the mod zip, or use the GitHub release.' : 'Choose the zip to upload.';
+    return form.kind === 'mod' ? 'Choose the mod zip, or use the GitHub release.'
+      : form.kind === 'background' ? 'Choose the image or video to upload.'
+      : form.kind === 'playlist' ? 'Choose the playlist zip (images) to upload.'
+      : 'Choose the zip to upload.';
   }
   return null;
 }

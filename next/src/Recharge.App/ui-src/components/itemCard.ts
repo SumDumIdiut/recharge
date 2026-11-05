@@ -164,6 +164,8 @@ export interface CardSelect {
   /** Whether it can be queued (already-installed items cannot). */
   canSelect: boolean;
   onToggle: () => void;
+  /** Stable identity for the cell (data-key), so setCellSelected can find it later without a rebuild. */
+  key?: string;
   /** Installs (or updates) this card straight away. */
   onInstall?: () => void;
   busy?: boolean;
@@ -177,6 +179,7 @@ const QUEUE_TEXT = { queued: 'Queued', installing: 'Installing…', installed: '
  */
 export function selectableCard(item: Item, select: CardSelect): HTMLElement {
   const cell = h('div', { className: 'item-cell' + (select.selected ? ' is-selected' : '') + (select.state ? ' is-' + select.state : '') });
+  if (select.key) cell.dataset.key = select.key;
   cell.appendChild(itemCard(item));
   if (select.canSelect || select.selected) {
     const check = h('button', {
@@ -205,6 +208,22 @@ export function selectableCard(item: Item, select: CardSelect): HTMLElement {
     cell.appendChild(line);
   }
   return cell;
+}
+
+/**
+ * Updates one selectable cell in place after the user ticks or unticks it: highlight, check glyph, aria and title, and any
+ * install-progress state is cleared. The card (and its thumbnail) is not rebuilt.
+ */
+export function setCellSelected(cell: HTMLElement, name: string, selected: boolean): void {
+  cell.classList.toggle('is-selected', selected);
+  for (const s of ['queued', 'installing', 'installed', 'failed']) cell.classList.remove('is-' + s);
+  cell.querySelector('.card-queue')?.remove();
+  const check = cell.querySelector<HTMLElement>('.card-select');
+  if (!check) return;
+  check.setAttribute('aria-checked', selected ? 'true' : 'false');
+  check.title = selected ? 'Remove from the install queue' : 'Add to the install queue';
+  check.setAttribute('aria-label', 'Queue ' + name + ' to install');
+  check.replaceChildren(...(selected ? [icon('check', 18)] : []));
 }
 
 /** A library card: image (or placeholder), name, author, kind and status badges. */

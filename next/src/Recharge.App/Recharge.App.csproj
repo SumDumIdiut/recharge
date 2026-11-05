@@ -5,7 +5,7 @@
     <RootNamespace>Recharge.App</RootNamespace>
     <AssemblyName>Recharge.App</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <!-- lets `dotnet publish -r win-x64` run from Linux -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

@@ -58,6 +58,9 @@
 
 /* ---------- banners ---------- */
 .profile-banner { position: relative; overflow: hidden; height: var(--pb-height, 150px); background: none; }
+/* The banner spans the card edge-to-edge: cancel the panel's 16px/18px padding and round its top corners to the card's,
+   so it sits flush inside the border instead of floating with a mismatched frame around it. */
+.profile-page .profile-card > .profile-banner { margin: -16px -18px 0; border-top-left-radius: calc(var(--pt-r) - 1px); border-top-right-radius: calc(var(--pt-r) - 1px); }
 .pb-h-slim { --pb-height: 84px; }
 .pb-h-normal { --pb-height: 150px; }
 .pb-h-tall { --pb-height: 210px; }

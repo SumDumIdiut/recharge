@@ -77,7 +77,9 @@
 .status-solved { color: #0c1a10; background: var(--green-dim); border-color: var(--green-dim); }
 .status-closed { color: var(--text-dim); border-style: dashed; }
 .pager { display: flex; align-items: center; justify-content: center; gap: 14px; }
-.back-link { align-self: flex-start; color: var(--text-dim); text-decoration: none; }
+/* Sits above the profile page that follows it, whose background glow (.pt-bgl) overflows upward over this link and
+   would otherwise swallow the click. position+z-index puts the back link on top so it stays clickable. */
+.back-link { align-self: flex-start; color: var(--text-dim); text-decoration: none; position: relative; z-index: 1; margin-bottom: 4px; }
 .back-link:hover { color: var(--green); }
 
 /* Thread */

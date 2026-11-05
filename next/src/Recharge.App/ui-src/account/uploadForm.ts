@@ -10,8 +10,8 @@ import { hubJson, HubError } from '../community/api.js';
 import { githubRepoUrl } from '../lib/sourceUrl.js';
 import { currentUser } from './session.js';
 import {
-  addGallery, baseName, buildFields, DESCRIPTION_MAX, IMAGE_EXTENSIONS, MAX_GALLERY, NAME_MAX, parseRelease, releaseLine, REPO_HINT,
-  suggestedName, UPLOAD_KINDS, validateUpload, type FileSource, type ReleaseInfo, type UploadForm, type UploadKind,
+  addGallery, BACKGROUND_EXTENSIONS, baseName, buildFields, derivesGallery, DESCRIPTION_MAX, IMAGE_EXTENSIONS, MAX_GALLERY, NAME_MAX,
+  parseRelease, releaseLine, REPO_HINT, suggestedName, UPLOAD_KINDS, validateUpload, type FileSource, type ReleaseInfo, type UploadForm, type UploadKind,
 } from '../lib/upload.js';
 
 export interface UploadPreset { repo?: string }
@@ -52,7 +52,11 @@ export function openUploadForm(onDone: () => void, preset: UploadPreset = {}): v
   const shotsBox = h('div', { className: 'form-field' });
   // text fields
   const nameInput = textInput('', 'Name', NAME_MAX);
+  // The author is always the signed-in account; it can't be changed.
   const authorInput = textInput(state.author, 'Author', 60);
+  authorInput.readOnly = true;
+  authorInput.classList.add('is-locked');
+  authorInput.title = 'Uploads are published under your account';
   const versionInput = textInput('', 'Version, like 1.0.0', 30);
   const descInput = textArea('', 'What does it do?', 4);
   const descField = field('Description', descInput);
@@ -70,12 +74,21 @@ export function openUploadForm(onDone: () => void, preset: UploadPreset = {}): v
   }
 
   function paintFile(): void {
-    fileBox.replaceChildren(h('span', { className: 'form-label', text: state.kind === 'mod' ? 'Mod file' : 'Zip file' }));
-    const zipName = state.zipPath ? baseName(state.zipPath) : '';
-    const chooser = button(state.zipPath ? 'Change zip…' : 'Choose a zip…', {
-      kind: 'secondary', icon: 'package',
+    const isBg = state.kind === 'background';
+    const label = state.kind === 'mod' ? 'Mod file'
+      : isBg ? 'Background image or video'
+      : state.kind === 'playlist' ? 'Playlist zip (images)'
+      : 'Zip file';
+    fileBox.replaceChildren(h('span', { className: 'form-label', text: label }));
+    const fileName = state.zipPath ? baseName(state.zipPath) : '';
+    const exts = isBg ? BACKGROUND_EXTENSIONS : ['zip'];
+    const pickerName = isBg ? 'Image or video' : 'Zip files';
+    const chooseText = isBg ? 'Choose a file…' : 'Choose a zip…';
+    const changeText = isBg ? 'Change file…' : 'Change zip…';
+    const chooser = button(state.zipPath ? changeText : chooseText, {
+      kind: 'secondary', icon: isBg ? 'image' : 'package',
       onClick: () => {
-        pick('Choose a zip', 'Zip files', ['zip'], false).then((paths) => {
+        pick(chooseText, pickerName, exts, false).then((paths) => {
           if (paths.length === 0) return;
           state.zipPath = paths[0];
           state.source = 'zip';
@@ -84,7 +97,7 @@ export function openUploadForm(onDone: () => void, preset: UploadPreset = {}): v
         }, (error) => errors.show(describeError(error)));
       },
     });
-    const picked = h('span', { className: 'upload-file dim', text: zipName });
+    const picked = h('span', { className: 'upload-file dim', text: fileName });
     if (state.kind !== 'mod') {
       fileBox.appendChild(h('div', { className: 'upload-line' }, chooser, picked));
       return;
@@ -133,13 +146,20 @@ export function openUploadForm(onDone: () => void, preset: UploadPreset = {}): v
     releaseNote.classList.toggle('is-problem', !!state.release?.problem || (!!state.release && !state.release.asset));
   }
 
+  const KIND_NAME: Record<UploadKind, string> = {
+    mod: 'Mod name', map: 'Map name', skin: 'Skin name', background: 'Background name', playlist: 'Playlist name',
+  };
+
   function paint(): void {
     sync();
     const mod = state.kind === 'mod';
-    repoField.hidden = !mod;
-    nameInput.placeholder = mod ? 'Mod name' : state.kind === 'map' ? 'Map name' : 'Skin name';
+    repoField.hidden = !mod;   // the GitHub repo is required for mods only
+    nameInput.placeholder = KIND_NAME[state.kind];
     paintFile();
-    paintShots();
+    // Backgrounds and playlists get their preview from the uploaded file, so there is no separate screenshots picker.
+    const noShots = derivesGallery(state.kind);
+    shotsBox.hidden = noShots;
+    if (noShots) shotsBox.replaceChildren(); else paintShots();
     paintRelease();
   }
 
@@ -207,7 +227,7 @@ export function openUploadForm(onDone: () => void, preset: UploadPreset = {}): v
       const reply = await call<{ id?: string; status?: string }>('hub.submit', {
         fields: buildFields(state),
         ...(!(mod && state.source === 'release') && state.zipPath ? { file: state.zipPath } : {}),
-        gallery: state.gallery,
+        gallery: derivesGallery(state.kind) ? [] : state.gallery,
       });
       toast(reply.status === 'approved' ? 'Uploaded — live now' : 'Uploaded — waiting for review', 'success');
       busy = false;

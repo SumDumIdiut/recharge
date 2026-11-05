@@ -36,3 +36,6 @@
 .upload-gh-line.is-off { opacity: .8; }
 .upload-gh-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .upload-gh-actions .mod-switch { margin-left: auto; }
+
+/* The author is locked to the signed-in account. */
+.upload-form .input.is-locked { opacity: .7; cursor: not-allowed; }

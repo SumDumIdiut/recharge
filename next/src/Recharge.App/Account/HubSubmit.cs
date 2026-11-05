@@ -21,6 +21,8 @@ namespace Recharge.App.Account
         public const int MaxImages = 8;
 
         private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
+        // The "file" part is a zip (mod/map/skin/playlist) or a background's image/video. The hub enforces the finer per-kind limits.
+        private static readonly string[] FileExtensions = { ".zip", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".webm" };
         private static readonly HttpClient Client = CreateClient();
 
         private static HttpClient CreateClient()
@@ -35,9 +37,10 @@ namespace Recharge.App.Account
         {
             if (zip is not null)
             {
-                if (!File.Exists(zip)) throw new ArgumentException("The zip file was not found: " + Path.GetFileName(zip));
-                if (!zip.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Choose a .zip file.");
-                if (new FileInfo(zip).Length > MaxZipBytes) throw new ArgumentException("The zip is over 200 MB.");
+                if (!File.Exists(zip)) throw new ArgumentException("The file was not found: " + Path.GetFileName(zip));
+                if (Array.IndexOf(FileExtensions, Path.GetExtension(zip).ToLowerInvariant()) < 0)
+                    throw new ArgumentException("Choose a .zip file, or an image or video for a background.");
+                if (new FileInfo(zip).Length > MaxZipBytes) throw new ArgumentException("The file is over 200 MB.");
             }
             if (gallery.Count > MaxImages) throw new ArgumentException("Add at most " + MaxImages + " screenshots.");
             foreach (string path in gallery)
@@ -55,6 +58,8 @@ namespace Recharge.App.Account
             ".jpg" or ".jpeg" => "image/jpeg",
             ".gif" => "image/gif",
             ".webp" => "image/webp",
+            ".mp4" => "video/mp4",
+            ".webm" => "video/webm",
             ".zip" => "application/zip",
             _ => "application/octet-stream",
         };
