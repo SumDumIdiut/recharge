@@ -300,7 +300,8 @@ internal static class MapMenuBuilder
             if (modsPager != null)
             {
                 modsPager.gameObject.SetActive(true);
-                var pageBtn = modsPager.Find("ModsPagerPageButton") as RectTransform;
+                // since the page button became a sibling of Quit, it lives in the pager's parent, not the pager itself
+                var pageBtn = modsPager.transform.parent.Find("ModsPagerPageButton") as RectTransform;
                 if (Quit != null && pageBtn != null && pageBtn.gameObject.activeSelf)
                 {
                     float step = Mathf.Abs(_rowYs != null && _rowYs.Length > 1 ? _rowYs[0] - _rowYs[1] : 0f);

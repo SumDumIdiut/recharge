@@ -9,6 +9,9 @@ namespace Recharge.ModApi
     /// Pages 2+ reuse the real StartGame/DeleteSave/Settings row slots for
     /// mod-contributed rows; page 1 is the untouched vanilla rows. A "Page 1/2 >"
     /// button under the last row switches pages (shown only when there's more than one).
+    /// The vanilla rows' real Ys are captured at build and page 1 restores them: the
+    /// game's row pitch is not uniform (65.9/67.4/58.3 in IGTAP), so a uniform
+    /// re-derivation lifted the lower rows off the vanilla divider bars.
     /// </summary>
     internal static class MenuPager
     {
@@ -32,6 +35,12 @@ namespace Recharge.ModApi
             public GameObject PageButton;
             public int CurrentPage;
             public float QuitTargetY;
+            // The rows' real positions as the game had them when the pager was built;
+            // page 1 puts every row back onto these so the vanilla divider bars line up.
+            public float VanillaYStart;
+            public float VanillaYDelete;
+            public float VanillaYSettings;
+            public float OriginalQuitY;
             public bool LayoutLogged;
             public System.Collections.Generic.List<GameObject> VanillaDividers = new System.Collections.Generic.List<GameObject>();
             public System.Collections.Generic.List<GameObject> PagerDividers = new System.Collections.Generic.List<GameObject>();
@@ -51,11 +60,18 @@ namespace Recharge.ModApi
                 if (PageButton != null) PageButton.SetActive(false);
             }
 
-            // Re-assert the row order after any layout pass or vanilla script moved things.
+            // Keep every visible row on its target: the vanilla rows on page 1 sit at
+            // their captured Ys (never re-derived), slots and Quit follow the pager,
+            // so the game's own layout passes can never park a row between the bars.
             private void LateUpdate()
             {
-                if (Quit == null) return;
-                SetY(Quit, QuitTargetY);
+                if (CurrentPage <= 0)
+                {
+                    SetY(StartGame, VanillaYStart);
+                    if (DeleteSave != null) SetY(DeleteSave, VanillaYDelete);
+                    SetY(Settings, VanillaYSettings);
+                }
+                if (Quit != null) SetY(Quit, QuitTargetY);
                 if (PageButton != null && PageButton.activeSelf) SetY((RectTransform)PageButton.transform, QuitTargetY + RowSpacing);
             }
 
@@ -174,7 +190,6 @@ namespace Recharge.ModApi
             if (rowSpacing <= 0f) rowSpacing = 60f;
             float topY = startGame.anchoredPosition.y;
             float originalQuitY = quit.anchoredPosition.y;
-
             var background = mainBitGo.GetComponent<RectTransform>();
             // The title-screen panel is itself the background image. The in-game
             // pause panel is a bare container whose background is a child Image,
@@ -226,6 +241,10 @@ namespace Recharge.ModApi
             rt.ChildBackground = childBackground;
             rt.BottomMargin = bottomMargin;
             rt.CurrentPage = 0;
+            rt.VanillaYStart = topY;
+            if (deleteSave != null) rt.VanillaYDelete = deleteSave.anchoredPosition.y;
+            rt.VanillaYSettings = settings.anchoredPosition.y;
+            rt.OriginalQuitY = originalQuitY;
 
             float quitY = topY - (MaxRowsPerPage + 1) * rowSpacing;
             quit.anchoredPosition = new Vector2(quit.anchoredPosition.x, quitY);
@@ -363,12 +382,14 @@ namespace Recharge.ModApi
             if (rt.PageButton != null)
             {
                 bool paged = totalPages > 1;
-                // No mod rows to show: the menu is the vanilla one again (vanilla dividers back, none of ours, no page row).
-                foreach (var d in rt.VanillaDividers) if (d != null) d.SetActive(!paged);
-                foreach (var d in rt.PagerDividers) if (d != null) d.SetActive(paged);
+                // Page 1 keeps the vanilla rows and their vanilla divider bars; the mod
+                // pages are our uniform grid with the pager's own bars (they match).
+                foreach (var d in rt.VanillaDividers) if (d != null) d.SetActive(page == 0);
+                foreach (var d in rt.PagerDividers) if (d != null) d.SetActive(page > 0);
                 rt.PageButton.SetActive(paged);
                 if (paged) MenuUiUtil.SetButtonLabel(rt.PageButton, "Page " + (page + 1) + "/" + totalPages + "  >");
-                float bottomY = paged ? rt.QuitY : rt.QuitY + rt.RowSpacing;
+                // No mod rows: the menu collapses back to the genuine vanilla one, Quit where the game placed it.
+                float bottomY = page > 0 ? rt.QuitY : (paged ? rt.QuitY : rt.OriginalQuitY);
                 rt.Quit.anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY);
                 rt.QuitTargetY = bottomY;
                 if (paged) ((RectTransform)rt.PageButton.transform).anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY + rt.RowSpacing);
@@ -382,17 +403,15 @@ namespace Recharge.ModApi
 
         private static void ShowVanillaPage(Runtime rt)
         {
+            // The captured Ys, not a derived grid: the game's pitch is uneven
+            // (65.9/67.4/58.3 between the four rows), and forcing a uniform grid
+            // lifted the lower rows above the vanilla divider bars.
             rt.StartGame.gameObject.SetActive(true);
-            rt.StartGame.anchoredPosition = new Vector2(rt.StartGame.anchoredPosition.x, rt.TopY);
-            int slotIndex = 1;
-            if (rt.DeleteSave != null)
-            {
-                rt.DeleteSave.gameObject.SetActive(true);
-                rt.DeleteSave.anchoredPosition = new Vector2(rt.DeleteSave.anchoredPosition.x, rt.TopY - slotIndex * rt.RowSpacing);
-                slotIndex++;
-            }
+            rt.StartGame.anchoredPosition = new Vector2(rt.StartGame.anchoredPosition.x, rt.VanillaYStart);
+            rt.DeleteSave?.gameObject.SetActive(true);
+            if (rt.DeleteSave != null) rt.DeleteSave.anchoredPosition = new Vector2(rt.DeleteSave.anchoredPosition.x, rt.VanillaYDelete);
             rt.Settings.gameObject.SetActive(true);
-            rt.Settings.anchoredPosition = new Vector2(rt.Settings.anchoredPosition.x, rt.TopY - slotIndex * rt.RowSpacing);
+            rt.Settings.anchoredPosition = new Vector2(rt.Settings.anchoredPosition.x, rt.VanillaYSettings);
             foreach (var slot in rt.Slots) slot.SetActive(false);
         }
 
