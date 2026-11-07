@@ -199,6 +199,7 @@ namespace Recharge.App.Library
                     using ZipArchive zip = FolderStore.OpenZip(package);
                     FolderStore.ExtractSafely(zip, tmp);
                     string manifest = Path.Combine(tmp, "mod.json");
+                    if (!File.Exists(manifest) && FlattenSingleRootFolder(tmp)) manifest = Path.Combine(tmp, "mod.json");
                     if (!File.Exists(manifest)) throw new InvalidOperationException("the package is missing mod.json");
                     string id;
                     try { id = JsonReader.Parse(File.ReadAllText(manifest)) is JsonObject o && o.TryGetValue("id", out JsonNode v) && v is JsonString s ? s.Value : ""; }
@@ -227,6 +228,32 @@ namespace Recharge.App.Library
                     result.Files = ExtractPlaylist(package, tmp);
                     if (result.Files == 0) throw new InvalidOperationException("that playlist has no usable pictures, videos or sounds");
                     return null;
+            }
+        }
+
+        /// <summary>
+        /// A mod package may keep every file inside one folder — the hub's own rule ("files at the top or inside one folder") —
+        /// which the loader would read as an empty mod. If tmp holds only one root entry and it is a folder, its contents move up
+        /// one level and the folder is removed. Returns whether a flatten happened.
+        /// </summary>
+        private static bool FlattenSingleRootFolder(string tmp)
+        {
+            try
+            {
+                string[] entries = Directory.GetFileSystemEntries(tmp);
+                if (entries.Length != 1 || !Directory.Exists(entries[0])) return false; // loose files or several roots: not the folder layout
+                string folder = entries[0];
+                foreach (string child in Directory.GetFileSystemEntries(folder))
+                {
+                    string dest = Path.Combine(tmp, Path.GetFileName(child));
+                    Directory.Move(child, dest);
+                }
+                Directory.Delete(folder);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false; // unreadable or blocked: the caller's own error wins
             }
         }
 

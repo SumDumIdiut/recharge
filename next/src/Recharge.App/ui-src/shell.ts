@@ -3,6 +3,7 @@ import { icon } from './icons.js';
 import { initAccountChip } from './account/index.js';
 import { initUpdateBar } from './components/updateBar.js';
 import { initBell } from './account/notifications.js';
+import { unreadBadge } from './social/unread.js';
 
 export interface NavEntry {
   id: string;
@@ -106,6 +107,7 @@ function navLink(entry: NavEntry): HTMLElement {
   });
   link.appendChild(icon(entry.icon, 20));
   link.appendChild(h('span', { className: 'nav-label', text: entry.label }));
+  if (entry.id === 'community') unreadBadge(link, 'nav-badge');
   return link;
 }
 

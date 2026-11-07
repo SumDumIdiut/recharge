@@ -38,6 +38,7 @@ namespace Recharge.App.Bridge
             });
             registry.Register("library.removeFolder", args => Task.FromResult<JsonNode>(Service().RemoveFolder(RequiredString(args, "kind"), RequiredString(args, "folder"))));
             CreateCommands.Register(registry);
+            AmpCommands.Register(registry);
             IconCommands.Register(registry);
             AccountCommands.Register(registry);
             UploadCommands.Register(registry);

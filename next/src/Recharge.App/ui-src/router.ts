@@ -173,6 +173,10 @@ export function parseRoute(hash: string): ParsedRoute {
     }
     return base;
   }
+  // The Amplifier editor: #/amp/<folder> edits an installed map, #/amp/new starts a fresh one.
+  if (first === 'amp' && segments.length === 2) {
+    return { ...base, name: 'amp', page: 'amp', sidebar: 'library', params: { id: second } };
+  }
   if (first === 'community') {
     if (segments.length === 1) {
       return {

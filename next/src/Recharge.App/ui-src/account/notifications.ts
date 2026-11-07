@@ -5,6 +5,8 @@ import { relativeTime } from '../create/format.js';
 import { libraryRoute } from '../community/format.js';
 import { hubJson } from '../community/api.js';
 import { go } from '../navigation.js';
+import { messagesRoute } from '../social/model.js';
+import { onMessageAlerts, clearAlertsFor, clearAllAlerts, type MsgAlert } from '../social/messageAlerts.js';
 import { currentUser, onSession } from './session.js';
 
 export interface HubNotification {
@@ -57,11 +59,12 @@ export function initBell(bell: HTMLElement): void {
   const badge = h('span', { className: 'bell-badge', hidden: true });
   bell.appendChild(badge);
   let state: NotificationList = { unread: 0, items: [] };
+  let alerts: MsgAlert[] = [];   // live message alerts (new DMs/group messages), newest first
   let panel: HTMLElement | null = null;
   let timer = 0;
 
   function paintBadge(): void {
-    const text = badgeText(state.unread);
+    const text = badgeText(state.unread + alerts.length);
     badge.textContent = text;
     badge.hidden = !text;
     bell.classList.toggle('has-unread', !!text);
@@ -104,14 +107,22 @@ export function initBell(bell: HTMLElement): void {
     if (!panel) return;
     panel.replaceChildren();
     const head = h('div', { className: 'bell-head' }, h('strong', { text: 'Notifications' }));
-    if (state.unread > 0) {
+    if (state.unread > 0 || alerts.length > 0) {
       const all = h('button', { className: 'link-btn', text: 'Mark all read', attrs: { type: 'button' } });
-      all.addEventListener('click', () => { void markRead(); });
+      all.addEventListener('click', () => { clearAllAlerts(); void markRead(); });
       head.appendChild(all);
     }
     panel.appendChild(head);
     if (!currentUser()) { panel.appendChild(h('p', { className: 'dim bell-empty', text: 'Sign in to see your notifications.' })); return; }
-    if (state.items.length === 0) { panel.appendChild(h('p', { className: 'dim bell-empty', text: 'No notifications yet.' })); return; }
+    if (state.items.length === 0 && alerts.length === 0) { panel.appendChild(h('p', { className: 'dim bell-empty', text: 'No notifications yet.' })); return; }
+    for (const a of alerts) {
+      const item = h('button', { className: 'bell-item is-unread bell-msg', attrs: { type: 'button' } },
+        h('span', { className: 'bell-title', text: a.group ? a.group + ' · ' + a.from : a.from }),
+        h('span', { className: 'bell-body dim', text: a.text }),
+        h('span', { className: 'bell-when dim', text: relativeTime(new Date(a.ts).toISOString()) }));
+      item.addEventListener('click', () => { const to = a.convId; clearAlertsFor(to); closePanel(); go(messagesRoute(to)); });
+      panel.appendChild(item);
+    }
     for (const n of state.items) {
       const route = notificationRoute(n);
       const item = h('button', { className: 'bell-item' + (n.read ? '' : ' is-unread'), attrs: { type: 'button' } },
@@ -137,6 +148,7 @@ export function initBell(bell: HTMLElement): void {
     void refresh();
   });
 
+  onMessageAlerts((_n, list) => { alerts = list; paintBadge(); paintPanel(); });
   onSession(() => { void refresh(); });
   timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, POLL_MS);
   void timer;

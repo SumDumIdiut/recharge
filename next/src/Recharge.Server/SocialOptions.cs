@@ -21,6 +21,7 @@ namespace Recharge.Server
         public int MaxConnectionsPerUser { get; set; } = 5;
         public int WsMessagesPerSecond { get; set; } = 10;
         public int ProfileWritesPerHour { get; set; } = 60;
+        public int MaxGroupMembers { get; set; } = 20;
         public int MaxBodyBytes { get; set; } = 64 * 1024;
 
         public TimeSpan AuthCache { get; set; } = TimeSpan.FromSeconds(60);

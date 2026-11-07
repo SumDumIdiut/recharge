@@ -1,0 +1,51 @@
+/* The Amplifier: a full-window editor drawn over the app shell. */
+.amp-root { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+.amp-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-nav); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.amp-name { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 10px; min-width: 180px; font: inherit; }
+.amp-name:focus { outline: none; border-color: var(--green-dim); }
+.amp-spacer { flex: 1; }
+.amp-status { font-size: 13px; }
+.amp-body { flex: 1; min-height: 0; display: flex; }
+.amp-canvas { flex: 1; min-width: 0; height: 100%; display: block; touch-action: none; }
+.amp-toolbar { width: 52px; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 6px; background: var(--surface-nav); border-right: 1px solid var(--line); overflow-y: auto; }
+.amp-tool { position: relative; width: 40px; height: 40px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-size: 18px; cursor: pointer; }
+.amp-tool:hover { border-color: var(--line-hi); }
+.amp-tool.is-active { border-color: var(--green); color: var(--green); box-shadow: inset 0 0 0 1px var(--green-dim); }
+.amp-tool-key { position: absolute; right: 3px; bottom: 1px; font-size: 10px; color: var(--text-dim); }
+.amp-play { margin-top: 8px; color: var(--magenta); }
+.amp-side { width: 232px; flex: none; overflow-y: auto; padding: 8px 10px; background: var(--surface-nav); border-left: 1px solid var(--line); }
+.amp-group { margin: 10px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); }
+.amp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.amp-brush { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); cursor: pointer; font-size: 10px; }
+.amp-brush:hover { border-color: var(--line-hi); }
+.amp-brush.is-active { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green-dim); }
+.amp-thumb { width: 40px; height: 40px; image-rendering: pixelated; border-radius: 3px; }
+.amp-brush-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amp-options, .amp-rules { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.amp-row { display: flex; align-items: center; gap: 6px; font-size: 12px; justify-content: space-between; }
+.amp-row.is-off { opacity: .5; }
+.amp-mini { width: 26px; height: 26px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.amp-opt { min-width: 36px; text-align: center; }
+.amp-text, .amp-num { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px 6px; font: inherit; width: 100px; }
+.amp-num { width: 56px; }
+.amp-statusbar { display: flex; gap: 14px; align-items: center; padding: 5px 12px; background: var(--surface-nav); border-top: 1px solid var(--line); font-size: 12px; color: var(--text-dim); }
+.amp-inspector { width: 232px; flex: none; overflow-y: auto; padding: 8px 10px; background: var(--surface-nav); border-left: 1px solid var(--line); }
+.amp-inspector > :first-child .amp-group, .amp-inspector .amp-props > .amp-group { margin-top: 2px; }
+.amp-hint-line { font-size: 11px; color: var(--text-dim); margin-bottom: 6px; }
+.amp-opt-row { align-items: center; }
+.amp-opt-label { flex: 1; min-width: 0; }
+.amp-opt-row .amp-text { width: 104px; }
+.amp-opt-row .amp-num { width: 64px; }
+.amp-wide { width: 100%; padding: 4px 6px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; margin-top: 6px; }
+select.amp-wide { margin-top: 0; }
+.amp-layer-list { display: flex; flex-direction: column; gap: 3px; }
+.amp-layer { display: flex; align-items: center; gap: 3px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); cursor: pointer; font-size: 12px; }
+.amp-layer.is-active { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green-dim); }
+.amp-layer.is-hidden .amp-layer-name { opacity: .45; }
+.amp-layer .amp-mini { width: 20px; height: 20px; font-size: 10px; padding: 0; flex: none; }
+.amp-mini.is-on { color: var(--green); border-color: var(--green-dim); }
+.amp-layer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amp-layer-role { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+.amp-layer-add { margin-top: 6px; gap: 3px; }
+.amp-mini-wide { width: auto; flex: 1; font-size: 11px; height: 24px; }
+.amp-props, .amp-layers, .amp-bgpanel, .amp-rules { margin-bottom: 12px; }

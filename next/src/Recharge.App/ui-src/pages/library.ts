@@ -249,7 +249,7 @@ function renderBar(shown: number): void {
   ]);
   paintInto(actionsHost, 'a' + uploadsOn + state.kind, () => [
     ...(state.kind === 'maps' && !uploadsOn
-      ? [button('New map', { kind: 'ghost', icon: 'plus', title: 'The Amplifier is coming soon', onClick: () => toast('Making maps in Recharge is coming soon.', 'info') })]
+      ? [button('New map', { kind: 'ghost', icon: 'plus', title: 'Make a new map in the Amplifier', onClick: () => go('#/amp/new') })]
       : []),
     button('Upload', {
       kind: 'primary',

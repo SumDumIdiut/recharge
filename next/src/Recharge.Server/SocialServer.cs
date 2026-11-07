@@ -455,21 +455,46 @@ namespace Recharge.Server
             throw new SocialException(404, "Not found.");
         }
 
+        /// <summary>A conversation id as given, or the DM id for a username (the pre-groups route form).</summary>
+        private async Task<string> ConvId(string me, string idOrUser)
+        {
+            if (SocialService.IsConversationId(idOrUser)) return idOrUser;
+            return SocialService.DmId(me, await Resolve(idOrUser).ConfigureAwait(false));
+        }
+
+        private static List<string> StrList(JsonElement body, string name)
+        {
+            var list = new List<string>();
+            if (body.ValueKind == JsonValueKind.Object && body.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement e in v.EnumerateArray()) if (e.ValueKind == JsonValueKind.String && e.GetString() is string t) list.Add(t);
+            return list;
+        }
+
         private async Task<object> Conversations(string method, string[] seg, string me, JsonElement body, HttpListenerRequest req)
         {
             if (seg.Length == 2 && method == "GET") return Service.Conversations(me);
+            if (seg.Length == 2 && method == "POST")
+            {
+                var others = new List<string>();
+                foreach (string n in StrList(body, "members")) others.Add(await Resolve(n).ConfigureAwait(false));
+                return Service.CreateGroup(me, Str(body, "name"), others);
+            }
             if (seg.Length == 4)
             {
-                string other = await Resolve(seg[2]).ConfigureAwait(false);
+                string id = await ConvId(me, seg[2]).ConfigureAwait(false);
                 if (seg[3] == "messages" && method == "GET")
                 {
                     long.TryParse(req.QueryString["before"], NumberStyles.None, CultureInfo.InvariantCulture, out long before);
                     int limit = int.TryParse(req.QueryString["limit"], NumberStyles.None, CultureInfo.InvariantCulture, out int l) ? l : 50;
-                    return Service.Messages(me, other, before, limit);
+                    return Service.Messages(me, id, before, limit);
                 }
-                if (seg[3] == "messages" && method == "POST") return Service.Send(me, other, Str(body, "text"), CardOf(body));
-                if (seg[3] == "read" && method == "POST") return Service.MarkRead(me, other, Num(body, "upTo"));
+                if (seg[3] == "messages" && method == "POST") return Service.Send(me, id, Str(body, "text"), CardOf(body), Str(body, "cid"), Num(body, "replyTo"));
+                if (seg[3] == "read" && method == "POST") return Service.MarkRead(me, id, Num(body, "upTo"));
+                if (seg[3] == "name" && method == "POST") return Service.RenameGroup(me, id, Str(body, "name"));
+                if (seg[3] == "members" && method == "POST") return Service.AddMember(me, id, await Resolve(Str(body, "username")).ConfigureAwait(false));
             }
+            if (seg.Length == 5 && seg[3] == "members" && method == "DELETE")
+                return Service.RemoveMember(me, await ConvId(me, seg[2]).ConfigureAwait(false), await Resolve(seg[4]).ConfigureAwait(false));
             throw new SocialException(404, "Not found.");
         }
 
@@ -603,8 +628,9 @@ namespace Recharge.Server
                         break;
                     case "send":
                     {
-                        string other = await Resolve(Str(msg, "to")).ConfigureAwait(false);
-                        object sent = Service.Send(user.Username, other, Str(msg, "text"), CardOf(msg));
+                        string? target = Str(msg, "conv") ?? Str(msg, "convId") ?? Str(msg, "to");
+                        string convId = await ConvId(user.Username, target ?? "").ConfigureAwait(false);
+                        object sent = Service.Send(user.Username, convId, Str(msg, "text"), CardOf(msg), Str(msg, "cid"), Num(msg, "replyTo"));
                         Send(conn, new { type = "sent", @ref = reference, message = sent });
                         break;
                     }

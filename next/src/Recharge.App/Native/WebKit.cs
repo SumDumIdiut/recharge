@@ -156,6 +156,12 @@ namespace Recharge.App.Native
             IntPtr userData);
 
         [DllImport(Lib)]
+        internal static extern void webkit_web_view_evaluate_javascript_finish(
+            IntPtr view,
+            IntPtr result,
+            IntPtr error);
+
+        [DllImport(Lib)]
         internal static extern uint webkit_get_major_version();
 
         [DllImport(Lib)]
@@ -163,6 +169,24 @@ namespace Recharge.App.Native
 
         [DllImport(Lib)]
         internal static extern uint webkit_get_micro_version();
+
+        /// <summary>The page's title (may be null). Borrowed pointer: WebKit owns it, so it is read without freeing.</summary>
+        [DllImport(Lib)]
+        internal static extern IntPtr webkit_web_view_get_title(IntPtr view);
+
+        /// <summary>Safe title read (a disposed or closed view just yields an empty title).</summary>
+        internal static string WebViewTitle(IntPtr view)
+        {
+            try
+            {
+                IntPtr title = webkit_web_view_get_title(view);
+                return title == IntPtr.Zero ? string.Empty : (Marshal.PtrToStringUTF8(title) ?? string.Empty);
+            }
+            catch (Exception)
+            {
+                return string.Empty;
+            }
+        }
     }
 
     /// <summary>GTK's GdkRGBA (all fields are doubles).</summary>

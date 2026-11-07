@@ -3,6 +3,8 @@ import { call, describeError } from '../bridge.js';
 import { button } from './button.js';
 import { modSwitch } from './modSwitch.js';
 import { toast } from './toast.js';
+import { go } from '../navigation.js';
+import { attachRenderedPreview, wantsRenderedPreview } from '../lib/mapPreview.js';
 import { gunSettingsSection } from './gunSettings.js';
 import { sourceBadge, sourceCodeLink } from './sourceLink.js';
 import { authorName, fitImage, kindPlaceholder, statusBadge } from './itemCard.js';
@@ -45,6 +47,13 @@ function gallery(item: Item, dispose: Array<() => void>): HTMLElement {
   root.appendChild(stage);
   if (item.gallery.length === 0 || item.local) {
     stage.appendChild(kindPlaceholder(item.kind));
+    // no uploaded picture: draw the map from its own data
+    if (wantsRenderedPreview(item)) {
+      const box = h('div', { className: 'media-box card-img' });
+      box.style.cssText = 'position:absolute;inset:0;background:#101214;';
+      stage.appendChild(box);
+      attachRenderedPreview(item, box);
+    }
     return root;
   }
   let index = 0;
@@ -256,10 +265,10 @@ export interface DetailOptions {
 
 const PAST: Record<string, string> = { install: 'Installed', update: 'Updated', remove: 'Removed' };
 
-/** An installed map opens in the Amplifier once it is back in Recharge; until then the button says so. */
-function amplifierButton(): HTMLButtonElement {
-  const amp = button('Amplifier: coming soon', { kind: 'secondary', icon: 'amplifier', title: 'Editing maps in Recharge is coming soon' });
-  amp.addEventListener('click', () => toast('The Amplifier is coming soon.', 'info'));
+/** An installed map opens in the Amplifier editor. */
+function amplifierButton(folder: string): HTMLButtonElement {
+  const amp = button('Amplifier', { kind: 'secondary', icon: 'amplifier', title: 'Open this map in the Amplifier' });
+  amp.addEventListener('click', () => go('#/amp/' + folder));
   return amp;
 }
 
@@ -268,7 +277,7 @@ function localActions(item: Item, folder: string, options: DetailOptions): HTMLE
   const box = h('div', {});
   const actions = h('div', { className: 'detail-actions' });
   const status = h('p', { className: 'detail-status dim', attrs: { role: 'status' } });
-  if (item.kind === 'maps') actions.appendChild(amplifierButton());
+  if (item.kind === 'maps') actions.appendChild(amplifierButton(folder));
   const remove = button('Remove', { kind: 'danger', title: 'Remove this folder (a backup is kept)' });
   let confirming = false;
   remove.addEventListener('click', () => {
@@ -356,7 +365,7 @@ function actionButtons(item: Item, options: DetailOptions): HTMLElement {
   if (item.kind === 'skins' && item.installed && item.installed.folder) {
     actions.appendChild(skinApplyButton(item.installed.folder, item.name));
   }
-  if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(amplifierButton());
+  if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(amplifierButton(item.installed.folder));
   // an installed background or playlist can be shown behind the app straight from its page
   if ((item.kind === 'backgrounds' || item.kind === 'playlists') && item.installed && item.installed.folder) {
     actions.appendChild(backgroundApplyButton(item.kind, item.installed.folder, item.name));

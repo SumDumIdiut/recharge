@@ -10,6 +10,7 @@ import { threadView } from '../community/thread.js';
 import { playersList } from '../community/players.js';
 import { profileView } from '../community/profile.js';
 import { ensureSocialStyles, socialTab } from '../social/index.js';
+import { unreadBadge } from '../social/unread.js';
 
 const TABS = [
   { value: 'forum', label: 'Forum', icon: 'forum' },
@@ -20,6 +21,7 @@ const TABS = [
 
 let view: View | null = null;
 let stopSession: (() => void) | null = null;
+let stopBadge: (() => void) | null = null;
 
 function viewFor(route: ParsedRoute, repaint: () => void): View {
   if (route.name === 'community-thread') return threadView(Number(route.params.id));
@@ -48,6 +50,9 @@ export const communityPage: PageModule = {
       tabs: tabs(TABS, { value: tab, onChange: (value) => go(buildRoute('/community/' + value)) }),
     });
     el.appendChild(page);
+    stopBadge?.();
+    const messagesTab = el.querySelector('.tab[data-value="messages"]') as HTMLElement | null;
+    stopBadge = messagesTab ? unreadBadge(messagesTab, 'tab-badge') : null;
 
     await sessionReady();
 
@@ -68,6 +73,8 @@ export const communityPage: PageModule = {
   },
 
   unmount(): void {
+    stopBadge?.();
+    stopBadge = null;
     stopSession?.();
     stopSession = null;
     view?.dispose?.();

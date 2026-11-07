@@ -41,6 +41,24 @@ namespace Recharge.Server
         public string Text { get; set; } = "";
         public CardRec? Card { get; set; }
         public long Ts { get; set; }
+        /// <summary>The sender's own id for this message; sending the same one again returns the stored message instead of a duplicate.</summary>
+        public string Cid { get; set; } = "";
+        /// <summary>The conversation this belongs to ("dm:a|b" or "g:xxxxxxxxxxxx"). Empty only in pre-groups data, which is migrated on load.</summary>
+        public string ConvId { get; set; } = "";
+        /// <summary>The id of the message this one replies to (same conversation), or 0.</summary>
+        public long ReplyTo { get; set; }
+    }
+
+    public sealed class ConversationRec
+    {
+        public string Id { get; set; } = "";
+        /// <summary>"dm" or "group".</summary>
+        public string Kind { get; set; } = "dm";
+        public string Name { get; set; } = "";
+        /// <summary>Lower-case member keys.</summary>
+        public string[] Members { get; set; } = Array.Empty<string>();
+        public string Owner { get; set; } = "";
+        public long Created { get; set; }
     }
 
     public sealed class ReadRec

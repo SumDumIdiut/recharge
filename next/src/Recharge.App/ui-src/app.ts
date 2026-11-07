@@ -8,8 +8,11 @@ import { lobbiesPage } from './pages/lobbies.js';
 import { notebookPage } from './pages/notebook.js';
 import { settingsPage } from './pages/settings.js';
 import './settings/boot.js';
+import { ampPage } from './pages/amp.js';
 import { notFoundPage } from './pages/notFound.js';
 import { initPerf } from './perf.js';
+import { initUnread } from './social/unread.js';
+import { initMessageAlerts } from './social/messageAlerts.js';
 import { themeAllSelects } from './components/dropdown.js';
 
 const routes: PageRegistry = {
@@ -19,6 +22,7 @@ const routes: PageRegistry = {
   lobbies: lobbiesPage,
   notebook: notebookPage,
   settings: settingsPage,
+  amp: ampPage,
 };
 
 const outlet = document.getElementById('page') as HTMLElement;
@@ -34,3 +38,5 @@ bindRouter(router);
 initShell({ onSearch: (query) => router.filter(query) });
 void router.start();
 void initPerf();
+initUnread();
+initMessageAlerts();

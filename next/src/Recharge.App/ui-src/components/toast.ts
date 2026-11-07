@@ -14,10 +14,10 @@ function container(): HTMLElement {
   return root;
 }
 
-/** A short-lived message at the bottom right. */
-export function toast(text: string, kind: ToastKind = 'info'): HTMLElement {
+/** A short-lived message at the bottom right. Pass `onClick` to make it act on a click (it still dismisses). */
+export function toast(text: string, kind: ToastKind = 'info', onClick?: () => void): HTMLElement {
   const node = h('div', {
-    className: 'toast toast-' + kind,
+    className: 'toast toast-' + kind + (onClick ? ' toast-clickable' : ''),
     attrs: { role: 'status' },
   });
   node.appendChild(icon(kind === 'success' ? 'check' : kind === 'error' ? 'alert' : 'sparkles', 18));
@@ -27,8 +27,8 @@ export function toast(text: string, kind: ToastKind = 'info'): HTMLElement {
     window.clearTimeout(timer);
     if (node.parentNode) node.parentNode.removeChild(node);
   };
-  node.addEventListener('click', dismiss);
+  node.addEventListener('click', () => { if (onClick) { try { onClick(); } catch (e) { console.error('toast action failed', e); } } dismiss(); });
   container().appendChild(node);
-  timer = window.setTimeout(dismiss, 4200);
+  timer = window.setTimeout(dismiss, onClick ? 6000 : 4200);
   return node;
 }

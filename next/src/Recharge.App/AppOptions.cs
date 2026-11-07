@@ -12,6 +12,8 @@ namespace Recharge.App
         public int Height { get; private set; } = 800;
         public int TimeoutSeconds { get; private set; } = 20;
         public bool EvalLog { get; private set; }
+        /// <summary>Dev only (with --snapshot): JavaScript run in the page before the picture is taken; its document.title is printed.</summary>
+        public string EvalJs { get; private set; } = string.Empty;
         /// <summary>Dev only: routes the page visits one after another, logging timings (see tools/perf.sh).</summary>
         public string[] RouteSequence { get; private set; } = Array.Empty<string>();
         public bool Help { get; private set; }
@@ -64,6 +66,9 @@ namespace Recharge.App
                     case "--eval-log":
                         options.EvalLog = true;
                         break;
+                    case "--eval-js":
+                        options.EvalJs = NextValue(args, ref i, arg);
+                        break;
                     case "--help":
                     case "-h":
                         options.Help = true;
@@ -77,7 +82,7 @@ namespace Recharge.App
 
         public static string Usage =>
             "usage: recharge [--snapshot <out.png> [--route <route>] " +
-            "[--size 1280x800] [--timeout 20] [--eval-log]] " +
+            "[--size 1280x800] [--timeout 20] [--eval-log] [--eval-js <js> (with --snapshot: dumps document.title first)]] " +
             "[--route-sequence #/home,#/library,... (dev: visit each route, log [perf] timings, then exit; use with --eval-log)]";
 
         private static string NextValue(string[] args, ref int index, string option)

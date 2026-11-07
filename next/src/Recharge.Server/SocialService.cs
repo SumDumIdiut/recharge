@@ -29,11 +29,13 @@ namespace Recharge.Server
         private readonly JsonlStore<SettingsRec> _settings;
         private readonly JsonlStore<ShareRec> _shares;
         private readonly JsonlStore<ProfileRec> _profiles;
+        private readonly JsonlStore<ConversationRec> _convs;
         private readonly Dictionary<string, List<MessageRec>> _byConv = new Dictionary<string, List<MessageRec>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<int, Live>> _live = new Dictionary<string, Dictionary<int, Live>>(StringComparer.Ordinal);
         private readonly RateLimiter _messageLimit;
         private readonly RateLimiter _requestLimit;
         private readonly RateLimiter _shareLimit;
+        private readonly Dictionary<string, MessageRec> _byCid = new Dictionary<string, MessageRec>(StringComparer.Ordinal);
         private long _lastMessageId;
 
         private sealed class Live
@@ -65,17 +67,20 @@ namespace Recharge.Server
             _messageLimit = new RateLimiter(options.MessagesPerMinute, TimeSpan.FromMinutes(1), options.Clock);
             _requestLimit = new RateLimiter(options.FriendRequestsPerHour, TimeSpan.FromHours(1), options.Clock);
             _shareLimit = new RateLimiter(options.SharesPerHour, TimeSpan.FromHours(1), options.Clock);
+            _convs = new JsonlStore<ConversationRec>(System.IO.Path.Combine(dir, "conversations.jsonl"));
+            Migrate();
             foreach (MessageRec m in _messages.Items.Values.OrderBy(m => m.Id))
             {
-                ConvList(Conv(m.From, m.To)).Add(m);
+                ConvList(m.ConvId).Add(m);
                 if (m.Id > _lastMessageId) _lastMessageId = m.Id;
+                if (m.Cid.Length > 0) _byCid[m.From + "|" + m.Cid] = m;
             }
         }
 
         public void Dispose()
         {
             _users.Dispose(); _friends.Dispose(); _requests.Dispose(); _blocks.Dispose();
-            _messages.Dispose(); _reads.Dispose(); _settings.Dispose(); _shares.Dispose(); _profiles.Dispose();
+            _messages.Dispose(); _reads.Dispose(); _settings.Dispose(); _shares.Dispose(); _profiles.Dispose(); _convs.Dispose();
         }
 
         // ---- names ----
@@ -87,7 +92,6 @@ namespace Recharge.Server
         private long Now() => _o.Clock().ToUnixTimeMilliseconds();
 
         private static string Pair(string a, string b) => string.CompareOrdinal(a, b) <= 0 ? a + "|" + b : b + "|" + a;
-        private static string Conv(string a, string b) => Pair(a, b);
 
         private List<MessageRec> ConvList(string conv)
         {
@@ -294,93 +298,12 @@ namespace Recharge.Server
 
         private SettingsRec SettingsOf(string key) => _settings.TryGet(key, out SettingsRec? s) ? s : new SettingsRec();
 
-        // ---- messages ----
-
-        public object Conversations(string meName)
+        private static string CleanCid(string? cid)
         {
-            lock (_gate)
-            {
-                string me = Norm(meName);
-                var rows = new List<(long Ts, int Unread, object Row)>();
-                foreach (KeyValuePair<string, List<MessageRec>> c in _byConv)
-                {
-                    string[] parts = c.Key.Split('|');
-                    if (parts[0] != me && parts[1] != me) continue;
-                    string other = parts[0] == me ? parts[1] : parts[0];
-                    if (IsBlocked(me, other) || c.Value.Count == 0) continue;
-                    MessageRec last = c.Value[c.Value.Count - 1];
-                    long readUpTo = _reads.TryGet(me + "|" + c.Key, out ReadRec? r) ? r.UpTo : 0;
-                    int unread = c.Value.Count(m => m.To == me && m.Id > readUpTo);
-                    PresenceView p = PresenceFor(me, other);
-                    rows.Add((last.Ts, unread, new { username = Display(other), last = Project(last), unread, state = p.State, friend = AreFriends(me, other) }));
-                }
-                var top = rows.OrderByDescending(r => r.Ts).Take(200).ToList();
-                return new { conversations = top.Select(r => r.Row).ToList(), unread = top.Sum(r => r.Unread) };
-            }
+            if (string.IsNullOrEmpty(cid) || cid.Length > 64) return "";
+            foreach (char c in cid) if (!(char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_')) return "";
+            return cid;
         }
-
-        public object Messages(string meName, string otherName, long before, int limit)
-        {
-            lock (_gate)
-            {
-                string me = Norm(meName), o = Norm(otherName);
-                if (IsBlocked(me, o)) throw new SocialException(404, "That conversation was not found.");
-                limit = Math.Clamp(limit, 1, 100);
-                List<MessageRec> all = _byConv.TryGetValue(Conv(me, o), out List<MessageRec>? l) ? l : new List<MessageRec>();
-                IEnumerable<MessageRec> older = before > 0 ? all.Where(m => m.Id < before) : all;
-                List<MessageRec> page = older.Reverse().Take(limit + 1).ToList();
-                bool more = page.Count > limit;
-                if (more) page.RemoveAt(page.Count - 1);
-                page.Reverse();
-                long readUpTo = _reads.TryGet(me + "|" + Conv(me, o), out ReadRec? r) ? r.UpTo : 0;
-                return new { messages = page.Select(Project).ToList(), hasMore = more, readUpTo };
-            }
-        }
-
-        public object Send(string meName, string otherName, string? text, CardRec? card)
-        {
-            lock (_gate)
-            {
-                string me = Norm(meName), o = Norm(otherName);
-                if (me == o) throw new SocialException(400, "You can't message yourself.");
-                if (IsBlocked(me, o)) throw new SocialException(403, "You can't message this user.");
-                if (!AreFriends(me, o) && !SettingsOf(o).AllowStrangers)
-                    throw new SocialException(403, "Only friends can message each other.");
-                string body = CleanText(text);
-                if (body.Length == 0 && card is null) throw new SocialException(400, "A message can't be empty.");
-                if (body.Length > _o.MaxMessageChars) throw new SocialException(400, "That message is too long (" + _o.MaxMessageChars + " characters at most).");
-                if (card is not null)
-                {
-                    if (card.Type != "map" && card.Type != "skin" && card.Type != "lobby") throw new SocialException(400, "Unknown card type.");
-                    if (string.IsNullOrEmpty(card.Id) || card.Id.Length > 64) throw new SocialException(400, "A card needs an id (64 characters at most).");
-                    if ((card.Name ?? "").Length > 80) throw new SocialException(400, "A card name is too long.");
-                    card.Name = CleanText(card.Name);
-                }
-                _messageLimit.Hit(me, "You are sending messages too fast.");
-                var m = new MessageRec { Id = ++_lastMessageId, From = me, To = o, Text = body, Card = card, Ts = Now() };
-                _messages.Put(m.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), m);
-                ConvList(Conv(me, o)).Add(m);
-                object view = Project(m);
-                Notify(o, new { type = "message", message = view });
-                Notify(me, new { type = "message", message = view });
-                return view;
-            }
-        }
-
-        public object MarkRead(string meName, string otherName, long upTo)
-        {
-            lock (_gate)
-            {
-                string me = Norm(meName), o = Norm(otherName);
-                string key = me + "|" + Conv(me, o);
-                long cur = _reads.TryGet(key, out ReadRec? r) ? r.UpTo : 0;
-                if (upTo > cur) _reads.Put(key, new ReadRec { UpTo = Math.Min(upTo, _lastMessageId) });
-                Notify(me, new { type = "read", username = Display(o) });
-                return new { readUpTo = Math.Max(cur, Math.Min(upTo, _lastMessageId)) };
-            }
-        }
-
-        private object Project(MessageRec m) => new { id = m.Id, from = Display(m.From), to = Display(m.To), text = m.Text, card = m.Card, ts = m.Ts };
 
         private static string CleanText(string? text)
         {

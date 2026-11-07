@@ -3,6 +3,7 @@ import { icon } from '../icons.js';
 import { skinCanvas } from '../lib/skinThumb.js';
 import { imageBlobUrl } from '../lib/hub.js';
 import { loadInstalled } from '../lib/hub.js';
+import { attachRenderedPreview, wantsRenderedPreview } from '../lib/mapPreview.js';
 import { modSwitch } from './modSwitch.js';
 import { sourceBadge } from './sourceLink.js';
 import { styleName } from '../profile/render.js';
@@ -238,6 +239,11 @@ export function itemCard(item: Item): HTMLElement {
     media.appendChild(skinMedia(item, media));
   } else if (item.gallery.length > 0 && !item.local) {
     media.appendChild(hubMedia(item, media));
+  } else if (wantsRenderedPreview(item)) {
+    // no uploaded picture: draw the map from its own data (an uploaded one always wins)
+    const box = h('div', { className: 'media-box card-img' });
+    media.appendChild(box);
+    attachRenderedPreview(item, box, () => media.classList.add('has-img'));
   }
   card.appendChild(media);
 

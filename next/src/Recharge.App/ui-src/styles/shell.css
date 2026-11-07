@@ -269,3 +269,8 @@ kbd {
   .page-view { animation: none; }
   #sidebar { transition: none; }
 }
+
+/* Unread messages on the Community entry. */
+.nav-badge { margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--magenta); color: #fff; font-size: 16px; line-height: 20px; text-align: center; flex: none; }
+.nav-badge[hidden] { display: none; }
+.sidebar-collapsed .nav-badge { position: absolute; top: 3px; right: 6px; margin: 0; min-width: 18px; padding: 0 4px; font-size: 14px; line-height: 18px; }

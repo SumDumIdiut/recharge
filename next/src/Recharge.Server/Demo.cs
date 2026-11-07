@@ -40,11 +40,25 @@ namespace Recharge.Server
             s.SetPresence("jonas", 1002, "editing", "Cliffside Run", "map-cliffside");
             s.Connect("priya", 1003);
             s.SetPresence("priya", 1003, "game", "", "");
-            s.Send("Maya", "oliver", "Hey! Want to try the new lobby?", null);
-            s.Send("oliver", "Maya", "Sure, give me two minutes.", null);
-            s.Send("Maya", "oliver", "I'm hosting Speedrun lobby, join whenever you're ready.", new CardRec { Type = "lobby", Id = "lobby-7", Name = "Speedrun lobby" });
-            s.Send("jonas", "oliver", "Can you test my map? I added a second checkpoint.", new CardRec { Type = "map", Id = "map-cliffside", Name = "Cliffside Run" });
-            s.Send("priya", "oliver", "gg on that last run", null);
+            s.Send("Maya", SocialService.DmId("Maya", "oliver"), "Hey! Want to try the new lobby?", null);
+            s.Send("oliver", SocialService.DmId("oliver", "Maya"), "Sure, give me two minutes.", null);
+            s.Send("Maya", SocialService.DmId("Maya", "oliver"), "I'm hosting Speedrun lobby, join whenever you're ready.", new CardRec { Type = "lobby", Id = "lobby-7", Name = "Speedrun lobby" });
+            s.Send("jonas", SocialService.DmId("jonas", "oliver"), "Can you test my map? I added a second checkpoint.", new CardRec { Type = "map", Id = "map-cliffside", Name = "Cliffside Run" });
+            s.Send("priya", SocialService.DmId("priya", "oliver"), "gg on that last run", null);
+
+            // A group chat: oliver, Maya, jonas and priya, with a reply in it.
+            using (JsonDocument g = JsonDocument.Parse(JsonSerializer.Serialize(s.CreateGroup("oliver", "Speedrun crew", new[] { "Maya", "jonas", "priya" }))))
+            {
+                string gid = g.RootElement.GetProperty("id").GetString()!;
+                s.Send("Maya", gid, "Race tonight at 8?", null);
+                JsonElement first = default;
+                using (JsonDocument hist = JsonDocument.Parse(JsonSerializer.Serialize(s.Messages("oliver", gid, 0, 10))))
+                    first = hist.RootElement.GetProperty("messages")[0].Clone();
+                long firstId = first.GetProperty("id").GetInt64();
+                s.Send("jonas", gid, "I'm in, testing my new map first.", null);
+                s.Send("oliver", gid, "Count me in too.", null, null, firstId);
+                s.Send("priya", gid, "Same, see you there!", null, null, firstId);
+            }
 
             DemoProfiles.SeedSocial(s);
             Console.WriteLine("{\"social\":" + server.Port + ",\"hub\":" + hub.Port + "}");

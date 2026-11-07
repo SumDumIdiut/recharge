@@ -6,6 +6,7 @@ type Listener = (event: FeedEvent) => void;
 
 export const POLL_MS = 1000;
 export const KEEPALIVE_MS = 8000;
+export const HIDDEN_POLL_MS = 5000;
 
 interface EventsReply { seq: number; connected: boolean; reset: boolean; events: FeedEvent[] }
 
@@ -50,7 +51,7 @@ async function tick(): Promise<void> {
     if (connected) { connected = false; dispatch({ type: 'disconnected' }); }
   } finally {
     busy = false;
-    if (listeners.size > 0) timer = window.setTimeout(() => void tick(), POLL_MS);
+    if (listeners.size > 0) timer = window.setTimeout(() => void tick(), document.hidden ? HIDDEN_POLL_MS : POLL_MS);
   }
 }
 

@@ -72,7 +72,7 @@ namespace Recharge.App
             SnapshotController? snapshot = null;
             if (options.IsSnapshot)
             {
-                snapshot = new SnapshotController(options.SnapshotPath!, options.TimeoutSeconds);
+                snapshot = new SnapshotController(options.SnapshotPath!, options.TimeoutSeconds, options.EvalJs);
                 shell.Bridge.Ready += snapshot.NotifyReady;
                 snapshot.Start(shell.View);
             }
@@ -96,7 +96,11 @@ namespace Recharge.App
 
             Gtk.gtk_main();
 
-            return snapshot?.ExitCode ?? 0;
+            // The lobby/social/update pollers run background work on threads that can outlive the window; after the
+            // GTK loop ends (the window closed) a plain return would leave a non-background thread keeping the process
+            // alive headless. Force an immediate exit so closing the window really closes the app.
+            Environment.Exit(snapshot?.ExitCode ?? 0);
+            return snapshot?.ExitCode ?? 0; // Environment.Exit does not return; this only satisfies the int signature.
         }
 
         /// <summary>Starts the app again (the given launch path inside the app folder, else this executable) with the same arguments.</summary>

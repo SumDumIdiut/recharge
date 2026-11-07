@@ -442,6 +442,7 @@
 .toast-info svg, .toast-success svg { color: var(--green); }
 .toast-error { border-color: var(--danger); }
 .toast-error svg { color: var(--danger); }
+.toast-clickable:hover { border-color: var(--green); }
 
 /* Modal */
 .modal-overlay {
@@ -592,7 +593,8 @@ img.pixel, .skin-canvas { image-rendering: pixelated; image-rendering: crisp-edg
   display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain;
 }
 .sidebar-collapsed .page-template.has-panel .page-panel { left: var(--sidebar-w-collapsed); }
-.detail-gallery { display: flex; flex-direction: column; gap: 8px; align-self: start; }
+/* stretch: the stage's width:100% + aspect-ratio must resolve against a definite width — shrink-to-fit makes the box collapse to 0 */
+.detail-gallery { display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
 .detail-stage { position: relative; flex: none; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 220px); overflow: hidden; border-radius: var(--radius-sm); background: var(--panel); }
 .detail-stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #0d0d0d; }
 .detail-thumbs { flex: none; display: flex; gap: 6px; overflow-x: auto; overscroll-behavior: contain; padding-bottom: 2px; }
@@ -751,6 +753,7 @@ img.pixel, .skin-canvas { image-rendering: pixelated; image-rendering: crisp-edg
 .bell-item:hover { background: rgba(255,255,255,.06); }
 .bell-item.is-unread .bell-title { font-weight: 700; }
 .bell-item.is-unread { border-left: 3px solid var(--magenta); }
+.bell-item.bell-msg.is-unread { border-left-color: var(--green); }
 .bell-body { font-size: 12px; overflow-wrap: anywhere; }
 .bell-when { font-size: 11px; }
 
@@ -771,3 +774,6 @@ img.pixel, .skin-canvas { image-rendering: pixelated; image-rendering: crisp-edg
 .detail-title-row .source-badge { width: 32px; height: 32px; }
 .card-badges .source-badge { margin-left: auto; }
 .card-badges .source-badge + .mod-switch { margin-left: 6px; }
+
+.tab-badge { min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--magenta); color: #fff; font-size: 16px; line-height: 20px; text-align: center; }
+.tab-badge[hidden] { display: none; }
