@@ -8,6 +8,7 @@ import { toast } from '../components/toast.js';
 import { emptyState, errorState } from '../components/emptyState.js';
 import { authorName, imagesSettled, itemMedia, KIND_ICON } from '../components/itemCard.js';
 import { loadInstalled, loadKind, onHubChange } from '../lib/hub.js';
+import { safeHref } from '../community/format.js';
 import { perfRouteData } from '../perf.js';
 import {
   annotate, installedItems, isEmbeddedMod, itemRoute, KINDS, newestAcross, updatesOf,
@@ -16,6 +17,30 @@ import {
 import type { PageModule } from '../router.js';
 
 let root: HTMLElement | null = null;
+
+/** Flipped's Patreon (the one the current app's home page links). */
+const PATREON_URL = 'https://www.patreon.com/c/FlippedRecharger';
+
+/** The official Patreon mark: a circle and the bar, filled, in the button's colour. */
+function patreonGlyph(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 569 546');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const shapes: Array<[string, Record<string, string>]> = [
+    ['circle', { cx: '362.59', cy: '204.59', r: '204.59' }],
+    ['rect', { width: '100', height: '545.8' }],
+  ];
+  for (const [tag, attrs] of shapes) {
+    const node = document.createElementNS(ns, tag);
+    for (const [attribute, value] of Object.entries(attrs)) node.setAttribute(attribute, value);
+    node.setAttribute('fill', 'currentColor');
+    svg.appendChild(node);
+  }
+  return svg;
+}
+
 let gameRow: HTMLElement | null = null;
 let filterNote: HTMLElement | null = null;
 let noMatches: HTMLElement | null = null;
@@ -171,6 +196,21 @@ export const homePage: PageModule = {
     newHost.appendChild(loadingRow());
     grid.appendChild(newHost);
     page.content.appendChild(grid);
+
+    // bottom right of the main menu: Flipped's Patreon, opened through the bridge (the page itself is a recharge:// page)
+    const support = h('a', { className: 'home-patreon', attrs: { href: PATREON_URL, title: 'Support on Patreon' } });
+    support.appendChild(patreonGlyph());
+    support.appendChild(h('span', { text: 'Support Me!' }));
+    support.addEventListener('click', (event: MouseEvent) => {
+      const url = safeHref(PATREON_URL);
+      if (!url) { event.preventDefault(); return; }
+      event.preventDefault();
+      call('open.url', { url }).catch((error: unknown) => toast(describeError(error), 'error'));
+    });
+    const footer = h('div', { className: 'home-footer' });
+    footer.appendChild(support);
+    page.content.appendChild(footer);
+
 
     el.appendChild(page);
     const token = ++generation;
