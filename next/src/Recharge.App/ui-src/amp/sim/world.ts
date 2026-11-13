@@ -1,7 +1,7 @@
 /** Build the simulation world from the editor's map: solid cells, spike boxes, the end gate. */
 import { solidAt } from '../content/blocks.js';
 import { COURSE, END_BOX, END_LIFT, gate, gatePoint } from '../content/course.js';
-import { MOVERS, cycleSeconds, moverBoxes, norm, progressAt } from '../content/mover.js';
+import { MOVERS, cycleSeconds, isDrawn, moverBoxes, norm, offsetAlong, progressAt, tilesOf } from '../content/mover.js';
 import { eachLayer } from '../core/layers.js';
 import { VINE, parseVine, vineBoxes } from '../content/vines.js';
 import { SPIKES, parseSpike, spikeBox, spikeTurn } from '../content/spikes.js';
@@ -36,12 +36,17 @@ export function buildWorld(map: AmpMap): World {
   for (const { data } of eachLayer(map, MOVERS)) {
     for (const [key, value] of [...data].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
       const m = norm(value), { start, end } = moverBoxes(key, value);
+      const o = parseKey(key);
       platforms.push({
         auto: m.auto, look: m,
         cycle: Math.max(1, Math.round(cycleSeconds(m) * 60)),
+        // one box per platform tile, all translated together along the mover's path
         boxAt(clock) {
           const k = progressAt(m, clock / 60);
-          return { x: start.x + (end.x - start.x) * k, y: start.y + (end.y - start.y) * k, w: start.w, h: start.h };
+          let dx: number, dy: number;
+          if (isDrawn(m)) { [dx, dy] = offsetAlong(m, k); dx *= CELL; dy *= CELL; }
+          else { dx = (end.x - start.x) * k; dy = (end.y - start.y) * k; }
+          return tilesOf(m).map(([tx, ty]) => ({ x: (o.x + tx) * CELL + dx, y: (o.y + ty) * CELL + dy, w: CELL, h: CELL }));
         },
       });
     }

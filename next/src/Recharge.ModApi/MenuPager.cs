@@ -41,6 +41,11 @@ namespace Recharge.ModApi
             public float VanillaYDelete;
             public float VanillaYSettings;
             public float OriginalQuitY;
+            // The panel's own size/pos before we touched it; restored verbatim when there
+            // are no mod rows, so an unmodded menu is pixel-identical to the game's.
+            public float BgOrigSizeY;
+            public float BgOrigPosY;
+            public bool BgCaptured;
             public bool LayoutLogged;
             public System.Collections.Generic.List<GameObject> VanillaDividers = new System.Collections.Generic.List<GameObject>();
             public System.Collections.Generic.List<GameObject> PagerDividers = new System.Collections.Generic.List<GameObject>();
@@ -234,6 +239,7 @@ namespace Recharge.ModApi
             rt.Settings = settings;
             rt.Quit = quit;
             rt.Background = background;
+            if (background != null) { rt.BgOrigSizeY = background.sizeDelta.y; rt.BgOrigPosY = background.anchoredPosition.y; rt.BgCaptured = true; }
             rt.TopY = topY;
             rt.RowSpacing = rowSpacing;
             rt.PanelTopY = panelTopY;
@@ -316,6 +322,14 @@ namespace Recharge.ModApi
             background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * background.sizeDelta.y);
         }
 
+        // Put the panel back to the size/position the game gave it (the no-mods case).
+        private static void RestoreBackground(Runtime rt)
+        {
+            if (!rt.BgCaptured || rt.Background == null) return;
+            rt.Background.sizeDelta = new Vector2(rt.Background.sizeDelta.x, rt.BgOrigSizeY);
+            rt.Background.anchoredPosition = new Vector2(rt.Background.anchoredPosition.x, rt.BgOrigPosY);
+        }
+
         private static System.Collections.Generic.List<GameObject> CreateDividers(Transform dividerTemplate, float topY, float rowSpacing)
         {
             var made = new System.Collections.Generic.List<GameObject>();
@@ -388,12 +402,17 @@ namespace Recharge.ModApi
                 foreach (var d in rt.PagerDividers) if (d != null) d.SetActive(page > 0);
                 rt.PageButton.SetActive(paged);
                 if (paged) MenuUiUtil.SetButtonLabel(rt.PageButton, "Page " + (page + 1) + "/" + totalPages + "  >");
-                // No mod rows: the menu collapses back to the genuine vanilla one, Quit where the game placed it.
-                float bottomY = page > 0 ? rt.QuitY : (paged ? rt.QuitY : rt.OriginalQuitY);
+                // Vanilla page with mods: Page button takes Quit's slot, Quit drops one vanilla
+                // row — compact, not the mod-grid slot that left a tall "super high" gap.
+                float vanillaPitch = rt.VanillaYSettings - rt.OriginalQuitY;
+                float bottomY = page > 0 ? rt.QuitY : (paged ? rt.OriginalQuitY - vanillaPitch : rt.OriginalQuitY);
+                float pageButtonY = (page == 0 && paged) ? rt.OriginalQuitY : bottomY + rt.RowSpacing;
                 rt.Quit.anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY);
                 rt.QuitTargetY = bottomY;
-                if (paged) ((RectTransform)rt.PageButton.transform).anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY + rt.RowSpacing);
-                ResizeBackgroundToFit(rt.Background, rt.PanelTopY, bottomY, rt.BottomMargin, rt.BackgroundScaleY, rt.ChildBackground);
+                if (paged) ((RectTransform)rt.PageButton.transform).anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, pageButtonY);
+                // With mod rows, size the panel to the new layout; with none, leave it exactly vanilla (no extra band below Quit).
+                if (!paged && page == 0) RestoreBackground(rt);
+                else ResizeBackgroundToFit(rt.Background, rt.PanelTopY, bottomY, rt.BottomMargin, rt.BackgroundScaleY, rt.ChildBackground);
             }
 
             if (page == 0) ShowVanillaPage(rt);

@@ -7,12 +7,15 @@ import type { Atlas } from '../atlas.js';
 import { drawMoverBody, type Mover } from '../content/mover.js';
 import { Controller } from './controller.js';
 import { CONFIDENCE, DT, physicsFor, type Physics, type PlayerRules } from './physics.js';
-import { playerBox, startState, step, stateTag, type SimState, type World } from './step.js';
+import { playerBox, startState, step, stateTag, type Box, type SimState, type World } from './step.js';
 import { Trail } from './trail.js';
 import { buildWorld } from './world.js';
 
 export class Playtest {
+  /** Playtest mode is engaged: the trail and player are drawn and the key listeners are live, whether or not the sim is ticking. */
   active = false;
+  /** The sim is advancing (false while paused). */
+  running = false;
   state: SimState;
   trail = new Trail();
   physics: Physics;
@@ -21,6 +24,8 @@ export class Playtest {
   finished: number | null = null;
   private map: AmpMap;
   private world: World;
+  /** The map changed under the sim (an edit while playing); the world is rebuilt before the next tick. */
+  private worldDirty = false;
   private spawn: { x: number; y: number };
   private ctl = new Controller();
   private acc = 0;
@@ -30,13 +35,15 @@ export class Playtest {
   private camera: Camera;
   private redraw: () => void;
   private onStop: () => void;
+  private onState: () => void;
   private listeners: Array<[string, (e: any) => void]> = [];
 
-  constructor(map: AmpMap, camera: Camera, redraw: () => void, onStop: () => void) {
+  constructor(map: AmpMap, camera: Camera, redraw: () => void, onStop: () => void, onState: () => void = () => {}) {
     this.map = map;
     this.camera = camera;
     this.redraw = redraw;
     this.onStop = onStop;
+    this.onState = onState;
     this.physics = physicsFor(null);
     this.world = buildWorld(map);
     this.spawn = { x: 0, y: 0 };
@@ -55,10 +62,12 @@ export class Playtest {
   start(): void {
     if (this.active) return;
     this.world = buildWorld(this.map);
+    this.worldDirty = false;
     this.physics = physicsFor((this.map.raw?.player as PlayerRules | undefined) ?? null);
     this.spawn = Playtest.spawnPoint(this.map);
     this.reset(true);
     this.active = true;
+    this.running = true;
     const on = (type: string, fn: (e: any) => void): void => { window.addEventListener(type, fn, true); this.listeners.push([type, fn]); };
     on('keydown', (e: KeyboardEvent) => this.key(e, true));
     on('keyup', (e: KeyboardEvent) => this.key(e, false));
@@ -66,19 +75,49 @@ export class Playtest {
     this.last = performance.now();
     this.acc = 0;
     this.raf = requestAnimationFrame((t) => this.frame(t));
+    this.onState();
     this.redraw();
   }
 
   stop(): void {
     if (!this.active) return;
     this.active = false;
+    this.running = false;
     cancelAnimationFrame(this.raf);
+    this.raf = 0;
     for (const [t, f] of this.listeners) window.removeEventListener(t, f, true);
     this.listeners = [];
     this.ctl.clear();
     this.onStop();
     this.redraw();
   }
+
+  /** Freeze the sim but keep playtest mode on: the trail and player stay on screen and the listeners stay live, so it can resume. */
+  pause(): void {
+    if (!this.active || !this.running) return;
+    this.running = false;
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.ctl.clear();
+    this.onState();
+    this.redraw();
+  }
+
+  /** Continue a paused run from where it froze. */
+  resume(): void {
+    if (!this.active || this.running) return;
+    this.running = true;
+    this.last = performance.now();
+    this.acc = 0;
+    this.raf = requestAnimationFrame((t) => this.frame(t));
+    this.onState();
+    this.redraw();
+  }
+
+  togglePause(): void { if (this.running) this.pause(); else this.resume(); }
+
+  /** Note that the map was edited while playing; the collision world is rebuilt before the next tick. */
+  markDirty(): void { this.worldDirty = true; }
 
   /** Back to the spawn. `clearTrail` also wipes the path. */
   reset(clearTrail = false): void {
@@ -89,9 +128,13 @@ export class Playtest {
 
   private key(e: KeyboardEvent, down: boolean): void {
     if (!this.active) return;
+    // typing in a field (editing a placed thing's options while playing) is not a game input
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     if (down) {
       if (e.code === 'Escape') { e.preventDefault(); e.stopPropagation(); this.stop(); return; }
-      if (e.code === 'KeyR') { e.preventDefault(); e.stopPropagation(); this.reset(false); return; }
+      if (e.code === 'KeyT') { e.preventDefault(); e.stopPropagation(); this.togglePause(); return; }
+      if (e.code === 'KeyR') { e.preventDefault(); e.stopPropagation(); this.reset(false); if (!this.running) this.resume(); else this.redraw(); return; }
       if (e.code === 'KeyC') { e.preventDefault(); e.stopPropagation(); this.trail.clear(); this.redraw(); return; }
       if (e.code === 'KeyF') { e.preventDefault(); e.stopPropagation(); this.follow = !this.follow; return; }
       if (this.ctl.down(e.code)) { e.preventDefault(); e.stopPropagation(); }
@@ -99,7 +142,8 @@ export class Playtest {
   }
 
   private frame(now: number): void {
-    if (!this.active) return;
+    if (!this.active || !this.running) return;
+    if (this.worldDirty) { this.world = buildWorld(this.map); this.worldDirty = false; }
     this.acc += Math.min(0.25, (now - this.last) / 1000);
     this.last = now;
     while (this.acc >= DT) { this.tick(this.ctl.mask()); this.acc -= DT; }
@@ -120,16 +164,19 @@ export class Playtest {
     else if (this.state.won && this.finished === null) this.finished = this.state.f;
   }
 
-  /** The moving platforms where they are right now. */
-  platformBoxes(): Array<{ x: number; y: number; w: number; h: number; look: unknown }> {
-    return (this.world.platforms ?? []).map((p, i) => ({ ...p.boxAt(this.state.mt?.[i] || 0), look: p.look }));
+  /** The moving platforms where they are right now: one entry per mover (a body + its tile boxes). */
+  platformsAt(): Array<{ boxes: Box[]; look: unknown }> {
+    return (this.world.platforms ?? []).map((p, i) => ({ boxes: p.boxAt(this.state.mt?.[i] || 0), look: p.look }));
   }
 
   draw(ctx: CanvasRenderingContext2D, cam: Camera, atlas?: Atlas): void {
     if (atlas) {
-      for (const b of this.platformBoxes()) {
-        const [x0, y0] = cam.toScreen(b.x, b.y + b.h);
-        drawMoverBody({ ctx, atlas }, x0, y0, b.look as Mover, CELL * cam.zoom, 1);
+      for (const p of this.platformsAt()) {
+        if (!p.boxes.length) continue;
+        // the body renders from its bounds: the tiles' lowest x and their highest top
+        const x = Math.min(...p.boxes.map((b) => b.x)), top = Math.max(...p.boxes.map((b) => b.y + b.h));
+        const [x0, y0] = cam.toScreen(x, top);
+        drawMoverBody({ ctx, atlas }, x0, y0, p.look as Mover, CELL * cam.zoom, 1);
       }
     }
     this.trail.draw(ctx, cam);
@@ -147,9 +194,10 @@ export class Playtest {
     ctx.fillRect(12, cam.height - 70, 520, 58);
     ctx.fillStyle = '#f9ffe4';
     const t = ((this.finished ?? this.state.f) / 60).toFixed(2);
-    ctx.fillText((this.finished !== null ? 'FINISHED ' : 'PLAYTEST ') + t + 's   deaths ' + this.deaths + '   air jumps ' + this.state.airJumps + '   dashes ' + this.state.airDashes, 22, cam.height - 48);
+    const label = this.finished !== null ? 'FINISHED ' : this.running ? 'PLAYTEST ' : 'PAUSED ';
+    ctx.fillText(label + t + 's   deaths ' + this.deaths + '   air jumps ' + this.state.airJumps + '   dashes ' + this.state.airDashes, 22, cam.height - 48);
     ctx.fillStyle = 'rgba(249,255,228,0.65)';
-    ctx.fillText('Arrows/WASD move · Space/Z jump · Shift/X dash · R reset · C clear trail · F follow · Esc stop', 22, cam.height - 28);
+    ctx.fillText('Arrows/WASD move · Space/Z jump · Shift/X dash · T pause · R reset · C clear trail · F follow · Esc stop', 22, cam.height - 28);
     ctx.fillText('physics: ' + (Object.values(CONFIDENCE).includes('uncalibrated') ? 'approximate (uncalibrated)' : 'calibrated') + '; abilities from the map rules', 22, cam.height - 14);
   }
 

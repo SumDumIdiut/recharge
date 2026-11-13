@@ -2,8 +2,9 @@
 import { CONTENT, brushOf } from '../content/index.js';
 import type { ContentType } from '../content/types.js';
 import { COURSE } from '../content/course.js';
+import { norm, tilesOf, type Mover } from '../content/mover.js';
 import { dataLayer } from '../core/layers.js';
-import { cellKey, type Cell } from '../core/types.js';
+import { cellKey, parseKey, type Cell } from '../core/types.js';
 import type { ToolApi } from './types.js';
 
 /** The cells a square brush covers around a cell. */
@@ -27,8 +28,10 @@ export function clearCell(api: ToolApi, x: number, y: number): void {
     for (const c of CONTENT) {
       if (c.layer === COURSE) continue;
       const dl = dataLayer(c.layer, layer.id);
-      const at = storeKey(c, x, y, key, api, dl);
-      if (api.map.has(dl, at)) api.edit(dl, at, undefined);
+      // a content type may erase more subtly than a whole cell clear (a mover keeps its shape minus one tile)
+      const part = c.eraseAt?.(x, y, api.map, dl) ?? null;
+      const at = part ? part.key : storeKey(c, x, y, key, api, dl);
+      if (api.map.has(dl, at)) api.edit(dl, at, part ? part.value : undefined);
     }
   }
 }
@@ -46,6 +49,7 @@ export function putCell(api: ToolApi, x: number, y: number): void {
   const dl = api.layerFor(picked.content.id);
   if (!dl) return;
   if (picked.content.id === 'arrows') return; // an arrow is drawn along a drag (the arrow tool), not stamped
+  if (picked.content.id === 'movers') { paintMoverTile(api, dl, x, y); return; } // a mover is painted as tiles: this adds one (or starts one)
   const key = storeKey(picked.content, x, y, cellKey(x, y), api, dl);
   if (picked.content.exclusive) {
     const layerId = dl.indexOf('@') < 0 ? 'main' : dl.slice(dl.indexOf('@') + 1);
@@ -56,6 +60,33 @@ export function putCell(api: ToolApi, x: number, y: number): void {
     }
   }
   api.edit(dl, key, JSON.parse(JSON.stringify(api.state.draft ?? null)));
+}
+
+/** Painting a tile of the moving platform: onto a mover touching this cell it grows its shape; far from one it places a fresh mover. */
+function paintMoverTile(api: ToolApi, dl: string, x: number, y: number): void {
+  const fresh = JSON.parse(JSON.stringify(api.state.draft ?? null)) as Mover | null;
+  if (!fresh || typeof fresh !== 'object') return;
+  // a mover value already keyed here stays as it is (repainting a tile never resets its options)
+  if (api.map.has(dl, cellKey(x, y))) return;
+  // grows whichever mover's platform touches this cell (a neighbour in any of the 8 directions)
+  let grown: { key: string; best: number } | null = null;
+  for (const [k, v] of api.map.layer(dl)) {
+    const m = norm(v);
+    if (Array.isArray(m)) continue;
+    const o = parseKey(k);
+    const dist = Math.min(...tilesOf(m).map(([tx, ty]) => Math.max(Math.abs(o.x + tx - x), Math.abs(o.y + ty - y))));
+    if (dist <= 1 && (!grown || dist < grown.best)) grown = { key: k, best: dist };
+  }
+  if (grown) {
+    const m = api.map.get(dl, grown.key) as Mover;
+    const o = parseKey(grown.key);
+    const tiles = tilesOf(m);
+    const dx = x - o.x, dy = y - o.y;
+    if (!tiles.some(([tx, ty]) => tx === dx && ty === dy)) api.edit(dl, grown.key, { ...m, tiles: [...tiles, [dx, dy]] });
+    return;
+  }
+  // fresh: the draft's look, size and timing, its shape as the draft's own tile set
+  api.edit(dl, cellKey(x, y), fresh);
 }
 
 /** The cells on the straight line between two cells, both ends included. */

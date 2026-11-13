@@ -916,9 +916,9 @@ internal class MpPanelUI : MonoBehaviour
 
 	private void RefreshPlayersLabel(List<MpPlayerState> others)
 	{
-		var selfHex = MpNetworkManager.GetNameColorHex();
 		var selfName = MpNetworkManager.SanitizeForRichText(MpNetworkManager.GetDisplayName());
-		var sb = new System.Text.StringBuilder("Players: <color=").Append(selfHex).Append('>').Append(selfName).Append("</color>");
+		// The local self entry is built here (not over the wire), so the Recharge gradient can show as per-character <color> tags.
+		var sb = new System.Text.StringBuilder("Players: ").Append(MpNetworkManager.BuildLocalNameMarkup(selfName));
 		foreach (var p in others)
 		{
 			var hexRe = !string.IsNullOrEmpty(p.nameColor) && p.nameColor.Length == 7 && p.nameColor[0] == '#' ? p.nameColor : "#FFFFFF";

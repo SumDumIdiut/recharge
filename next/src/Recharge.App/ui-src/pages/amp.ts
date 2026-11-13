@@ -8,6 +8,7 @@ import { AmpEditor } from '../amp/editor.js';
 import { demoMap } from '../amp/demo.js';
 import { emptyMap, fromMapJson, toMapJson } from '../amp/model.js';
 import type { AmpMap } from '../amp/core/map.js';
+import type { InstalledData } from '../lib/library.js';
 import { backgroundPanel, brushPicker, layersPanel, propertiesPanel, rulesPanel, statusBar, toolPalette } from '../amp/ui/panels.js';
 import { TOOLS } from '../amp/tools/index.js';
 import { clearPreviewCache } from '../amp/preview.js';
@@ -47,8 +48,11 @@ export const ampPage: PageModule = {
     const undoButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button', title: 'Undo (Ctrl+Z)' } }, h('span', { text: 'Undo' }));
     const redoButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button', title: 'Redo (Ctrl+Y)' } }, h('span', { text: 'Redo' }));
     const fitButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button', title: 'Fit the map in view (F)' } }, h('span', { text: 'Fit' }));
+    const testButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button', title: 'Save, then launch the game straight into this map' } }, h('span', { text: 'Test in game' }));
+    const uploadButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button', title: 'Save, then open your uploads to share this map' } }, h('span', { text: 'Upload' }));
     const saveButton = h('button', { className: 'btn btn-primary amp-save', attrs: { type: 'button', title: 'Save (Ctrl+S)' } }, h('span', { text: 'Save' }));
     const backButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button' } }, h('span', { text: 'Back' }));
+    const loadButton = h('button', { className: 'btn btn-ghost', attrs: { type: 'button', title: 'Open a saved map' } }, h('span', { text: 'Load map' }));
 
     const editor = new AmpEditor(canvas, opened.map, atlas);
     const markDirty = (): void => { dirty = true; status.textContent = 'Unsaved changes'; };
@@ -69,7 +73,7 @@ export const ampPage: PageModule = {
 
     const side = h('div', { className: 'amp-side' }, picker.el);
     const inspector = h('div', { className: 'amp-inspector' }, props.el, layers.el, backdrop.el, rules.el);
-    const top = h('div', { className: 'amp-bar' }, backButton, nameInput, undoButton, redoButton, fitButton, h('span', { className: 'amp-spacer' }), status, saveButton);
+    const top = h('div', { className: 'amp-bar' }, backButton, nameInput, undoButton, redoButton, fitButton, h('span', { className: 'amp-spacer' }), status, loadButton, testButton, uploadButton, saveButton);
     const body = h('div', { className: 'amp-body' }, tools.el, canvas, inspector, side);
     const root = h('div', { className: 'amp-root' }, top, body, bar.el);
     document.body.appendChild(root);
@@ -106,6 +110,72 @@ export const ampPage: PageModule = {
     };
     saveButton.addEventListener('click', () => void save());
 
+    // Test in game: save the map to the library, then start the game modded with the play.map intent (the same path the library's Play uses)
+    const testInGame = async (): Promise<void> => {
+      testButton.disabled = true;
+      try {
+        await save();
+        if (!mapId || dirty) return;
+        status.textContent = 'Launching the game…';
+        await call('game.launch', { modded: true, intent: { kind: 'play.map', args: { folder: mapId } } });
+        status.textContent = 'Launched ' + mapId;
+        toast('Launching IGTAP into ' + (nameInput.value.trim() || mapId) + '. Other mods are off until you close the game.', 'success');
+      } catch (error) {
+        status.textContent = 'Could not launch: ' + describeError(error);
+        toast('Could not launch the game: ' + describeError(error), 'error');
+      } finally {
+        testButton.disabled = false;
+      }
+    };
+    testButton.addEventListener('click', () => void testInGame());
+    uploadButton.addEventListener('click', () => {
+      void save().then(() => { if (mapId && !dirty) go('#/library?kind=maps&view=uploads'); });
+    });
+
+    // Load map: a dropdown of saved maps; picking one opens it (same route the library's Edit uses).
+    let loadMenu: HTMLElement | null = null;
+    function onLoadDocDown(e: PointerEvent): void {
+      if (loadMenu && !loadMenu.contains(e.target as Node) && !loadButton.contains(e.target as Node)) closeLoadMenu();
+    }
+    const closeLoadMenu = (): void => {
+      loadMenu?.remove();
+      loadMenu = null;
+      document.removeEventListener('pointerdown', onLoadDocDown, true);
+    };
+    loadButton.addEventListener('click', () => {
+      if (loadMenu) { closeLoadMenu(); return; }
+      void (async (): Promise<void> => {
+        let maps: { folder: string; name: string }[];
+        try {
+          const data = await call<InstalledData>('library.installed');
+          maps = (data.maps || []).map((m) => ({ folder: m.folder, name: m.name })).sort((a, b) => a.name.localeCompare(b.name));
+        } catch (error) {
+          toast('Could not list maps: ' + describeError(error), 'error');
+          return;
+        }
+        const menu = h('div', { className: 'amp-load-menu' });
+        menu.style.cssText = 'position:fixed;z-index:1000;min-width:220px;max-height:60vh;overflow:auto;background:var(--panel,#1b1d1a);border:1px solid var(--border,#333a33);border-radius:8px;padding:4px;box-shadow:0 10px 28px rgba(0,0,0,.45)';
+        const note = (text: string): void => { const n = h('div', { text }); n.style.cssText = 'padding:6px 10px;opacity:.6;font-size:13px'; menu.appendChild(n); };
+        if (dirty) note('Unsaved changes will be lost');
+        if (!maps.length) note('No saved maps yet');
+        for (const m of maps) {
+          const row = h('button', { attrs: { type: 'button' } }, h('span', { text: m.name || m.folder }));
+          row.style.cssText = 'display:block;width:100%;text-align:left;padding:7px 10px;background:transparent;border:0;color:inherit;border-radius:6px;cursor:pointer;font:inherit;white-space:nowrap';
+          if (m.folder === mapId) row.style.opacity = '.5';
+          row.addEventListener('mouseenter', () => { row.style.background = 'rgba(255,255,255,.08)'; });
+          row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+          row.addEventListener('click', () => { closeLoadMenu(); if (m.folder !== mapId) go('#/amp/' + encodeURIComponent(m.folder)); });
+          menu.appendChild(row);
+        }
+        const r = loadButton.getBoundingClientRect();
+        menu.style.top = Math.round(r.bottom + 4) + 'px';
+        menu.style.right = Math.round(window.innerWidth - r.right) + 'px';
+        document.body.appendChild(menu);
+        loadMenu = menu;
+        document.addEventListener('pointerdown', onLoadDocDown, true);
+      })();
+    });
+
     let confirming = false;
     backButton.addEventListener('click', () => {
       if (dirty && !confirming) {
@@ -118,10 +188,11 @@ export const ampPage: PageModule = {
     });
 
     const onKey = (e: KeyboardEvent): void => {
-      if (editor.playtest.active) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
       const k = e.key.toLowerCase();
+      // During playtest the sim's own capturing listener handles movement + T/F/C/R/Escape; the edit shortcuts below still run so you can keep building.
+      const playing = editor.playtest.active;
       if (e.ctrlKey || e.metaKey) {
         if (k === 's') { e.preventDefault(); void save(); }
         else if (k === 'z') { e.preventDefault(); if (e.shiftKey) editor.redo(); else editor.undo(); }
@@ -130,8 +201,8 @@ export const ampPage: PageModule = {
       }
       if (e.altKey) return;
       if (e.key === 'Delete' || e.key === 'Backspace') { editor.deleteSelection(); return; }
-      if (k === 't') { editor.startPlaytest(); return; }
-      if (k === 'f') { editor.fit(); return; }
+      if (k === 't') { if (!playing) editor.startPlaytest(); return; }
+      if (k === 'f') { if (!playing) editor.fit(); return; }
       if (k === '[') { editor.setSize(editor.state.size - 1); return; }
       if (k === ']') { editor.setSize(editor.state.size + 1); return; }
       if (k === ',') { editor.rotate(1); return; }
@@ -152,9 +223,10 @@ export const ampPage: PageModule = {
     }
     refresh();
     // handles for tests and headless snapshots
-    (window as unknown as { __amp?: unknown }).__amp = { editor, save, refresh };
+    (window as unknown as { __amp?: unknown }).__amp = { editor, save, refresh, testInGame };
 
     teardown = () => {
+      closeLoadMenu();
       window.removeEventListener('keydown', onKey);
       editor.dispose();
       root.remove();

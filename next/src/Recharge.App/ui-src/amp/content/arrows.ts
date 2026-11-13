@@ -41,13 +41,27 @@ export function arrowTiles(c: ReadonlyArray<Readonly<Step>>): Map<string, ArrowT
       put(c[i][0], c[i][1], ARROW_CORNER[h.join(',') + '|' + v.join(',')]);
     }
   }
-  const q0 = TURN_FROM_RIGHT[step(0, 1).join(',')];
-  for (const [dx, dy, t] of ARROW_CIRCLE) { const [ox, oy] = turnOffset(dx, dy, q0); put(c[0][0] + ox, c[0][1] + oy, t, q0); }
-  const d = step(n - 2, n - 1), e = c[n - 1];
-  if (d[1] === -1) for (const [dx, dy, t] of ARROW_HEAD_DOWN) put(e[0] + dx, e[1] + dy, t);
-  else {
-    const q = TURN_FROM_UP[d.join(',')];
-    for (const [dx, dy, t] of ARROW_HEAD_UP) { const [ox, oy] = turnOffset(dx, dy, q); put(e[0] + ox, e[1] + oy, t, q); }
+  const e0 = c[n - 1];
+  // Loop closing on/next to the start: the start cell bends into the loop instead of a circle the head would orphan (closed: lead-in is c[n-2]).
+  const dStart = Math.abs(e0[0] - c[0][0]) + Math.abs(e0[1] - c[0][1]);
+  if (n >= 3 && dStart <= 1) {
+    const inCell = dStart === 0 ? c[n - 2] : e0;
+    const loopBack: Step = [Math.sign(inCell[0] - c[0][0]), Math.sign(inCell[1] - c[0][1])];
+    const toNext = step(0, 1);
+    if (!toNext[0] === !loopBack[0]) put(c[0][0], c[0][1], toNext[0] ? 18 : 34);
+    else { const hh = toNext[0] ? toNext : loopBack, vv = toNext[0] ? loopBack : toNext; put(c[0][0], c[0][1], ARROW_CORNER[hh.join(',') + '|' + vv.join(',')]); }
+  } else {
+    const q0 = TURN_FROM_RIGHT[step(0, 1).join(',')];
+    for (const [dx, dy, t] of ARROW_CIRCLE) { const [ox, oy] = turnOffset(dx, dy, q0); put(c[0][0] + ox, c[0][1] + oy, t, q0); }
+  }
+  // A fully closed loop has no direction: a clean ring, no head (a head on the closure would jut out and notch).
+  if (dStart !== 0) {
+    const d = step(n - 2, n - 1), e = c[n - 1];
+    if (d[1] === -1) for (const [dx, dy, t] of ARROW_HEAD_DOWN) put(e[0] + dx, e[1] + dy, t);
+    else {
+      const q = TURN_FROM_UP[d.join(',')];
+      for (const [dx, dy, t] of ARROW_HEAD_UP) { const [ox, oy] = turnOffset(dx, dy, q); put(e[0] + ox, e[1] + oy, t, q); }
+    }
   }
   return out;
 }

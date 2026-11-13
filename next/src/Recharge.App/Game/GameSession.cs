@@ -28,6 +28,7 @@ namespace Recharge.App.Game
         private LinkServer? _server;
         private (string Kind, JsonNode? Args)? _pending;
         private bool _disposed;
+        private bool _watching;
 
         /// <param name="switchBuild">Deploys the vanilla (false) or modded (true) build in the game folder before a launch; returns a detail line.</param>
         public GameSession(Func<string?> findGame, IGameLauncher launcher, LinkOptions? options = null, Func<string, bool, string>? switchBuild = null,
@@ -117,8 +118,45 @@ namespace Recharge.App.Game
             }
             LinkLaunchFile.Write(game, server.EnvironmentValue);
             _launcher.Launch(game, appId, server.EnvironmentValue);
+            // Modded leaves a hooked build on disk; revert to vanilla once this run ends so a plain Steam launch isn't modded.
+            if (modded == true) StartRevertWatch(game);
             result["launched"] = JsonBool.True;
             return result;
+        }
+
+        /// <summary>After a modded launch, restore the vanilla build once the game closes so Steam launches aren't still modded.</summary>
+        private void StartRevertWatch(string game)
+        {
+            if (_switchBuild == null || _isRunning == null) return;
+            lock (_gate) { if (_watching) return; _watching = true; }
+            _ = Task.Run(() => WatchAndRevertAsync(game));
+        }
+
+        private async Task WatchAndRevertAsync(string game)
+        {
+            try
+            {
+                // Wait until the game is actually seen running before arming the revert, so a slow Steam start isn't swapped out from under it.
+                DateTime appearBy = DateTime.UtcNow + TimeSpan.FromSeconds(90);
+                while (!_isRunning!(game))
+                {
+                    if (_disposed) return;
+                    if (DateTime.UtcNow >= appearBy) return; // launch never came up: leave the build as set
+                    await Task.Delay(500).ConfigureAwait(false);
+                }
+                while (_isRunning(game))
+                {
+                    if (_disposed) return;
+                    await Task.Delay(1000).ConfigureAwait(false);
+                }
+                await Task.Delay(1500).ConfigureAwait(false); // let files release before the swap
+                if (_disposed) return;
+                try { _switchBuild!(game, false); } catch { /* best-effort; a failed revert just stays modded */ }
+            }
+            finally
+            {
+                lock (_gate) _watching = false;
+            }
         }
 
         /// <summary>

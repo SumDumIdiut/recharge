@@ -8,8 +8,8 @@ export const BUTTON = { LEFT: 1, RIGHT: 2, UP: 4, DOWN: 8, JUMP: 16, DASH: 32 } 
 
 export interface Box { x: number; y: number; w: number; h: number }
 
-/** A platform that moves on a timetable (a mover). `boxAt(clock)` is where it is `clock` frames into its trip; `cycle` is one whole trip. */
-export interface Platform { boxAt(clock: number): Box; auto: boolean; cycle: number; /** What the content type draws it from. */ look?: unknown }
+/** A platform that moves on a timetable (a mover). `boxAt(clock)` is where its tiles are `clock` frames into its trip (one box per tile); `cycle` is one whole trip. */
+export interface Platform { boxAt(clock: number): Box[]; auto: boolean; cycle: number; /** What the content type draws it from. */ look?: unknown }
 
 export interface World {
   /** Moving platforms: solid, and they carry a player standing on them. */
@@ -28,6 +28,8 @@ export interface SimState {
   coyote: number; jumpBuffer: number; jumpHeld: boolean;
   airDashes: number; airJumps: number;
   dashFrames: number; dashCooldown: number;
+  /** Frames left of the wall-jump input lock (the game's wallJumpMovementLockFrames): horizontal input is ignored while it runs. */
+  wallLock: number;
   wall: -1 | 0 | 1;
   facing: -1 | 1;
   dead: boolean; won: boolean;
@@ -40,7 +42,7 @@ export interface SimState {
 export function startState(x: number, y: number, P: Physics = BASE_PHYSICS): SimState {
   return {
     x, y, vx: 0, vy: 0, onGround: false, coyote: 0, jumpBuffer: 0, jumpHeld: false,
-    airDashes: P.airDashes, airJumps: P.airJumps, dashFrames: 0, dashCooldown: 0, wall: 0, facing: 1, dead: false, won: false, f: 0, mt: [],
+    airDashes: P.airDashes, airJumps: P.airJumps, dashFrames: 0, dashCooldown: 0, wallLock: 0, wall: 0, facing: 1, dead: false, won: false, f: 0, mt: [],
   };
 }
 
@@ -70,6 +72,9 @@ export function step(s: SimState, input: number, world: World, P: Physics = BASE
   n.jumpHeld = jump;
   n.jumpBuffer = jumpPressed ? P.jumpBuffer : Math.max(0, s.jumpBuffer - 1);
   n.coyote = s.onGround ? P.coyote : Math.max(0, s.coyote - 1);
+  // the wall-jump input lock runs down every frame; while it is active, horizontal input is ignored so the kick carries
+  const wallLocked = s.wallLock > 0;
+  n.wallLock = Math.max(0, s.wallLock - 1);
 
   const dir = (right ? 1 : 0) - (left ? 1 : 0);
   if (dir) n.facing = dir as -1 | 1;
@@ -88,23 +93,41 @@ export function step(s: SimState, input: number, world: World, P: Physics = BASE
   if (startedDash || s.dashFrames > 0) {
     n.dashFrames = (startedDash ? P.dashFrames : s.dashFrames) - 1;
   } else {
-    if (dir) {
+    // the game's apex band (Velocity.y in (-50, 200) u/s): a floatier pull and a little extra top speed up here
+    const atApex = !s.onGround && s.vy < P.apexWindow && s.vy > -P.apexWindow * 0.25;
+    // horizontal: the game accelerates to the cap at the same rate on the ground and in the air (full air control),
+    // and decelerates at that rate on the ground; the wall-jump lock freezes input so the kick carries.
+    const cap = P.runMax + (atApex ? P.apexSpeedBonus : 0);
+    if (wallLocked) {
+      // keep the wall-jump horizontal velocity (no input, no friction) while the lock runs
+    } else if (dir) {
       const acc = s.onGround ? P.runAccel : P.airAccel;
-      n.vx = clamp(s.vx + dir * acc, -P.runMax, P.runMax);
+      n.vx = clamp(s.vx + dir * acc, -cap, cap);
     } else {
       const f = Math.sign(s.vx) * (s.onGround ? P.friction : P.airDrag);
       n.vx = Math.abs(s.vx) <= Math.abs(f) ? 0 : s.vx - f;
     }
     // a dash's burst does not outlive the dash
-    if (Math.abs(s.vx) > P.runMax) n.vx = clamp(n.vx, -P.runMax, P.runMax);
+    if (!wallLocked && Math.abs(s.vx) > cap) n.vx = clamp(n.vx, -cap, cap);
 
-    n.vy = Math.max(-P.fallMax, s.vy - P.gravity);
+    // gravity: the game multiplies it by fastFallMod once falling faster than fastFallThreshold, and lightens it near
+    // the apex (jumpApexAntiGrav); terminal fall is clamped at fallMax.
+    let g = P.gravity;
+    if (!s.onGround) {
+      if (s.vy < P.fastFallThreshold) g *= P.fastFallMod;
+      else if (atApex) g *= 1 - P.apexAntiGrav;
+    }
+    n.vy = Math.max(-P.fallMax, s.vy - g);
     if (P.wallJumpUnlocked && !s.onGround && s.wall !== 0 && s.vy < 0 && ((s.wall < 0 && left) || (s.wall > 0 && right))) n.vy = Math.max(n.vy, -P.wallSlide);
 
     if (n.jumpBuffer > 0) {
       if (s.onGround || s.coyote > 0) { n.vy = P.jumpVel; n.jumpBuffer = 0; n.coyote = 0; n.onGround = false; }
-      else if (P.wallJumpUnlocked && s.wall !== 0) { n.vy = P.wallJumpY; n.vx = -s.wall * P.wallJumpX; n.facing = (-s.wall) as -1 | 1; n.jumpBuffer = 0; }
-      else if (s.airJumps > 0) { n.vy = P.jumpVel * 0.9; n.airJumps = s.airJumps - 1; n.jumpBuffer = 0; }
+      else if (P.wallJumpUnlocked && s.wall !== 0) {
+        // the game kicks off the wall at full run speed, with a modest upward boost and an input lock
+        n.vy = P.wallJumpY; n.vx = -s.wall * P.wallJumpX; n.facing = (-s.wall) as -1 | 1; n.jumpBuffer = 0; n.wallLock = P.wallLockFrames;
+      }
+      // air jump (the game zeroes a downward Velocity.y first, then sets it toward airJumpForce; lerps halfway when already rising)
+      else if (s.airJumps > 0) { n.vy = s.vy < 0 ? P.airJumpVel : s.vy + (P.airJumpVel - s.vy) * 0.5; n.airJumps = s.airJumps - 1; n.jumpBuffer = 0; }
     }
     if (jumpReleased && n.vy > 0) n.vy *= P.jumpCut;
   }
@@ -116,14 +139,15 @@ export function step(s: SimState, input: number, world: World, P: Physics = BASE
   const plats = world.platforms ?? [];
   const hw = P.width / 2, H = P.height;
   let bx = s.x, by = s.y;
-  let pb: Box[] = [];
+  let pb: Box[][] = [];
   if (plats.length) {
     const old = s.mt || [];
     const mt: number[] = [];
     const before = plats.map((p, i) => p.boxAt(old[i] || 0));
+    const onBox = (b: Box): boolean => s.onGround && Math.abs(s.y - (b.y + b.h)) <= 1.5 && s.x + hw > b.x && s.x - hw < b.x + b.w;
     plats.forEach((p, i) => {
       let c = old[i] || 0;
-      const riding = s.onGround && Math.abs(s.y - (before[i].y + before[i].h)) <= 1.5 && s.x + hw > before[i].x && s.x - hw < before[i].x + before[i].w;
+      const riding = before[i].some(onBox);
       if (p.auto) c = (c + 1) % p.cycle;
       else if (c > 0) c = c + 1 >= p.cycle ? 0 : c + 1;
       else if (riding) c = 1;
@@ -132,15 +156,17 @@ export function step(s: SimState, input: number, world: World, P: Physics = BASE
     n.mt = mt;
     pb = plats.map((p, i) => p.boxAt(mt[i]));
     for (let i = 0; i < plats.length; i++) {
-      const b = before[i];
-      if (!(s.onGround && Math.abs(s.y - (b.y + b.h)) <= 1.5 && s.x + hw > b.x && s.x - hw < b.x + b.w)) continue;
-      const cx = s.x + (pb[i].x - b.x), cy = pb[i].y + pb[i].h;
+      // the platform the player rides: every tile of it moves as one, so one tile's delta carries the player
+      const bi = before[i].findIndex(onBox);
+      if (bi < 0) continue;
+      const b = before[i][Math.max(0, bi)], a = pb[i][Math.max(0, bi)];
+      const cx = s.x + (a.x - b.x), cy = a.y + a.h;
       if (!world.solidHits(cx - hw, cy, P.width, H)) { bx = cx; by = cy; }
       break;
     }
   }
   const platHit = (x: number, y: number, w: number, h: number): Box | null => {
-    for (const b of pb) if (x < b.x + b.w && b.x < x + w && y < b.y + b.h && b.y < y + h) return b;
+    for (const boxes of pb) for (const b of boxes) if (x < b.x + b.w && b.x < x + w && y < b.y + b.h && b.y < y + h) return b;
     return null;
   };
 

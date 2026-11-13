@@ -8,10 +8,19 @@
 .amp-body { flex: 1; min-height: 0; display: flex; }
 .amp-canvas { flex: 1; min-width: 0; height: 100%; display: block; touch-action: none; }
 .amp-toolbar { width: 52px; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 6px; background: var(--surface-nav); border-right: 1px solid var(--line); overflow-y: auto; }
-.amp-tool { position: relative; width: 40px; height: 40px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-size: 18px; cursor: pointer; }
+.amp-tool { position: relative; width: 40px; height: 40px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-size: 18px; cursor: pointer; display: grid; place-items: center; }
+.amp-tool-icon { display: inline-flex; }
+.amp-tool-icon svg { display: block; margin: 0 auto; }
 .amp-tool:hover { border-color: var(--line-hi); }
 .amp-tool.is-active { border-color: var(--green); color: var(--green); box-shadow: inset 0 0 0 1px var(--green-dim); }
 .amp-tool-key { position: absolute; right: 3px; bottom: 1px; font-size: 10px; color: var(--text-dim); }
+.amp-load-list { display: flex; flex-direction: column; gap: 4px; min-width: 340px; max-height: 56vh; overflow-y: auto; }
+.amp-load-hint { margin: 2px 0 6px; }
+.load-map-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); cursor: pointer; text-align: left; }
+.load-map-row:hover { border-color: var(--line-hi); }
+.load-map-row.is-armed { border-color: var(--warn, #ffd24a); box-shadow: inset 0 0 0 1px var(--warn, #ffd24a); }
+.load-map-name { font-weight: 600; font-size: 13px; }
+.load-map-folder { font-size: 11px; }
 .amp-play { margin-top: 8px; color: var(--magenta); }
 .amp-side { width: 232px; flex: none; overflow-y: auto; padding: 8px 10px; background: var(--surface-nav); border-left: 1px solid var(--line); }
 .amp-group { margin: 10px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim); }

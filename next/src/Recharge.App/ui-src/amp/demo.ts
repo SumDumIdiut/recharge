@@ -49,10 +49,14 @@ export function demoMap(): AmpMap {
   m.set('objects', cellKey(5, 0), { t: 'spring' });
   m.set('objects', cellKey(0, 0), { t: 'checkpoint' });
   m.set('objects', cellKey(2, 1), { t: 'sign', text: 'Ride the platform' });
-  // movers: a ping-pong platform over the gap, a lift, a block that moves on touch
+  // movers: a ping-pong platform over the gap, a lift, a block that moves on touch, and a drawn route riding a smooth curve
   m.set('movers', cellKey(9, 1), { ...MOVER_DEFAULT, dx: 11, dy: 0, w: 3, h: 1, time: 3, back: 3, look: 'grate' });
   m.set('movers', cellKey(20, -2), { ...MOVER_DEFAULT, dx: 0, dy: 6, w: 2, h: 1, time: 2.5, back: 2.5, look: 'zip' });
   m.set('movers', cellKey(16, 6), { ...MOVER_DEFAULT, dx: 0, dy: -3, w: 3, h: 2, auto: false, look: 'plate', time: 0.8, back: 2 });
+  m.set('movers', cellKey(6, 0), {
+    ...MOVER_DEFAULT, w: 2, h: 1, time: 4, back: 2, look: 'zip', dx: 6, dy: 3,
+    path: [[0, 0], [2, 0], [4, -1], [5, 1], [6, 3]], smooth: true,
+  });
   // trigger zones: a message, a camera zoom, a teleport with its marker, a group toggle
   m.set('triggers', cellKey(4, 2), { ...newTrigger('message'), text: 'Mind the gap!', w: 192, h: 128, once: true });
   m.set('triggers', cellKey(14, 3), { ...newTrigger('zoom'), w: 192, h: 192 });

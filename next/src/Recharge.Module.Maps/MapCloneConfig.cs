@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -125,6 +126,137 @@ internal static class MapCloneConfig
         MapUpgrades.PrepareRefresher(clone);
     }
 
+    /// <summary>
+    /// A drawn route: dense samples of the curve as platform phases. The mover rides out along the samples and, when it moves on
+    /// its own, back through the same curve reversed (it never teleports). The editor's whole-ride time is spread over the curve
+    /// by leg length, so one speed carries the platform around the shape; pauses live at the route's start and end.
+    /// </summary>
+    private static Array ZipPathPositions(Array template, Type elemType, FieldInfo position, FieldInfo time, List<Vector2> samples, JObject zip, bool auto)
+    {
+        int n = samples.Count - 1;                                  // legs of the ride out (sample 0 is the platform's own start)
+        var count = auto ? 2 * n : n + 1;
+        var total = 0f;
+        for (int i = 1; i < samples.Count; i++) total += Vector2.Distance(samples[i - 1], samples[i]);
+        var ride = zip["time"]?.Value<float>() ?? 3f;
+        var backTime = zip["backTime"]?.Value<float>() ?? ride;
+        var speedOut = total > 0.001f ? total / ride : 0f;
+        var speedBack = total > 0.001f ? total / backTime : 0f;
+        var pauseStart = zip["pauseMove"]?.Value<float>() ?? 1f;
+        var pauseEnd = zip["pauseReturn"]?.Value<float>() ?? 0.5f;
+        var wait = elemType.GetField("waitOnPhaseEnd");
+        var autoStart = elemType.GetField("autoStartNextPhase");
+        var onEnter = elemType.GetField("nextPhaseOnEnter");
+        var onExit = elemType.GetField("nextPhaseOnExit");
+        var phases = Array.CreateInstance(elemType, count);
+        for (int i = 0; i < count; i++)
+        {
+            Vector2 at;
+            float leg;
+            if (i == 0) { at = samples[0]; leg = n >= 1 && speedBack > 0f ? Vector2.Distance(samples[1], samples[0]) / speedBack : 0f; }
+            else if (i <= n) { at = samples[i]; leg = speedOut > 0f ? Vector2.Distance(samples[i - 1], samples[i]) / speedOut : 0f; }
+            else { at = samples[n - (i - n)]; leg = speedBack > 0f ? Vector2.Distance(samples[n - (i - n - 1)], samples[n - (i - n)]) / speedBack : 0f; }
+            var box = CopyPhase(i == 0 ? template.GetValue(0) : template.GetValue(template.Length - 1), elemType);
+            position.SetValue(box, at);
+            time.SetValue(box, leg);
+            if (auto)
+            {
+                if (autoStart != null) autoStart.SetValue(box, true);
+                if (onEnter != null) onEnter.SetValue(box, false);
+                if (onExit != null) onExit.SetValue(box, false);
+                if (wait != null) wait.SetValue(box, i == 0 ? pauseStart : (i == n ? pauseEnd : 0f));
+            }
+            else
+            {
+                // On touch: every leg starts while the player stands on the platform, so the touch carries it around the whole shape.
+                if (autoStart != null) autoStart.SetValue(box, false);
+                if (onEnter != null) onEnter.SetValue(box, true);
+                if (onExit != null) onExit.SetValue(box, false);
+            }
+            phases.SetValue(box, i);
+        }
+        return phases;
+    }
+
+    /// <summary>Every field of the position struct, as one fresh copy: the mover's own phases carry tween and other fields worth keeping.</summary>
+    private static object CopyPhase(object src, Type elemType)
+    {
+        var box = Activator.CreateInstance(elemType);
+        if (src != null)
+            foreach (var f in elemType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                f.SetValue(box, f.GetValue(src));
+        return box;
+    }
+
+    /// <summary>The drawn route's waypoints (level-unit offsets from the platform's start) as a polyline: a Catmull-Rom curve through
+    /// them (sampled every half cell) when smooth, the raw drawn corners otherwise. Minus the repeated or lone points.</summary>
+    private static List<Vector2> SampleZipPath(JArray path, bool smooth)
+    {
+        var pts = new List<Vector2>();
+        foreach (var token in path)
+            if (token is JArray p && p.Count == 2) pts.Add(new Vector2(p[0].Value<float>(), p[1].Value<float>()));
+        var clean = new List<Vector2>();
+        foreach (var pt in pts)
+            if (clean.Count == 0 || Vector2.Distance(clean[clean.Count - 1], pt) > 0.5f) clean.Add(pt);
+        if (clean.Count < 2) return null;
+        if (!smooth || clean.Count == 2) return clean;
+        Vector2 At(int i) => clean[Mathf.Clamp(i, 0, clean.Count - 1)];
+        var samples = new List<Vector2>();
+        for (int s = 0; s < clean.Count - 1; s++)
+        {
+            var p0 = At(s - 1); var p1 = At(s); var p2 = At(s + 1); var p3 = At(s + 2);
+            var steps = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(p1, p2) / 16f));
+            for (int j = (s == 0 ? 0 : 1); j <= steps; j++)
+            {
+                var t = (float)j / steps;
+                var t2 = t * t; var t3 = t2 * t;
+                samples.Add(new Vector2(
+                    0.5f * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+                    0.5f * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3)));
+            }
+        }
+        return samples;
+    }
+
+    /// <summary>The drawn route's track: the level's own track sprite as a copy per stretch of the route, turned and sized along the curve.</summary>
+    private static void BuildZipTrack(GameObject clone, List<Vector2> samples)
+    {
+        Transform track = null;
+        SpriteRenderer trackSr = null;
+        foreach (var tr in clone.GetComponentsInChildren<Transform>(true))
+        {
+            if (tr.name == "ZipTrack") { track = tr; trackSr = tr.GetComponent<SpriteRenderer>(); }
+            else if (tr.name == "ZipNode (1)")
+            {
+                var last = samples[samples.Count - 1];
+                var prev = samples[samples.Count - 2];
+                var leg = last - prev;
+                var dir = leg.magnitude > 0.001f ? leg / leg.magnitude : Vector2.up;
+                tr.localPosition = last - dir * 5f;
+            }
+        }
+        if (track == null || trackSr == null) return;
+        trackSr.enabled = false;    // the straight stretch is replaced by the curve's segments
+        for (int s = 1; s < samples.Count; s++)
+        {
+            var from = samples[s - 1];
+            var to = samples[s];
+            var seg = to - from;
+            var len = seg.magnitude;
+            if (len < 24f) continue;
+            var dir = seg / len;
+            var piece = UnityEngine.Object.Instantiate(track.gameObject, track.parent);
+            piece.name = "ZipTrackSeg_" + s;
+            var sr = piece.GetComponent<SpriteRenderer>();
+            if (sr != null)
+            {
+                sr.enabled = true;
+                sr.size = new Vector2(len + 12f, sr.size.y);
+            }
+            piece.transform.localPosition = from + dir * (len / 2f + 2f);
+            piece.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
+        }
+    }
+
     private static void BuildPlatform(PlatformMover mover, JArray rects)
     {
         var sr = mover.GetComponent<SpriteRenderer>();
@@ -133,29 +265,77 @@ internal static class MapCloneConfig
         var scale = mover.transform.lossyScale;
         // The game's collider sits a little inside the sprite; keep that margin.
         var fit = box != null && sr.size.x > 0f && sr.size.y > 0f ? new Vector2(box.size.x / sr.size.x, box.size.y / sr.size.y) : Vector2.one;
-        int n = 0;
+        var tiles = new List<JArray>();
         foreach (var token in rects)
+            if (token is JArray r && r.Count == 4) tiles.Add(r);
+        if (tiles.Count == 0) return;
+        // Tiles -> maximal rectangles, one Tiled 9-slice body each (native art renders; sliced-per-tile did not); one collider per tile.
+        var cellSet = new HashSet<Vector2Int>();
+        foreach (var r in tiles) cellSet.Add(new Vector2Int(Mathf.RoundToInt(r[0].Value<float>() / TileCells), Mathf.RoundToInt(r[1].Value<float>() / TileCells)));
+        var used = new HashSet<Vector2Int>();
+        var ordered = new List<Vector2Int>(cellSet);
+        ordered.Sort((a, b) => a.y != b.y ? a.y.CompareTo(b.y) : a.x.CompareTo(b.x));
+        int bodyN = 0;
+        foreach (var start in ordered)
         {
-            if (!(token is JArray r) || r.Count != 4) continue;
-            var size = new Vector2(r[2].Value<float>() / scale.x, r[3].Value<float>() / scale.y);
-            var piece = new GameObject("PlatformTiles_" + n++);
-            piece.layer = mover.gameObject.layer;
-            piece.tag = mover.gameObject.tag;
-            piece.transform.SetParent(mover.transform, false);
-            piece.transform.localPosition = new Vector3(r[0].Value<float>() / scale.x, r[1].Value<float>() / scale.y, 0f);
-            var art = piece.AddComponent<SpriteRenderer>();
+            if (used.Contains(start)) continue;
+            int w = 1;
+            while (cellSet.Contains(new Vector2Int(start.x + w, start.y)) && !used.Contains(new Vector2Int(start.x + w, start.y))) w++;
+            int h = 1;
+            while (true)
+            {
+                bool ok = true;
+                for (int i = 0; i < w; i++) { var c = new Vector2Int(start.x + i, start.y + h); if (!cellSet.Contains(c) || used.Contains(c)) { ok = false; break; } }
+                if (!ok) break;
+                h++;
+            }
+            for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < w; dx++) used.Add(new Vector2Int(start.x + dx, start.y + dy));
+            float rw = w * TileCells, rh = h * TileCells;
+            var body = new GameObject("PlatformBody_" + bodyN++);
+            body.layer = mover.gameObject.layer;
+            body.tag = mover.gameObject.tag;
+            body.transform.SetParent(mover.transform, false);
+            body.transform.localPosition = new Vector3((start.x * TileCells + rw / 2f) / scale.x, (start.y * TileCells + rh / 2f) / scale.y, 0f);
+            var art = body.AddComponent<SpriteRenderer>();
             art.sprite = sr.sprite;
+            art.drawMode = sr.drawMode == SpriteDrawMode.Simple ? SpriteDrawMode.Simple : SpriteDrawMode.Tiled;
+            art.size = new Vector2(rw / scale.x, rh / scale.y);
             art.sharedMaterial = sr.sharedMaterial;
-            art.drawMode = sr.drawMode == SpriteDrawMode.Simple ? SpriteDrawMode.Sliced : sr.drawMode;
-            art.size = size;
             art.color = sr.color;
             art.sortingLayerID = sr.sortingLayerID;
             art.sortingOrder = sr.sortingOrder;
+        }
+        int n = 0;
+        foreach (var r in tiles)
+        {
+            var size = new Vector2(r[2].Value<float>() / scale.x, r[3].Value<float>() / scale.y);
+            var piece = new GameObject("PlatformTile_" + n++);
+            piece.layer = mover.gameObject.layer;
+            piece.tag = mover.gameObject.tag;
+            piece.transform.SetParent(mover.transform, false);
+            piece.transform.localPosition = new Vector3((r[0].Value<float>() + r[2].Value<float>() / 2f) / scale.x, (r[1].Value<float>() + r[3].Value<float>() / 2f) / scale.y, 0f);
             var col = piece.AddComponent<BoxCollider2D>();
             col.size = Vector2.Scale(size, fit);
         }
         sr.enabled = false;
         if (box != null) box.enabled = false;
+    }
+
+    /** A mover tile spans this many level units (the editor emits one rect per tile). */
+    private const int TileCells = 32;
+
+    /** Third sprites cut from the zip art, cached: Sprite.Create on a texture rect, keyed so repeated platforms share one per third. */
+    private static readonly Dictionary<string, Sprite> ZipThirds = new Dictionary<string, Sprite>();
+
+    private static Sprite ZipThird(Sprite whole, int cx, int cy)
+    {
+        var key = whole.texture.GetInstanceID() + ":" + cx + ":" + cy;
+        if (ZipThirds.TryGetValue(key, out var cached) && cached != null) return cached;
+        var w = whole.rect.width / 3f;
+        var h = whole.rect.height / 3f;
+        var sprite = Sprite.Create(whole.texture, new Rect(whole.rect.x + cx * w, whole.rect.y + (2 - cy) * h, w, h), new Vector2(0.5f, 0.5f), whole.pixelsPerUnit);
+        ZipThirds[key] = sprite;
+        return sprite;
     }
 
     private static void ApplyZip(GameObject clone, JObject zip)
@@ -166,50 +346,69 @@ internal static class MapCloneConfig
         var end = endArr != null && endArr.Count == 2 ? new Vector2(endArr[0].Value<float>(), endArr[1].Value<float>()) : Vector2.zero;
         // Positions is an array of a private struct: edit boxed copies, write them back.
         var posField = typeof(PlatformMover).GetField("Positions", BindingFlags.Instance | BindingFlags.NonPublic);
+        List<Vector2> drawnSamples = null;
         if (posField?.GetValue(mover) is Array positions && positions.Length >= 2)
         {
             var elemType = positions.GetType().GetElementType();
             var position = elemType.GetField("position");
             var time = elemType.GetField("timeToReachFromPrevious");
-            var last = positions.GetValue(positions.Length - 1);
-            position.SetValue(last, end);
-            if (zip["time"] != null) time.SetValue(last, zip["time"].Value<float>());
-            positions.SetValue(last, positions.Length - 1);
-            var first = positions.GetValue(0);
-            if (zip["backTime"] != null) time.SetValue(first, zip["backTime"].Value<float>());
-            positions.SetValue(first, 0);
-            if (zip["auto"]?.Value<bool>() == true)
+            var auto = zip["auto"]?.Value<bool>() == true;
+            if (zip["path"] is JArray pathArr && pathArr.Count >= 2 && pathArr[0] is JArray)
             {
-                // Moving on its own: every phase starts the next once its pause is
-                // over, and touching it no longer matters.
-                var wait = elemType.GetField("waitOnPhaseEnd");
-                for (int i = 0; i < positions.Length; i++)
+                // A drawn route: dense samples of the curve as phases, riding out along it and back; the platform bounds from corner to its whole shape.
+                drawnSamples = SampleZipPath(pathArr, zip["smooth"]?.Value<bool>() ?? true);
+                if (drawnSamples == null) drawnSamples = new List<Vector2>();
+                if (drawnSamples.Count >= 2) posField.SetValue(mover, ZipPathPositions(positions, elemType, position, time, drawnSamples, zip, auto));
+            }
+            else
+            {
+                var last = positions.GetValue(positions.Length - 1);
+                position.SetValue(last, end);
+                if (zip["time"] != null) time.SetValue(last, zip["time"].Value<float>());
+                positions.SetValue(last, positions.Length - 1);
+                var first = positions.GetValue(0);
+                if (zip["backTime"] != null) time.SetValue(first, zip["backTime"].Value<float>());
+                positions.SetValue(first, 0);
+                if (auto)
                 {
-                    var phase = positions.GetValue(i);
-                    elemType.GetField("autoStartNextPhase").SetValue(phase, true);
-                    elemType.GetField("nextPhaseOnEnter").SetValue(phase, false);
-                    elemType.GetField("nextPhaseOnExit").SetValue(phase, false);
-                    if (i == positions.Length - 1) wait.SetValue(phase, zip["pauseReturn"]?.Value<float>() ?? 0.5f);
-                    if (i == 0) wait.SetValue(phase, zip["pauseMove"]?.Value<float>() ?? 1f);
-                    positions.SetValue(phase, i);
+                    // Moving on its own: every phase starts the next once its pause is
+                    // over, and touching it no longer matters.
+                    var wait = elemType.GetField("waitOnPhaseEnd");
+                    for (int i = 0; i < positions.Length; i++)
+                    {
+                        var phase = positions.GetValue(i);
+                        elemType.GetField("autoStartNextPhase").SetValue(phase, true);
+                        elemType.GetField("nextPhaseOnEnter").SetValue(phase, false);
+                        elemType.GetField("nextPhaseOnExit").SetValue(phase, false);
+                        if (i == positions.Length - 1) wait.SetValue(phase, zip["pauseReturn"]?.Value<float>() ?? 0.5f);
+                        if (i == 0) wait.SetValue(phase, zip["pauseMove"]?.Value<float>() ?? 1f);
+                        positions.SetValue(phase, i);
+                    }
                 }
-                mover.gameObject.AddComponent<MapZipAutoStart>().FirstPause = zip["pauseMove"]?.Value<float>() ?? 1f;
             }
-            posField.SetValue(mover, positions);
+            if (auto) mover.gameObject.AddComponent<MapZipAutoStart>().FirstPause = zip["pauseMove"]?.Value<float>() ?? 1f;
         }
-        // The track and its end node follow the new path.
-        var len = end.magnitude;
-        var dir = len > 0.001f ? end / len : Vector2.up;
-        foreach (var tr in clone.GetComponentsInChildren<Transform>(true))
+        if (drawnSamples != null)
         {
-            if (tr.name == "ZipTrack")
+            // The track is a child copy per stretch of the drawn route, so it follows the curves; the node sits at the route's end.
+            BuildZipTrack(clone, drawnSamples);
+        }
+        else
+        {
+            // The straight track and its end node follow the new path.
+            var len = end.magnitude;
+            var dir = len > 0.001f ? end / len : Vector2.up;
+            foreach (var tr in clone.GetComponentsInChildren<Transform>(true))
             {
-                tr.localPosition = end / 2f + dir * 5f;
-                tr.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
-                var sr = tr.GetComponent<SpriteRenderer>();
-                if (sr != null) sr.size = new Vector2(len + 30f, sr.size.y);
+                if (tr.name == "ZipTrack")
+                {
+                    tr.localPosition = end / 2f + dir * 5f;
+                    tr.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
+                    var sr = tr.GetComponent<SpriteRenderer>();
+                    if (sr != null) sr.size = new Vector2(len + 30f, sr.size.y);
+                }
+                else if (tr.name == "ZipNode (1)") tr.localPosition = end - dir * 5f;
             }
-            else if (tr.name == "ZipNode (1)") tr.localPosition = end - dir * 5f;
         }
         // A platform built from grate tiles: rectangles of the game's own grate
         // hung off the moving part, each with its collider. Colliders on a child

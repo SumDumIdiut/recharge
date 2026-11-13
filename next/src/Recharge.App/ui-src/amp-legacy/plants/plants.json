@@ -1,0 +1,509 @@
+[
+ {
+  "sprite": "Mossy - Hanging Plants_0",
+  "file": "Mossy_Hanging_Plants_0.png",
+  "label": "Hanging leaves 1",
+  "w": 182.09,
+  "h": 589.46,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging leaves"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_1",
+  "file": "Mossy_Hanging_Plants_1.png",
+  "label": "Hanging leaves 2",
+  "w": 182.09,
+  "h": 488.69,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging leaves"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_2",
+  "file": "Mossy_Hanging_Plants_2.png",
+  "label": "Hanging leaves 3",
+  "w": 181.37,
+  "h": 488.69,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging leaves"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_3",
+  "file": "Mossy_Hanging_Plants_3.png",
+  "label": "Hanging leaves 4",
+  "w": 152.58,
+  "h": 410.96,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging leaves"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_4",
+  "file": "Mossy_Hanging_Plants_4.png",
+  "label": "Hanging leaves 5",
+  "w": 133.87,
+  "h": 475.02,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging leaves"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_5",
+  "file": "Mossy_Hanging_Plants_5.png",
+  "label": "Hanging vines 1",
+  "w": 233.91,
+  "h": 688.06,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging vines"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_6",
+  "file": "Mossy_Hanging_Plants_6.png",
+  "label": "Hanging vines 2",
+  "w": 233.91,
+  "h": 688.06,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Hanging vines"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_7",
+  "file": "Mossy_Hanging_Plants_7.png",
+  "label": "Leaf sprout 1",
+  "w": 380.02,
+  "h": 254.78,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Leaf sprout"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_8",
+  "file": "Mossy_Hanging_Plants_8.png",
+  "label": "Leaf sprout 2",
+  "w": 380.02,
+  "h": 254.78,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Leaf sprout"
+ },
+ {
+  "sprite": "Mossy - Hanging Plants_9",
+  "file": "Mossy_Hanging_Plants_9.png",
+  "label": "Leaf sprout 3",
+  "w": 380.02,
+  "h": 254.78,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.3894165754318237,
+  "kind": "Leaf sprout"
+ },
+ {
+  "sprite": "Mossy - MossyHills_0",
+  "file": "Mossy_MossyHills_0.png",
+  "label": "Moss mound 1",
+  "w": 130.0,
+  "h": 160.5,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - MossyHills_2",
+  "file": "Mossy_MossyHills_2.png",
+  "label": "Moss mound 3",
+  "w": 579.5,
+  "h": 245.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - MossyHills_5",
+  "file": "Mossy_MossyHills_5.png",
+  "label": "Moss mound 6",
+  "w": 191.5,
+  "h": 186.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - MossyHills_6",
+  "file": "Mossy_MossyHills_6.png",
+  "label": "Moss mound 7",
+  "w": 621.5,
+  "h": 430.5,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - MossyHills_7",
+  "file": "Mossy_MossyHills_7.png",
+  "label": "Moss mound 8",
+  "w": 143.0,
+  "h": 159.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - MossyHills_8",
+  "file": "Mossy_MossyHills_8.png",
+  "label": "Moss mound 9",
+  "w": 664.0,
+  "h": 227.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - MossyHills_10",
+  "file": "Mossy_MossyHills_10.png",
+  "label": "Moss mound 11",
+  "w": 268.0,
+  "h": 213.5,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 2.0,
+  "kind": "Moss mound"
+ },
+ {
+  "sprite": "Mossy - BackgroundDecoration_0",
+  "file": "Mossy_BackgroundDecoration_0.png",
+  "label": "Moss outline 1",
+  "w": 526.0,
+  "h": 2015.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Moss outline"
+ },
+ {
+  "sprite": "Mossy - BackgroundDecoration_1",
+  "file": "Mossy_BackgroundDecoration_1.png",
+  "label": "Moss outline 2",
+  "w": 519.0,
+  "h": 1174.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Moss outline"
+ },
+ {
+  "sprite": "Mossy - BackgroundDecoration_2",
+  "file": "Mossy_BackgroundDecoration_2.png",
+  "label": "Moss outline 3",
+  "w": 544.0,
+  "h": 502.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Moss outline"
+ },
+ {
+  "sprite": "Mossy - BackgroundDecoration_3",
+  "file": "Mossy_BackgroundDecoration_3.png",
+  "label": "Moss outline 4",
+  "w": 842.0,
+  "h": 456.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Moss outline"
+ },
+ {
+  "sprite": "Mossy - BackgroundDecoration_4",
+  "file": "Mossy_BackgroundDecoration_4.png",
+  "label": "Moss outline 5",
+  "w": 463.0,
+  "h": 323.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Moss outline"
+ },
+ {
+  "sprite": "Mossy - BackgroundDecoration_5",
+  "file": "Mossy_BackgroundDecoration_5.png",
+  "label": "Moss outline 6",
+  "w": 844.0,
+  "h": 864.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Moss outline"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_0",
+  "file": "Mossy_Decorations_Hazards_0.png",
+  "label": "Mossy rock 1",
+  "w": 643.0,
+  "h": 354.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Mossy rock"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_1",
+  "file": "Mossy_Decorations_Hazards_1.png",
+  "label": "Mossy rock 2",
+  "w": 582.0,
+  "h": 259.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Mossy rock"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_2",
+  "file": "Mossy_Decorations_Hazards_2.png",
+  "label": "Mossy rock 3",
+  "w": 528.0,
+  "h": 459.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Mossy rock"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_9",
+  "file": "Mossy_Decorations_Hazards_9.png",
+  "label": "Small plant 1",
+  "w": 145.0,
+  "h": 130.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_10",
+  "file": "Mossy_Decorations_Hazards_10.png",
+  "label": "Small plant 2",
+  "w": 138.0,
+  "h": 190.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_11",
+  "file": "Mossy_Decorations_Hazards_11.png",
+  "label": "Small plant 3",
+  "w": 76.0,
+  "h": 181.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_12",
+  "file": "Mossy_Decorations_Hazards_12.png",
+  "label": "Small plant 4",
+  "w": 228.0,
+  "h": 93.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_22",
+  "file": "Mossy_Decorations_Hazards_22.png",
+  "label": "Small plant 14",
+  "w": 179.0,
+  "h": 221.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_23",
+  "file": "Mossy_Decorations_Hazards_23.png",
+  "label": "Small plant 15",
+  "w": 87.0,
+  "h": 205.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_24",
+  "file": "Mossy_Decorations_Hazards_24.png",
+  "label": "Small plant 16",
+  "w": 70.0,
+  "h": 88.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_25",
+  "file": "Mossy_Decorations_Hazards_25.png",
+  "label": "Small plant 17",
+  "w": 203.0,
+  "h": 225.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_26",
+  "file": "Mossy_Decorations_Hazards_26.png",
+  "label": "Small plant 18",
+  "w": 150.0,
+  "h": 114.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_27",
+  "file": "Mossy_Decorations_Hazards_27.png",
+  "label": "Small plant 19",
+  "w": 51.0,
+  "h": 226.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_28",
+  "file": "Mossy_Decorations_Hazards_28.png",
+  "label": "Small plant 20",
+  "w": 208.0,
+  "h": 238.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_30",
+  "file": "Mossy_Decorations_Hazards_30.png",
+  "label": "Small plant 22",
+  "w": 43.0,
+  "h": 199.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ },
+ {
+  "sprite": "Mossy - Decorations&Hazards_32",
+  "file": "Mossy_Decorations_Hazards_32.png",
+  "label": "Small plant 24",
+  "w": 189.0,
+  "h": 200.0,
+  "pivot": [
+   0.5,
+   0.5
+  ],
+  "ppu": 1.0,
+  "kind": "Small plant"
+ }
+]

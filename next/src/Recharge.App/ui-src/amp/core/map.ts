@@ -14,6 +14,8 @@ export class AmpMap {
   /** The level background shown behind the map (a view aid: the game plays the level's own), and whether it drifts with the camera. Saved in the file's `amp` block. */
   backdrop = 'level';
   parallax = true;
+  /** Group ids that start hidden in the game (a Show / Toggle trigger reveals them). Saved as the file's `hiddenGroups`. */
+  hiddenGroups: string[] = [];
   /** The loaded file, kept so what the Amplifier does not edit (player rules, music, other objects) is saved back untouched. */
   raw: Json | null = null;
   private listeners: MapListener[] = [];

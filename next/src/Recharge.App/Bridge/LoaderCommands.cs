@@ -30,7 +30,18 @@ namespace Recharge.App.Bridge
         /// <summary>For game.launch: deploys the vanilla or modded build (either loader) before the game starts. Refuses while IGTAP runs.</summary>
         public static string SwitchBuild(string game, bool modded)
         {
-            try { return LoaderPatcher.SetMode(game, modded, GameProcess.IsRunning).Detail; }
+            try
+            {
+                // Switching to modded: refresh the modules when the bundled loader is newer/mismatched (SetMode only swaps Assembly-CSharp).
+                if (modded)
+                {
+                    string files = DefaultFilesDir();
+                    LoaderState state = LoaderPatcher.Inspect(game, files).State;
+                    if (state == LoaderState.Outdated || state == LoaderState.Broken)
+                        LoaderPatcher.Repair(game, files, GameProcess.IsRunning);
+                }
+                return LoaderPatcher.SetMode(game, modded, GameProcess.IsRunning).Detail;
+            }
             catch (PatcherException e) { throw new InvalidOperationException(e.Message); }
         }
 

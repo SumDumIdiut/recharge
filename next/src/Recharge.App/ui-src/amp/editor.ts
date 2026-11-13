@@ -79,7 +79,7 @@ export class AmpEditor {
   }
 
   private makePlaytest(): Playtest {
-    return new Playtest(this.map, this.camera, () => this.redraw(), () => { this.canvas.style.cursor = this.tool.cursor; this.onState(); });
+    return new Playtest(this.map, this.camera, () => this.redraw(), () => { this.canvas.style.cursor = this.tool.cursor; this.onState(); }, () => this.onState());
   }
 
   /** Swap in another map (opening one); history starts over. */
@@ -98,6 +98,8 @@ export class AmpEditor {
 
   private changed(layer: string, key: string): void {
     if (layer !== COURSE) { const c = parseKey(key); this.cache.invalidate(c.x, c.y, layer === 'moss' || layer.startsWith('moss@') ? 4 : 2); }
+    // a map edit while playing: the sim rebuilds its collision world so the player meets the new geometry
+    if (this.playtest.active) this.playtest.markDirty();
     this.onChange();
   }
 
@@ -254,6 +256,22 @@ export class AmpEditor {
 
   startPlaytest(): void { this.playtest.start(); this.onState(); }
 
+  /** The Play/Pause toggle: start the playtest if it is off, else pause or resume the running sim. The trail is kept throughout. */
+  togglePlaytest(): void {
+    if (!this.playtest.active) this.playtest.start();
+    else this.playtest.togglePause();
+    this.onState();
+  }
+
+  /** Re-run from the spawn without leaving playtest mode (resumes if it was paused). */
+  resetPlaytest(): void {
+    if (!this.playtest.active) return;
+    this.playtest.reset(false);
+    if (!this.playtest.running) this.playtest.resume();
+    this.redraw();
+    this.onState();
+  }
+
   counts(): Record<string, number> {
     const out: Record<string, number> = {};
     for (const c of PAINTABLE) out[c.id] = this.map.total(c.layer);
@@ -276,7 +294,7 @@ export class AmpEditor {
     };
     on(c, 'contextmenu', (e: Event) => e.preventDefault());
     on(c, 'pointerdown', (e: PointerEvent) => {
-      if (this.playtest.active) return;
+      // editing stays live during playtest: tools place/erase into the map and the sim picks up the change
       try { c.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer (the scripted driver) has nothing to capture */ }
       const p = this.info(e);
       if (e.button === 1 || e.button === 2 || this.spaceDown) {
@@ -354,7 +372,8 @@ export class AmpEditor {
     this.cache.draw(ctx, cam);
     drawLive(env, this.map, at, 32 * cam.zoom, 'over', cam.visible(), skip);
     drawCourse(ctx, cam, this.map);
-    if (this.playtest.active) { this.playtest.draw(ctx, cam, this.atlas); return; }
+    // the player, trail and HUD sit over the map during playtest; the tool overlay still shows so you can keep building
+    if (this.playtest.active) this.playtest.draw(ctx, cam, this.atlas);
     this.tool.overlay?.(this.api, ctx, this.hover);
     if (!this.tool.overlay && this.hover) highlightCells(ctx, cam, [this.hover]);
   }

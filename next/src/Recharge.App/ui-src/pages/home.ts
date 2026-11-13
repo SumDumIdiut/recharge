@@ -41,6 +41,23 @@ function patreonGlyph(): SVGSVGElement {
   return svg;
 }
 
+/** Flipped's PayPal. */
+const PAYPAL_URL = 'https://paypal.me/Flipped1Hz';
+
+/** The PayPal mark, filled in the button's colour. */
+function paypalGlyph(): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', 'M7.076 21.337H2.47a.641.641 0 0 1-.633-.74L4.944.901C5.026.382 5.474 0 5.998 0h7.46c2.57 0 4.578.543 5.69 1.81 1.01 1.15 1.304 2.42 1.012 4.287-.023.143-.047.288-.077.437-.983 5.05-4.349 6.797-8.647 6.797h-2.19c-.524 0-.968.382-1.05.9l-1.12 7.106zm14.146-14.42a3.35 3.35 0 0 0-.607-.541c-.013.076-.026.175-.041.254-.93 4.778-4.005 7.201-9.138 7.201h-2.19a.563.563 0 0 0-.556.479l-1.187 7.527h-.506l-.24 1.516a.56.56 0 0 0 .554.647h3.882c.46 0 .85-.334.922-.788.06-.26.76-4.852.816-5.09a.932.932 0 0 1 .923-.788h.58c3.76 0 6.705-1.528 7.565-5.946.36-1.847.174-3.388-.777-4.471z');
+  path.setAttribute('fill', 'currentColor');
+  svg.appendChild(path);
+  return svg;
+}
+
 let gameRow: HTMLElement | null = null;
 let filterNote: HTMLElement | null = null;
 let noMatches: HTMLElement | null = null;
@@ -197,19 +214,24 @@ export const homePage: PageModule = {
     grid.appendChild(newHost);
     page.content.appendChild(grid);
 
-    // bottom right of the main menu: Flipped's Patreon, opened through the bridge (the page itself is a recharge:// page)
-    const support = h('a', { className: 'home-patreon', attrs: { href: PATREON_URL, title: 'Support on Patreon' } });
-    support.appendChild(patreonGlyph());
-    support.appendChild(h('span', { text: 'Support Me!' }));
-    support.addEventListener('click', (event: MouseEvent) => {
-      const url = safeHref(PATREON_URL);
-      if (!url) { event.preventDefault(); return; }
+    // bottom-right of the main menu: one "Support Me!" pill with Patreon + PayPal, each opened through the bridge.
+    const openVia = (url: string) => (event: MouseEvent): void => {
+      const safe = safeHref(url);
       event.preventDefault();
-      call('open.url', { url }).catch((error: unknown) => toast(describeError(error), 'error'));
-    });
-    const footer = h('div', { className: 'home-footer' });
-    footer.appendChild(support);
-    page.content.appendChild(footer);
+      if (!safe) return;
+      call('open.url', { url: safe }).catch((error: unknown) => toast(describeError(error), 'error'));
+    };
+    const support = h('div', { className: 'home-support' });
+    support.appendChild(h('span', { className: 'home-support-label', text: 'Support Me!' }));
+    const patreonBtn = h('a', { className: 'home-support-link home-support-patreon', attrs: { href: PATREON_URL, title: 'Support on Patreon' } });
+    patreonBtn.appendChild(patreonGlyph());
+    patreonBtn.addEventListener('click', openVia(PATREON_URL));
+    const paypalBtn = h('a', { className: 'home-support-link home-support-paypal', attrs: { href: PAYPAL_URL, title: 'Support on PayPal' } });
+    paypalBtn.appendChild(paypalGlyph());
+    paypalBtn.addEventListener('click', openVia(PAYPAL_URL));
+    support.appendChild(patreonBtn);
+    support.appendChild(paypalBtn);
+    page.content.appendChild(support);
 
 
     el.appendChild(page);
@@ -340,7 +362,19 @@ async function loadData(token: number): Promise<void> {
   if (updates.length > 0) {
     const head = h('p', { className: 'updates-count' }, h('strong', { text: String(updates.length) }), updates.length === 1 ? ' update available' : ' updates available');
     const more = h('a', { className: 'link-btn', attrs: { href: '#/library?mode=updates' }, text: 'See all updates' });
-    fillCard(updatesHost, head, ...updates.slice(0, 3).map((item) => miniRow(item, item.kind === 'maps' ? 'Revision ' + (item.installed?.revision ?? '?') + ' → ' + item.revision : (item.installed?.version || '?') + ' → ' + item.version)), more);
-    if (updatesHost && homeGrid && !updatesHost.isConnected) homeGrid.appendChild(updatesHost);
+    // One row, all the way across the wide lead card: every update side by side, names cutting off instead of wrapping.
+    const strip = h('div', { className: 'updates-strip' });
+    for (const item of updates) strip.appendChild(miniRow(item, item.kind === 'maps' ? 'Revision ' + (item.installed?.revision ?? '?') + ' → ' + item.revision : (item.installed?.version || '?') + ' → ' + item.version));
+    fillCard(updatesHost, head, strip, more);
+    // With updates pending, they take over the lead: the updates card spans the top
+    // (where What's new runs) and What's new drops into the narrower slot below.
+    updatesHost.classList.add('home-card-wide');
+    newHost?.classList.remove('home-card-wide');
+    if (homeGrid && !updatesHost.isConnected) homeGrid.prepend(updatesHost);
+  } else if (updatesHost && updatesHost.isConnected) {
+    // nothing to update any more: What's new gets its lead back and the empty card leaves the grid
+    updatesHost.classList.remove('home-card-wide');
+    newHost?.classList.add('home-card-wide');
+    updatesHost.remove();
   }
 }

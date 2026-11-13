@@ -1,6 +1,7 @@
 /** The editor's panels: tool palette, brush picker with real tile thumbnails, status bar, map rules. DOM only; they read and drive an AmpEditor. */
 import type { Atlas } from '../atlas.js';
 import { PAINTABLE, contentById } from '../content/index.js';
+import { drawMoverBody, norm as normMover, tileBounds } from '../content/mover.js';
 import type { Brush, OptionCtx, OptionDef } from '../content/types.js';
 import { THUMB_PATH, arrowTiles } from '../content/arrows.js';
 import { rotMatrix } from '../content/sink.js';
@@ -18,9 +19,44 @@ import { MOSS_TABLE, drawMossSprite, mossImage, onMossLoaded } from '../moss-art
 
 export interface Panel { el: HTMLElement; refresh(): void }
 
-const TOOL_GLYPH: Record<string, string> = { select: '↖', paint: '✎', erase: '⌫', rect: '▭', fill: '◧', pick: '⌖', start: '▶', end: '■', reset: '◷', spawn: '◆', xspawn: '◇', arrow: '↗' };
+/**
+ * The tools' icons: small pictures, one thought each - a cursor, a brush, an eraser block, a hollow shape, a bucket,
+ * a dropper, gate doors and dots, a person, two people, an elbowed arrow, a drawn route. Stroke on currentColor, so the
+ * active state (green) paints them with the button.
+ */
+const TOOL_ICONS: Record<string, string> = {
+  select: '<path d="M6 3 L14 10 L10 11 L12 16 L9.6 17 L7.6 12 L6 15 Z"/>',
+  paint: '<path d="M13 3 C14 2 16 4 15 5.5 L11 10 L9 8 L13 3 Z"/><path d="M9 11 C7 12 5.5 14 5.5 16 C5.5 17.2 6.6 17.6 7.6 16.8 C9 15.6 10 13.5 11 10.5 Z"/>',
+  erase: '<path d="M4 12 L9.5 6.5 L15.5 12.5 L10 18 L4 12 Z"/><path d="M7.5 9 L13 14.5"/><path d="M3.5 18 H17"/>',
+  rect: '<rect x="4" y="5.5" width="12" height="9" stroke-dasharray="3 2"/>',
+  fill: '<path d="M4 9 L11 3.5 L14.5 7 L8 13.5 L4 9 Z"/><path d="M13 9 L16 12 L11 17 L7.5 13.5 L13 9"/>',
+  pick: '<path d="M12.5 4.5 L15.5 7.5 L13 10 L10 7 Z"/><path d="M10 7 L4.5 12.5 L4 16 L7.5 15.5 L13 10"/>',
+  start: '<circle cx="10" cy="16.5" r="1.6" fill="currentColor" stroke="none"/><path d="M10 14 V5 M7 8 L10 5 L13 8"/>',
+  end: '<rect x="4" y="10" width="12" height="4"/><circle cx="10" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  reset: '<path d="M14.5 10 A4.5 4.5 0 1 1 10 5.5"/><path d="M10 2.5 L13.5 5.5 L10 8.5"/>',
+  spawn: '<circle cx="10" cy="6" r="2.4"/><path d="M5.5 17 C5.5 11.5 14.5 11.5 14.5 17"/>',
+  xspawn: '<circle cx="5.5" cy="15" r="2"/><circle cx="14.5" cy="5" r="2"/><circle cx="5.5" cy="15" r="0.8" fill="currentColor" stroke="none"/><circle cx="14.5" cy="5" r="0.8" fill="currentColor" stroke="none"/>',
+  arrow: '<path d="M4 15.5 V9 Q4 6.5 6.5 6.5 H13"/><path d="M10 3.5 L13.5 6.5 L10 9.5"/>',
+  zippath: '<path d="M4 16 C8 9 12 9 16 4"/><circle cx="4" cy="16" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10.4" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="4" r="1.4" fill="currentColor" stroke="none"/>',
+  play: '<path d="M6.5 4.5 L15.5 10 L6.5 15.5 Z" fill="currentColor" stroke="none"/>',
+  pause: '<rect x="5.5" y="4.5" width="3" height="11" rx="0.6" fill="currentColor" stroke="none"/><rect x="11.5" y="4.5" width="3" height="11" rx="0.6" fill="currentColor" stroke="none"/>',
+};
 
-/** A thumbnail of a brush: a 3x3 autotiled block of a tile set, the game's own tile or sprite, or a letter. */
+/** The inner SVG markup for a named icon (a dot stands in until one is drawn). Static constants only. */
+function iconSvg(id: string, size: number): string {
+  const body = TOOL_ICONS[id] || '<circle cx="10" cy="10" r="6"/>';
+  return '<svg viewBox="0 0 20 20" width="' + size + '" height="' + size + '" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+}
+
+/** One tool's icon span (a named picture). */
+function toolIcon(id: string, size: number): HTMLElement {
+  const span = document.createElement('span');
+  span.className = 'amp-tool-icon';
+  span.innerHTML = iconSvg(id, size);
+  return span;
+}
+
+/** A thumbnail of a brush: a 3x3 autotiled block of a tile set, the game's own tile or sprite, a moving platform's tile shape, or a letter. */
 export function thumbCanvas(atlas: Atlas, brush: Brush, size = 40): HTMLCanvasElement {
   const cv = h('canvas', { className: 'amp-thumb' });
   cv.width = size; cv.height = size;
@@ -29,7 +65,12 @@ export function thumbCanvas(atlas: Atlas, brush: Brush, size = 40): HTMLCanvasEl
   ctx.fillStyle = '#1b1d20';
   ctx.fillRect(0, 0, size, size);
   const t = brush.thumb;
-  if (t.set) {
+  if (t.mover !== undefined) {
+    // the platform it places: its tile shape, drawn the way the editor does, fitted into the thumb square
+    const m = normMover(t.mover);
+    const b = tileBounds(m);
+    drawMoverBody({ ctx, atlas }, 0, 0, m, size / Math.max(b.maxX - b.minX + 1, b.maxY - b.minY + 1), 1);
+  } else if (t.set) {
     const set = tileSet(t.set);
     const cell = size / 3;
     for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
@@ -92,17 +133,30 @@ export function toolPalette(editor: AmpEditor): Panel {
   const buttons = new Map<string, HTMLButtonElement>();
   for (const t of TOOLS) {
     const b = h('button', { className: 'amp-tool', attrs: { type: 'button', title: t.label + ' (' + t.hotkey + ') - ' + t.hint, 'aria-label': t.label } },
-      h('span', { className: 'amp-tool-glyph', text: TOOL_GLYPH[t.id] || '•' }),
+      toolIcon(t.id, 20),
       h('span', { className: 'amp-tool-key', text: t.hotkey }));
     b.addEventListener('click', () => editor.setTool(t.id));
     buttons.set(t.id, b);
     el.appendChild(b);
   }
+  const playIcon = toolIcon('play', 20);
   const play = h('button', { className: 'amp-tool amp-play', attrs: { type: 'button', title: 'Playtest (T): run the map with simulated physics', 'aria-label': 'Playtest' } },
-    h('span', { className: 'amp-tool-glyph', text: '▷' }), h('span', { className: 'amp-tool-key', text: 'T' }));
-  play.addEventListener('click', () => editor.startPlaytest());
+    playIcon, h('span', { className: 'amp-tool-key', text: 'T' }));
+  play.addEventListener('click', () => editor.togglePlaytest());
   el.appendChild(play);
-  return { el, refresh: () => { for (const [id, b] of buttons) b.classList.toggle('is-active', id === editor.tool.id); } };
+  return {
+    el,
+    refresh: () => {
+      for (const [id, b] of buttons) b.classList.toggle('is-active', id === editor.tool.id);
+      // the Play button is a toggle: Pause while the sim runs, Play to start or resume; it stays lit while playtest mode is on
+      const pt = editor.playtest;
+      const running = pt.active && pt.running;
+      playIcon.innerHTML = iconSvg(running ? 'pause' : 'play', 20);
+      play.classList.toggle('is-active', pt.active);
+      play.title = !pt.active ? 'Playtest (T): run the map with simulated physics' : running ? 'Pause playtest (T)' : 'Resume playtest (T)';
+      play.setAttribute('aria-label', running ? 'Pause playtest' : pt.active ? 'Resume playtest' : 'Playtest');
+    },
+  };
 }
 
 export function brushPicker(editor: AmpEditor, atlas: Atlas): Panel {
@@ -163,8 +217,8 @@ export function rulesPanel(editor: AmpEditor, markDirty: () => void): Panel {
   const wall = h('input', { attrs: { type: 'checkbox', 'aria-label': 'Wall jump' } });
   wall.addEventListener('change', () => { rules().wallJump = wall.checked; markDirty(); });
   el.appendChild(h('label', { className: 'amp-row' }, h('span', { text: 'Wall jump' }), wall));
-  const overlay = h('input', { attrs: { type: 'checkbox', disabled: 'disabled', 'aria-label': 'Base level behind the map' } });
-  el.appendChild(h('label', { className: 'amp-row is-off', title: 'Not built yet: the base game level behind the map' }, h('span', { text: 'Base level (soon)' }), overlay));
+  // The base level is not editable here: the map is its own self-contained level (the game plays the level's background behind it).
+  el.appendChild(h('div', { className: 'amp-hint-line', title: 'Editing the real game level (its tiles, objects and courses) is not part of this editor yet', text: 'Maps here are standalone: the base game level is not shown or editable.' }));
   return {
     el,
     refresh() {
@@ -252,7 +306,20 @@ export function propertiesPanel(editor: AmpEditor): Panel {
   const list = h('div', { className: 'amp-options' });
   const del = h('button', { className: 'amp-wide', text: 'Delete (Del)', attrs: { type: 'button' } });
   del.addEventListener('click', () => editor.deleteSelection());
-  el.append(title, hint, list, del);
+  const hiddenBox = h('input', { attrs: { type: 'checkbox', 'aria-label': 'Group starts hidden' } }) as HTMLInputElement;
+  const hiddenText = h('span');
+  const hiddenRow = h('label', { className: 'amp-row', title: 'The group is off when the map starts; a Show or Toggle trigger turns it on.' }, hiddenText, hiddenBox);
+  hiddenRow.hidden = true;
+  const groupOfSel = (): string => { const v = editor.selected()?.value as { group?: unknown } | undefined; return typeof v?.group === 'string' ? v.group : ''; };
+  hiddenBox.addEventListener('change', () => {
+    const g = groupOfSel();
+    if (!g) return;
+    const set = new Set(editor.map.hiddenGroups);
+    if (hiddenBox.checked) set.add(g); else set.delete(g);
+    editor.map.hiddenGroups = [...set];
+    editor.onChange();
+  });
+  el.append(title, hint, list, hiddenRow, del);
   let sig = '';
   let controls: Array<{ def: OptionDef; read(v: unknown, ctx?: OptionCtx): void }> = [];
   return {
@@ -285,6 +352,9 @@ export function propertiesPanel(editor: AmpEditor): Panel {
         });
       }
       for (const c of controls) c.read(value, ctx);
+      const g = sel ? groupOfSel() : '';
+      hiddenRow.hidden = !g;
+      if (g) { hiddenText.textContent = 'Group "' + g + '" starts hidden'; hiddenBox.checked = editor.map.hiddenGroups.includes(g); }
     },
   };
 }

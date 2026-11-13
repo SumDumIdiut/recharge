@@ -11,8 +11,8 @@ export interface Brush {
   label: string;
   /** Picker group heading. */
   group: string;
-  /** What the picker thumbnail shows: the game's tiles, one sprite, a deco image, or a letter. */
-  thumb: { vine?: string; moss?: boolean; set?: string; tile?: string; sprite?: string; deco?: string; matrix?: readonly number[]; glyph?: string; color?: string; arrow?: boolean };
+  /** What the picker thumbnail shows: the game's tiles, one sprite, a deco image, a letter, or a mover's own tile shape. */
+  thumb: { vine?: string; moss?: boolean; set?: string; tile?: string; sprite?: string; deco?: string; matrix?: readonly number[]; glyph?: string; color?: string; arrow?: boolean; mover?: unknown };
 }
 
 /**
@@ -49,6 +49,8 @@ export interface ContentType {
   label: string;
   /** The map layer id (per editor layer: `dataLayer`) this content stores values in (cell key -> value). */
   layer: string;
+  /** Erasing cell (x, y): the exact key and value to write (value undefined: delete the key), when erasing is subtler than clearing the cell - null keeps the default. */
+  eraseAt?(x: number, y: number, map: AmpMap, dl: string): { key: string; value: unknown } | null;
   /** The editor cell a thing covering editor cell (x, y) is stored under, when it is bigger than a cell (moss). Default: the cell itself. */
   cellOf?(x: number, y: number, map?: AmpMap, dl?: string): Cell;
   /** After a selected thing is deleted: tidy what depended on it (`edit` records the change in the same undo step). */

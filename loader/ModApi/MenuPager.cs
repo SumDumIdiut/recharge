@@ -159,6 +159,26 @@ namespace Recharge.ModApi
             catch (Exception e) { Debug.Log("[Recharge] MenuPager layout log failed: " + e.Message); }
         }
 
+        // The per-row pitch of the game's own menu. Settings-minus-Quit alone is fragile: if a
+        // divider/gap sits between those two (or Quit is offset), every mod row inherits the wrong
+        // pitch. Take the smallest positive gap between consecutive native buttons instead, since
+        // a gap can only make a pair look farther apart than one row, never closer.
+        private static float NativeRowSpacing(RectTransform startGame, RectTransform deleteSave, RectTransform settings, RectTransform quit)
+        {
+            var ys = new System.Collections.Generic.List<float>();
+            foreach (var r in new[] { startGame, deleteSave, settings, quit })
+                if (r != null) ys.Add(r.anchoredPosition.y);
+            ys.Sort((a, b) => b.CompareTo(a));
+            float best = 0f;
+            for (int i = 1; i < ys.Count; i++)
+            {
+                float d = ys[i - 1] - ys[i];
+                if (d > 1f && (best <= 0f || d < best)) best = d;
+            }
+            if (best <= 0f) best = settings.anchoredPosition.y - quit.anchoredPosition.y;
+            return best > 0f ? best : 60f;
+        }
+
         private static GameObject Build(GameObject mainBitGo)
         {
             var startGame = FindFirst(mainBitGo.transform, "StartGame", "Resume");
@@ -168,8 +188,7 @@ namespace Recharge.ModApi
             if (startGame == null || settings == null || quit == null) { LogLayout(mainBitGo.transform, "build-failed", null); return null; }
             LogLayout(mainBitGo.transform, "before", null);
 
-            float rowSpacing = settings.anchoredPosition.y - quit.anchoredPosition.y;
-            if (rowSpacing <= 0f) rowSpacing = 60f;
+            float rowSpacing = NativeRowSpacing(startGame, deleteSave, settings, quit);
             float topY = startGame.anchoredPosition.y;
             float originalQuitY = quit.anchoredPosition.y;
 

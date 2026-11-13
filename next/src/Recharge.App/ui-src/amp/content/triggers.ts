@@ -99,6 +99,26 @@ export const triggers: ContentType = {
   roles: ['main'],
   exclusive: false,
   live: true,
+  /** A zone is erased (and picked) anywhere its rectangle covers, by its anchor cell. */
+  cellOf(x, y, map, dl) {
+    if (!map || !dl) return null;
+    const data = map.layers[dl];
+    if (!data) return null;
+    const px = x * CELL + CELL / 2, py = y * CELL + CELL / 2;
+    let best: { key: string; dist: number } | null = null;
+    for (const [key, v] of data) {
+      const t = norm(v), c = parseKey(key);
+      const cx = c.x * CELL + CELL / 2, cy = c.y * CELL + CELL / 2;
+      // half the zone plus half a cell: any cell the tinted rectangle touches
+      const hw = t.w / 2 + CELL / 2, hh = t.h / 2 + CELL / 2;
+      const dx = Math.abs(px - cx), dy = Math.abs(py - cy);
+      if (dx <= hw && dy <= hh) {
+        const dist = Math.hypot(dx, dy);
+        if (!best || dist < best.dist) best = { key, dist };
+      }
+    }
+    return best ? parseKey(best.key) : null;
+  },
   brushes: Object.entries(TRIGGER_KINDS).map(([id, d]): Brush => ({ id, label: d.label, group: d.group, thumb: { glyph: d.glyph, color: d.color } })),
   place: (brush) => newTrigger(brush.id),
   brushOf(value) {

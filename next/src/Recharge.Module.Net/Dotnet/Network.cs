@@ -348,8 +348,63 @@ public class MpNetworkManager : MonoBehaviour
 		return true;
 	}
 
+	// ---- Recharge identity (the app writes this on login; it overrides the Steam persona name) ----
+	// <gameDir>/Recharge/Mods/recharge.multiplayer/identity.json : { "name", "color" (#rrggbb), "gradient": ["#rrggbb", ...] }
+	private static readonly string IdentityPath = System.IO.Path.Combine(
+		System.IO.Path.GetDirectoryName(Application.dataPath) ?? ".", "Recharge", "Mods", "recharge.multiplayer", "identity.json");
+	private static string _idName;
+	private static string _idColor;
+	private static string[] _idGradient;
+	private static long _idStamp = long.MinValue;
+	private static bool _idChecked;
+	private static float _idNextCheck;
+
+	// Re-reads the identity file at most every couple of seconds (the getters below run up to 60x/second in SendState).
+	private static void EnsureIdentity()
+	{
+		if (_idChecked && Time.unscaledTime < _idNextCheck) return;
+		_idChecked = true;
+		_idNextCheck = Time.unscaledTime + 2f;
+		try
+		{
+			if (!File.Exists(IdentityPath))
+			{
+				_idName = null; _idColor = null; _idGradient = null; _idStamp = 0;
+				return;
+			}
+			long stamp = File.GetLastWriteTimeUtc(IdentityPath).Ticks;
+			if (stamp == _idStamp) return;
+			_idStamp = stamp;
+			var jo = JObject.Parse(File.ReadAllText(IdentityPath));
+			_idName = (string)jo["name"];
+			var color = (string)jo["color"];
+			_idColor = IsHexColor(color) ? color : null;
+			_idGradient = null;
+			if (jo["gradient"] is JArray arr)
+			{
+				var stops = new List<string>(arr.Count);
+				foreach (var tok in arr) { var h = (string)tok; if (IsHexColor(h)) stops.Add(h); }
+				if (stops.Count >= 2) _idGradient = stops.ToArray();
+			}
+		}
+		catch { /* keep whatever we last read */ }
+	}
+
+	private static bool IsHexColor(string c)
+	{
+		if (string.IsNullOrEmpty(c) || c.Length != 7 || c[0] != '#') return false;
+		for (int i = 1; i < 7; i++)
+		{
+			char ch = c[i];
+			if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))) return false;
+		}
+		return true;
+	}
+
 	internal static string GetDisplayName()
 	{
+		EnsureIdentity();
+		if (!string.IsNullOrWhiteSpace(_idName)) return _idName;
 		var custom = PlayerPrefs.GetString("MpDisplayName", "");
 		if (!string.IsNullOrWhiteSpace(custom)) return custom;
 		try
@@ -369,8 +424,59 @@ public class MpNetworkManager : MonoBehaviour
 	public const string DefaultNameColorHex = "#FFFFFF";
 	public const string DefaultDotColorHex = "#3399FF";
 
-	public static string GetNameColorHex() => PlayerPrefs.GetString(NameColorPrefsKey, DefaultNameColorHex);
+	public static string GetNameColorHex()
+	{
+		EnsureIdentity();
+		return _idColor ?? PlayerPrefs.GetString(NameColorPrefsKey, DefaultNameColorHex);
+	}
 	public static string GetDotColorHex() => PlayerPrefs.GetString(DotColorPrefsKey, DefaultDotColorHex);
+
+	// TMP/TextMesh rich text for an already-sanitized LOCAL name: a per-character interpolated
+	// gradient when the Recharge identity has 2+ colour stops, else a single <color> span in the
+	// solid name colour. Local-only: names that cross the relay are sanitized there (< and > are
+	// swapped for full-width forms), which would turn these tags into literal text.
+	internal static string BuildLocalNameMarkup(string sanitizedName)
+	{
+		EnsureIdentity();
+		if (_idGradient != null && _idGradient.Length >= 2 && !string.IsNullOrEmpty(sanitizedName))
+			return GradientSpans(sanitizedName, _idGradient);
+		return "<color=" + GetNameColorHex() + ">" + sanitizedName + "</color>";
+	}
+
+	private static string GradientSpans(string text, string[] stops)
+	{
+		var sb = new System.Text.StringBuilder(text.Length * 24);
+		int n = text.Length;
+		for (int i = 0; i < n; i++)
+		{
+			float t = n <= 1 ? 0f : (float)i / (n - 1);
+			sb.Append("<color=").Append(LerpStops(stops, t)).Append('>').Append(text[i]).Append("</color>");
+		}
+		return sb.ToString();
+	}
+
+	// Maps t in [0,1] across the stop list and linearly interpolates the two bounding stops to a #rrggbb.
+	private static string LerpStops(string[] stops, float t)
+	{
+		if (stops.Length == 1) return stops[0];
+		float scaled = Mathf.Clamp01(t) * (stops.Length - 1);
+		int lo = (int)scaled;
+		if (lo >= stops.Length - 1) return stops[stops.Length - 1];
+		float f = scaled - lo;
+		ParseHex(stops[lo], out int r0, out int g0, out int b0);
+		ParseHex(stops[lo + 1], out int r1, out int g1, out int b1);
+		int r = Mathf.RoundToInt(r0 + (r1 - r0) * f);
+		int g = Mathf.RoundToInt(g0 + (g1 - g0) * f);
+		int b = Mathf.RoundToInt(b0 + (b1 - b0) * f);
+		return "#" + r.ToString("X2") + g.ToString("X2") + b.ToString("X2");
+	}
+
+	private static void ParseHex(string hex, out int r, out int g, out int b)
+	{
+		r = System.Convert.ToInt32(hex.Substring(1, 2), 16);
+		g = System.Convert.ToInt32(hex.Substring(3, 2), 16);
+		b = System.Convert.ToInt32(hex.Substring(5, 2), 16);
+	}
 
 	public static void SetNameColorHex(string hex)
 	{

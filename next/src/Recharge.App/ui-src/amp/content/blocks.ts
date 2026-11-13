@@ -2,7 +2,7 @@
 import type { AmpMap } from '../core/map.js';
 import { eachLayer, dataLayer } from '../core/layers.js';
 import { cellKey, parseKey, type Cell, type Json } from '../core/types.js';
-import { TILESETS, quarterTileName, resolveCell, tileSet, type Resolved } from '../tiling.js';
+import { TILESETS, quarterTileName, resolveCell, tileSet, joinGroup, type Resolved } from '../tiling.js';
 import { drawResolved } from '../tileart.js';
 import { mossCovers } from './moss.js';
 import { IDENTITY, type JsonSink } from './sink.js';
@@ -10,9 +10,9 @@ import { ampLayer, type Brush, type ContentType, type DrawEnv, type OptionDef } 
 
 export const BLOCKS = 'blocks';
 
-const GROUPS: Record<string, string> = { ground: 'Ground', blueBlocks: 'Colour swap', orangeBlocks: 'Colour swap', Ilusorywalls: 'Walk-through', OvergrowthDestroyedGround: 'Special' };
+const GROUPS: Record<string, string> = { ground: 'Ground', blueBlocks: 'Colour swap', orangeBlocks: 'Colour swap', Ilusorywalls: 'Walk-through', Background: 'Walk-through', OvergrowthDestroyedGround: 'Special' };
 /** Walk-through tilemaps: the player passes them. */
-const WALK_THROUGH = new Set(['Ilusorywalls']);
+const WALK_THROUGH = new Set(['Ilusorywalls', 'Background']);
 
 /** The game tilemap a set paints on in a layer of this role: the background layer's blocks go on the walk-through Background tilemap. */
 export const tilemapFor = (setId: string, role: string): string => (role === 'back' ? 'Background' : tileSet(setId).tilemap);
@@ -26,7 +26,7 @@ export function resolveAt(map: AmpMap, x: number, y: number, dl: string = BLOCKS
     set,
     (dx, dy) => {
       const n = map.get(dl, cellKey(x + dx, y + dy)) as string | undefined;
-      return n !== undefined && tileSet(n).tilemap === set.tilemap;
+      return n !== undefined && joinGroup(tileSet(n)) === joinGroup(set);
     },
     (dx, dy) => {
       const n = map.get(dl, cellKey(x + dx, y + dy)) as string | undefined;

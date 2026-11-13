@@ -55,6 +55,11 @@ export function toMapJson(map: AmpMap): Json {
   group.reward = reward;
   group.courses = courseList ?? [];
   out.groups = [group, ...groups.slice(1)];
+  // groups that start hidden: only those something still belongs to (the old editor's withGroups)
+  const used = new Set(sink.objects.map((o) => o.group).filter((g) => typeof g === 'string' && g));
+  const hidden = map.hiddenGroups.filter((g) => used.has(g));
+  delete out.hiddenGroups;
+  if (hidden.length) out.hiddenGroups = hidden;
 
   // every data layer as [key, value] pairs, sorted so the same map always writes the same file
   const ampLayers: Record<string, Array<[string, unknown]>> = {};
@@ -62,7 +67,7 @@ export function toMapJson(map: AmpMap): Json {
     if (data.size === 0) continue;
     ampLayers[id] = [...data.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   }
-  out.amp = { version: FORMAT, layerDefs: map.layerDefs, backdrop: map.backdrop, parallax: map.parallax, layers: ampLayers };
+  out.amp = { version: FORMAT, layerDefs: map.layerDefs, backdrop: map.backdrop, parallax: map.parallax, ...(map.hiddenGroups.length ? { hiddenGroups: map.hiddenGroups } : {}), layers: ampLayers };
   return out;
 }
 
@@ -71,9 +76,10 @@ export function fromMapJson(json: Json): AmpMap {
   const map = new AmpMap(typeof json.name === 'string' ? json.name : 'Untitled map');
   map.description = typeof json.description === 'string' ? json.description : '';
   map.raw = json;
-  const amp = json.amp as { layerDefs?: EditorLayer[]; backdrop?: string; parallax?: boolean; layers?: Record<string, Array<[string, unknown]>> } | undefined;
+  const amp = json.amp as { layerDefs?: EditorLayer[]; backdrop?: string; parallax?: boolean; hiddenGroups?: unknown; layers?: Record<string, Array<[string, unknown]>> } | undefined;
   if (amp && typeof amp.backdrop === 'string' && BACKDROPS.some((b) => b.id === amp.backdrop)) map.backdrop = amp.backdrop;
   if (amp && typeof amp.parallax === 'boolean') map.parallax = amp.parallax;
+  if (amp && Array.isArray(amp.hiddenGroups)) map.hiddenGroups = amp.hiddenGroups.filter((g): g is string => typeof g === 'string' && g.length > 0);
   if (amp?.layers && typeof amp.layers === 'object') {
     // version 2 and 3: every data layer of a known content type, as saved
     if (Array.isArray(amp.layerDefs) && amp.layerDefs.length) map.layerDefs = amp.layerDefs.map((l) => ({ ...l }));

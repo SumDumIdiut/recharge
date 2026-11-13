@@ -33,8 +33,13 @@ export interface TileSet {
   family: string;
   /** The game tilemap these tiles are painted on. */
   tilemap: string;
+  /** Which sets autotile into one shape. Same group runs together (plate + panel), different groups get an edge. Defaults to family@tilemap, so sheets that share a family (the Asset plates) set their own. */
+  join?: string;
   plate: Plate;
 }
+
+/** The autotiling group of a set: its own `join`, else its family on its tilemap (so ground + panel join, but ground + dark get an edge). */
+export const joinGroup = (s: TileSet): string => s.join ?? s.family + '@' + s.tilemap;
 
 /** The riveted plate (the game's ground). It has no strip pieces of its own, so a 1-wide run is cut from quarters. */
 export const PLATE: Plate = { TL: 56, T: 57, TR: 58, L: 63, C: 64, R: 65, BL: 70, B: 71, BR: 72, inner: { NE: 66, SE: 59, SW: 60, NW: 67 }, style: 'plate' };
@@ -47,6 +52,12 @@ export const GRATE: Plate = { TL: 1, T: 2, TR: 3, L: 9, C: 10, R: 11, BL: 17, B:
 export const PLATE3: Plate = { TL: 0, T: 1, TR: 2, L: 3, C: 4, R: 5, BL: 6, B: 7, BR: 8 };
 /** FLOOR V2: the same 3x3 with a bar along the top. */
 export const PLATE3_RAIL: Plate = { ...PLATE3, rail: true };
+
+/** The game's Asset_Sheet plate sheets: a 3x3 from three base tile numbers (top/middle/bottom rows), plus an optional 1-high bar row. */
+const assetPlate = (tl: number, l: number, bl: number, bar?: number): Plate => ({
+  TL: tl, T: tl + 1, TR: tl + 2, L: l, C: l + 1, R: l + 2, BL: bl, B: bl + 1, BR: bl + 2,
+  ...(bar ? { h: [bar, bar + 1, bar + 2] as [number, number, number] } : {}),
+});
 
 /** Every set the Amplifier offers, grouped for the picker. Sets on one tilemap join each other; blue and orange are colour-swap blocks. */
 export const TILESETS: TileSet[] = [
@@ -62,6 +73,21 @@ export const TILESETS: TileSet[] = [
   // walk-through ground (the game's illusory walls) and ground that breaks (the overgrowth's destroyed ground)
   { id: 'illusory', label: 'Illusory wall', family: 'ground1_tileset_', tilemap: 'Ilusorywalls', plate: PLATE },
   { id: 'breakable', label: 'Breakable', family: 'ground1_tileset_', tilemap: 'OvergrowthDestroyedGround', plate: PLATE },
+  // Asset-sheet plates: they share the Asset_Sheet family, so each declares its own join group (otherwise they'd all run together).
+  { id: 'lightplate', label: 'Light plate', family: 'Asset_Sheet_', tilemap: 'ground', join: 'asset-light', plate: assetPlate(241, 253, 265, 186) },
+  { id: 'lightfloor', label: 'Light floor plate', family: 'Asset_Sheet_', tilemap: 'ground', join: 'asset-lightfloor', plate: assetPlate(192, 211, 226, 186) },
+  { id: 'assetdark', label: 'Asset dark plate', family: 'Asset_Sheet_', tilemap: 'ground', join: 'asset-dark', plate: assetPlate(238, 250, 262, 235) },
+  { id: 'assetdarkfloor', label: 'Asset dark floor', family: 'Asset_Sheet_', tilemap: 'ground', join: 'asset-darkfloor', plate: assetPlate(189, 207, 223, 235) },
+  { id: 'blueplate', label: 'Blue plate', family: 'Asset_Sheet_', tilemap: 'blueBlocks', join: 'asset-blue', plate: assetPlate(229, 244, 256, 220) },
+  { id: 'bluefloor', label: 'Blue floor plate', family: 'Asset_Sheet_', tilemap: 'blueBlocks', join: 'asset-bluefloor', plate: assetPlate(180, 196, 214, 220) },
+  { id: 'orangeplate', label: 'Orange plate', family: 'Asset_Sheet_', tilemap: 'orangeBlocks', join: 'asset-orange', plate: assetPlate(232, 247, 259, 203) },
+  { id: 'orangefloor', label: 'Orange floor plate', family: 'Asset_Sheet_', tilemap: 'orangeBlocks', join: 'asset-orangefloor', plate: assetPlate(183, 200, 217, 203) },
+  // Background (walk-through) sheets, painted on the Background tilemap.
+  { id: 'bgwall', label: 'Background wall', family: 'TILE V2 Tileset_', tilemap: 'Background', plate: PLATE3 },
+  { id: 'bgfloor', label: 'Background floor', family: 'FLOOR V2 Tileset_', tilemap: 'Background', plate: PLATE3_RAIL },
+  { id: 'bgplate', label: 'Background dark plate', family: 'Asset_Sheet_', tilemap: 'Background', join: 'asset-bg', plate: assetPlate(238, 250, 262, 235) },
+  { id: 'bglight', label: 'Background ground', family: 'ground1_tileset_', tilemap: 'Background', plate: PLATE },
+  { id: 'bgdark', label: 'Dark background ground', family: 'dark_ground_tileset_', tilemap: 'Background', plate: PLATE },
 ];
 
 export function tileSet(id: string): TileSet {

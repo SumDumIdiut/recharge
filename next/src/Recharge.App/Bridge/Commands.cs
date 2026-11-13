@@ -43,6 +43,7 @@ namespace Recharge.App.Bridge
             AccountCommands.Register(registry);
             UploadCommands.Register(registry);
             LobbyCommands.Register(registry);
+            MultiplayerCommands.Register(registry);
             SocialCommands.Register(registry);
             SkinCommands.Register(registry);
             LoaderCommands.Register(registry);
