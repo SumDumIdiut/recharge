@@ -112,6 +112,49 @@ export function rect(a: Cell, b: Cell): Cell[] {
   return out;
 }
 
+/** The border cells of the rectangle between two corners (a hollow frame). */
+export function rectOutline(a: Cell, b: Cell): Cell[] {
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+  const out: Cell[] = [];
+  for (let x = x0; x <= x1; x++) { out.push({ x, y: y0 }); if (y1 !== y0) out.push({ x, y: y1 }); }
+  for (let y = y0 + 1; y < y1; y++) { out.push({ x: x0, y }); if (x1 !== x0) out.push({ x: x1, y }); }
+  return out;
+}
+
+/** The cells of an ellipse fitted to the box between two corners: its outline, or filled. */
+export function ellipse(a: Cell, b: Cell, filled = false): Cell[] {
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, rx = (x1 - x0) / 2, ry = (y1 - y0) / 2;
+  if (rx < 0.5 || ry < 0.5) return filled ? rect(a, b) : rectOutline(a, b);
+  const seen = new Set<string>(), out: Cell[] = [];
+  const add = (x: number, y: number): void => { const k = x + ',' + y; if (!seen.has(k)) { seen.add(k); out.push({ x, y }); } };
+  for (let y = y0; y <= y1; y++) {
+    const dy = (y - cy) / ry;
+    if (Math.abs(dy) > 1) continue;
+    const dx = rx * Math.sqrt(1 - dy * dy), xl = Math.round(cx - dx), xr = Math.round(cx + dx);
+    if (filled) for (let x = xl; x <= xr; x++) add(x, y);
+    else { add(xl, y); add(xr, y); }
+  }
+  if (!filled) for (let x = x0; x <= x1; x++) {
+    const dx = (x - cx) / rx;
+    if (Math.abs(dx) > 1) continue;
+    const dy = ry * Math.sqrt(1 - dx * dx);
+    add(x, Math.round(cy - dy)); add(x, Math.round(cy + dy));
+  }
+  return out;
+}
+
+/** Every occupied cell in the map (any content, any visible/hidden layer), as a de-duplicated list. */
+export function occupiedCells(api: ToolApi): Cell[] {
+  const seen = new Set<string>(), out: Cell[] = [];
+  for (const layer of api.map.layerDefs) for (const c of CONTENT) {
+    if (c.layer === COURSE) continue;
+    const dl = dataLayer(c.layer, layer.id);
+    for (const [k] of api.map.layer(dl)) { if (seen.has(k)) continue; seen.add(k); const o = parseKey(k); out.push({ x: o.x, y: o.y }); }
+  }
+  return out;
+}
+
 /** The topmost placed thing in a cell (layers top first), as a data layer id and value, or null. */
 export function topAt(api: ToolApi, x: number, y: number, bigToo = true): { layer: string; key: string; value: unknown; content: string } | null {
   for (let i = api.map.layerDefs.length - 1; i >= 0; i--) {

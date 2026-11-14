@@ -17,18 +17,63 @@ namespace Recharge.App.Bridge
     {
         public const string ModuleFolder = "recharge.multiplayer";
         public const string IdentityFileName = "identity.json";
+        public const string DisplayFileName = "display.json";
 
         public static void Register(CommandRegistry registry)
         {
             registry.Register("mp.identity", args => Task.FromResult(WriteIdentity(args)));
+            registry.Register("mp.display", args => Task.FromResult(WriteDisplay(args)));
         }
 
         /// <summary>The identity file the in-game Net module reads: &lt;gameDir&gt;/Recharge/Mods/recharge.multiplayer/identity.json.</summary>
-        private static string? IdentityPath()
+        private static string? IdentityPath() => ModuleFile(IdentityFileName);
+
+        private static string? ModuleFile(string name)
         {
             string? game = GameFinder.Find();
             if (string.IsNullOrEmpty(game)) return null;
-            return Path.Combine(game, "Recharge", "Mods", ModuleFolder, IdentityFileName);
+            return Path.Combine(game, "Recharge", "Mods", ModuleFolder, name);
+        }
+
+        /// <summary>mp.display: the per-player opacity prefs the in-game Net module reads for peer name labels and bodies (0..1).</summary>
+        private static JsonNode WriteDisplay(JsonObject args)
+        {
+            string? path = ModuleFile(DisplayFileName);
+            var result = new JsonObject();
+            if (path == null)
+            {
+                result["written"] = JsonBool.False;
+                result["reason"] = new JsonString("game not found");
+                return result;
+            }
+
+            var model = new JsonObject();
+            model["nameOpacity"] = JsonNumber.From(Clamp01(args, "nameOpacity", 0.9));
+            model["playerOpacity"] = JsonNumber.From(Clamp01(args, "playerOpacity", 0.9));
+
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, JsonWriter.Write(model, 0), new UTF8Encoding(false));
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                result["written"] = JsonBool.False;
+                result["reason"] = new JsonString(ex.Message);
+                return result;
+            }
+
+            result["written"] = JsonBool.True;
+            result["path"] = new JsonString(path);
+            return result;
+        }
+
+        private static double Clamp01(JsonObject args, string key, double fallback)
+        {
+            if (!args.TryGetValue(key, out JsonNode node) || node is not JsonNumber num) return fallback;
+            double v;
+            try { v = num.AsDouble(); } catch { return fallback; }
+            return v < 0 ? 0 : v > 1 ? 1 : v;
         }
 
         private static JsonNode WriteIdentity(JsonObject args)

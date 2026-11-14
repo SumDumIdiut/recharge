@@ -30,6 +30,14 @@ export const TRIGGER_KINDS: Record<string, TriggerKind> = {
   respawn: { glyph: '⚑', label: 'Set respawn', group: 'Player', color: '#41f88d', about: 'the player respawns at the marker' },
   zoom: { glyph: '⌕', label: 'Camera zoom', group: 'Camera', color: '#7ad7f0', about: 'zooms the camera while inside' },
   message: { glyph: '✉', label: 'Message', group: 'Camera', color: '#f0f07a', about: 'shows text on screen' },
+  launch: { glyph: '⇡', label: 'Launch pad', group: 'Player', color: '#ff9a3c', about: 'flings the player when they walk in' },
+  boost: { glyph: '⚡', label: 'Stat zone', group: 'Player', color: '#7affc3', about: 'scales run speed / jump / gravity / dash while inside' },
+  abilities: { glyph: '✦', label: 'Set abilities', group: 'Player', color: '#9ae66e', about: 'sets air-jump / air-dash counts and unlocks abilities' },
+  refill: { glyph: '↻', label: 'Refill pad', group: 'Player', color: '#5fd4a0', about: 'tops up the player\'s air jumps and dashes' },
+  slowmo: { glyph: '◷', label: 'Slow-mo zone', group: 'Camera', color: '#b0a0ff', about: 'slows or speeds time while inside' },
+  music: { glyph: '♫', label: 'Music', group: 'Sound', color: '#c792ff', about: 'switches the music when the player walks in' },
+  sfx: { glyph: '♬', label: 'Sound effect', group: 'Sound', color: '#f0a7ff', about: 'plays a game sound effect by name' },
+  wind: { glyph: '≈', label: 'Wind / push', group: 'Player', color: '#8fd0ff', about: 'pushes the player while inside' },
 };
 export const GROUP_KINDS = new Set(['show', 'hide', 'toggle', 'move']);
 export const MARKER_KINDS = new Set(['teleport', 'respawn']);
@@ -42,6 +50,10 @@ export interface Trigger {
   music?: string; background?: 'level' | Background;
   group?: string; dx?: number; dy?: number; time?: number; back?: boolean;
   tx?: number; ty?: number; size?: number; text?: string; seconds?: number;
+  vx?: number; vy?: number; speed?: number; jump?: number; gravity?: number; dash?: number;
+  setJumps?: boolean; airJumps?: number; setDashes?: boolean; airDashes?: number;
+  giveDash?: boolean; giveDoubleJump?: boolean; giveWallJump?: boolean; timeScale?: number;
+  sound?: string; volume?: number; wx?: number; wy?: number;
 }
 
 /** A fresh trigger of a kind with the old editor's defaults (newTrigger). */
@@ -51,6 +63,13 @@ export function newTrigger(kind: string): Trigger {
   if (MARKER_KINDS.has(kind)) Object.assign(t, { tx: 512, ty: 0 });
   if (kind === 'zoom') t.size = 1.5;
   if (kind === 'message') Object.assign(t, { text: 'Hello!', seconds: 3 });
+  if (kind === 'launch') Object.assign(t, { vx: 0, vy: 90 });
+  if (kind === 'boost') Object.assign(t, { speed: 1, jump: 1, gravity: 0.5, dash: 1 });
+  if (kind === 'abilities') Object.assign(t, { setJumps: true, airJumps: 2, setDashes: true, airDashes: 1 });
+  if (kind === 'slowmo') t.timeScale = 0.5;
+  if (kind === 'music') t.music = 'game:Area1Track1';
+  if (kind === 'sfx') Object.assign(t, { sound: '', volume: 1 });
+  if (kind === 'wind') Object.assign(t, { wx: 200, wy: 0 });
   if (GROUP_KINDS.has(kind)) t.group = '1';
   return t;
 }
@@ -66,7 +85,13 @@ export function triggerLabel(t: Trigger): string {
     return [music ? '♪ ' + music : '', bg ? 'bg ' + bg : ''].filter(Boolean).join('  ·  ') || 'TRIGGER (does nothing yet)';
   }
   const extra = GROUP_KINDS.has(k) ? ' "' + (t.group || '?') + '"' + (k === 'move' ? ` by ${t.dx || 0}, ${t.dy || 0}` : '')
-    : k === 'zoom' ? ' x' + (t.size || 1) : k === 'message' ? ': ' + (t.text || '') : '';
+    : k === 'zoom' ? ' x' + (t.size || 1) : k === 'message' ? ': ' + (t.text || '')
+    : k === 'launch' ? ` ${t.vx || 0}, ${t.vy || 0}`
+    : k === 'abilities' ? ' ' + [t.setJumps ? (t.airJumps ?? 0) + 'j' : '', t.setDashes ? (t.airDashes ?? 0) + 'd' : ''].filter(Boolean).join(' ')
+    : k === 'slowmo' ? ' x' + (t.timeScale ?? 0.5)
+    : k === 'music' ? ' ' + (t.music === 'none' ? 'silence' : t.music === 'level' ? 'level' : (GAME_TRACKS.find(([id]) => 'game:' + id === t.music)?.[1] ?? t.music ?? ''))
+    : k === 'sfx' ? ': ' + (t.sound || '?')
+    : k === 'wind' ? ` ${t.wx || 0}, ${t.wy || 0}` : '';
   return d.label.toUpperCase() + extra + (t.once ? ' (once)' : '');
 }
 
@@ -80,6 +105,14 @@ export function triggerJson(t: Trigger, x: number, y: number): Json {
   if (MARKER_KINDS.has(k)) Object.assign(o, { tx: Math.round(x + (t.tx || 0)), ty: Math.round(y + (t.ty || 0)) });
   if (k === 'zoom') o.size = t.size || 1;
   if (k === 'message') Object.assign(o, { text: t.text || '', seconds: t.seconds ?? 3 });
+  if (k === 'launch') Object.assign(o, { vx: t.vx || 0, vy: t.vy || 0 });
+  if (k === 'boost') Object.assign(o, { speed: t.speed ?? 1, jump: t.jump ?? 1, gravity: t.gravity ?? 1, dash: t.dash ?? 1 });
+  if (k === 'abilities') Object.assign(o, { setJumps: !!t.setJumps, airJumps: t.airJumps ?? 1, setDashes: !!t.setDashes, airDashes: t.airDashes ?? 1 },
+    t.giveDash ? { giveDash: true } : {}, t.giveDoubleJump ? { giveDoubleJump: true } : {}, t.giveWallJump ? { giveWallJump: true } : {});
+  if (k === 'slowmo') o.timeScale = t.timeScale ?? 0.5;
+  if (k === 'music') o.music = t.music || '';
+  if (k === 'sfx') Object.assign(o, { sound: t.sound || '', volume: t.volume ?? 1 });
+  if (k === 'wind') Object.assign(o, { wx: t.wx || 0, wy: t.wy || 0 });
   return o;
 }
 
@@ -156,7 +189,27 @@ export const triggers: ContentType = {
     if (MARKER_KINDS.has(k)) out.push(num('tx', 'Marker right', 512, { min: -9999, max: 9999, step: 16, unit: 'units', hint: 'The circle is where the player ends up.' }), num('ty', 'Marker up', 0, { min: -9999, max: 9999, step: 16, unit: 'units' }));
     if (k === 'zoom') out.push(num('size', 'Zoom', 1.5, { min: 0.1, max: 10, step: 0.1, hint: '1 = normal, 2 = see twice as far.' }));
     if (k === 'message') out.push(textOption('text', 'Text', 'Hello!'), num('seconds', 'Seconds on screen', 3, { min: 0.5, max: 600, step: 0.5, unit: 's' }));
-    if (k !== 'zoom' && k !== 'kill') out.push(boolOption('once', 'Only the first time', false));
+    if (k === 'launch') out.push(num('vx', 'Launch right', 0, { min: -999, max: 999, step: 5, unit: 'u/s' }), num('vy', 'Launch up', 90, { min: -999, max: 999, step: 5, unit: 'u/s', hint: 'Negative sends the player down.' }));
+    if (k === 'boost') out.push(
+      num('speed', 'Run speed', 1, { min: 0, max: 5, step: 0.1, unit: 'x', hint: '1 = normal.' }),
+      num('jump', 'Jump height', 1, { min: 0, max: 5, step: 0.1, unit: 'x' }),
+      num('gravity', 'Gravity', 1, { min: 0, max: 5, step: 0.1, unit: 'x', hint: 'Below 1 = floaty, above 1 = heavy.' }),
+      num('dash', 'Dash speed', 1, { min: 0, max: 5, step: 0.1, unit: 'x' }),
+    );
+    if (k === 'abilities') out.push(
+      { ...boolOption('setJumps', 'Set air jumps', true), get: (v) => norm(v).setJumps ?? true, set: (v, x) => patch(v, { setJumps: !!x }) },
+      num('airJumps', 'Air jumps', 2, { min: 0, max: 10, step: 1, hint: 'How many mid-air jumps the player gets.' }),
+      { ...boolOption('setDashes', 'Set air dashes', true), get: (v) => norm(v).setDashes ?? true, set: (v, x) => patch(v, { setDashes: !!x }) },
+      num('airDashes', 'Air dashes', 1, { min: 0, max: 10, step: 1 }),
+      { ...boolOption('giveDash', 'Unlock dash', false), get: (v) => norm(v).giveDash ?? false, set: (v, x) => patch(v, { giveDash: !!x }) },
+      { ...boolOption('giveDoubleJump', 'Unlock double jump', false), get: (v) => norm(v).giveDoubleJump ?? false, set: (v, x) => patch(v, { giveDoubleJump: !!x }) },
+      { ...boolOption('giveWallJump', 'Unlock wall jump', false), get: (v) => norm(v).giveWallJump ?? false, set: (v, x) => patch(v, { giveWallJump: !!x }) },
+    );
+    if (k === 'slowmo') out.push(num('timeScale', 'Time scale', 0.5, { min: 0.05, max: 10, step: 0.05, unit: 'x', hint: 'Below 1 = slow-mo, above 1 = fast-forward.' }));
+    if (k === 'music') out.push({ ...selectOption('music', 'Music', 'game:Area1Track1', MUSIC_CHOICES), get: (v) => norm(v).music ?? '', set: (v, x) => patch(v, { music: String(x) }) });
+    if (k === 'sfx') out.push(textOption('sound', 'Sound name', '', { hint: 'The name of a game sound clip (e.g. a jump or coin sound).' }), num('volume', 'Volume', 1, { min: 0, max: 1, step: 0.05 }));
+    if (k === 'wind') out.push(num('wx', 'Push right', 0, { min: -2000, max: 2000, step: 20, unit: 'u/s' }), num('wy', 'Push up', 0, { min: -2000, max: 2000, step: 20, unit: 'u/s', hint: 'A steady push while the player is inside.' }));
+    if (k !== 'zoom' && k !== 'kill' && k !== 'boost' && k !== 'slowmo' && k !== 'wind') out.push(boolOption('once', 'Only the first time', false));
     out.push(num('w', 'Width', 256, { min: 16, max: 9999, step: 16, unit: 'units' }), num('h', 'Height', 256, { min: 16, max: 9999, step: 16, unit: 'units' }));
     return out;
   },

@@ -74,6 +74,7 @@ namespace Recharge.Relay
         public string Name = "";
         public string NameColor = "#FFFFFF";
         public string DotColor = "#3399FF";
+        public string NameGradient = ""; // comma-separated #rrggbb stops, empty = solid
         public int? LobbyId;
         public long MsgWindowStart;
         public int MsgCount;
@@ -415,6 +416,10 @@ namespace Recharge.Relay
                         {
                             c.DotColor = dcs.Value;
                         }
+                        if (msg.TryGetValue("nameGradient", out var ng) && ng is JsonString ngs)
+                        {
+                            c.NameGradient = SanitizeGradient(ngs.Value);
+                        }
                         var st = new ClientState();
                         if (TryFinite(msg, "x", out var xraw)) st.X = ClampNum(xraw, 0, -1e9, 1e9); else st.X = 0;
                         if (TryFinite(msg, "y", out var yraw)) st.Y = ClampNum(yraw, 0, -1e9, 1e9); else st.Y = 0;
@@ -672,6 +677,7 @@ namespace Recharge.Relay
                         po["name"] = new JsonString(mc.Name);
                         po["nameColor"] = new JsonString(mc.NameColor);
                         po["dotColor"] = new JsonString(mc.DotColor);
+                        if (mc.NameGradient.Length > 0) po["nameGradient"] = new JsonString(mc.NameGradient);
                         po["x"] = JsonNumber.From(st.X);
                         po["y"] = JsonNumber.From(st.Y);
                         po["facingRight"] = st.FacingRight ? JsonBool.True : JsonBool.False;
@@ -716,6 +722,16 @@ namespace Recharge.Relay
             o["type"] = new JsonString("welcome");
             o["id"] = JsonNumber.From(id);
             return JsonWriter.Write(o, 0);
+        }
+
+        // A trusted packed gradient: up to 6 #rrggbb stops joined by commas, else "". Only clean hex is forwarded.
+        private static string SanitizeGradient(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var parts = s.Split(',');
+            if (parts.Length < 2 || parts.Length > 6) return "";
+            foreach (var p in parts) if (!HexColor.IsMatch(p)) return "";
+            return string.Join(",", parts);
         }
 
         private static string SanitizeName(string s, int maxLen)

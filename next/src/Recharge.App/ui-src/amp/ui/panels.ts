@@ -8,7 +8,8 @@ import { rotMatrix } from '../content/sink.js';
 import { parseKey } from '../core/types.js';
 import { parseCourseKey } from '../content/coursedata.js';
 import type { AmpEditor } from '../editor.js';
-import { TOOLS } from '../tools/index.js';
+import { TOOLS, TOOL_GROUPS } from '../tools/index.js';
+import { openNodeCreator } from '../nodes/creator.js';
 import { h } from '../../dom.js';
 import { autotilePick, resolveCell, tileSet } from '../tiling.js';
 import { drawResolved } from '../tileart.js';
@@ -40,6 +41,11 @@ const TOOL_ICONS: Record<string, string> = {
   zippath: '<path d="M4 16 C8 9 12 9 16 4"/><circle cx="4" cy="16" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10.4" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="4" r="1.4" fill="currentColor" stroke="none"/>',
   play: '<path d="M6.5 4.5 L15.5 10 L6.5 15.5 Z" fill="currentColor" stroke="none"/>',
   pause: '<rect x="5.5" y="4.5" width="3" height="11" rx="0.6" fill="currentColor" stroke="none"/><rect x="11.5" y="4.5" width="3" height="11" rx="0.6" fill="currentColor" stroke="none"/>',
+  line: '<path d="M4.5 15.5 L15.5 4.5"/><circle cx="4.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>',
+  frame: '<rect x="4" y="5.5" width="12" height="9"/>',
+  ellipse: '<ellipse cx="10" cy="10" rx="7" ry="5"/>',
+  ellipseFill: '<ellipse cx="10" cy="10" rx="7" ry="5" fill="currentColor" stroke="none"/>',
+  replace: '<path d="M4 7.5 H13"/><path d="M11 5.5 L13 7.5 L11 9.5"/><path d="M16 12.5 H7"/><path d="M9 10.5 L7 12.5 L9 14.5"/>',
 };
 
 /** The inner SVG markup for a named icon (a dot stands in until one is drawn). Static constants only. */
@@ -131,17 +137,29 @@ export function thumbCanvas(atlas: Atlas, brush: Brush, size = 40): HTMLCanvasEl
 export function toolPalette(editor: AmpEditor): Panel {
   const el = h('div', { className: 'amp-toolbar', attrs: { role: 'toolbar', 'aria-label': 'Tools' } });
   const buttons = new Map<string, HTMLButtonElement>();
-  for (const t of TOOLS) {
-    const b = h('button', { className: 'amp-tool', attrs: { type: 'button', title: t.label + ' (' + t.hotkey + ') - ' + t.hint, 'aria-label': t.label } },
+  const toolButton = (t: (typeof TOOLS)[number]): HTMLButtonElement => {
+    const b = h('button', { className: 'amp-tool', attrs: { type: 'button', title: t.label + ' (' + t.hotkey + ') — ' + t.hint, 'aria-label': t.label } },
       toolIcon(t.id, 20),
+      h('span', { className: 'amp-tool-label', text: t.label }),
       h('span', { className: 'amp-tool-key', text: t.hotkey }));
     b.addEventListener('click', () => editor.setTool(t.id));
     buttons.set(t.id, b);
-    el.appendChild(b);
+    return b;
+  };
+  // Grouped sections, in order, with a labelled heading each; any ungrouped tools fall under "Tools".
+  const seen = new Set<string>();
+  const order = [...TOOL_GROUPS, 'Tools'];
+  for (const group of order) {
+    const inGroup = TOOLS.filter((t) => (t.group ?? 'Tools') === group);
+    if (!inGroup.length) continue;
+    el.appendChild(h('div', { className: 'amp-tool-group', text: group }));
+    for (const t of inGroup) { el.appendChild(toolButton(t)); seen.add(t.id); }
   }
+  for (const t of TOOLS) if (!seen.has(t.id)) el.appendChild(toolButton(t));
+  el.appendChild(h('div', { className: 'amp-tool-group', text: 'Play' }));
   const playIcon = toolIcon('play', 20);
   const play = h('button', { className: 'amp-tool amp-play', attrs: { type: 'button', title: 'Playtest (T): run the map with simulated physics', 'aria-label': 'Playtest' } },
-    playIcon, h('span', { className: 'amp-tool-key', text: 'T' }));
+    playIcon, h('span', { className: 'amp-tool-label', text: 'Playtest' }), h('span', { className: 'amp-tool-key', text: 'T' }));
   play.addEventListener('click', () => editor.togglePlaytest());
   el.appendChild(play);
   return {
@@ -161,22 +179,34 @@ export function toolPalette(editor: AmpEditor): Panel {
 
 export function brushPicker(editor: AmpEditor, atlas: Atlas): Panel {
   const el = h('div', { className: 'amp-picker' });
-  const items: Array<{ content: string; brush: Brush; node: HTMLElement }> = [];
-  for (const c of PAINTABLE) {
-    const groups = new Map<string, Brush[]>();
-    for (const b of c.brushes) (groups.get(b.group) || groups.set(b.group, []).get(b.group) as Brush[]).push(b);
-    for (const [group, list] of groups) {
-      el.appendChild(h('div', { className: 'amp-group', text: group }));
-      const grid = h('div', { className: 'amp-grid' });
-      for (const b of list) {
-        const node = h('button', { className: 'amp-brush', attrs: { type: 'button', title: b.label } }, thumbCanvas(atlas, b), h('span', { className: 'amp-brush-name', text: b.label }));
-        node.addEventListener('click', () => editor.setBrush(c.id, b.id));
-        items.push({ content: c.id, brush: b, node });
-        grid.appendChild(node);
+  const list = h('div', { className: 'amp-picker-list' });
+  let items: Array<{ content: string; brush: Brush; node: HTMLElement }> = [];
+  const applyActive = (): void => { for (const it of items) it.node.classList.toggle('is-active', it.content === editor.state.content && it.brush.id === editor.state.brush); };
+  function renderBrushes(): void {
+    list.replaceChildren();
+    items = [];
+    for (const c of PAINTABLE) {
+      const groups = new Map<string, Brush[]>();
+      for (const b of c.brushes) (groups.get(b.group) || groups.set(b.group, []).get(b.group) as Brush[]).push(b);
+      for (const [group, glist] of groups) {
+        list.appendChild(h('div', { className: 'amp-group', text: group }));
+        const grid = h('div', { className: 'amp-grid' });
+        for (const b of glist) {
+          const node = h('button', { className: 'amp-brush', attrs: { type: 'button', title: b.label } }, thumbCanvas(atlas, b), h('span', { className: 'amp-brush-name', text: b.label }));
+          node.addEventListener('click', () => editor.setBrush(c.id, b.id));
+          items.push({ content: c.id, brush: b, node });
+          grid.appendChild(node);
+        }
+        list.appendChild(grid);
       }
-      el.appendChild(grid);
     }
+    applyActive();
   }
+  renderBrushes();
+  el.appendChild(list);
+  const newNode = h('button', { className: 'amp-new-node', attrs: { type: 'button', title: 'Create a custom node from behaviours' }, text: '+ New node' });
+  newNode.addEventListener('click', () => openNodeCreator(() => renderBrushes()));
+  el.appendChild(newNode);
   const options = h('div', { className: 'amp-options' });
   const sizeLabel = h('span', { className: 'amp-opt', text: '' });
   const size = h('div', { className: 'amp-row' }, h('span', { text: 'Brush size' }));
@@ -196,7 +226,7 @@ export function brushPicker(editor: AmpEditor, atlas: Atlas): Panel {
   return {
     el,
     refresh() {
-      for (const it of items) it.node.classList.toggle('is-active', it.content === editor.state.content && it.brush.id === editor.state.brush);
+      applyActive();
       sizeLabel.textContent = editor.state.size + '×' + editor.state.size;
     },
   };

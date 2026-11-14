@@ -110,14 +110,15 @@ export const ampPage: PageModule = {
     };
     saveButton.addEventListener('click', () => void save());
 
-    // Test in game: save the map to the library, then start the game modded with the play.map intent (the same path the library's Play uses)
+    // Test in game: save the map to the library, then start the game modded into it (game.testMap uses the loader's
+    // autoplay.txt on a fresh launch so the map opens as a new game, not the main menu; it falls back to a live intent).
     const testInGame = async (): Promise<void> => {
       testButton.disabled = true;
       try {
         await save();
         if (!mapId || dirty) return;
         status.textContent = 'Launching the game…';
-        await call('game.launch', { modded: true, intent: { kind: 'play.map', args: { folder: mapId } } });
+        await call('game.testMap', { folder: mapId });
         status.textContent = 'Launched ' + mapId;
         toast('Launching IGTAP into ' + (nameInput.value.trim() || mapId) + '. Other mods are off until you close the game.', 'success');
       } catch (error) {

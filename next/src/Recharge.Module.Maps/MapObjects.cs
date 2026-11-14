@@ -26,6 +26,7 @@ internal static class MapObjects
         ["freeSpike"] = SpawnFreeSpike,
         ["sign"] = SpawnSign,
         ["trigger"] = SpawnTrigger,
+        ["node"] = NodeSpawner.SpawnNode,
         ["customSprite"] = SpawnCustomSprite,
         ["gameSprite"] = SpawnGameSprite,
         ["clone"] = SpawnClone,
@@ -409,6 +410,23 @@ internal static class MapObjects
         t.Target = w.LevelPoint(obj["tx"]?.Value<float>() ?? 0f, obj["ty"]?.Value<float>() ?? 0f);
         t.Zoom = Mathf.Max(0.2f, obj["size"]?.Value<float>() ?? 1f);
         t.Text = obj["text"]?.Value<string>();
+        t.Velocity = new Vector2(obj["vx"]?.Value<float>() ?? 0f, obj["vy"]?.Value<float>() ?? 0f);
+        t.SpeedMul = obj["speed"]?.Value<float>() ?? 1f;
+        t.JumpMul = obj["jump"]?.Value<float>() ?? 1f;
+        t.GravityMul = obj["gravity"]?.Value<float>() ?? 1f;
+        t.DashMul = obj["dash"]?.Value<float>() ?? 1f;
+        t.AirJumps = obj["airJumps"]?.Value<int>() ?? 1;
+        t.AirDashes = obj["airDashes"]?.Value<int>() ?? 1;
+        t.SetJumps = obj["setJumps"]?.Value<bool>() ?? false;
+        t.SetDashes = obj["setDashes"]?.Value<bool>() ?? false;
+        t.GiveDash = obj["giveDash"]?.Value<bool>() ?? false;
+        t.GiveDoubleJump = obj["giveDoubleJump"]?.Value<bool>() ?? false;
+        t.GiveWallJump = obj["giveWallJump"]?.Value<bool>() ?? false;
+        t.TimeScale = obj["timeScale"]?.Value<float>() ?? 0.5f;
+        t.Music = obj["music"]?.Value<string>();
+        t.Sound = obj["sound"]?.Value<string>();
+        t.Volume = obj["volume"]?.Value<float>() ?? 1f;
+        t.Wind = new Vector2(obj["wx"]?.Value<float>() ?? 0f, obj["wy"]?.Value<float>() ?? 0f);
     }
 
     // One of the game's own sprites the level never places (its plant art), by name, centred where the editor put it.

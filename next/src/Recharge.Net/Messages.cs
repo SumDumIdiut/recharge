@@ -136,6 +136,7 @@ namespace Recharge.Net
         public string Name = "";
         public string NameColor = NetText.DefaultNameColor;
         public string DotColor = NetText.DefaultDotColor;
+        public string NameGradient = ""; // comma-separated #rrggbb stops, empty = solid NameColor
 
         public override JsonObject ToJson()
         {
@@ -149,6 +150,7 @@ namespace Recharge.Net
             o["name"] = J.S(Name);
             o["nameColor"] = J.S(NameColor);
             o["dotColor"] = J.S(DotColor);
+            if (NameGradient.Length > 0) o["nameGradient"] = J.S(NameGradient);
             return o;
         }
         public static StateMsg FromJson(JsonObject o) => new StateMsg
@@ -156,6 +158,7 @@ namespace Recharge.Net
             X = J.Num(o, "x"), Y = J.Num(o, "y"), FacingRight = J.Bool(o, "facingRight"),
             AnimState = J.Int(o, "animState"), AnimSpeed = J.Num(o, "animSpeed", 1), IsPaused = J.Bool(o, "isPaused"),
             Name = J.Str(o, "name"), NameColor = J.Str(o, "nameColor", NetText.DefaultNameColor), DotColor = J.Str(o, "dotColor", NetText.DefaultDotColor),
+            NameGradient = J.Str(o, "nameGradient", ""),
         };
     }
 
@@ -290,6 +293,7 @@ namespace Recharge.Net
         public string Name = "";
         public string NameColor = NetText.DefaultNameColor;
         public string DotColor = NetText.DefaultDotColor;
+        public string NameGradient = ""; // comma-separated #rrggbb stops, empty = solid NameColor
         public double X, Y;
         public bool FacingRight;
         public int AnimState;
@@ -303,6 +307,7 @@ namespace Recharge.Net
             o["name"] = J.S(Name);
             o["nameColor"] = J.S(NameColor);
             o["dotColor"] = J.S(DotColor);
+            if (NameGradient.Length > 0) o["nameGradient"] = J.S(NameGradient);
             o["x"] = J.N(X);
             o["y"] = J.N(Y);
             o["facingRight"] = J.B(FacingRight);
@@ -315,6 +320,7 @@ namespace Recharge.Net
         {
             Id = J.Int(o, "id"), Name = J.Str(o, "name"),
             NameColor = J.Str(o, "nameColor", NetText.DefaultNameColor), DotColor = J.Str(o, "dotColor", NetText.DefaultDotColor),
+            NameGradient = J.Str(o, "nameGradient", ""),
             X = J.Num(o, "x"), Y = J.Num(o, "y"), FacingRight = J.Bool(o, "facingRight"),
             AnimState = J.Int(o, "animState"), AnimSpeed = J.Num(o, "animSpeed", 1), IsPaused = J.Bool(o, "isPaused"),
         };

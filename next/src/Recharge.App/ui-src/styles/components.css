@@ -450,6 +450,11 @@
 .switch[aria-checked="true"] { border-color: var(--green); background: color-mix(in srgb, var(--green) 20%, var(--panel)); }
 .switch[aria-checked="true"] .switch-knob { transform: translateX(22px); background: var(--green); }
 
+.settings-stack { display: flex; flex-direction: column; gap: 20px; }
+.settings-slider { display: flex; align-items: center; gap: 12px; }
+.settings-range { width: 220px; accent-color: var(--green); cursor: pointer; }
+.settings-slider-value { min-width: 44px; text-align: right; color: var(--green); font-variant-numeric: tabular-nums; }
+
 .about-list { display: grid; grid-template-columns: 140px 1fr; gap: 6px 16px; margin: 0 0 14px; }
 .about-list dt { color: var(--text-dim); }
 .about-list dd { margin: 0; }

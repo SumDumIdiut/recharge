@@ -41,6 +41,10 @@ internal class MapDefinition
     [JsonProperty("startZone")] public int StartZone;
     [JsonProperty("areaState")] public string AreaState;
 
+    // Custom node definitions carried by the map (the editor writes them under amp.nodeDefs; a top-level nodeDefs also works).
+    [JsonProperty("amp")] public Newtonsoft.Json.Linq.JObject Amp;
+    [JsonProperty("nodeDefs")] public Newtonsoft.Json.Linq.JObject NodeDefs;
+
     public static MapDefinition Read(string mapId)
     {
         var path = Path.Combine(MapPaths.MapsDir, mapId, "map.json");

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using Recharge.Net;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -16,6 +17,7 @@ public class MpPlayerState
 	public string name;
 	public string nameColor;
 	public string dotColor;
+	public string nameGradient; // packed "#rrggbb,#rrggbb,..." or null/empty for solid
 }
 
 public class MpLobbyInfo
@@ -83,6 +85,41 @@ internal static class MpGhostSpace
 	}
 }
 
+// Local opacity prefs the app writes: <gameDir>/Recharge/Mods/recharge.multiplayer/display.json { "nameOpacity", "playerOpacity" } (0..1).
+internal static class MpDisplay
+{
+	private static readonly string Path = System.IO.Path.Combine(
+		System.IO.Path.GetDirectoryName(Application.dataPath) ?? ".", "Recharge", "Mods", "recharge.multiplayer", "display.json");
+	public static float NameAlpha = 0.9f;
+	public static float PlayerAlpha = 0.9f;
+	private static long _stamp = long.MinValue;
+	private static float _nextCheck;
+
+	// Re-reads at most every 2s (ApplySnapshot calls this each snapshot).
+	public static void Tick()
+	{
+		if (Time.unscaledTime < _nextCheck) return;
+		_nextCheck = Time.unscaledTime + 2f;
+		try
+		{
+			if (!System.IO.File.Exists(Path)) { _stamp = 0; return; }
+			long stamp = System.IO.File.GetLastWriteTimeUtc(Path).Ticks;
+			if (stamp == _stamp) return;
+			_stamp = stamp;
+			var jo = JObject.Parse(System.IO.File.ReadAllText(Path));
+			NameAlpha = Clamp01(jo["nameOpacity"], NameAlpha);
+			PlayerAlpha = Clamp01(jo["playerOpacity"], PlayerAlpha);
+		}
+		catch { }
+	}
+
+	private static float Clamp01(JToken tok, float fallback)
+	{
+		if (tok == null) return fallback;
+		try { return Mathf.Clamp01((float)tok); } catch { return fallback; }
+	}
+}
+
 internal static class MpGhostManager
 {
 	private class GhostEntry
@@ -95,6 +132,8 @@ internal static class MpGhostManager
 		public float LastSeenTime;
 		public Animator Anim;
 		public TextMesh Label;
+		public string LabelText = "?";
+		public string[] NameStops; // gradient stops, null = solid
 		public GameObject PausedIndicator;
 		public readonly List<SpriteRenderer> Body = new List<SpriteRenderer>(); // tinted with the player's colour
 		public Transform[] Dash = new Transform[0];
@@ -141,23 +180,27 @@ internal static class MpGhostManager
 		bool doLog = Time.unscaledTime - _lastSnapshotLogTime > 2f;
 		if (doLog) _lastSnapshotLogTime = Time.unscaledTime;
 
+		MpDisplay.Tick();
 		var seen = new HashSet<int>();
 		foreach (var p in players)
 		{
 			if (doLog) Debug.Log($"[MpGhost] snapshot id={p.id} name={p.name} pos=({p.x:F1},{p.y:F1}) paused={p.isPaused}");
 			seen.Add(p.id);
 			var pos = MpOrigin.ToLocal(p.x, p.y);
-			var dotColor = ParseColorOr(p.dotColor, new Color(0.4f, 0.6f, 1f, 0.9f));
-			var nameColor = ParseColorOr(p.nameColor, new Color(1f, 1f, 1f, 0.9f));
+			var dotColor = ParseColorOr(p.dotColor, new Color(0.4f, 0.6f, 1f, MpDisplay.PlayerAlpha));
+			var nameColor = ParseColorOr(p.nameColor, new Color(1f, 1f, 1f, MpDisplay.NameAlpha));
+			var stops = ParseStops(p.nameGradient);
 			if (!_ghosts.TryGetValue(p.id, out var g))
 			{
-				g = Spawn(p.name, pos, dotColor, nameColor);
+				g = Spawn(p.name, pos, dotColor, nameColor, stops);
 				_ghosts[p.id] = g;
 				var counts = _indicatorCounts.TryGetValue(p.id, out var c) ? c : (0, 0);
 				ApplyIndicators(g, counts.Item1, counts.Item2);
 			}
 			else
 			{
+				g.LabelText = string.IsNullOrEmpty(p.name) ? "?" : p.name;
+				g.NameStops = stops;
 				ApplyColors(g, dotColor, nameColor);
 			}
 			g.TargetWorldX = p.x;
@@ -237,16 +280,45 @@ internal static class MpGhostManager
 	{
 		foreach (var partSr in g.Body)
 			if (partSr != null) partSr.color = dotColor;
-		if (g.Label != null) g.Label.color = nameColor;
+		UpdateLabel(g, nameColor);
 	}
 
-	private static GhostEntry Spawn(string name, Vector3 spawnPos, Color dotColor, Color nameColor)
+	// A packed "#rrggbb,#rrggbb,..." into stops, or null when solid. The relay already validates; this is a light re-check.
+	private static string[] ParseStops(string packed)
+	{
+		if (string.IsNullOrEmpty(packed)) return null;
+		var parts = packed.Split(',');
+		if (parts.Length < 2) return null;
+		foreach (var p in parts) if (p.Length != 7 || p[0] != '#') return null;
+		return parts;
+	}
+
+	// Renders the ghost's name: a per-character gradient (rich text, alpha from the opacity pref) when it has stops, else solid.
+	private static void UpdateLabel(GhostEntry g, Color nameColor)
+	{
+		var tm = g.Label;
+		if (tm == null) return;
+		if (g.NameStops != null && g.NameStops.Length >= 2)
+		{
+			byte a = (byte)Mathf.RoundToInt(Mathf.Clamp01(MpDisplay.NameAlpha) * 255f);
+			tm.richText = true;
+			tm.text = MpNetworkManager.GradientSpansRGBA(MpNetworkManager.SanitizeForRichText(g.LabelText), g.NameStops, a);
+		}
+		else
+		{
+			tm.richText = false;
+			tm.text = g.LabelText;
+			tm.color = nameColor;
+		}
+	}
+
+	private static GhostEntry Spawn(string name, Vector3 spawnPos, Color dotColor, Color nameColor, string[] stops)
 	{
 		var root = new GameObject("MPGhost_" + (string.IsNullOrEmpty(name) ? "?" : name));
 		Object.DontDestroyOnLoad(root);
 		root.transform.position = spawnPos;
 
-		var entry = new GhostEntry { Root = root, LastSeenTime = Time.unscaledTime };
+		var entry = new GhostEntry { Root = root, LastSeenTime = Time.unscaledTime, LabelText = string.IsNullOrEmpty(name) ? "?" : name, NameStops = stops };
 		SpriteRenderer sr = null;
 		Animator anim = null;
 		Transform spriteTransform = null;
@@ -319,12 +391,12 @@ internal static class MpGhostManager
 		labelGo.transform.SetParent(root.transform, false);
 		labelGo.transform.localPosition = new Vector3(0f, 75f, 0f);
 		var tm = labelGo.AddComponent<TextMesh>();
-		tm.text = string.IsNullOrEmpty(name) ? "?" : name;
 		tm.fontSize = 48;
 		tm.characterSize = 8f;
 		tm.anchor = TextAnchor.MiddleCenter;
 		tm.alignment = TextAlignment.Center;
-		tm.color = nameColor;
+		entry.Label = tm;
+		UpdateLabel(entry, nameColor);
 
 		var pausedGo = new GameObject("PausedIndicator");
 		pausedGo.transform.SetParent(root.transform, false);
@@ -341,7 +413,6 @@ internal static class MpGhostManager
 		pausedGo.SetActive(false);
 
 		entry.SpriteTransform = spriteTransform;
-		entry.Label = tm;
 		entry.Anim = anim;
 		entry.PausedIndicator = pausedGo;
 		return entry;

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading.Tasks;
 using Recharge.App.Game;
 using Recharge.Core.Json;
@@ -49,6 +50,27 @@ namespace Recharge.App.Bridge
             {
                 string kind = KindOf(args);
                 return (JsonNode)await session().SendIntentAsync(kind, args.TryGetValue("args", out JsonNode a) ? a : null).ConfigureAwait(false);
+            });
+            // game.testMap: the map maker's "Test in game". For a fresh launch it writes the loader's autoplay.txt, so the Maps
+            // module plays the map as a new game the moment it loads (robust - no menu-timing race). If the game is already up,
+            // it falls back to the live play.map intent.
+            registry.Register("game.testMap", async args =>
+            {
+                if (!args.TryGetValue("folder", out JsonNode f) || f is not JsonString fs || fs.Value.Length == 0)
+                    throw new ArgumentException("missing string argument: folder");
+                string folder = fs.Value;
+                string game = GameFinder.Find() ?? throw new InvalidOperationException("io: IGTAP wasn't found");
+                string? blocked = intentBlocker?.Invoke();
+                if (blocked != null) throw new InvalidOperationException(blocked);
+                if (Recharge.App.Library.GameProcess.IsRunning(game))
+                {
+                    var intentArgs = new JsonObject { ["folder"] = new JsonString(folder) };
+                    return (JsonNode)await session().LaunchAsync("play.map", intentArgs, true).ConfigureAwait(false);
+                }
+                string autoplay = Path.Combine(game, "Recharge", "Mods", "recharge.maps", "autoplay.txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(autoplay)!);
+                File.WriteAllText(autoplay, folder);
+                return (JsonNode)await session().LaunchAsync(null, null, true).ConfigureAwait(false);
             });
             registry.Register("game.state", args => Task.FromResult<JsonNode>(session().State()));
             // Is this game folder's IGTAP running (whether or not it's linked to the app), and which build is deployed.

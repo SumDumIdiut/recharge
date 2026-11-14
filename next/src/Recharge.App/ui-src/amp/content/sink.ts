@@ -15,6 +15,8 @@ export class JsonSink {
   private tiles = new Map<string, Placed[]>();
   private mats: number[][] = [[...IDENTITY]];
   objects: Json[] = [];
+  /** Node manifests used in the map, by id, written into the file's `amp.nodeDefs` so it carries its custom nodes. */
+  nodeDefs: Record<string, Json> = {};
   /** Fields for the first group (start/end/spawn, gates...). */
   group: Json = {};
   /** Player rules a content type needs switched on (merged into the file's `player`). */

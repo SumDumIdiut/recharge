@@ -7,6 +7,7 @@
  */
 import { CONTENT } from './content/index.js';
 import { JsonSink } from './content/sink.js';
+import { registerNodeDefs } from './nodes/content.js';
 import { AmpMap } from './core/map.js';
 import { contentLayerOf, type EditorLayer } from './core/layers.js';
 import type { Json } from './core/types.js';
@@ -67,7 +68,7 @@ export function toMapJson(map: AmpMap): Json {
     if (data.size === 0) continue;
     ampLayers[id] = [...data.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   }
-  out.amp = { version: FORMAT, layerDefs: map.layerDefs, backdrop: map.backdrop, parallax: map.parallax, ...(map.hiddenGroups.length ? { hiddenGroups: map.hiddenGroups } : {}), layers: ampLayers };
+  out.amp = { version: FORMAT, layerDefs: map.layerDefs, backdrop: map.backdrop, parallax: map.parallax, ...(map.hiddenGroups.length ? { hiddenGroups: map.hiddenGroups } : {}), ...(Object.keys(sink.nodeDefs).length ? { nodeDefs: sink.nodeDefs } : {}), layers: ampLayers };
   return out;
 }
 
@@ -76,7 +77,8 @@ export function fromMapJson(json: Json): AmpMap {
   const map = new AmpMap(typeof json.name === 'string' ? json.name : 'Untitled map');
   map.description = typeof json.description === 'string' ? json.description : '';
   map.raw = json;
-  const amp = json.amp as { layerDefs?: EditorLayer[]; backdrop?: string; parallax?: boolean; hiddenGroups?: unknown; layers?: Record<string, Array<[string, unknown]>> } | undefined;
+  const amp = json.amp as { layerDefs?: EditorLayer[]; backdrop?: string; parallax?: boolean; hiddenGroups?: unknown; nodeDefs?: Record<string, unknown>; layers?: Record<string, Array<[string, unknown]>> } | undefined;
+  if (amp?.nodeDefs) registerNodeDefs(amp.nodeDefs);
   if (amp && typeof amp.backdrop === 'string' && BACKDROPS.some((b) => b.id === amp.backdrop)) map.backdrop = amp.backdrop;
   if (amp && typeof amp.parallax === 'boolean') map.parallax = amp.parallax;
   if (amp && Array.isArray(amp.hiddenGroups)) map.hiddenGroups = amp.hiddenGroups.filter((g): g is string => typeof g === 'string' && g.length > 0);

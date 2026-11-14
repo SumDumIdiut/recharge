@@ -115,10 +115,10 @@ internal class MpInGameChatHud : MonoBehaviour
 		var logGo = new GameObject("LogPanel", typeof(RectTransform), typeof(CanvasGroup), typeof(Image));
 		logGo.transform.SetParent(canvasGo.transform, false);
 		var logRt = (RectTransform)logGo.transform;
-		logRt.anchorMin = new Vector2(1, 1);
-		logRt.anchorMax = new Vector2(1, 1);
-		logRt.pivot = new Vector2(1, 1);
-		logRt.anchoredPosition = new Vector2(-20, -20);
+		logRt.anchorMin = new Vector2(1, 0);
+		logRt.anchorMax = new Vector2(1, 0);
+		logRt.pivot = new Vector2(1, 0);
+		logRt.anchoredPosition = new Vector2(-20, 60);
 		logRt.sizeDelta = new Vector2(460, 150);
 		logGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.45f);
 		logGo.AddComponent<RectMask2D>();
@@ -138,10 +138,10 @@ internal class MpInGameChatHud : MonoBehaviour
 		_inputRow = new GameObject("ChatInputRow", typeof(RectTransform), typeof(Image));
 		_inputRow.transform.SetParent(canvasGo.transform, false);
 		var inputRt = (RectTransform)_inputRow.transform;
-		inputRt.anchorMin = new Vector2(1, 1);
-		inputRt.anchorMax = new Vector2(1, 1);
-		inputRt.pivot = new Vector2(1, 1);
-		inputRt.anchoredPosition = new Vector2(-20, -176);
+		inputRt.anchorMin = new Vector2(1, 0);
+		inputRt.anchorMax = new Vector2(1, 0);
+		inputRt.pivot = new Vector2(1, 0);
+		inputRt.anchoredPosition = new Vector2(-20, 20);
 		inputRt.sizeDelta = new Vector2(460, 34);
 		_inputRow.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.6f);
 
@@ -921,9 +921,8 @@ internal class MpPanelUI : MonoBehaviour
 		var sb = new System.Text.StringBuilder("Players: ").Append(MpNetworkManager.BuildLocalNameMarkup(selfName));
 		foreach (var p in others)
 		{
-			var hexRe = !string.IsNullOrEmpty(p.nameColor) && p.nameColor.Length == 7 && p.nameColor[0] == '#' ? p.nameColor : "#FFFFFF";
 			var safeName = MpNetworkManager.SanitizeForRichText(p.name);
-			sb.Append(", <color=").Append(hexRe).Append('>').Append(safeName).Append("</color>");
+			sb.Append(", ").Append(MpNetworkManager.BuildRemoteNameMarkup(safeName, p.nameColor, p.nameGradient));
 			if (p.isPaused) sb.Append(" (paused)");
 		}
 		_playersLabel.text = sb.ToString();

@@ -173,7 +173,7 @@ public class MpNetworkManager : MonoBehaviour
 		{
 			var list = new List<MpPlayerState>(players.Count);
 			foreach (var p in players)
-				list.Add(new MpPlayerState { id = p.Id, x = p.X, y = p.Y, facingRight = p.FacingRight, animState = p.AnimState, animSpeed = (float)p.AnimSpeed, isPaused = p.IsPaused, name = p.Name, nameColor = p.NameColor, dotColor = p.DotColor });
+				list.Add(new MpPlayerState { id = p.Id, x = p.X, y = p.Y, facingRight = p.FacingRight, animState = p.AnimState, animSpeed = (float)p.AnimSpeed, isPaused = p.IsPaused, name = p.Name, nameColor = p.NameColor, dotColor = p.DotColor, nameGradient = p.NameGradient });
 			LastSnapshotPlayers = list;
 			MpGhostManager.ApplySnapshot(list);
 		});
@@ -431,6 +431,13 @@ public class MpNetworkManager : MonoBehaviour
 	}
 	public static string GetDotColorHex() => PlayerPrefs.GetString(DotColorPrefsKey, DefaultDotColorHex);
 
+	// The Recharge identity's gradient stops as a packed "#rrggbb,#rrggbb,..." for the wire, or "" when the name is solid.
+	public static string GetNameGradientPacked()
+	{
+		EnsureIdentity();
+		return _idGradient != null && _idGradient.Length >= 2 ? string.Join(",", _idGradient) : "";
+	}
+
 	// TMP/TextMesh rich text for an already-sanitized LOCAL name: a per-character interpolated
 	// gradient when the Recharge identity has 2+ colour stops, else a single <color> span in the
 	// solid name colour. Local-only: names that cross the relay are sanitized there (< and > are
@@ -443,6 +450,22 @@ public class MpNetworkManager : MonoBehaviour
 		return "<color=" + GetNameColorHex() + ">" + sanitizedName + "</color>";
 	}
 
+	// Rich text for a REMOTE player (name already sanitized): their transmitted gradient when it has 2+ valid stops, else a solid span.
+	internal static string BuildRemoteNameMarkup(string sanitizedName, string nameColor, string packedGradient)
+	{
+		if (!string.IsNullOrEmpty(packedGradient) && !string.IsNullOrEmpty(sanitizedName))
+		{
+			var stops = packedGradient.Split(',');
+			if (stops.Length >= 2)
+			{
+				bool ok = true;
+				foreach (var s in stops) if (!IsHexColor(s)) { ok = false; break; }
+				if (ok) return GradientSpans(sanitizedName, stops);
+			}
+		}
+		return "<color=" + (IsHexColor(nameColor) ? nameColor : DefaultNameColorHex) + ">" + sanitizedName + "</color>";
+	}
+
 	private static string GradientSpans(string text, string[] stops)
 	{
 		var sb = new System.Text.StringBuilder(text.Length * 24);
@@ -451,6 +474,20 @@ public class MpNetworkManager : MonoBehaviour
 		{
 			float t = n <= 1 ? 0f : (float)i / (n - 1);
 			sb.Append("<color=").Append(LerpStops(stops, t)).Append('>').Append(text[i]).Append("</color>");
+		}
+		return sb.ToString();
+	}
+
+	// Per-character gradient spans with an explicit alpha byte, for the ghost head-labels (so the opacity slider still applies).
+	internal static string GradientSpansRGBA(string text, string[] stops, byte alpha)
+	{
+		var sb = new System.Text.StringBuilder(text.Length * 26);
+		string aa = alpha.ToString("X2");
+		int n = text.Length;
+		for (int i = 0; i < n; i++)
+		{
+			float t = n <= 1 ? 0f : (float)i / (n - 1);
+			sb.Append("<color=").Append(LerpStops(stops, t)).Append(aa).Append('>').Append(text[i]).Append("</color>");
 		}
 		return sb.ToString();
 	}
@@ -557,7 +594,7 @@ public class MpNetworkManager : MonoBehaviour
 			Debug.Log($"[MpNet] send state localId={LocalPlayerId} world=({worldX:F1},{worldY:F1}) paused={isPaused} lobby={CurrentLobbyId}");
 		}
 
-		_net.SendState(worldX, worldY, _localPlayer.facingRight, animState, animSpeed, isPaused, GetDisplayName(), GetNameColorHex(), GetDotColorHex());
+		_net.SendState(worldX, worldY, _localPlayer.facingRight, animState, animSpeed, isPaused, GetDisplayName(), GetNameColorHex(), GetDotColorHex(), GetNameGradientPacked());
 	}
 
 	// Air dashes/jumps left go out through the relay's generic game_msg

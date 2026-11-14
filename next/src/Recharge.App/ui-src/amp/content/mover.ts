@@ -189,21 +189,68 @@ function drawStrip(env: DrawEnv, x1: number, y1: number, x2: number, y2: number,
   ctx.restore();
 }
 
+/** The zip track, tiling the game's own track sprite along the line (one 32px unit = one cell). */
+function drawTrack(env: DrawEnv, x1: number, y1: number, x2: number, y2: number, size: number, alpha: number): void {
+  const ctx = env.ctx;
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  if (len < 0.5) return;
+  const prev = ctx.globalAlpha;
+  ctx.save();
+  ctx.globalAlpha = prev * alpha;
+  ctx.translate(x1, y1);
+  ctx.rotate(Math.atan2(y2 - y1, x2 - x1));
+  const src = env.atlas.source('obj_ziptrack');
+  if (src) {
+    ctx.imageSmoothingEnabled = false;
+    const uw = src.w * (size / 32), uh = src.h * (size / 32);
+    for (let t = 0; t < len; t += uw) {
+      const w = Math.min(uw, len - t);
+      ctx.drawImage(src.img, src.x, src.y, src.w * (w / uw), src.h, t, -uh / 2, w, uh);
+    }
+  } else {
+    ctx.fillStyle = '#48586a';
+    ctx.fillRect(0, -size * 0.1, len, size * 0.2);
+  }
+  ctx.restore();
+  ctx.globalAlpha = prev;
+}
+
+/** The zip's drive mechanism as the prefab builds it: a mount circle at the centre and four gears one tile out (top/bottom/left/right). */
+function drawMechanism(env: DrawEnv, cx: number, cy: number, size: number): void {
+  drawCog(env, cx - size, cy, size * 0.9);
+  drawCog(env, cx + size, cy, size * 0.9);
+  drawCog(env, cx, cy - size, size * 0.9);
+  drawCog(env, cx, cy + size, size * 0.9);
+  drawPoint(env, cx, cy, size * 0.95);
+}
+
+/** The mount circle at a track end, the game's own track-point sprite. */
+function drawPoint(env: DrawEnv, x: number, y: number, size: number, alpha = 1): void {
+  const ctx = env.ctx;
+  const d = size * 1.05;
+  const prev = ctx.globalAlpha;
+  ctx.globalAlpha = prev * alpha;
+  const src = env.atlas.source('obj_zippoint');
+  if (src) { ctx.imageSmoothingEnabled = false; ctx.drawImage(src.img, src.x, src.y, src.w, src.h, x - d / 2, y - d / 2, d, d); }
+  else { ctx.fillStyle = 'rgba(140,140,150,' + alpha + ')'; ctx.beginPath(); ctx.arc(x, y, size * 0.36, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalAlpha = prev;
+}
+
 /** The zip's cog node, drawn big like the game does: the mount the platform rides out to. */
 function drawCog(env: DrawEnv, x: number, y: number, size: number, alpha = 1): void {
   const ctx = env.ctx;
-  const src = env.atlas.source('obj_zipnode');
-  if (!src) {
-    ctx.fillStyle = 'rgba(220,114,236,' + alpha + ')';
-    ctx.beginPath(); ctx.arc(x, y, size * 0.5, 0, Math.PI * 2); ctx.fill();
-    return;
-  }
   const cog = size * 1.05;
   const prev = ctx.globalAlpha;
   ctx.globalAlpha = prev * alpha;
-  ctx.imageSmoothingEnabled = false;
-  // the gear sits inside the 96 x 96 sprite with padding: crop its own box so it fills the node
-  ctx.drawImage(src.img, src.x + 25, src.y + 25, 48, 46, x - cog / 2, y - cog / 2, cog, cog);
+  const src = env.atlas.source('obj_zipnode');
+  if (src) {
+    // the gear sprite, like the game: crop its own box inside the 96 x 96 so it fills the mount
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src.img, src.x + 25, src.y + 25, 48, 46, x - cog / 2, y - cog / 2, cog, cog);
+  } else {
+    ctx.fillStyle = 'rgba(160,160,160,' + alpha + ')';
+    ctx.beginPath(); ctx.arc(x, y, size * 0.42, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.globalAlpha = prev;
 }
 
@@ -298,43 +345,22 @@ export const movers: ContentType = {
     const x0 = cx + b.minX * size - size / 2, y0 = cy - (b.maxY + 0.5) * size;
     ctx.save();
     if (isDrawn(m)) {
-      // the drawn route: a curve (or the raw polyline) through the shape, a node at each drawn cell, and the cog at the end
+      // the game's beam track along the drawn route (segment by segment), the ghost platform, the mount cog at the end
       const pts = routePoints(m);
-      const stroke = (alpha: number): void => {
-        ctx.strokeStyle = 'rgba(220,114,236,' + alpha + ')';
-        ctx.lineWidth = Math.max(1, size / 12);
-        ctx.setLineDash([size / 3, size / 4]);
-        ctx.beginPath();
-        ctx.moveTo(cx + pts[0][0] * size, cy - pts[0][1] * size);
-        if (m.smooth === false) for (let i = 1; i < pts.length; i++) ctx.lineTo(cx + pts[i][0] * size, cy - pts[i][1] * size);
-        else for (let i = 1; i < pts.length - 1; i++) {
-          const mx = cx + (pts[i][0] + pts[i + 1][0]) * size / 2, my = cy - (pts[i][1] + pts[i + 1][1]) * size / 2;
-          ctx.quadraticCurveTo(cx + pts[i][0] * size, cy - pts[i][1] * size, mx, my);
-        }
-        ctx.lineTo(cx + pts[pts.length - 1][0] * size, cy - pts[pts.length - 1][1] * size);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      };
-      stroke(0.8);
-      // cells you drew: a node at each waypoint (the samples just shape the line)
-      ctx.fillStyle = 'rgba(220,114,236,0.95)';
-      for (const [px, py] of m.path!) {
-        ctx.beginPath();
-        ctx.arc(cx + px * size, cy - py * size, Math.max(2, size / 7), 0, Math.PI * 2);
-        ctx.fill();
-      }
-      body(env, x0 + m.dx * size, y0 - m.dy * size, m, size, 0.35);
-      if (env.atlas.has('obj_zipnode')) drawCog(env, cx + m.dx * size, cy - m.dy * size, size);
-      stroke(0.35);
+      for (let i = 1; i < pts.length; i++) drawTrack(env, cx + pts[i - 1][0] * size, cy - pts[i - 1][1] * size, cx + pts[i][0] * size, cy - pts[i][1] * size, size, 1);
+      body(env, x0 + m.dx * size, y0 - m.dy * size, m, size, 0.3);
+      const last = pts[pts.length - 1];
+      drawPoint(env, cx + last[0] * size, cy - last[1] * size, size);
     } else {
-      // the route: the game's riveted rail strip repeated along the line, the cog at the end, the ghost platform riding it
+      // the game's beam track from the platform to the end, the ghost platform, the mount point at the end
       const ex = cx + m.dx * size, ey = cy - m.dy * size;
-      drawStrip(env, cx, cy, ex, ey, size, 0.8);
-      body(env, x0 + m.dx * size, y0 - m.dy * size, m, size, 0.35);
-      if (env.atlas.has('obj_zipnode')) drawCog(env, ex, ey, size);
+      drawTrack(env, cx, cy, ex, ey, size, 1);
+      body(env, x0 + m.dx * size, y0 - m.dy * size, m, size, 0.3);
+      drawPoint(env, ex, ey, size);
     }
     ctx.restore();
     body(env, x0, y0, m, size, 1);
+    drawMechanism(env, cx, cy, size); // the drive mechanism (centre mount + four gears), like the prefab
     ctx.strokeStyle = m.auto ? '#dc72ec' : '#ffd24a';
     ctx.lineWidth = Math.max(1, size / 16);
     ctx.strokeRect(x0, y0, (b.maxX - b.minX + 1) * size, (b.maxY - b.minY + 1) * size);

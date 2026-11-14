@@ -3,7 +3,8 @@ import { call, describeError, type GameInfo } from '../bridge.js';
 import { button } from '../components/button.js';
 import { toast } from '../components/toast.js';
 import { openGameFolder, pickFolder, setGamePath, getSettings, type LoaderStatus } from './api.js';
-import { panel, row, wrap, type Section } from './ui.js';
+import { panel, row, wrap, sliderControl, type Section } from './ui.js';
+import { getMpDisplay, setMpDisplay } from '../account/display.js';
 
 const LOADER_WORDS: Record<string, string> = {
   installed: 'Installed',
@@ -98,6 +99,22 @@ function loaderRow(): HTMLElement {
   return outer;
 }
 
+/** Opacity sliders for how other players' name tags and bodies appear in-game. */
+function multiplayerPanel(): HTMLElement {
+  const current = getMpDisplay();
+  const names = row(
+    'Player name opacity',
+    "How solid other players' name tags look in-game.",
+    sliderControl(current.nameOpacity, (v) => setMpDisplay({ nameOpacity: v }))
+  );
+  const bodies = row(
+    'Other player opacity',
+    "How solid other players' characters look in-game.",
+    sliderControl(current.playerOpacity, (v) => setMpDisplay({ playerOpacity: v }))
+  );
+  return panel('Multiplayer', names, bodies);
+}
+
 export function gameSection(): Section {
   let current: string | null = null;
   const value = h('span', { className: 'path-value', text: 'Looking for IGTAP…' });
@@ -163,5 +180,6 @@ export function gameSection(): Section {
   const typed = row('Type a path', 'If the folder chooser is not available, enter the folder here.', wrap(field, use));
   typed.querySelector('.setting-copy')?.appendChild(error);
   void refresh();
-  return { node: panel('Game', location, typed, loaderRow()) };
+  const node = h('div', { className: 'settings-stack' }, panel('Game', location, typed, loaderRow()), multiplayerPanel());
+  return { node };
 }

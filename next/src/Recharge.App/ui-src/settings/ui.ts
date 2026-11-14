@@ -32,6 +32,23 @@ export function setSwitch(toggle: HTMLElement, on: boolean): void {
   toggle.setAttribute('aria-checked', on ? 'true' : 'false');
 }
 
+/** A 0..1 slider shown as a percentage; calls onInput with the 0..1 value as it moves. */
+export function sliderControl(value: number, onInput: (next: number) => void): HTMLElement {
+  const box = h('div', { className: 'settings-slider' });
+  const input = h('input', { className: 'settings-range', attrs: { type: 'range', min: '0', max: '100', step: '1', 'aria-label': 'Opacity' } }) as HTMLInputElement;
+  const readout = h('span', { className: 'settings-slider-value' });
+  const pct = Math.round(Math.min(1, Math.max(0, value)) * 100);
+  input.value = String(pct);
+  readout.textContent = pct + '%';
+  input.addEventListener('input', () => {
+    const p = Number(input.value);
+    readout.textContent = p + '%';
+    onInput(p / 100);
+  });
+  box.append(input, readout);
+  return box;
+}
+
 export interface Section {
   node: HTMLElement;
   dispose?: () => void;

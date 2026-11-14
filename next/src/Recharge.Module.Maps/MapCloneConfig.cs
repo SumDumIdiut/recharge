@@ -218,6 +218,24 @@ internal static class MapCloneConfig
     }
 
     /// <summary>The drawn route's track: the level's own track sprite as a copy per stretch of the route, turned and sized along the curve.</summary>
+    // Drops points on a straight run (direction barely changes), keeping corners, curve bends and both ends, so a drawn route
+    // becomes a few long legs instead of dozens of tiny ones.
+    private static List<Vector2> SimplifyPath(List<Vector2> pts)
+    {
+        if (pts == null || pts.Count <= 2) return pts;
+        var outp = new List<Vector2> { pts[0] };
+        for (int i = 1; i < pts.Count - 1; i++)
+        {
+            var a = pts[i] - outp[outp.Count - 1];
+            var b = pts[i + 1] - pts[i];
+            float al = a.magnitude, bl = b.magnitude;
+            if (al < 0.001f) continue;
+            if (bl < 0.001f || Vector2.Dot(a / al, b / bl) < 0.9995f) outp.Add(pts[i]);
+        }
+        outp.Add(pts[pts.Count - 1]);
+        return outp;
+    }
+
     private static void BuildZipTrack(GameObject clone, List<Vector2> samples)
     {
         Transform track = null;
@@ -242,7 +260,7 @@ internal static class MapCloneConfig
             var to = samples[s];
             var seg = to - from;
             var len = seg.magnitude;
-            if (len < 24f) continue;
+            if (len < 4f) continue;
             var dir = seg / len;
             var piece = UnityEngine.Object.Instantiate(track.gameObject, track.parent);
             piece.name = "ZipTrackSeg_" + s;
@@ -275,6 +293,7 @@ internal static class MapCloneConfig
         var used = new HashSet<Vector2Int>();
         var ordered = new List<Vector2Int>(cellSet);
         ordered.Sort((a, b) => a.y != b.y ? a.y.CompareTo(b.y) : a.x.CompareTo(b.x));
+        var bodies = new List<SpriteRenderer>();
         int bodyN = 0;
         foreach (var start in ordered)
         {
@@ -301,10 +320,15 @@ internal static class MapCloneConfig
             art.drawMode = sr.drawMode == SpriteDrawMode.Simple ? SpriteDrawMode.Simple : SpriteDrawMode.Tiled;
             art.size = new Vector2(rw / scale.x, rh / scale.y);
             art.sharedMaterial = sr.sharedMaterial;
-            art.color = sr.color;
+            art.color = new Color(sr.color.r, sr.color.g, sr.color.b, 1f);
             art.sortingLayerID = sr.sortingLayerID;
             art.sortingOrder = sr.sortingOrder;
+            bodies.Add(art);
         }
+        // The game sets/fades the native sprite's colour after clone time; mirror its live RGB onto the bodies (kept opaque so the platform stays visible).
+        var sync = mover.gameObject.AddComponent<MapPlatformTint>();
+        sync.Source = sr;
+        sync.Bodies = bodies.ToArray();
         int n = 0;
         foreach (var r in tiles)
         {
@@ -319,6 +343,26 @@ internal static class MapCloneConfig
         }
         sr.enabled = false;
         if (box != null) box.enabled = false;
+    }
+
+    /** True when the per-tile rects fill a full solid rectangle; then the native ZipMover sprite is resized, not rebuilt. */
+    private static bool RectsAreSolidRectangle(JArray rects)
+    {
+        var cells = new HashSet<long>();
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+        foreach (var token in rects)
+        {
+            if (token is not JArray r || r.Count != 4) return false;
+            if (Mathf.RoundToInt(r[2].Value<float>()) != TileCells || Mathf.RoundToInt(r[3].Value<float>()) != TileCells) return false;
+            int cx = Mathf.RoundToInt(r[0].Value<float>() / TileCells), cy = Mathf.RoundToInt(r[1].Value<float>() / TileCells);
+            cells.Add(((long)cx << 32) ^ (uint)cy);
+            if (cx < minX) minX = cx;
+            if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy;
+            if (cy > maxY) maxY = cy;
+        }
+        long w = maxX - minX + 1, h = maxY - minY + 1;
+        return cells.Count == w * h;
     }
 
     /** A mover tile spans this many level units (the editor emits one rect per tile). */
@@ -355,8 +399,9 @@ internal static class MapCloneConfig
             var auto = zip["auto"]?.Value<bool>() == true;
             if (zip["path"] is JArray pathArr && pathArr.Count >= 2 && pathArr[0] is JArray)
             {
-                // A drawn route: dense samples of the curve as phases, riding out along it and back; the platform bounds from corner to its whole shape.
-                drawnSamples = SampleZipPath(pathArr, zip["smooth"]?.Value<bool>() ?? true);
+                // A drawn route: dense curve samples, simplified so straight runs are one long phase/segment (dense phases make the
+                // native mover ease in/out dozens of times = jitter, and sub-24-unit track pieces get skipped = no visible track).
+                drawnSamples = SimplifyPath(SampleZipPath(pathArr, zip["smooth"]?.Value<bool>() ?? true));
                 if (drawnSamples == null) drawnSamples = new List<Vector2>();
                 if (drawnSamples.Count >= 2) posField.SetValue(mover, ZipPathPositions(positions, elemType, position, time, drawnSamples, zip, auto));
             }
@@ -410,10 +455,9 @@ internal static class MapCloneConfig
                 else if (tr.name == "ZipNode (1)") tr.localPosition = end - dir * 5f;
             }
         }
-        // A platform built from grate tiles: rectangles of the game's own grate
-        // hung off the moving part, each with its collider. Colliders on a child
-        // belong to the moving part's body, so the game carries the player on them.
-        if (zip["rects"] is JArray rects && rects.Count > 0)
+        // An irregular (non-rectangular) platform: rebuild it from per-tile slices. A plain rectangle keeps the native
+        // ZipMover sprite (its cogs and movement) and is just resized below, which is smooth and correctly sized.
+        if (zip["rects"] is JArray rects && rects.Count > 0 && !RectsAreSolidRectangle(rects))
         {
             BuildPlatform(mover, rects);
             return;
@@ -480,4 +524,19 @@ internal class MapZoneArtKeeper : MonoBehaviour
     private SpriteRenderer _sr;
     private void Awake() => _sr = GetComponent<SpriteRenderer>();
     private void LateUpdate() { if (_sr != null && _sr.enabled) _sr.enabled = false; }
+}
+
+// Mirrors the native platform sprite's live RGB onto the custom-shape bodies, forced opaque so a custom zip
+// stays visible even when the game sets or fades the original's colour (and alpha) after clone time.
+internal class MapPlatformTint : MonoBehaviour
+{
+    public SpriteRenderer Source;
+    public SpriteRenderer[] Bodies;
+    private void LateUpdate()
+    {
+        if (Source == null || Bodies == null) return;
+        var c = Source.color;
+        for (int i = 0; i < Bodies.Length; i++)
+            if (Bodies[i] != null) Bodies[i].color = new Color(c.r, c.g, c.b, 1f);
+    }
 }

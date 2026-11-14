@@ -2,6 +2,7 @@ import { h } from './dom.js';
 import { icon } from './icons.js';
 import { initAccountChip } from './account/index.js';
 import { initMpIdentity } from './account/identity.js';
+import { initMpDisplay } from './account/display.js';
 import { initUpdateBar } from './components/updateBar.js';
 import { initBell } from './account/notifications.js';
 import { unreadBadge } from './social/unread.js';
@@ -175,6 +176,7 @@ export function initShell(options: ShellOptions = {}): void {
   const account = document.getElementById('topbar-account');
   if (account) initAccountChip(account);
   initMpIdentity();
+  initMpDisplay();
 
   window.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {

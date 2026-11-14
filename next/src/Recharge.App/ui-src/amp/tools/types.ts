@@ -55,6 +55,8 @@ export interface Tool {
   label: string;
   /** Single key (upper case) that selects the tool. */
   hotkey: string;
+  /** Toolbar section this tool is shown under (Select, Draw, Shapes, Paths, Course). */
+  group?: string;
   cursor: string;
   /** One line shown in the status bar while active. */
   hint: string;

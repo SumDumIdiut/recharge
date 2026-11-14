@@ -5,6 +5,7 @@ import { course } from './course.js';
 import { deco } from './deco.js';
 import { moss } from './moss.js';
 import { movers } from './mover.js';
+import { nodes } from '../nodes/content.js';
 import { objects } from './objects.js';
 import { triggers } from './triggers.js';
 import { spikes } from './spikes.js';
@@ -13,7 +14,7 @@ import { contentLayerOf } from '../core/layers.js';
 import type { Brush, ContentType } from './types.js';
 
 /** Drawn in this order within a layer (later on top); the course draws last as an overlay. */
-export const CONTENT: ContentType[] = [blocks, spikes, vines, moss, arrows, objects, movers, deco, triggers, course];
+export const CONTENT: ContentType[] = [blocks, spikes, vines, moss, arrows, objects, movers, deco, triggers, nodes, course];
 /** The ones with cells and picker entries. */
 export const PAINTABLE: ContentType[] = CONTENT.filter((c) => c.brushes.length > 0);
 
