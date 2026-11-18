@@ -6,7 +6,7 @@ const MB = 1024 * 1024;
 /** The hub's limits (forum.js LIM), checked here first so people get an answer before the upload. */
 export const LIM = {
   title: 120, post: 5000, reply: 3000, bio: 300, pronouns: 20, link: 200, links: 3,
-  postImages: 4, replyImages: 2, image: 5 * MB, avatar: 2 * MB, q: 100,
+  postImages: 4, replyImages: 2, image: 5 * MB, video: 32 * MB, avatar: 2 * MB, q: 100,
 } as const;
 
 export interface Choice { value: string; label: string }
@@ -61,14 +61,33 @@ export function validateReply(body: string): string | null {
 }
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const VIDEO_TYPES = ['video/mp4', 'video/webm'];
 
-/** Checks picked image files against a count and size limit. */
-export function validateImages(files: Array<{ type: string; size: number; name?: string }>, max: number, maxBytes: number = LIM.image): string | null {
-  if (files.length > max) return 'At most ' + max + ' image' + (max === 1 ? '' : 's') + ' allowed.';
+/** True for a hub attachment path/URL that points at a video, so it renders as <video> rather than <img>. */
+export function isVideoPath(path: string): boolean {
+  return /\.(mp4|webm)(\?|$)/i.test(path);
+}
+
+/** Checks picked attachments against a count and size limit. With allowVideo, one MP4/WebM (up to LIM.video) is allowed too. */
+export function validateImages(
+  files: Array<{ type: string; size: number; name?: string }>,
+  max: number,
+  maxBytes: number = LIM.image,
+  options: { allowVideo?: boolean } = {},
+): string | null {
+  if (files.length > max) return 'At most ' + max + ' attachment' + (max === 1 ? '' : 's') + ' allowed.';
+  let videos = 0;
   for (const file of files) {
-    if (!IMAGE_TYPES.includes(file.type)) return 'Images must be PNG, JPEG, GIF or WebP.';
-    if (file.size <= 0) return 'An image is empty.';
-    if (file.size > maxBytes) return 'An image is larger than ' + Math.round(maxBytes / MB) + ' MB.';
+    const isImage = IMAGE_TYPES.includes(file.type);
+    const isVideo = !!options.allowVideo && VIDEO_TYPES.includes(file.type);
+    if (!isImage && !isVideo) return options.allowVideo ? 'Attachments must be PNG, JPEG, GIF, WebP, MP4 or WebM.' : 'Images must be PNG, JPEG, GIF or WebP.';
+    if (file.size <= 0) return 'An attachment is empty.';
+    if (isVideo) {
+      if (++videos > 1) return 'At most one video allowed.';
+      if (file.size > LIM.video) return 'A video is larger than ' + Math.round(LIM.video / MB) + ' MB.';
+    } else if (file.size > maxBytes) {
+      return 'An image is larger than ' + Math.round(maxBytes / MB) + ' MB.';
+    }
   }
   return null;
 }

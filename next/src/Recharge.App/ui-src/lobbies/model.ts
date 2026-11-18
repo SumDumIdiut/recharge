@@ -12,6 +12,8 @@ export interface Lobby {
   /** A validated #rrggbb (or gradient) colour, or null. */
   hostColor: string | null;
   count: number;
+  /** The relay's own member cap for this lobby, when it sends one (else MAX_PLAYERS). */
+  cap: number;
   hard: boolean;
   mapHubId: string | null;
   mapName: string | null;
@@ -40,12 +42,14 @@ export function normalizeLobby(raw: unknown): Lobby | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== 'number' || !Number.isFinite(r.id)) return null;
   const count = typeof r.count === 'number' && Number.isFinite(r.count) ? Math.max(0, Math.floor(r.count)) : 0;
+  const cap = typeof r.cap === 'number' && Number.isFinite(r.cap) && r.cap >= count && r.cap > 0 ? Math.floor(r.cap) : MAX_PLAYERS;
   return {
     id: r.id,
     name: text(r.name).trim() || 'Untitled lobby',
     hostName: text(r.hostName).trim() || 'Someone',
     hostColor: validNameColor(r.hostColor),
     count,
+    cap,
     hard: r.hard === true,
     mapHubId: optText(r.mapHubId),
     mapName: optText(r.mapName),
@@ -110,14 +114,15 @@ export function cardData(lobby: Lobby, hubMaps: Item[] | null, installed: Instal
   const hubMap = lobby.mapHubId && hubMaps ? hubMaps.find((m) => m.id === lobby.mapHubId) || null : null;
   const hasMap = !!(lobby.mapHubId || lobby.mapName);
   const installedHere = hubMap && installed ? findInstalled(hubMap, installed, hubMaps || []) : null;
+  const full = lobby.count >= lobby.cap;
   return {
     id: lobby.id,
     name: lobby.name,
     hostName: lobby.hostName,
     hostColor: lobby.hostColor,
     count: lobby.count,
-    playersLabel: lobby.count + '/' + MAX_PLAYERS,
-    full: lobby.count >= MAX_PLAYERS,
+    playersLabel: lobby.count + '/' + lobby.cap,
+    full,
     hard: lobby.hard,
     mapName: lobby.mapName || (hubMap ? hubMap.name : null),
     hubMap,
@@ -126,8 +131,8 @@ export function cardData(lobby: Lobby, hubMaps: Item[] | null, installed: Instal
     picture: hubMap && hubMap.gallery.length > 0 ? hubMap.gallery[0] : null,
     mapReady: !hasMap || !!installedHere,
     getMapRoute: hubMap && !installedHere ? itemRoute(hubMap) : null,
-    joinDisabled: lobby.count >= MAX_PLAYERS,
-    joinTitle: lobby.count >= MAX_PLAYERS ? JOIN_FULL_TOOLTIP : JOIN_TOOLTIP,
+    joinDisabled: full,
+    joinTitle: full ? JOIN_FULL_TOOLTIP : JOIN_TOOLTIP,
   };
 }
 

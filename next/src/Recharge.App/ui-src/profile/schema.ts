@@ -26,7 +26,7 @@ export const CARDS = c(['glass', 'Glass'], ['solid', 'Solid'], ['gradient', 'Gra
 export const BGS = c(['none', 'None'], ['color', 'Solid colour'], ['gradient', 'Gradient'], ['grid', 'Grid'], ['dots', 'Dots'], ['stars', 'Stars'], ['aurora', 'Aurora']);
 export const CORNERS = c(['sharp', 'Sharp'], ['soft', 'Soft'], ['round', 'Round'], ['pixel', 'Pixel']);
 export const SECTION_IDS = c(['about', 'About'], ['showcase', 'Showcase'], ['uploads', 'Uploads'], ['stats', 'Stats'], ['links', 'Links'], ['friends', 'Friends'], ['activity', 'Activity']);
-export const STAT_IDS = c(['uploads', 'Uploads'], ['threads', 'Threads'], ['replies', 'Replies'], ['comments', 'Comments'], ['friends', 'Friends'], ['played', 'Maps played']);
+export const STAT_IDS = c(['uploads', 'Uploads'], ['threads', 'Threads'], ['replies', 'Replies'], ['friends', 'Friends'], ['played', 'Maps played']);
 export const STAT_STYLES = c(['chips', 'Chips'], ['big', 'Big numbers'], ['minimal', 'Minimal']);
 export const PROFILE_VIS = c(['everyone', 'Everyone'], ['friends', 'Friends only']);
 export const FRIENDS_VIS = c(['everyone', 'Everyone'], ['friends', 'Friends only'], ['nobody', 'Only me']);
@@ -85,7 +85,7 @@ export function defaultExt(): Ext {
     theme: { accent: null, card: 'glass', bg: 'none', bgColors: ['#101a14', '#1f3a2a'], corner: 'soft', preset: null },
     content: { status: { emoji: '', text: '', expires: 0 }, bio: '', pronouns: '', links: [], showcase: [], featured: null },
     sections: defaultSections(),
-    stats: { show: ['uploads', 'threads', 'replies', 'comments'], style: 'chips' },
+    stats: { show: ['uploads', 'threads', 'replies'], style: 'chips' },
     privacy: { profile: 'everyone', friends: 'everyone', presence: 'friends' },
   };
 }

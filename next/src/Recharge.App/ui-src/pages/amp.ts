@@ -3,6 +3,8 @@ import { call, describeError } from '../bridge.js';
 import { h } from '../dom.js';
 import { go } from '../navigation.js';
 import { toast } from '../components/toast.js';
+import { modal } from '../components/modal.js';
+import { updateStatus } from '../settings/api.js';
 import { loadAtlas } from '../amp/atlas.js';
 import { AmpEditor } from '../amp/editor.js';
 import { demoMap } from '../amp/demo.js';
@@ -13,6 +15,17 @@ import { backgroundPanel, brushPicker, layersPanel, propertiesPanel, rulesPanel,
 import { TOOLS } from '../amp/tools/index.js';
 import { clearPreviewCache } from '../amp/preview.js';
 import type { PageModule } from '../router.js';
+
+// The Amplifier is beta-only for now: on the stable channel it shows a "coming soon" dialog instead of opening.
+// Fails open (editor shown) if the channel can't be read, so beta is never blocked by a transient error.
+async function ampBetaOnly(): Promise<boolean> {
+  try {
+    const status = await updateStatus();
+    return status.channel !== 'beta';
+  } catch {
+    return false;
+  }
+}
 
 interface LoadResult { id: string; map: string }
 interface SaveResult { id: string }
@@ -30,6 +43,17 @@ export const ampPage: PageModule = {
   title: 'Amplifier',
   async mount(el, route): Promise<void> {
     teardown?.();
+    // STABLE GATE: the Amplifier map maker is beta-only for now (full editor on beta).
+    if (await ampBetaOnly()) {
+      el.appendChild(h('p', { className: 'dim', text: 'The Amplifier map maker is coming to the stable release soon.' }));
+      modal({
+        title: 'Amplifier',
+        body: 'Only available in beta for now!',
+        actions: [{ label: 'OK', kind: 'primary' }],
+        onClose: () => go('#/library'),
+      });
+      return;
+    }
     let opened: { map: AmpMap; id: string | null };
     try {
       opened = await open(route.params.id);

@@ -1,12 +1,10 @@
 name: Publish to update hub
 
 # Builds the app for windows-x64 and linux-x64 and publishes it to the update hub with tools/publish-update.mjs. master -> stable, dev -> beta.
-#   master (stable): the old Tauri app (tools/build-update-dir.*), unchanged.
-#   dev (beta):      Recharge, the .NET rewrite whose source lives in next/ (synced from the recharge-next tree by its tools/sync-to-recharge.sh):
-#                    dotnet publish self-contained for each platform + the built UI, assembled by tools/build-next-dir.sh. Its manifest version is
-#                    the csproj Version without a trailing ".0" (0.1.0 -> "0.1"); the build number is this workflow's run number, as always.
-# Note for the launcher: a beta install takes whichever of the beta and stable manifests has the HIGHER build number, so a later master (old app) publish outranks the newest dev
-# (Recharge) build until dev is published again.
+# Both channels now ship Recharge, the .NET rewrite whose source lives in next/ (synced from the recharge-next tree by its tools/sync-to-recharge.sh):
+# dotnet publish self-contained for each platform + the built UI, assembled by tools/build-next-dir.sh. Its manifest version is the csproj Version
+# without a trailing ".0" (0.1.0 -> "0.1"); the build number is this workflow's run number, as always. (The old Tauri app build job is retired but kept
+# dormant below for reference.) Note for the launcher: a beta install takes whichever of the beta and stable manifests has the HIGHER build number.
 #
 # Runs alongside the legacy autorelease.yml / release.yml until every install has migrated to the launcher.
 #
@@ -66,21 +64,19 @@ jobs:
         run: |
           set -euo pipefail
           base=$(python3 -c "import json; print(json.load(open('app/src/version.json'))['version'])")
-          product=app
-          if [ "${{ github.ref_name }}" = dev ]; then
-            channel=beta
-            product=next
-            # Recharge: the csproj Version, "0.1.0" published as "0.1".
-            version=$(python3 - <<'PY'
+          product=next
+          # Recharge: the csproj Version, "0.1.0" published as "0.1". Both channels ship the .NET Recharge now.
+          version=$(python3 - <<'PY'
           import re
           v = re.search(r'<Version>([^<]+)</Version>', open('next/src/Recharge.App/Recharge.App.csproj').read()).group(1).strip()
           print(re.sub(r'^(\d+\.\d+)\.0$', r'\1', v))
           PY
-            )
-            [ -n "$version" ] || { echo "no Version in next/src/Recharge.App/Recharge.App.csproj" >&2; exit 1; }
+          )
+          [ -n "$version" ] || { echo "no Version in next/src/Recharge.App/Recharge.App.csproj" >&2; exit 1; }
+          if [ "${{ github.ref_name }}" = dev ]; then
+            channel=beta
           elif [ "${{ github.ref_name }}" = master ]; then
             channel=stable
-            version="$base"
           else
             echo "only master and dev publish (ref ${{ github.ref_name }})" >&2; exit 1
           fi

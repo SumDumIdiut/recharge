@@ -12,7 +12,7 @@ import { currentUser } from '../account/session.js';
 import { HubError, hubForm, hubImage, hubJson } from './api.js';
 import { categoryBadge, needLogin, statusBadge, type View } from './forum.js';
 import {
-  CATEGORIES, LIM, normalizeThread, validateImages, validateReply, validateThread,
+  CATEGORIES, LIM, isVideoPath, normalizeThread, validateImages, validateReply, validateThread,
   type Post, type Reply, type Thread,
 } from './format.js';
 import { counter, field, formError, imagePicker, textArea, textInput } from './forms.js';
@@ -27,6 +27,14 @@ function pictureStrip(paths: string[]): HTMLElement | null {
   if (paths.length === 0) return null;
   const strip = h('div', { className: 'pic-strip' });
   for (const path of paths) {
+    if (isVideoPath(path)) {
+      const vtile = h('div', { className: 'pic-tile pic-video' });
+      const video = h('video', { attrs: { controls: 'controls', playsinline: 'playsinline', preload: 'metadata' } }) as HTMLVideoElement;
+      void hubImage(path).then((url) => { if (url) video.src = url; else vtile.classList.add('is-broken'); });
+      vtile.appendChild(video);
+      strip.appendChild(vtile);
+      continue;
+    }
     const tile = h('button', { className: 'pic-tile', attrs: { type: 'button', 'aria-label': 'View picture' } });
     const image = h('img', { attrs: { alt: 'Attached picture', decoding: 'async' } });
     void hubImage(path).then((url) => { if (url) image.src = url; else tile.classList.add('is-broken'); });
@@ -218,7 +226,7 @@ export function threadView(id: number): View {
       return box;
     }
     const body = textArea('', 'Write a reply...', 4);
-    const pictures = imagePicker(LIM.replyImages);
+    const pictures = imagePicker(LIM.replyImages, [], true);
     const error = formError();
     const form = h('form', { className: 'compose', attrs: { novalidate: 'novalidate' } });
     const bodyField = field('Reply as ' + me.username, body);
@@ -252,7 +260,7 @@ export function threadView(id: number): View {
     const select = category.querySelector('select') as HTMLSelectElement;
     const title = textInput(post.title, '', LIM.title);
     const body = textArea(post.body, '', 8);
-    const pictures = imagePicker(LIM.postImages, post.images.map((path) => ({ path, url: hubImage(path) })));
+    const pictures = imagePicker(LIM.postImages, post.images.map((path) => ({ path, url: hubImage(path) })), true);
     const error = formError();
     const form = h('form', { className: 'compose', attrs: { novalidate: 'novalidate' } });
     form.appendChild(field('Category', category));
@@ -288,7 +296,7 @@ export function threadView(id: number): View {
 
   function editReply(reply: Reply): void {
     const body = textArea(reply.body, '', 6);
-    const pictures = imagePicker(LIM.replyImages, reply.images.map((path) => ({ path, url: hubImage(path) })));
+    const pictures = imagePicker(LIM.replyImages, reply.images.map((path) => ({ path, url: hubImage(path) })), true);
     const error = formError();
     const form = h('form', { className: 'compose', attrs: { novalidate: 'novalidate' } });
     const bodyField = field('Reply', body);

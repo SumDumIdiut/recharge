@@ -1,7 +1,7 @@
 /** Small form pieces shared by the forum and profile editors. */
 import { h } from '../dom.js';
 import { button } from '../components/button.js';
-import { validateImages } from './format.js';
+import { LIM, isVideoPath, validateImages } from './format.js';
 
 export function field(label: string, control: HTMLElement, hint?: string): HTMLElement {
   const wrap = h('label', { className: 'form-field' });
@@ -58,10 +58,11 @@ export interface ImagePicker {
 }
 
 /** Choose up to `max` pictures with thumbnails, counting `existing` ones already on the post. */
-export function imagePicker(max: number, existing: Array<{ path: string; url: Promise<string | null> }> = []): ImagePicker {
+export function imagePicker(max: number, existing: Array<{ path: string; url: Promise<string | null> }> = [], allowVideo = false): ImagePicker {
   const root = h('div', { className: 'picker' });
   const row = h('div', { className: 'picker-row' });
-  const input = h('input', { attrs: { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: 'multiple' } });
+  const accept = 'image/png,image/jpeg,image/gif,image/webp' + (allowVideo ? ',video/mp4,video/webm' : '');
+  const input = h('input', { attrs: { type: 'file', accept, multiple: 'multiple' } });
   input.hidden = true;
   let picked: File[] = [];
   const dropped = new Set<string>();
@@ -70,7 +71,7 @@ export function imagePicker(max: number, existing: Array<{ path: string; url: Pr
   function kept(): number { return existing.filter((e) => !dropped.has(e.path)).length; }
   function room(): number { return Math.max(0, max - kept() - picked.length); }
 
-  const add = button('Add pictures', { kind: 'secondary', icon: 'image', onClick: () => input.click() });
+  const add = button(allowVideo ? 'Add media' : 'Add pictures', { kind: 'secondary', icon: 'image', onClick: () => input.click() });
   const note = h('span', { className: 'dim' });
 
   function paint(): void {
@@ -78,22 +79,31 @@ export function imagePicker(max: number, existing: Array<{ path: string; url: Pr
     for (const entry of existing) {
       if (dropped.has(entry.path)) continue;
       const tile = h('span', { className: 'picker-tile' });
-      const image = h('img', { attrs: { alt: '', decoding: 'async' } });
-      void entry.url.then((url) => { if (url) image.src = url; });
-      tile.appendChild(image);
-      tile.appendChild(h('button', { className: 'picker-x', title: 'Remove this picture', attrs: { type: 'button', 'aria-label': 'Remove picture' }, text: 'x', on: { click: () => { dropped.add(entry.path); paint(); } } }));
+      if (allowVideo && isVideoPath(entry.path)) {
+        const video = h('video', { attrs: { muted: 'muted', playsinline: 'playsinline', preload: 'metadata' } }) as HTMLVideoElement;
+        void entry.url.then((url) => { if (url) video.src = url; });
+        tile.appendChild(video);
+      } else {
+        const image = h('img', { attrs: { alt: '', decoding: 'async' } });
+        void entry.url.then((url) => { if (url) image.src = url; });
+        tile.appendChild(image);
+      }
+      tile.appendChild(h('button', { className: 'picker-x', title: 'Remove this attachment', attrs: { type: 'button', 'aria-label': 'Remove attachment' }, text: 'x', on: { click: () => { dropped.add(entry.path); paint(); } } }));
       row.appendChild(tile);
     }
     for (const file of picked) {
       let url = urls.get(file);
       if (!url) { url = URL.createObjectURL(file); urls.set(file, url); }
       const tile = h('span', { className: 'picker-tile' });
-      tile.appendChild(h('img', { attrs: { src: url, alt: '', decoding: 'async' } }));
-      tile.appendChild(h('button', { className: 'picker-x', title: 'Remove this picture', attrs: { type: 'button', 'aria-label': 'Remove picture' }, text: 'x', on: { click: () => { picked = picked.filter((f) => f !== file); paint(); } } }));
+      if (file.type.startsWith('video/')) tile.appendChild(h('video', { attrs: { src: url, muted: 'muted', playsinline: 'playsinline', preload: 'metadata' } }));
+      else tile.appendChild(h('img', { attrs: { src: url, alt: '', decoding: 'async' } }));
+      tile.appendChild(h('button', { className: 'picker-x', title: 'Remove this attachment', attrs: { type: 'button', 'aria-label': 'Remove attachment' }, text: 'x', on: { click: () => { picked = picked.filter((f) => f !== file); paint(); } } }));
       row.appendChild(tile);
     }
     add.disabled = room() === 0;
-    note.textContent = max + ' pictures at most, 5 MB each (' + room() + ' left)';
+    note.textContent = allowVideo
+      ? max + ' attachments at most — images 5 MB, one video up to ' + Math.round(LIM.video / (1024 * 1024)) + ' MB (' + room() + ' left)'
+      : max + ' pictures at most, 5 MB each (' + room() + ' left)';
   }
 
   input.addEventListener('change', () => {
@@ -115,7 +125,7 @@ export function imagePicker(max: number, existing: Array<{ path: string; url: Pr
     element: root,
     files: () => picked.slice(),
     removed: () => Array.from(dropped),
-    error: () => validateImages(picked, max),
+    error: () => validateImages(picked, max, LIM.image, { allowVideo }),
     clear() {
       for (const url of urls.values()) URL.revokeObjectURL(url);
       urls.clear();

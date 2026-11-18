@@ -113,7 +113,6 @@ function statValue(id: string, d: ProfileData): { n: number; label: string } | n
     case 'uploads': return { n: p.uploads.length, label: p.uploads.length === 1 ? 'upload' : 'uploads' };
     case 'threads': return { n: p.posts, label: p.posts === 1 ? 'thread' : 'threads' };
     case 'replies': return { n: p.replies, label: p.replies === 1 ? 'reply' : 'replies' };
-    case 'comments': return { n: p.comments, label: p.comments === 1 ? 'comment' : 'comments' };
     case 'friends': return d.friendCount === null || d.friendCount === undefined ? null : { n: d.friendCount, label: d.friendCount === 1 ? 'friend' : 'friends' };
     default: return null;   // "maps played" has no source yet: it appears when the data does
   }

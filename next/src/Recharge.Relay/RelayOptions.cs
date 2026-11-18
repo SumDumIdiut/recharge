@@ -10,6 +10,23 @@ namespace Recharge.Relay
         public int MaxConnectionsPerIp { get; set; } = 20;
         public int MaxPayloadBytes { get; set; } = 8 * 1024;
         public int MaxMsgsPerSec { get; set; } = 120;
+        public int MaxLobbyMembers { get; set; } = 16;
+
+        /// <summary>Overrides each numeric limit from a RELAY_* environment variable when set (staged runs can raise caps, e.g. a 100-player stress lobby). Unset variables keep the defaults.</summary>
+        public void ApplyEnvironment()
+        {
+            void Num(string name, Action<int> set)
+            {
+                var raw = Environment.GetEnvironmentVariable(name);
+                if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out var v) && v > 0) set(v);
+            }
+            Num("RELAY_PORT", v => Port = v);
+            Num("RELAY_MAX_CONNECTIONS", v => MaxConnections = v);
+            Num("RELAY_MAX_CONNECTIONS_PER_IP", v => MaxConnectionsPerIp = v);
+            Num("RELAY_MAX_MSGS_PER_SEC", v => MaxMsgsPerSec = v);
+            Num("RELAY_MAX_LOBBY_MEMBERS", v => MaxLobbyMembers = v);
+            Num("RELAY_MAX_LOBBIES", v => MaxLobbies = v);
+        }
 
         private TimeSpan _keepAliveInterval = TimeSpan.FromSeconds(8);
         private TimeSpan _keepAliveTimeout = TimeSpan.FromSeconds(24);
@@ -38,7 +55,6 @@ namespace Recharge.Relay
 
         public int MaxMissedHeartbeats { get; set; } = 3;
         public int MaxLobbies { get; set; } = 500;
-        public int MaxLobbyMembers { get; set; } = 16;
         public int MaxChatHistory { get; set; } = 50;
         public int BroadcastHz { get; set; } = 60;
         public int StaleMs { get; set; } = 5000;

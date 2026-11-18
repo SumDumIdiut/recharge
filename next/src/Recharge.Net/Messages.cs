@@ -354,6 +354,8 @@ namespace Recharge.Net
         public string HostName = "";
         public string HostColor = NetText.DefaultNameColor;
         public int Count;
+        /** The relay's member cap for this lobby (0 when an older relay doesn't send one). */
+        public int Cap;
         public bool Hard;
         public string? MapHubId;
         public string? MapName;
@@ -366,6 +368,7 @@ namespace Recharge.Net
             o["hostName"] = J.S(HostName);
             o["hostColor"] = J.S(HostColor);
             o["count"] = J.N(Count);
+            if (Cap > 0) o["cap"] = J.N(Cap);
             o["hard"] = J.B(Hard);
             if (MapHubId != null) o["mapHubId"] = J.S(MapHubId);
             if (MapName != null) o["mapName"] = J.S(MapName);
@@ -374,7 +377,7 @@ namespace Recharge.Net
         public static LobbyInfo FromJson(JsonObject o) => new LobbyInfo
         {
             Id = J.Int(o, "id"), Name = J.Str(o, "name"), HostName = J.Str(o, "hostName"),
-            HostColor = J.Str(o, "hostColor", NetText.DefaultNameColor), Count = J.Int(o, "count"), Hard = J.Bool(o, "hard"),
+            HostColor = J.Str(o, "hostColor", NetText.DefaultNameColor), Count = J.Int(o, "count"), Cap = J.Int(o, "cap"), Hard = J.Bool(o, "hard"),
             MapHubId = J.StrOrNull(o, "mapHubId"), MapName = J.StrOrNull(o, "mapName"),
         };
     }

@@ -480,7 +480,7 @@ function layoutPanel(env: Env): HTMLElement[] {
   return [
     group('Sections', row('Order and visibility', 'Drag to reorder, untick to hide. Your header always shows.', list, 'about showcase uploads stats links friends activity hide reorder')),
     group('Stats',
-      multiRow(ctx, 'Show these counts', '"Maps played" appears once that count is available.', STAT_IDS, () => ctx.get().stats.show, (e, v) => { e.stats.show = v; }, 'uploads threads replies comments friends played'),
+      multiRow(ctx, 'Show these counts', '"Maps played" appears once that count is available.', STAT_IDS, () => ctx.get().stats.show, (e, v) => { e.stats.show = v; }, 'uploads threads replies friends played'),
       segmentedRow(ctx, 'Stats style', '', STAT_STYLES, () => ctx.get().stats.style, (e, v) => { e.stats.style = v; }, 'chips big numbers minimal')),
   ];
 }

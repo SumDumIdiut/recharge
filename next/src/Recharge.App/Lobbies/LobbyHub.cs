@@ -210,6 +210,7 @@ namespace Recharge.App.Lobbies
             o["hostName"] = new JsonString(l.HostName);
             o["hostColor"] = new JsonString(l.HostColor);
             o["count"] = JsonNumber.From((long)l.Count);
+            if (l.Cap > 0) o["cap"] = JsonNumber.From((long)l.Cap);
             o["hard"] = l.Hard ? JsonBool.True : JsonBool.False;
             o["mapHubId"] = l.MapHubId == null ? (JsonNode)JsonNull.Instance : new JsonString(l.MapHubId);
             o["mapName"] = l.MapName == null ? (JsonNode)JsonNull.Instance : new JsonString(l.MapName);

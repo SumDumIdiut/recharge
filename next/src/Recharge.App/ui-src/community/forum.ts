@@ -164,7 +164,7 @@ export function openNewThread(): void {
   const select = category.querySelector('select') as HTMLSelectElement;
   const title = textInput('', 'A short, clear title', LIM.title);
   const body = textArea('', 'What is on your mind? Describe it so others can help.', 8);
-  const pictures = imagePicker(LIM.postImages);
+  const pictures = imagePicker(LIM.postImages, [], true);
   const error = formError();
   const form = h('form', { className: 'compose', attrs: { novalidate: 'novalidate' } });
   form.appendChild(field('Category', category));
