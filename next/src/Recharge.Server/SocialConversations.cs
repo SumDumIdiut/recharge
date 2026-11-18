@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 
 namespace Recharge.Server
 {
@@ -13,11 +15,87 @@ namespace Recharge.Server
     public sealed partial class SocialService
     {
         private const int ReplySnippetChars = 120;
+        private const int ImageBytes = 5 * 1024 * 1024;
+        private const int VideoBytes = 32 * 1024 * 1024;
+        private static readonly Regex MediaNameRe = new Regex(@"^[0-9a-f]{32}\.(png|jpg|jpeg|gif|webp|mp4|webm)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex AvatarNameRe = new Regex(@"^[0-9a-f]{32}\.(png|jpg|jpeg|gif|webp)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex GroupColorRe = new Regex(@"^#[0-9a-fA-F]{6}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         /// <summary>The conversation id of the DM between two users (names in any spelling).</summary>
         public static string DmId(string a, string b) => "dm:" + Pair(Norm(a), Norm(b));
 
         public static bool IsConversationId(string? s) => s is not null && (s.StartsWith("dm:", StringComparison.Ordinal) || s.StartsWith("g:", StringComparison.Ordinal));
+
+        // ---- message media (base64 in JSON on upload, names on the send) ----
+
+        public string MediaDir => _mediaDir;
+        public static string MediaUrl(string name) => "/api/conversations/media/" + name;
+        public static bool IsMediaName(string? name) => name is not null && MediaNameRe.IsMatch(name);
+        public static bool IsAvatarName(string? name) => name is not null && AvatarNameRe.IsMatch(name);
+        public string? MediaPath(string name) => IsMediaName(name) ? Path.Combine(_mediaDir, name) : null;
+
+        public static string MediaMime(string name) =>
+            name.EndsWith(".png", StringComparison.Ordinal) ? "image/png" :
+            name.EndsWith(".jpg", StringComparison.Ordinal) || name.EndsWith(".jpeg", StringComparison.Ordinal) ? "image/jpeg" :
+            name.EndsWith(".gif", StringComparison.Ordinal) ? "image/gif" :
+            name.EndsWith(".webp", StringComparison.Ordinal) ? "image/webp" :
+            name.EndsWith(".mp4", StringComparison.Ordinal) ? "video/mp4" : "video/webm";
+
+        /// <summary>Real type from magic bytes; the supplied name/mime are never trusted.</summary>
+        private static string? SniffExt(byte[] b)
+        {
+            bool At(int at, string s) { if (b.Length < at + s.Length) return false; for (int i = 0; i < s.Length; i++) if (b[at + i] != s[i]) return false; return true; }
+            if (b.Length >= 8 && b[0] == 0x89 && b[1] == (byte)'P' && b[2] == (byte)'N' && b[3] == (byte)'G') return "png";
+            if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "jpg";
+            if (At(0, "GIF8")) return "gif";
+            if (At(0, "RIFF") && At(8, "WEBP")) return "webp";
+            if (At(4, "ftyp")) return "mp4";
+            if (b.Length >= 4 && b[0] == 0x1A && b[1] == 0x45 && b[2] == 0xDF && b[3] == 0xA3) return "webm";
+            return null;
+        }
+
+        /// <summary>Keep at most 4 existing names, including at most one video; unknown names are dropped.</summary>
+        private List<string> MediaFor(string[]? media)
+        {
+            var keep = new List<string>();
+            if (media is null) return keep;
+            bool video = false;
+            foreach (string name in media)
+            {
+                if (!IsMediaName(name) || keep.Contains(name) || !File.Exists(Path.Combine(_mediaDir, name))) continue;
+                bool isVideo = name.EndsWith(".mp4", StringComparison.Ordinal) || name.EndsWith(".webm", StringComparison.Ordinal);
+                if (isVideo && video) continue;
+                if (keep.Count >= 4) break;
+                keep.Add(name);
+                if (isVideo) video = true;
+            }
+            return keep;
+        }
+
+        /// <summary>Store one base64-in-JSON upload on the social server and return its public name/url.</summary>
+        public object UploadMedia(string meName, string convId, string? name, string? mime, string? dataBase64)
+        {
+            lock (_gate)
+            {
+                string me = Norm(meName);
+                ConvFor(me, convId);   // members only
+                _mediaLimit.Hit(me, "You are uploading media too fast.");
+                if (string.IsNullOrEmpty(dataBase64) || dataBase64.Length > 48 * 1024 * 1024)
+                    throw new SocialException(413, "That file is too large.");
+                byte[] bytes;
+                try { bytes = Convert.FromBase64String(dataBase64); }
+                catch (FormatException) { throw new SocialException(400, "That file wasn't valid base64."); }
+                // name/mime are hints only: the bytes decide the extension.
+                string? ext = SniffExt(bytes);
+                if (ext is null) throw new SocialException(415, "Only PNG, JPEG, GIF, WebP, MP4 and WebM files are accepted.");
+                bool video = ext == "mp4" || ext == "webm";
+                if (bytes.Length > (video ? VideoBytes : ImageBytes))
+                    throw new SocialException(413, video ? "Videos must be 32 MB or less." : "Images must be 5 MB or less.");
+                string file = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant() + "." + ext;
+                File.WriteAllBytes(Path.Combine(_mediaDir, file), bytes);
+                return new { name = file, url = MediaUrl(file) };
+            }
+        }
 
         private IReadOnlyList<MessageRec> ListOf(string convId) =>
             _byConv.TryGetValue(convId, out List<MessageRec>? l) ? l : (IReadOnlyList<MessageRec>)Array.Empty<MessageRec>();
@@ -84,9 +162,11 @@ namespace Recharge.Server
             string other = dm ? OtherOf(c, me) : "";
             var members = c.Members.Select(k => (object)new { username = Display(k), state = MemberState(me, k), admin = c.Owner.Length > 0 && c.Owner == k }).ToList();
             string name = dm ? Display(other) : c.Name;
+            string color = dm ? "" : c.Color;
+            string avatar = !dm && IsAvatarName(c.Avatar) && File.Exists(Path.Combine(_mediaDir, c.Avatar)) ? MediaUrl(c.Avatar) : "";
             return new
             {
-                id = c.Id, kind = c.Kind, name, members,
+                id = c.Id, kind = c.Kind, name, color, avatar, members,
                 last = last is null ? null : Project(last), unread, friend = dm && AreFriends(me, other),
                 // Kept for the pre-groups client, which reads these from a conversation row.
                 username = name, state = dm ? MemberState(me, other) : "offline",
@@ -105,7 +185,7 @@ namespace Recharge.Server
                     reply = new { id = r.Id, from = Display(r.From), text = t };
                 }
             }
-            return new { id = m.Id, convId = m.ConvId, from = Display(m.From), to = m.To.Length > 0 ? Display(m.To) : "", text = m.Text, card = m.Card, ts = m.Ts, cid = m.Cid, replyTo = reply };
+            return new { id = m.Id, convId = m.ConvId, from = Display(m.From), to = m.To.Length > 0 ? Display(m.To) : "", text = m.Text, card = m.Card, ts = m.Ts, cid = m.Cid, replyTo = reply, reactions = m.Reactions, editedAt = m.EditedAt, deletedAt = m.DeletedAt, media = (m.Media ?? new List<string>()).Select(MediaUrl).ToArray() };
         }
 
         // ---- reading ----
@@ -151,7 +231,7 @@ namespace Recharge.Server
             }
         }
 
-        public object Send(string meName, string convId, string? text, CardRec? card, string? clientId = null, long replyTo = 0)
+        public object Send(string meName, string convId, string? text, CardRec? card, string? clientId = null, long replyTo = 0, string[]? media = null)
         {
             lock (_gate)
             {
@@ -170,8 +250,9 @@ namespace Recharge.Server
                         throw new SocialException(403, "Only friends can message each other.");
                     to = o;
                 }
+                List<string> files = MediaFor(media);
                 string body = CleanText(text);
-                if (body.Length == 0 && card is null) throw new SocialException(400, "A message can't be empty.");
+                if (body.Length == 0 && card is null && files.Count == 0) throw new SocialException(400, "A message can't be empty.");
                 if (body.Length > _o.MaxMessageChars) throw new SocialException(400, "That message is too long (" + _o.MaxMessageChars + " characters at most).");
                 if (card is not null)
                 {
@@ -182,7 +263,7 @@ namespace Recharge.Server
                 }
                 _messageLimit.Hit(me, "You are sending messages too fast.");
                 long reply = replyTo > 0 && ListOf(convId).Any(x => x.Id == replyTo) ? replyTo : 0;
-                var m = new MessageRec { Id = ++_lastMessageId, From = me, To = to, Text = body, Card = card, Ts = Now(), Cid = cid, ConvId = convId, ReplyTo = reply };
+                var m = new MessageRec { Id = ++_lastMessageId, From = me, To = to, Text = body, Card = card, Ts = Now(), Cid = cid, ConvId = convId, ReplyTo = reply, Media = files };
                 if (c.Kind == "dm" && !_convs.Items.ContainsKey(convId)) { c.Created = m.Ts; _convs.Put(convId, c); }
                 if (cid.Length > 0) _byCid[me + "|" + cid] = m;
                 _messages.Put(m.Id.ToString(CultureInfo.InvariantCulture), m);
@@ -191,6 +272,84 @@ namespace Recharge.Server
                 foreach (string member in c.Members.Distinct())
                     Notify(member, new { type = "message", message = view, conversation = ConversationView(c, member) });
                 return view;
+            }
+        }
+
+        /// <summary>Toggle the caller's emoji reaction on a message and push the new map to every member.</summary>
+        public object React(string meName, string convId, long messageId, string? emoji)
+        {
+            lock (_gate)
+            {
+                string me = Norm(meName);
+                string key = CleanText(emoji);
+                if (key.Length == 0 || key.Length > 16) throw new SocialException(400, "That reaction is not valid.");
+                ConversationRec c = ConvFor(me, convId);
+                MessageRec? m = ListOf(convId).FirstOrDefault(x => x.Id == messageId);
+                if (m is null) throw new SocialException(404, "That message was not found.");
+                m.Reactions ??= new Dictionary<string, List<string>>();
+                if (!m.Reactions.TryGetValue(key, out List<string>? users) || users is null)
+                {
+                    users = new List<string>();
+                    m.Reactions[key] = users;
+                }
+                if (users.Contains(me))
+                {
+                    users.Remove(me);
+                    if (users.Count == 0) m.Reactions.Remove(key);
+                }
+                else users.Add(me);
+                _messages.Put(m.Id.ToString(CultureInfo.InvariantCulture), m);
+                var reactions = m.Reactions.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray());
+                foreach (string member in c.Members.Distinct())
+                    Notify(member, new { type = "reaction", convId, messageId = m.Id, emoji = key, reactions });
+                return new { convId, messageId = m.Id, emoji = key, reactions };
+            }
+        }
+
+        /// <summary>Edit the caller's own message text and push the change to every member.</summary>
+        public object Edit(string meName, string convId, long messageId, string? text)
+        {
+            lock (_gate)
+            {
+                string me = Norm(meName);
+                ConversationRec c = ConvFor(me, convId);
+                MessageRec? m = ListOf(convId).FirstOrDefault(x => x.Id == messageId);
+                if (m is null) throw new SocialException(404, "That message was not found.");
+                if (Norm(m.From) != me) throw new SocialException(403, "You can only edit your own messages.");
+                string body = CleanText(text);
+                if (body.Length == 0) throw new SocialException(400, "A message can't be empty.");
+                if (body.Length > _o.MaxMessageChars) throw new SocialException(400, "That message is too long (" + _o.MaxMessageChars + " characters at most).");
+                _messageLimit.Hit(me, "You are sending messages too fast.");
+                m.Text = body;
+                m.EditedAt = Now();
+                _messages.Put(m.Id.ToString(CultureInfo.InvariantCulture), m);
+                var payload = new { type = "edit", convId, messageId = m.Id, text = m.Text, editedAt = m.EditedAt };
+                foreach (string member in c.Members.Distinct())
+                    Notify(member, payload);
+                return payload;
+            }
+        }
+
+        /// <summary>Soft-delete the caller's own message, keeping the row as a tombstone so replies and ordering still work.</summary>
+        public object Delete(string meName, string convId, long messageId)
+        {
+            lock (_gate)
+            {
+                string me = Norm(meName);
+                ConversationRec c = ConvFor(me, convId);
+                MessageRec? m = ListOf(convId).FirstOrDefault(x => x.Id == messageId);
+                if (m is null) throw new SocialException(404, "That message was not found.");
+                if (Norm(m.From) != me) throw new SocialException(403, "You can only delete your own messages.");
+                m.DeletedAt = Now();
+                m.Text = "";
+                m.Card = null;
+                m.Media = new();
+                m.Reactions = new Dictionary<string, List<string>>();
+                _messages.Put(m.Id.ToString(CultureInfo.InvariantCulture), m);
+                var payload = new { type = "delete", convId, messageId = m.Id, deletedAt = m.DeletedAt };
+                foreach (string member in c.Members.Distinct())
+                    Notify(member, payload);
+                return payload;
             }
         }
 
@@ -322,6 +481,27 @@ namespace Recharge.Server
                 string title = CleanGroupName(name);
                 if (title.Length == 0) throw new SocialException(400, "A group needs a name.");
                 c.Name = title;
+                _convs.Put(c.Id, c);
+                PushConversation(c);
+                return ConversationView(c, me);
+            }
+        }
+
+        /// <summary>Any member can edit the group's look; only supplied, valid fields change.</summary>
+        public object SetGroupProfile(string meName, string convId, string? name, string? color, string? avatar)
+        {
+            lock (_gate)
+            {
+                string me = Norm(meName);
+                ConversationRec c = GroupFor(me, convId);   // group + member checks
+                if (name is not null)
+                {
+                    string title = CleanGroupName(name);
+                    if (title.Length == 0) throw new SocialException(400, "A group needs a name.");
+                    c.Name = title;
+                }
+                if (color is not null && GroupColorRe.IsMatch(color)) c.Color = color;
+                if (avatar is not null && IsAvatarName(avatar) && File.Exists(Path.Combine(_mediaDir, avatar))) c.Avatar = avatar;
                 _convs.Put(c.Id, c);
                 PushConversation(c);
                 return ConversationView(c, me);

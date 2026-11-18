@@ -1,12 +1,14 @@
 /** The messaging model: thread merge, send state, day grouping, conversation list and unread rules. DOM-free so the tests can import it. */
-import type { Conversation, FriendsData, Member, Message, PresenceState, ReplyRef } from './model.js';
+import type { Conversation, FriendsData, Member, Message, PresenceState, Reactions, ReplyRef } from './model.js';
 
 export type SendState = 'sent' | 'sending' | 'failed';
 
-/** A message in an open thread. Unsent ones carry a negative id and a client id (cid) the server uses to drop duplicates. */
+/** A message in an open thread. Extends Message so merges keep reactions; unsent ones carry a negative id and a cid. */
 export interface ThreadMessage extends Message {
   state: SendState;
   error: string;
+  /** Uploaded media names waiting to be sent (pending messages only). */
+  mediaNames?: string[];
 }
 
 export interface Entry {
@@ -15,6 +17,9 @@ export interface Entry {
   kind: 'dm' | 'group';
   /** The other person's name for a DM, the group's name for a group. */
   name: string;
+  /** Group look: #rrggbb and an avatar URL; empty strings mean the defaults. */
+  color?: string;
+  avatar?: string;
   members: Member[];
   last: Message | null;
   unread: number;
@@ -61,13 +66,40 @@ export function newCid(random: () => number = Math.random, now: number = Date.no
 let pendingSeq = 0;
 
 /** The local copy of a message being sent (shown at once, before the server answers). */
-export function pendingMessage(me: string, convId: string, text: string, cid: string, ts: number = Date.now(), replyTo: ReplyRef | null = null): ThreadMessage {
+export function pendingMessage(me: string, convId: string, text: string, cid: string, ts: number = Date.now(), replyTo: ReplyRef | null = null, mediaNames: string[] = []): ThreadMessage {
   pendingSeq += 1;
-  return { id: -pendingSeq, convId, from: me, to: '', text, card: null, ts, cid, replyTo, state: 'sending', error: '' };
+  return { id: -pendingSeq, convId, from: me, to: '', text, card: null, ts, cid, replyTo, state: 'sending', error: '', mediaNames };
 }
 
 export function confirmed(m: Message): ThreadMessage {
   return { ...m, state: 'sent', error: '' };
+}
+
+/** Replace one message's reactions after a push or an optimistic toggle. */
+export function applyReactions(list: ThreadMessage[], id: number, reactions: Reactions | undefined): ThreadMessage[] {
+  return list.map((m) => (m.id === id ? { ...m, reactions } : m));
+}
+
+/** Replace one message's text after an edit push or optimistic save. */
+export function applyEdit(list: ThreadMessage[], id: number, text: string, editedAt: number): ThreadMessage[] {
+  return list.map((m) => (m.id === id ? { ...m, text, editedAt } : m));
+}
+
+/** Keep a deleted message as a tombstone: stamp it and clear its content after a push or optimistic delete. */
+export function applyDelete(list: ThreadMessage[], id: number, deletedAt: number): ThreadMessage[] {
+  return list.map((m) => (m.id === id ? { ...m, deletedAt, text: '', card: null, media: [], reactions: {} } : m));
+}
+
+/** Toggle me in a reaction map; names are lower-case, as on the server. */
+export function toggleReactionMap(reactions: Reactions | undefined, emoji: string, me: string): Reactions {
+  const out: Reactions = {};
+  for (const [key, users] of Object.entries(reactions || {})) out[key] = users.slice();
+  const key = me.trim().toLowerCase();
+  const had = (out[emoji] || []).some((u) => u.toLowerCase() === key);
+  const users = (out[emoji] || []).filter((u) => u.toLowerCase() !== key);
+  if (had && users.length === 0) delete out[emoji];
+  else out[emoji] = had ? users : users.concat(key);
+  return out;
 }
 
 /** Confirmed messages by id, then unsent ones in the order they were typed. */
@@ -205,7 +237,7 @@ export function statusFor(list: ThreadMessage[], me: string, seenUpTo: number): 
 // ---- conversation list and unread ----
 
 function entryOf(c: Conversation): Entry {
-  return { id: c.id, kind: c.kind, name: c.name, members: c.members, last: c.last, unread: c.unread, state: c.state, detail: '', friend: c.friend };
+  return { id: c.id, kind: c.kind, name: c.name, color: c.color || '', avatar: c.avatar || '', members: c.members, last: c.last, unread: c.unread, state: c.state, detail: '', friend: c.friend };
 }
 
 /** The other person in a DM (anyone who is not you), for presence and avatars. */
@@ -275,6 +307,7 @@ export function applyMessage(entries: Entry[], m: Message, me: string, openId: s
     next.push(e);
   } else if (conv && conv.id) {
     e.name = conv.name; e.kind = conv.kind;
+    e.color = conv.color || ''; e.avatar = conv.avatar || '';
     if (conv.members.length > 0) e.members = conv.members;
   }
   if (e.last && e.last.id === m.id) return entries;      // seen already (the same push twice)

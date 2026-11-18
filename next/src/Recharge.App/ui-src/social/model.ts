@@ -9,9 +9,10 @@ export interface Pending { username: string; created: number }
 export interface FriendsData { friends: Friend[]; incoming: Pending[]; outgoing: Pending[]; blocked: Pending[] }
 export interface Card { type: 'map' | 'skin' | 'lobby'; id: string; name: string }
 export interface ReplyRef { id: number; from: string; text: string }
-export interface Message { id: number; convId: string; from: string; to: string; text: string; card: Card | null; ts: number; cid: string; replyTo: ReplyRef | null }
+export type Reactions = Record<string, string[]>;
+export interface Message { id: number; convId: string; from: string; to: string; text: string; card: Card | null; ts: number; cid: string; replyTo: ReplyRef | null; reactions?: Reactions; editedAt?: number; deletedAt?: number; media?: string[] }
 export interface Member { username: string; state: PresenceState; admin: boolean }
-export interface Conversation { id: string; kind: 'dm' | 'group'; name: string; members: Member[]; last: Message | null; unread: number; friend: boolean; state: PresenceState }
+export interface Conversation { id: string; kind: 'dm' | 'group'; name: string; color?: string; avatar?: string; members: Member[]; last: Message | null; unread: number; friend: boolean; state: PresenceState }
 export interface MessagePage { messages: Message[]; hasMore: boolean; readUpTo: number; seenUpTo: number; conversation: Conversation | null }
 
 const STATES: PresenceState[] = ['online', 'game', 'lobby', 'editing', 'offline'];
@@ -71,12 +72,29 @@ export function normalizeReply(raw: unknown): ReplyRef | null {
   return { id, from: text(o.from), text: cleanText(text(o.text)) };
 }
 
+export function normalizeReactions(raw: unknown): Reactions {
+  const out: Reactions = {};
+  for (const [emoji, value] of Object.entries(obj(raw))) {
+    const users = list(value).map((u) => text(u).trim().toLowerCase()).filter(Boolean);
+    if (emoji && emoji !== '__proto__' && users.length > 0) out[emoji] = users;
+  }
+  return out;
+}
+
 export function normalizeMessage(raw: unknown): Message {
   const o = obj(raw);
-  return {
+  const m: Message = {
     id: num(o.id), convId: text(o.convId), from: text(o.from), to: text(o.to), text: cleanText(text(o.text)), card: normalizeCard(o.card),
     ts: num(o.ts), cid: text(o.cid).slice(0, 64), replyTo: normalizeReply(o.replyTo),
   };
+  if (o.reactions !== undefined) m.reactions = normalizeReactions(o.reactions);
+  const media = list(o.media).filter((url): url is string => typeof url === 'string' && url.length > 0);
+  if (media.length) m.media = media;
+  const editedAt = num(o.editedAt);
+  if (editedAt > 0) m.editedAt = editedAt;
+  const deletedAt = num(o.deletedAt);
+  if (deletedAt > 0) m.deletedAt = deletedAt;
+  return m;
 }
 
 export function normalizeMember(raw: unknown): Member {
@@ -92,7 +110,7 @@ export function normalizeConversation(raw: unknown): Conversation | null {
   const kind = c.kind === 'group' ? 'group' : 'dm';
   const members = list(c.members).map(normalizeMember).filter((m) => m.username);
   return {
-    id: text(c.id), kind, name, members, last: c.last ? normalizeMessage(c.last) : null, unread: num(c.unread), friend: c.friend === true,
+    id: text(c.id), kind, name, color: text(c.color), avatar: text(c.avatar), members, last: c.last ? normalizeMessage(c.last) : null, unread: num(c.unread), friend: c.friend === true,
     state: kind === 'group' ? 'offline' : stateOf(c.state),
   };
 }

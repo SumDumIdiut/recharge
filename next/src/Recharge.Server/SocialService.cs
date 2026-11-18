@@ -33,8 +33,10 @@ namespace Recharge.Server
         private readonly Dictionary<string, List<MessageRec>> _byConv = new Dictionary<string, List<MessageRec>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<int, Live>> _live = new Dictionary<string, Dictionary<int, Live>>(StringComparer.Ordinal);
         private readonly RateLimiter _messageLimit;
+        private readonly RateLimiter _mediaLimit;
         private readonly RateLimiter _requestLimit;
         private readonly RateLimiter _shareLimit;
+        private readonly string _mediaDir;
         private readonly Dictionary<string, MessageRec> _byCid = new Dictionary<string, MessageRec>(StringComparer.Ordinal);
         private long _lastMessageId;
 
@@ -54,6 +56,8 @@ namespace Recharge.Server
             _o = options;
             _signer = signer;
             string dir = options.DataDir;
+            _mediaDir = System.IO.Path.Combine(dir, "media");
+            System.IO.Directory.CreateDirectory(_mediaDir);
             _users = new JsonlStore<UserRec>(System.IO.Path.Combine(dir, "users.jsonl"));
             _friends = new JsonlStore<FriendRec>(System.IO.Path.Combine(dir, "friends.jsonl"));
             _requests = new JsonlStore<RequestRec>(System.IO.Path.Combine(dir, "requests.jsonl"));
@@ -65,6 +69,7 @@ namespace Recharge.Server
             _profiles = new JsonlStore<ProfileRec>(System.IO.Path.Combine(dir, "profiles.jsonl"));
             _profileLimit = new RateLimiter(options.ProfileWritesPerHour, TimeSpan.FromHours(1), options.Clock);
             _messageLimit = new RateLimiter(options.MessagesPerMinute, TimeSpan.FromMinutes(1), options.Clock);
+            _mediaLimit = new RateLimiter(options.MessagesPerMinute, TimeSpan.FromMinutes(1), options.Clock);
             _requestLimit = new RateLimiter(options.FriendRequestsPerHour, TimeSpan.FromHours(1), options.Clock);
             _shareLimit = new RateLimiter(options.SharesPerHour, TimeSpan.FromHours(1), options.Clock);
             _convs = new JsonlStore<ConversationRec>(System.IO.Path.Combine(dir, "conversations.jsonl"));

@@ -1,8 +1,64 @@
 /** The realtime feed: the app keeps one socket to the social server; this polls its event list while a view is open. */
 import { call } from '../bridge.js';
+import { cleanText, normalizeReactions, type Reactions } from './model.js';
 
 export interface FeedEvent { type: string; seq?: number; [key: string]: unknown }
+export interface ReactionEvent extends FeedEvent { convId: string; messageId: number; emoji: string; reactions: Reactions }
+export interface EditEvent extends FeedEvent { convId: string; messageId: number; text: string; editedAt: number }
+export interface DeleteEvent extends FeedEvent { convId: string; messageId: number; deletedAt: number }
 type Listener = (event: FeedEvent) => void;
+
+/** Parse a reaction push, or null when it is malformed. */
+export function reactionEvent(event: FeedEvent): ReactionEvent | null {
+  const convId = typeof event.convId === 'string' ? event.convId : '';
+  const messageId = typeof event.messageId === 'number' ? event.messageId : 0;
+  const emoji = typeof event.emoji === 'string' ? event.emoji : '';
+  if (!convId || !Number.isInteger(messageId) || messageId <= 0 || !emoji) return null;
+  return { ...event, type: 'reaction', convId, messageId, emoji, reactions: normalizeReactions(event.reactions) };
+}
+
+/** Apply a reaction push to the open thread via `update`; returns true when it was handled. */
+export function handleReaction(event: FeedEvent, openId: string, update: (messageId: number, reactions: Reactions) => void): boolean {
+  const r = reactionEvent(event);
+  if (!r || !openId || r.convId !== openId) return false;
+  update(r.messageId, r.reactions);
+  return true;
+}
+
+/** Parse an edit push, or null when it is malformed. */
+export function editEvent(event: FeedEvent): EditEvent | null {
+  const convId = typeof event.convId === 'string' ? event.convId : '';
+  const messageId = typeof event.messageId === 'number' ? event.messageId : 0;
+  if (!convId || !Number.isInteger(messageId) || messageId <= 0) return null;
+  const text = cleanText(typeof event.text === 'string' ? event.text : '');
+  const editedAt = typeof event.editedAt === 'number' ? event.editedAt : 0;
+  return { ...event, type: 'edit', convId, messageId, text, editedAt };
+}
+
+/** Apply an edit push to the open thread via `update`; returns true when it was handled. */
+export function handleEdit(event: FeedEvent, openId: string, update: (messageId: number, text: string, editedAt: number) => void): boolean {
+  const e = editEvent(event);
+  if (!e || !openId || e.convId !== openId) return false;
+  update(e.messageId, e.text, e.editedAt);
+  return true;
+}
+
+/** Parse a delete push, or null when it is malformed. */
+export function deleteEvent(event: FeedEvent): DeleteEvent | null {
+  const convId = typeof event.convId === 'string' ? event.convId : '';
+  const messageId = typeof event.messageId === 'number' ? event.messageId : 0;
+  if (!convId || !Number.isInteger(messageId) || messageId <= 0) return null;
+  const deletedAt = typeof event.deletedAt === 'number' ? event.deletedAt : 0;
+  return { ...event, type: 'delete', convId, messageId, deletedAt };
+}
+
+/** Apply a delete push to the open thread via `update`; returns true when it was handled. */
+export function handleDelete(event: FeedEvent, openId: string, update: (messageId: number, deletedAt: number) => void): boolean {
+  const d = deleteEvent(event);
+  if (!d || !openId || d.convId !== openId) return false;
+  update(d.messageId, d.deletedAt);
+  return true;
+}
 
 export const POLL_MS = 1000;
 export const KEEPALIVE_MS = 8000;

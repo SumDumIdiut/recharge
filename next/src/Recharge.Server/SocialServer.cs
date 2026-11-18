@@ -188,6 +188,60 @@ namespace Recharge.Server
             }
         }
 
+        /// <summary>One inclusive byte range from a "bytes=a-b" header (no suffix/multi-range support).</summary>
+        private static bool TryByteRange(string? header, long length, out long start, out long end)
+        {
+            start = 0;
+            end = length - 1;
+            if (length == 0 || string.IsNullOrEmpty(header) || !header.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase)) return false;
+            string[] pair = header.Substring(6).Split(',')[0].Trim().Split('-');
+            if (pair.Length != 2 || !long.TryParse(pair[0], NumberStyles.None, CultureInfo.InvariantCulture, out long from) || from < 0 || from >= length) return false;
+            long to = length - 1;
+            if (pair[1].Length > 0 && (!long.TryParse(pair[1], NumberStyles.None, CultureInfo.InvariantCulture, out to) || to < from)) return false;
+            start = from;
+            end = Math.Min(to, length - 1);
+            return true;
+        }
+
+        /// <summary>Streams a stored message attachment; a byte range lets videos seek.</summary>
+        private async Task ServeMedia(HttpListenerContext ctx, string name)
+        {
+            string? path = Service.MediaPath(name);
+            if (path is null || !File.Exists(path)) throw new SocialException(404, "That file was not found.");
+            long length = new FileInfo(path).Length;
+            HttpListenerResponse res = ctx.Response;
+            res.ContentType = SocialService.MediaMime(name);
+            res.Headers["X-Content-Type-Options"] = "nosniff";
+            res.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+            res.Headers["Accept-Ranges"] = "bytes";
+            long start = 0, end = length - 1;
+            string? header = ctx.Request.Headers["Range"];
+            bool ranged = !string.IsNullOrEmpty(header);
+            if (ranged && !TryByteRange(header, length, out start, out end))
+            {
+                res.StatusCode = 416;
+                res.Headers["Content-Range"] = "bytes */" + length.ToString(CultureInfo.InvariantCulture);
+                res.ContentLength64 = 0;
+                res.Close();
+                return;
+            }
+            res.StatusCode = ranged ? 206 : 200;
+            res.ContentLength64 = end - start + 1;
+            if (ranged) res.Headers["Content-Range"] = "bytes " + start.ToString(CultureInfo.InvariantCulture) + "-" + end.ToString(CultureInfo.InvariantCulture) + "/" + length.ToString(CultureInfo.InvariantCulture);
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            file.Seek(start, SeekOrigin.Begin);
+            var buf = new byte[81920];
+            long left = end - start + 1;
+            while (left > 0)
+            {
+                int n = file.Read(buf, 0, (int)Math.Min(buf.Length, left));
+                if (n == 0) break;
+                await res.OutputStream.WriteAsync(buf.AsMemory(0, n)).ConfigureAwait(false);
+                left -= n;
+            }
+            res.Close();
+        }
+
         /// <summary>The caller's address; behind the hub's proxy (a loopback peer) it is the first X-Forwarded-For entry.</summary>
         private static string ClientAddress(HttpListenerRequest req)
         {
@@ -207,17 +261,18 @@ namespace Recharge.Server
             return req.QueryString["token"];
         }
 
-        private async Task<JsonElement> ReadBody(HttpListenerRequest req)
+        private async Task<JsonElement> ReadBody(HttpListenerRequest req, long maxBytes = -1)
         {
+            if (maxBytes < 0) maxBytes = _o.MaxBodyBytes;
             if (!req.HasEntityBody) return default;
-            if (req.ContentLength64 > _o.MaxBodyBytes) throw new SocialException(413, "That request is too large.");
+            if (req.ContentLength64 > maxBytes) throw new SocialException(413, "That request is too large.");
             using var ms = new MemoryStream();
             var buf = new byte[4096];
             int n;
             while ((n = await req.InputStream.ReadAsync(buf).ConfigureAwait(false)) > 0)
             {
                 ms.Write(buf, 0, n);
-                if (ms.Length > _o.MaxBodyBytes) throw new SocialException(413, "That request is too large.");
+                if (ms.Length > maxBytes) throw new SocialException(413, "That request is too large.");
             }
             if (ms.Length == 0) return default;
             try
@@ -298,6 +353,14 @@ namespace Recharge.Server
                 throw new SocialException(404, "Not found.");
             }
 
+            // Public: message media is served by the social-proxy so <img>/<video> can load it without a token.
+            if (seg.Length == 4 && seg[0] == "api" && seg[1] == "conversations" && seg[2] == "media" && method == "GET")
+            {
+                _anonLimit.Hit(ClientAddress(req), "Too many requests.");
+                await ServeMedia(ctx, seg[3]).ConfigureAwait(false);
+                return;
+            }
+
             bool socket = seg.Length == 1 && seg[0] == "ws" && req.IsWebSocketRequest;
             string? token = BearerOf(req);
             HubUser? user = string.IsNullOrEmpty(token) ? null : await _hub.Authenticate(token!).ConfigureAwait(false);
@@ -312,7 +375,8 @@ namespace Recharge.Server
             }
             if (seg.Length < 2 || seg[0] != "api") throw new SocialException(404, "Not found.");
             _apiLimit.Hit(SocialService.Norm(me), "You are making requests too fast.");
-            JsonElement body = method == "GET" || method == "DELETE" ? default : await ReadBody(req).ConfigureAwait(false);
+            bool mediaUpload = seg.Length == 4 && seg[3] == "media" && method == "POST";
+            JsonElement body = method == "GET" || method == "DELETE" ? default : await ReadBody(req, mediaUpload ? _o.MaxMediaBodyBytes : _o.MaxBodyBytes).ConfigureAwait(false);
 
             object result;
             string a = seg[1];
@@ -481,6 +545,8 @@ namespace Recharge.Server
             }
             if (seg.Length == 4)
             {
+                if (seg[3] == "media" && method == "POST")
+                    return Service.UploadMedia(me, await ConvId(me, seg[2]).ConfigureAwait(false), Str(body, "name"), Str(body, "mime"), Str(body, "data"));
                 string id = await ConvId(me, seg[2]).ConfigureAwait(false);
                 if (seg[3] == "messages" && method == "GET")
                 {
@@ -488,11 +554,22 @@ namespace Recharge.Server
                     int limit = int.TryParse(req.QueryString["limit"], NumberStyles.None, CultureInfo.InvariantCulture, out int l) ? l : 50;
                     return Service.Messages(me, id, before, limit);
                 }
-                if (seg[3] == "messages" && method == "POST") return Service.Send(me, id, Str(body, "text"), CardOf(body), Str(body, "cid"), Num(body, "replyTo"));
+                if (seg[3] == "messages" && method == "POST") return Service.Send(me, id, Str(body, "text"), CardOf(body), Str(body, "cid"), Num(body, "replyTo"), StrList(body, "media").ToArray());
                 if (seg[3] == "read" && method == "POST") return Service.MarkRead(me, id, Num(body, "upTo"));
+                if (seg[3] == "profile" && method == "PATCH")
+                    return Service.SetGroupProfile(me, id, Str(body, "name"), Str(body, "color"), Str(body, "avatar"));
                 if (seg[3] == "name" && method == "POST") return Service.RenameGroup(me, id, Str(body, "name"));
                 if (seg[3] == "members" && method == "POST") return Service.AddMember(me, id, await Resolve(Str(body, "username")).ConfigureAwait(false));
             }
+            if (seg.Length == 5 && seg[3] == "messages" && method == "PATCH" &&
+                long.TryParse(seg[4], NumberStyles.None, CultureInfo.InvariantCulture, out long midEdit))
+                return Service.Edit(me, await ConvId(me, seg[2]).ConfigureAwait(false), midEdit, Str(body, "text"));
+            if (seg.Length == 6 && seg[3] == "messages" && seg[5] == "react" && method == "POST" &&
+                long.TryParse(seg[4], NumberStyles.None, CultureInfo.InvariantCulture, out long mid))
+                return Service.React(me, await ConvId(me, seg[2]).ConfigureAwait(false), mid, Str(body, "emoji"));
+            if (seg.Length == 5 && seg[3] == "messages" && method == "DELETE" &&
+                long.TryParse(seg[4], NumberStyles.None, CultureInfo.InvariantCulture, out long midDelete))
+                return Service.Delete(me, await ConvId(me, seg[2]).ConfigureAwait(false), midDelete);
             if (seg.Length == 5 && seg[3] == "members" && method == "DELETE")
                 return Service.RemoveMember(me, await ConvId(me, seg[2]).ConfigureAwait(false), await Resolve(seg[4]).ConfigureAwait(false));
             throw new SocialException(404, "Not found.");
@@ -630,7 +707,7 @@ namespace Recharge.Server
                     {
                         string? target = Str(msg, "conv") ?? Str(msg, "convId") ?? Str(msg, "to");
                         string convId = await ConvId(user.Username, target ?? "").ConfigureAwait(false);
-                        object sent = Service.Send(user.Username, convId, Str(msg, "text"), CardOf(msg), Str(msg, "cid"), Num(msg, "replyTo"));
+                        object sent = Service.Send(user.Username, convId, Str(msg, "text"), CardOf(msg), Str(msg, "cid"), Num(msg, "replyTo"), StrList(msg, "media").ToArray());
                         Send(conn, new { type = "sent", @ref = reference, message = sent });
                         break;
                     }

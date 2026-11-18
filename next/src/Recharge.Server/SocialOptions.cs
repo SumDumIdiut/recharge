@@ -23,6 +23,8 @@ namespace Recharge.Server
         public int ProfileWritesPerHour { get; set; } = 60;
         public int MaxGroupMembers { get; set; } = 20;
         public int MaxBodyBytes { get; set; } = 64 * 1024;
+        /// <summary>Base64 media uploads need room for a 32 MB video plus JSON overhead.</summary>
+        public int MaxMediaBodyBytes { get; set; } = 48 * 1024 * 1024;
 
         public TimeSpan AuthCache { get; set; } = TimeSpan.FromSeconds(60);
         public TimeSpan DownloadLinkLifetime { get; set; } = TimeSpan.FromMinutes(5);

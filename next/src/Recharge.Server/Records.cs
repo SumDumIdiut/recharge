@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Recharge.Server
 {
@@ -47,6 +48,14 @@ namespace Recharge.Server
         public string ConvId { get; set; } = "";
         /// <summary>The id of the message this one replies to (same conversation), or 0.</summary>
         public long ReplyTo { get; set; }
+        /// <summary>Emoji to lower-case usernames who reacted.</summary>
+        public Dictionary<string, List<string>> Reactions { get; set; } = new();
+        /// <summary>When the author last edited the text, or 0.</summary>
+        public long EditedAt { get; set; }
+        /// <summary>When the author deleted this message (tombstone), or 0.</summary>
+        public long DeletedAt { get; set; }
+        /// <summary>Stored media filenames (32 hex + extension) on this message.</summary>
+        public List<string> Media { get; set; } = new();
     }
 
     public sealed class ConversationRec
@@ -58,6 +67,9 @@ namespace Recharge.Server
         /// <summary>Lower-case member keys.</summary>
         public string[] Members { get; set; } = Array.Empty<string>();
         public string Owner { get; set; } = "";
+        /// <summary>Group look: <see cref="Color"/> is #rrggbb, <see cref="Avatar"/> a stored media filename; empty means default.</summary>
+        public string Color { get; set; } = "";
+        public string Avatar { get; set; } = "";
         public long Created { get; set; }
     }
 
