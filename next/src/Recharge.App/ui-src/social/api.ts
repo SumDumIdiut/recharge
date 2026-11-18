@@ -1,5 +1,6 @@
 /** Talking to the social server. Every request goes through the app, which adds the hub session token. */
 import { call } from '../bridge.js';
+import { normalizeChannel, normalizeServer, normalizeServers, type Channel, type Server } from './model.js';
 
 export class SocialError extends Error {
   status: number;
@@ -62,13 +63,78 @@ export function setGroupProfile(convId: string, patch: { name?: string; color?: 
   return socialJson('PATCH', '/api/conversations/' + userPath(convId) + '/profile', patch).then(() => undefined);
 }
 
-/** Upload one attachment as base64-in-JSON; returns the stored media name for the send frame. */
-export async function uploadChatMedia(convKey: string, file: File): Promise<string> {
+// ---- servers and text channels ----
+const serverPath = (id: string): string => '/api/servers/' + userPath(id);
+
+function one<T>(raw: unknown, read: (value: unknown) => T | null): T {
+  const value = read(raw);
+  if (!value) throw new SocialError(0, 'The social server sent something unreadable.');
+  return value;
+}
+
+export function listServers(): Promise<Server[]> {
+  return socialJson<unknown>('GET', '/api/servers').then(normalizeServers);
+}
+
+export function createServer(name: string): Promise<Server> {
+  return socialJson<unknown>('POST', '/api/servers', { name }).then((raw) => one(raw, normalizeServer));
+}
+
+export function createChannel(serverId: string, name: string): Promise<Channel> {
+  return socialJson<unknown>('POST', serverPath(serverId) + '/channels', { name }).then((raw) => one(raw, normalizeChannel));
+}
+
+/** Owner-only channel edit; omitted fields are left alone by the server. */
+export function renameChannel(serverId: string, channelId: string, patch: { name?: string; topic?: string; position?: number }): Promise<Channel> {
+  return socialJson<unknown>('PATCH', serverPath(serverId) + '/channels/' + userPath(channelId), patch).then((raw) => one(raw, normalizeChannel));
+}
+
+export function deleteChannel(serverId: string, channelId: string): Promise<void> {
+  return socialJson('DELETE', serverPath(serverId) + '/channels/' + userPath(channelId)).then(() => undefined);
+}
+
+export function addServerMember(serverId: string, username: string): Promise<Server> {
+  return socialJson<unknown>('POST', serverPath(serverId) + '/members', { username }).then((raw) => one(raw, normalizeServer));
+}
+
+/** Owner removes someone, or a member leaves with their own name. */
+export function removeServerMember(serverId: string, username: string): Promise<void> {
+  return socialJson('DELETE', serverPath(serverId) + '/members/' + userPath(username)).then(() => undefined);
+}
+
+export function leaveServer(serverId: string, username: string): Promise<void> {
+  return removeServerMember(serverId, username);
+}
+
+/** Base64 for the JSON upload frames, chunked to keep the argument list small. */
+async function base64Of(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let text = '';
   for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+}
+
+/** Upload one attachment as base64-in-JSON; returns the stored media name for the send frame. */
+export async function uploadChatMedia(convKey: string, file: File): Promise<string> {
   const reply = await socialJson<{ name: string; url: string }>('POST', '/api/conversations/' + userPath(convKey) + '/media', {
-    name: file.name, mime: file.type, data: btoa(text),
+    name: file.name, mime: file.type, data: await base64Of(file),
   });
   return reply.name;
+}
+
+/** The global shared custom emoji catalog. */
+export interface ServerEmoji { shortcode: string; url: string }
+
+export function listEmojis(): Promise<ServerEmoji[]> {
+  return socialJson<ServerEmoji[]>('GET', '/api/emojis');
+}
+
+/** Add a custom emoji to the shared set (PNG/GIF/WebP, 256 KB max). */
+export async function uploadEmoji(shortcode: string, file: File): Promise<void> {
+  await socialJson('POST', '/api/emojis', { shortcode, mime: file.type, data: await base64Of(file) });
+}
+
+/** Remove an emoji you uploaded (or any emoji, if you are an admin). */
+export function deleteEmoji(shortcode: string): Promise<void> {
+  return socialJson('DELETE', '/api/emojis/' + encodeURIComponent(shortcode)).then(() => undefined);
 }

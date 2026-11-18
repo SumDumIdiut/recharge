@@ -9,8 +9,8 @@ using System.Text.RegularExpressions;
 namespace Recharge.Server
 {
     /// <summary>
-    /// Conversations: one model for direct messages ("dm:a|b", implicit, keyed by the two users) and group chats ("g:xxxxxxxxxxxx",
-    /// explicit, with an owner and a member list), plus replies and read state. Part of <see cref="SocialService"/>; same lock.
+    /// Conversations: direct messages ("dm:a|b"), group chats ("g:xxxxxxxxxxxx") and server channels ("ch:xxxxxxxxxxxx",
+    /// membership from the owning server), plus replies and read state. Part of <see cref="SocialService"/>; same lock.
     /// </summary>
     public sealed partial class SocialService
     {
@@ -24,7 +24,8 @@ namespace Recharge.Server
         /// <summary>The conversation id of the DM between two users (names in any spelling).</summary>
         public static string DmId(string a, string b) => "dm:" + Pair(Norm(a), Norm(b));
 
-        public static bool IsConversationId(string? s) => s is not null && (s.StartsWith("dm:", StringComparison.Ordinal) || s.StartsWith("g:", StringComparison.Ordinal));
+        public static bool IsConversationId(string? s) => s is not null &&
+            (s.StartsWith("dm:", StringComparison.Ordinal) || s.StartsWith("g:", StringComparison.Ordinal) || s.StartsWith("ch:", StringComparison.Ordinal));
 
         // ---- message media (base64 in JSON on upload, names on the send) ----
 
@@ -128,10 +129,16 @@ namespace Recharge.Server
         private static ConversationRec DmRec(string id, long created) =>
             new ConversationRec { Id = id, Kind = "dm", Members = id.Substring(3).Split('|'), Created = created };
 
-        /// <summary>The conversation <paramref name="me"/> is in: a stored one, or (for a DM with nothing said yet) an implicit one. 404 otherwise.</summary>
+        /// <summary>The conversation <paramref name="me"/> is in: a stored one, an implicit DM, or a channel of a server they belong to. 404 otherwise.</summary>
         private ConversationRec ConvFor(string me, string id)
         {
             var notFound = new SocialException(404, "That conversation was not found.");
+            if (id.StartsWith("ch:", StringComparison.Ordinal))
+            {
+                // A channel id IS a conversation id; membership comes from the owning server, not a stored ConversationRec.
+                if (!_channels.TryGet(id, out ChannelRec? ch) || !_servers.TryGet(ch.ServerId, out ServerRec? s) || !s.Members.Contains(me)) throw notFound;
+                return new ConversationRec { Id = id, Kind = "channel", Name = ch.Name, Members = s.Members, Owner = s.OwnerId, Created = ch.Created };
+            }
             if (id.StartsWith("g:", StringComparison.Ordinal))
             {
                 if (!_convs.TryGet(id, out ConversationRec? g) || !g.Members.Contains(me)) throw notFound;

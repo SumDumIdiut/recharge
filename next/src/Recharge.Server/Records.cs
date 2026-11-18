@@ -73,6 +73,29 @@ namespace Recharge.Server
         public long Created { get; set; }
     }
 
+    /// <summary>A Discord-style server; members are lower-case user keys. Its channels hold the messages.</summary>
+    public sealed class ServerRec
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        /// <summary>Stored avatar media filename, or "".</summary>
+        public string Icon { get; set; } = "";
+        public string OwnerId { get; set; } = "";
+        public string[] Members { get; set; } = Array.Empty<string>();
+        public long Created { get; set; }
+    }
+
+    /// <summary>A text channel in a server; its id is also the id of its conversation.</summary>
+    public sealed class ChannelRec
+    {
+        public string Id { get; set; } = "";
+        public string ServerId { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string Topic { get; set; } = "";
+        public int Position { get; set; }
+        public long Created { get; set; }
+    }
+
     public sealed class ReadRec
     {
         public long UpTo { get; set; }
@@ -98,6 +121,15 @@ namespace Recharge.Server
         public long Created { get; set; }
         public long Expires { get; set; }
         public bool Revoked { get; set; }
+    }
+
+    /// <summary>A global shared custom emoji; keyed by shortcode, image lives in the media dir.</summary>
+    public sealed class EmojiRec
+    {
+        public string Shortcode { get; set; } = "";
+        public string Media { get; set; } = "";
+        public string Owner { get; set; } = "";
+        public long Created { get; set; }
     }
 
     /// <summary>A user's extended profile, stored as its canonical JSON text (see <see cref="ProfileSchema"/>).</summary>

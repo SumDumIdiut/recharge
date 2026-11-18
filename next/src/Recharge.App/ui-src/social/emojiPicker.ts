@@ -1,6 +1,11 @@
-/** Reusable emoji popover: category tabs, custom-art tab, caret-safe pick callback. */
+/** Reusable emoji popover: category tabs, custom-art tab with upload, caret-safe pick callback. */
 import { h } from '../dom.js';
-import { CUSTOM_EMOJIS, EMOJI_CATEGORIES, type CustomEmoji } from './emojis.js';
+import { CUSTOM_EMOJIS, EMOJI_CATEGORIES, onCustomEmojis, setCustomEmojis, type CustomEmoji } from './emojis.js';
+import { listEmojis, uploadEmoji } from './api.js';
+
+const SHORT_RE = /^[a-z0-9_]{2,32}$/;
+const EMOJI_TYPES = ['image/png', 'image/gif', 'image/webp'];
+const EMOJI_MAX = 256 * 1024;
 
 export interface EmojiPopover {
   button: HTMLButtonElement;
@@ -28,7 +33,16 @@ export function emojiPopover(onPick: (value: string, custom?: CustomEmoji) => vo
 
   const tabs = h('div', { className: 'emoji-tabs', attrs: { role: 'tablist', 'aria-label': 'Emoji categories' } });
   const grid = h('div', { className: 'emoji-grid', attrs: { id: uid + '-grid', role: 'group' } });
-  const panel = h('div', { className: 'emoji-pop', attrs: { role: 'dialog', 'aria-label': label }, hidden: true }, tabs, grid);
+  const fileInput = h('input', { className: 'emoji-upload-file', attrs: { type: 'file', accept: 'image/png,image/gif,image/webp', 'aria-label': 'Emoji image (PNG, GIF or WebP, up to 256 KB)' } });
+  const shortInput = h('input', { className: 'input emoji-upload-short', attrs: { type: 'text', placeholder: 'shortcode', maxlength: '32', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Emoji shortcode (2-32 letters, numbers or underscores)' } });
+  const addBtn = h('button', { className: 'btn emoji-upload-add', text: 'Add', attrs: { type: 'button' } });
+  const note = h('p', { className: 'emoji-upload-msg', attrs: { role: 'alert' }, hidden: true });
+  const uploadBox = h('div', { className: 'emoji-upload', attrs: { 'aria-label': 'Upload a custom emoji' } },
+    h('div', { className: 'emoji-upload-title', text: 'Upload emoji' }),
+    h('div', { className: 'emoji-upload-row' }, fileInput),
+    h('div', { className: 'emoji-upload-row' }, shortInput, addBtn),
+    note);
+  const panel = h('div', { className: 'emoji-pop', attrs: { role: 'dialog', 'aria-label': label }, hidden: true }, tabs, grid, uploadBox);
   document.body.appendChild(panel);
 
   const tabButtons = new Map<string, HTMLButtonElement>();
@@ -38,6 +52,7 @@ export function emojiPopover(onPick: (value: string, custom?: CustomEmoji) => vo
   function renderGrid(): void {
     grid.replaceChildren();
     grid.setAttribute('aria-label', tabName + ' emoji');
+    uploadBox.hidden = tabName !== 'Custom';
     if (tabName === 'Custom') {
       if (CUSTOM_EMOJIS.length === 0) {
         grid.appendChild(h('p', { className: 'emoji-empty dim', text: 'No custom emoji yet' }));
@@ -121,6 +136,41 @@ export function emojiPopover(onPick: (value: string, custom?: CustomEmoji) => vo
     close();
   }
 
+  function say(text: string, good = false): void {
+    note.textContent = text;
+    note.classList.toggle('is-good', good);
+    note.hidden = !text;
+  }
+
+  async function addCustom(): Promise<void> {
+    const sc = shortInput.value.trim().toLowerCase();
+    const file = fileInput.files?.[0];
+    if (!SHORT_RE.test(sc)) { say('Shortcode: 2-32 letters, numbers or underscores.'); shortInput.focus(); return; }
+    if (!file) { say('Choose a PNG, GIF or WebP image first.'); fileInput.focus(); return; }
+    if (!EMOJI_TYPES.includes(file.type)) { say('Only PNG, GIF and WebP images are accepted.'); fileInput.focus(); return; }
+    if (file.size > EMOJI_MAX) { say('Images must be 256 KB or less.'); fileInput.focus(); return; }
+    addBtn.disabled = true;
+    say('Uploading...');
+    try {
+      await uploadEmoji(sc, file);
+      setCustomEmojis(await listEmojis());   // refresh the shared set for this picker and all open views
+      fileInput.value = '';
+      shortInput.value = '';
+      say('Added :' + sc + ':', true);
+    } catch (err) {
+      say(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      addBtn.disabled = false;
+    }
+  }
+
+  addBtn.addEventListener('click', () => void addCustom());
+  shortInput.addEventListener('keydown', (event: KeyboardEvent) => {
+    if (event.key === 'Enter') { event.preventDefault(); void addCustom(); }
+  });
+  fileInput.addEventListener('change', () => { note.hidden = true; });
+  const offEmojiChanges = onCustomEmojis(() => { if (opened) select(tabName); });
+
   const api: EmojiPopover = {
     button,
     open(a: HTMLElement = button): void {
@@ -147,6 +197,7 @@ export function emojiPopover(onPick: (value: string, custom?: CustomEmoji) => vo
     isOpen(): boolean { return opened; },
     dispose(): void {
       api.close();
+      offEmojiChanges();
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown, true);
       panel.remove();

@@ -14,6 +14,9 @@ export interface Message { id: number; convId: string; from: string; to: string;
 export interface Member { username: string; state: PresenceState; admin: boolean }
 export interface Conversation { id: string; kind: 'dm' | 'group'; name: string; color?: string; avatar?: string; members: Member[]; last: Message | null; unread: number; friend: boolean; state: PresenceState }
 export interface MessagePage { messages: Message[]; hasMore: boolean; readUpTo: number; seenUpTo: number; conversation: Conversation | null }
+/** A server's text channel. Its id is also the conversation id used by the message endpoints. */
+export interface Channel { id: string; name: string; topic: string; position: number }
+export interface Server { id: string; name: string; icon: string; owner: string; members: Member[]; channels: Channel[] }
 
 const STATES: PresenceState[] = ['online', 'game', 'lobby', 'editing', 'offline'];
 
@@ -129,6 +132,33 @@ export function normalizeMessages(raw: unknown): MessagePage {
   };
 }
 
+export function normalizeChannel(raw: unknown): Channel | null {
+  const o = obj(raw);
+  const id = text(o.id);
+  if (!id) return null;
+  return { id, name: text(o.name) || 'channel', topic: text(o.topic), position: num(o.position) };
+}
+
+/** A server from GET /api/servers or a pushed `server` event; null when it has no id. */
+export function normalizeServer(raw: unknown): Server | null {
+  const o = obj(raw);
+  const id = text(o.id);
+  if (!id) return null;
+  const channels = list(o.channels).map(normalizeChannel).filter((c): c is Channel => c !== null)
+    .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+  return {
+    id, name: text(o.name) || id, icon: text(o.icon), owner: text(o.owner),
+    members: list(o.members).map(normalizeMember).filter((m) => m.username), channels,
+  };
+}
+
+/** Accepts both `{servers:[...]}` (current server) and a bare array. */
+export function normalizeServers(raw: unknown): Server[] {
+  const rows = Array.isArray(raw) ? raw : list(obj(raw).servers);
+  return rows.map(normalizeServer).filter((s): s is Server => s !== null)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
 /** "Online", "In a game", "In lobby: Speedrun", "Editing Cliffside", or "Offline". */
 export function presenceLabel(state: PresenceState, detail: string): string {
   switch (state) {
@@ -161,13 +191,13 @@ export function validateUsername(raw: string): string | null {
   return null;
 }
 
-/** A conversation id (`dm:...` or `g:...`) or a plain username (opens the DM with that person). */
+/** A conversation id (`dm:...`, `g:...` or `ch:...`) or a plain username (opens the DM with that person). */
 export function messagesRoute(idOrUser?: string): string {
   return '#/community/messages' + (idOrUser ? '/' + encodeURIComponent(idOrUser) : '');
 }
 
 export function isConvId(value: string): boolean {
-  return value.startsWith('dm:') || value.startsWith('g:');
+  return value.startsWith('dm:') || value.startsWith('g:') || value.startsWith('ch:');
 }
 
 /** Why a group name can't be used, or null. An empty name is fine: the server makes one from the members. */

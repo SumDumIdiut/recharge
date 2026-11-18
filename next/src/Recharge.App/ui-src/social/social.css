@@ -32,6 +32,34 @@
 .social.messages { max-width: none; }
 .messages { flex-direction: row; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--hl); height: calc(100vh - 185px); min-height: 380px; overflow: hidden; }
 .conv-list { width: 320px; flex: none; border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: color-mix(in srgb, var(--bg) 35%, var(--panel)); }
+
+/* Servers rail: home, one tile per server, and a new-server button pinned to the bottom. */
+.server-rail { width: 76px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 6px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 55%, var(--panel)); overflow-y: auto; min-height: 0; }
+.rail-btn { flex: none; width: 60px; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 5px 2px; border: 0; border-radius: 12px; background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
+.rail-btn:hover, .rail-btn:focus-visible { background: var(--hover); color: var(--text); }
+.rail-btn.is-on { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); box-shadow: inset 3px 0 0 var(--green); }
+.rail-btn svg { flex: none; }
+.rail-label { max-width: 100%; font-size: 12px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-sep { flex: none; width: 32px; height: 1px; background: var(--line); }
+.rail-add { margin-top: auto; }
+.server-tile { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--sz, 40px); height: var(--sz, 40px); border-radius: 50%; color: #fff; background: linear-gradient(135deg, var(--gc, var(--green)), color-mix(in srgb, var(--gc, var(--green)) 55%, #000)); box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+.server-tile.has-avatar { overflow: hidden; background: var(--hover); }
+.server-tile img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.server-initials { font-size: calc(var(--sz, 40px) * .38); font-weight: 600; line-height: 1; }
+
+/* Channel list (replaces the conversation list while a server is active). */
+.channel-top { gap: 6px; }
+.channel-top .conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-sub { font-size: 15px; }
+.channel-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text-dim); font: inherit; font-size: 20px; text-align: left; cursor: pointer; }
+.channel-item:hover, .channel-item:focus-visible { background: var(--hover); color: var(--text); }
+.channel-item.is-on { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--text); }
+.channel-hash { flex: none; width: 16px; font-size: 21px; }
+.channel-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thread-hash { font-size: 26px; }
+.thread-channel-name { font-size: 22px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-actions { display: flex; gap: 6px; flex: none; margin-left: auto; }
+.channel-action { height: 28px; font-size: 16px; padding: 0 8px; }
 .conv-pane { background: var(--panel); }
 .conv-top { padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
 .conv-titlebar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -111,6 +139,17 @@
 .emoji-item { width: 100%; aspect-ratio: 1; display: inline-flex; align-items: center; justify-content: center; padding: 2px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
 .emoji-item:hover, .emoji-item:focus-visible { background: var(--hover); border-color: var(--line-hi); }
 .emoji-item img { display: block; width: 24px; height: 24px; object-fit: contain; }
+/* Shared custom emoji upload (shown on the Custom tab only). */
+.emoji-upload { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.emoji-upload[hidden], .emoji-upload-msg[hidden] { display: none; }
+.emoji-upload-title { font-size: 14px; color: var(--text-dim); }
+.emoji-upload-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.emoji-upload-row .emoji-upload-file { flex: 1; width: 100%; min-width: 0; font-size: 12px; }
+.emoji-upload-row .emoji-upload-short { flex: 1; min-width: 0; height: 28px; font-size: 14px; padding: 2px 6px; }
+.emoji-upload-row .emoji-upload-add { flex: none; height: 28px; padding: 0 9px; font-size: 14px; }
+.emoji-upload-add:disabled { opacity: .6; cursor: default; }
+.emoji-upload-msg { margin: 0; font-size: 13px; color: var(--danger); }
+.emoji-upload-msg.is-good { color: var(--green); }
 .composer-row { display: flex; align-items: center; gap: 12px; min-height: 0; }
 .composer-row .form-error { flex: 1; margin: 0; }
 .composer-row .form-count { margin-left: auto; font-size: 15px; }
@@ -209,7 +248,10 @@
 
 @media (max-width: 860px) {
   .messages { height: calc(100vh - 200px); }
-  .conv-list { width: 100%; border-right: 0; }
+  .server-rail { width: 62px; padding: 8px 4px; gap: 6px; }
+  .rail-btn { width: 52px; min-height: 50px; }
+  .rail-label { display: none; }
+  .conv-list { width: auto; flex: 1; min-width: 0; border-right: 0; }
   .messages.is-thread .conv-list, .messages:not(.is-thread) .conv-pane { display: none; }
   .thread-back { display: inline-block; }
   .msg-col { max-width: 86%; }
@@ -241,3 +283,9 @@
 .msg-delete-btn { position: absolute; top: -12px; right: 82px; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-hi); background: var(--panel); color: var(--text-dim); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .12s; padding: 0; box-shadow: var(--shadow-1); }
 .msg-row:hover .msg-delete-btn, .msg-delete-btn:focus-visible { opacity: 1; }
 .msg-delete-btn:hover { color: var(--danger); border-color: var(--danger); }
+.msg-react-btn { position: absolute; top: -12px; right: 116px; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-hi); background: var(--panel); color: var(--text-dim); font-size: 15px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .12s; padding: 0; box-shadow: var(--shadow-1); }
+.msg-row:hover .msg-react-btn, .msg-react-btn:focus-visible, .msg-react-btn[aria-expanded='true'] { opacity: 1; }
+.msg-react-btn:hover { border-color: var(--green-dim); }
+/* Delivered/seen tick at the left gutter of your newest message. */
+.msg-tick-left { position: absolute; left: 16px; bottom: 1px; width: 40px; display: flex; align-items: center; justify-content: center; color: var(--green); pointer-events: none; }
+.msg-tick-left.is-seen svg:last-child { margin-left: -7px; }

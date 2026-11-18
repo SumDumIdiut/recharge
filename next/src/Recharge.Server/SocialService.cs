@@ -30,10 +30,14 @@ namespace Recharge.Server
         private readonly JsonlStore<ShareRec> _shares;
         private readonly JsonlStore<ProfileRec> _profiles;
         private readonly JsonlStore<ConversationRec> _convs;
+        private readonly JsonlStore<EmojiRec> _emojis;
+        private readonly JsonlStore<ServerRec> _servers;
+        private readonly JsonlStore<ChannelRec> _channels;
         private readonly Dictionary<string, List<MessageRec>> _byConv = new Dictionary<string, List<MessageRec>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<int, Live>> _live = new Dictionary<string, Dictionary<int, Live>>(StringComparer.Ordinal);
         private readonly RateLimiter _messageLimit;
         private readonly RateLimiter _mediaLimit;
+        private readonly RateLimiter _emojiLimit;
         private readonly RateLimiter _requestLimit;
         private readonly RateLimiter _shareLimit;
         private readonly string _mediaDir;
@@ -70,9 +74,13 @@ namespace Recharge.Server
             _profileLimit = new RateLimiter(options.ProfileWritesPerHour, TimeSpan.FromHours(1), options.Clock);
             _messageLimit = new RateLimiter(options.MessagesPerMinute, TimeSpan.FromMinutes(1), options.Clock);
             _mediaLimit = new RateLimiter(options.MessagesPerMinute, TimeSpan.FromMinutes(1), options.Clock);
+            _emojiLimit = new RateLimiter(options.MessagesPerMinute, TimeSpan.FromMinutes(1), options.Clock);
             _requestLimit = new RateLimiter(options.FriendRequestsPerHour, TimeSpan.FromHours(1), options.Clock);
             _shareLimit = new RateLimiter(options.SharesPerHour, TimeSpan.FromHours(1), options.Clock);
             _convs = new JsonlStore<ConversationRec>(System.IO.Path.Combine(dir, "conversations.jsonl"));
+            _emojis = new JsonlStore<EmojiRec>(System.IO.Path.Combine(dir, "emojis.jsonl"));
+            _servers = new JsonlStore<ServerRec>(System.IO.Path.Combine(dir, "servers.jsonl"));
+            _channels = new JsonlStore<ChannelRec>(System.IO.Path.Combine(dir, "channels.jsonl"));
             Migrate();
             foreach (MessageRec m in _messages.Items.Values.OrderBy(m => m.Id))
             {
@@ -85,7 +93,7 @@ namespace Recharge.Server
         public void Dispose()
         {
             _users.Dispose(); _friends.Dispose(); _requests.Dispose(); _blocks.Dispose();
-            _messages.Dispose(); _reads.Dispose(); _settings.Dispose(); _shares.Dispose(); _profiles.Dispose(); _convs.Dispose();
+            _messages.Dispose(); _reads.Dispose(); _settings.Dispose(); _shares.Dispose(); _profiles.Dispose(); _convs.Dispose(); _emojis.Dispose(); _servers.Dispose(); _channels.Dispose();
         }
 
         // ---- names ----

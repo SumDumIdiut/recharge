@@ -9,18 +9,18 @@ import { authorName } from '../components/itemCard.js';
 import { describeError } from '../bridge.js';
 import { icon } from '../icons.js';
 import { emojiPopover } from './emojiPicker.js';
-import { customByShort } from './emojis.js';
+import { customByShort, onCustomEmojis, setCustomEmojis } from './emojis.js';
 import { currentUser } from '../account/session.js';
 import { fallbackColor, playerAvatar } from '../community/people.js';
 import { hubAuthor } from '../community/hubUsers.js';
 import { isVideoPath, libraryRoute, profileRoute } from '../community/format.js';
 import { imagePicker } from '../community/forms.js';
 import type { View } from '../community/forum.js';
-import { SocialError, deleteMessage, editMessage, react, setGroupProfile, socialJson, uploadChatMedia, userPath } from './api.js';
+import { SocialError, createChannel, createServer, deleteChannel, deleteMessage, editMessage, listEmojis, listServers, react, renameChannel, setGroupProfile, socialJson, uploadChatMedia, userPath } from './api.js';
 import { handleDelete, handleEdit, handleReaction, openFeed, type FeedEvent } from './events.js';
 import {
-  LIM, cleanText, isConvId, messagesRoute, normalizeConversation, normalizeConversations, normalizeFriends, normalizeMessage, normalizeMessages,
-  presenceLabel, stateOf, validateGroupName, validateMessage, type Card, type FriendsData, type Member, type ReplyRef,
+  LIM, cleanText, isConvId, messagesRoute, normalizeConversation, normalizeConversations, normalizeFriends, normalizeMessage, normalizeMessages, normalizeServer,
+  presenceLabel, stateOf, validateGroupName, validateMessage, type Card, type Channel, type FriendsData, type Member, type ReplyRef, type Server,
 } from './model.js';
 import {
   Drafts, addPending, applyConversation, applyDelete, applyEdit, applyMessage, applyPresence, applyRead, applyReactions, buildEntries, clock, convIdOf, dmId, filterEntries, findEntry,
@@ -85,11 +85,25 @@ function groupTile(name: string, size = 36, avatar = '', color = ''): HTMLElemen
   return tile;
 }
 
+/** A server icon, or a colour tile with its initials (the groupTile idea). */
+function serverTile(server: Server, size = 40): HTMLElement {
+  const tile = h('span', { className: 'server-tile' + (server.icon ? ' has-avatar' : '') });
+  tile.style.setProperty('--sz', size + 'px');
+  tile.style.setProperty('--gc', fallbackColor(server.name));
+  if (server.icon) tile.appendChild(h('img', { attrs: { src: server.icon, alt: '', decoding: 'async' } }));
+  else {
+    const initials = server.name.trim().split(/\s+/).slice(0, 2).map((w) => w.charAt(0)).join('').toUpperCase() || '#';
+    tile.appendChild(h('span', { className: 'server-initials', text: initials }));
+  }
+  return tile;
+}
+
 const convPath = (key: string): string => '/api/conversations/' + userPath(key);
 const avatarUrl = (name: string): string => '/api/conversations/media/' + encodeURIComponent(name);
 
-/** A DM is addressed by the other person's name (which works before the chat has any messages); a group by its id. */
+/** A DM is addressed by the other person's name (which works before the chat has any messages); groups and channels by id. */
 function pathKey(e: Entry | undefined, id: string): string {
+  if (id.startsWith('ch:')) return id;
   return e && e.kind === 'dm' && e.name && !isConvId(e.name) ? e.name : id;
 }
 
@@ -184,13 +198,17 @@ function renderMessageText(text: string): HTMLElement {
 export function messagesView(initialUser?: string): View {
   const me = currentUser()?.username || '';
   const root = h('div', { className: 'social messages' });
+  const rail = h('nav', { className: 'server-rail', attrs: { 'aria-label': 'Servers' } });
   const listBox = h('aside', { className: 'conv-list', attrs: { 'aria-label': 'Conversations' } });
   const pane = h('section', { className: 'conv-pane' });
-  root.append(listBox, pane);
+  root.append(rail, listBox, pane);
 
   let entries: Entry[] = [];
   let friendsData: FriendsData | null = null;
-  // The open conversation: by id (`dm:`/`g:`). Opening by a bare username works out the DM's id from the two names.
+  let servers: Server[] = [];
+  let serversLoaded = false;
+  let activeServerId = '';   // '' is Home/DMs
+  // The open conversation: by id (`dm:`/`g:`/`ch:`). Opening by a bare username works out the DM's id from the two names.
   let current = initialUser ? (isConvId(initialUser) ? initialUser : dmId(me, initialUser)) : '';
   let currentName = initialUser && !isConvId(initialUser) ? initialUser : (initialUser || '');
   let replyTo: ReplyRef | null = null;
@@ -217,6 +235,15 @@ export function messagesView(initialUser?: string): View {
 
   const cur = (): Entry | undefined => findEntry(entries, current);
   const isGroup = (): boolean => (cur()?.kind === 'group') || current.startsWith('g:');
+  const isChannel = (): boolean => current.startsWith('ch:');
+  const activeServer = (): Server | undefined => servers.find((s) => s.id === activeServerId);
+  const channelOf = (id: string): Channel | undefined => {
+    for (const s of servers) { const ch = s.channels.find((c) => c.id === id); if (ch) return ch; }
+    return undefined;
+  };
+  const serverOfChannel = (id: string): Server | undefined => servers.find((s) => s.channels.some((c) => c.id === id));
+  const ownsServer = (s: Server | undefined): boolean => !!s && (
+    s.owner.toLowerCase() === me.toLowerCase() || s.members.some((m) => m.admin && m.username.toLowerCase() === me.toLowerCase()));
 
   // ---- pieces that stay put ----
   const listHead = h('div', { className: 'conv-top' });
@@ -226,6 +253,8 @@ export function messagesView(initialUser?: string): View {
   const listItems = h('div', { className: 'conv-items' });
   listHead.append(h('div', { className: 'conv-titlebar' }, h('h2', { className: 'conv-title', text: 'Messages' }), newBtn), searchBox);
   listBox.append(listHead, listItems);
+  const channelHead = h('div', { className: 'conv-top channel-top' });
+  const channelItems = h('div', { className: 'conv-items channel-items' });
 
   const banner = h('div', { className: 'msg-banner', attrs: { role: 'status' }, hidden: true }, 'Reconnecting... messages will send when you are back online.');
   const headEl = h('header', { className: 'thread-head' });
@@ -252,7 +281,208 @@ export function messagesView(initialUser?: string): View {
     return h('span', { className: 'conv-av' }, userAvatar(e.name, 40), h('span', { className: 'presence-dot conv-presence is-' + e.state }));
   }
 
+  // ---- servers rail and channel list ----
+  function mergeServer(s: Server): void {
+    servers = servers.some((x) => x.id === s.id) ? servers.map((x) => (x.id === s.id ? s : x)) : servers.concat(s);
+    servers.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    serversLoaded = true;
+  }
+
+  function paintRail(): void {
+    rail.replaceChildren();
+    const home = h('button', {
+      className: 'rail-btn rail-home' + (activeServerId ? '' : ' is-on'),
+      attrs: { type: 'button', title: 'Home / DMs', 'aria-label': 'Home and direct messages', 'aria-current': activeServerId ? 'false' : 'true' },
+    });
+    home.append(icon('home', 22), h('span', { className: 'rail-label', text: 'Home' }));
+    home.addEventListener('click', () => showHome());
+    rail.appendChild(home);
+    rail.appendChild(h('div', { className: 'rail-sep' }));
+    for (const s of servers) {
+      const on = s.id === activeServerId;
+      const btn = h('button', {
+        className: 'rail-btn rail-server' + (on ? ' is-on' : ''),
+        attrs: { type: 'button', title: s.name, 'aria-label': s.name, 'aria-current': on ? 'true' : 'false' },
+      });
+      btn.appendChild(serverTile(s));
+      btn.addEventListener('click', () => selectServer(s.id));
+      rail.appendChild(btn);
+    }
+    const add = h('button', {
+      className: 'rail-btn rail-add',
+      attrs: { type: 'button', title: 'New server', 'aria-label': 'New server' },
+    });
+    add.append(icon('plus', 22), h('span', { className: 'rail-label', text: 'New server' }));
+    add.addEventListener('click', () => newServer());
+    rail.appendChild(add);
+  }
+
+  function paintChannels(): void {
+    channelHead.replaceChildren();
+    channelItems.replaceChildren();
+    const s = activeServer();
+    if (!s) {
+      channelHead.appendChild(h('div', { className: 'conv-titlebar' }, h('h2', { className: 'conv-title', text: 'Servers' })));
+      channelItems.appendChild(h('p', { className: 'dim conv-empty', text: serversLoaded ? 'No servers yet. Use + to make one.' : 'Loading...' }));
+      return;
+    }
+    const title = h('div', { className: 'conv-titlebar' }, h('h2', { className: 'conv-title', text: s.name }));
+    if (ownsServer(s)) {
+      const add = button('Add channel', { kind: 'secondary', icon: 'plus', onClick: () => newChannel(s) });
+      add.classList.add('conv-new');
+      title.appendChild(add);
+    }
+    channelHead.append(title, h('div', { className: 'channel-sub dim', text: s.members.length + (s.members.length === 1 ? ' member' : ' members') }));
+    for (const ch of s.channels) {
+      const on = ch.id === current;
+      const row = h('button', {
+        className: 'channel-item' + (on ? ' is-on' : ''),
+        attrs: { type: 'button', 'aria-current': on ? 'true' : 'false', title: ch.topic || '#' + ch.name },
+      });
+      row.append(h('span', { className: 'channel-hash dim', text: '#' }), h('span', { className: 'channel-name', text: ch.name }));
+      row.addEventListener('click', () => void selectChannel(s, ch));
+      channelItems.appendChild(row);
+    }
+    if (s.channels.length === 0) channelItems.appendChild(h('p', { className: 'dim conv-empty', text: 'No channels yet.' }));
+  }
+
+  function syncListPane(): void {
+    if (activeServerId) listBox.replaceChildren(channelHead, channelItems);
+    else listBox.replaceChildren(listHead, listItems);
+  }
+
+  function showHome(): void {
+    if (!activeServerId && !isChannel()) return;
+    activeServerId = '';
+    syncListPane();
+    if (isChannel()) leave(); else { paintRail(); paintList(); paintPane(); }
+    paintRail();
+  }
+
+  function selectServer(id: string): void {
+    const s = servers.find((x) => x.id === id);
+    if (!s) return;
+    if (closeMenu) closeMenu();
+    if (activeServerId === id) { paintRail(); paintList(); return; }
+    activeServerId = id;
+    syncListPane();
+    if (current) leave(); else paintPane();
+    paintRail();
+    paintList();
+  }
+
+  function selectChannel(s: Server, ch: Channel): void {
+    if (activeServerId !== s.id) { activeServerId = s.id; syncListPane(); }
+    void select(ch.id, ch.name);
+  }
+
+  /** Small name prompt shared by new server / new channel / rename channel. */
+  function nameDialog(title: string, label: string, actionLabel: string, run: (name: string) => Promise<void>): void {
+    const input = h('input', { className: 'input', attrs: { type: 'text', placeholder: label, 'aria-label': label, maxlength: '60', autocomplete: 'off' } });
+    const err = h('p', { className: 'form-error', attrs: { role: 'alert' }, hidden: true });
+    let busy = false;
+    const overlay = modal({
+      title, body: h('div', { className: 'group-form' }, input, err),
+      actions: [{ label: 'Cancel' }, {
+        label: actionLabel, kind: 'primary',
+        onClick: () => {
+          const name = input.value.trim();
+          const problem = !name ? 'Give it a name.' : validateGroupName(name);
+          err.hidden = !problem; err.textContent = problem || '';
+          if (problem || busy) return false;
+          busy = true;
+          closeModal(overlay);
+          run(name).catch((x) => toast('Could not save: ' + describeError(x), 'error'));
+          return false;
+        },
+      }],
+    });
+  }
+
+  function newServer(): void {
+    nameDialog('New server', 'Server name', 'Create server', (name) => createServer(name).then((s) => {
+      mergeServer(s);
+      activeServerId = s.id;
+      syncListPane();
+      paintRail();
+      paintList();
+      const general = s.channels.find((c) => c.name.toLowerCase() === 'general') || s.channels[0];
+      if (general) void selectChannel(s, general); else paintPane();
+    }));
+  }
+
+  function newChannel(s: Server): void {
+    nameDialog('New channel', 'Channel name', 'Create channel', (name) => createChannel(s.id, name).then((ch) => {
+      const fresh = servers.find((x) => x.id === s.id) || s;
+      mergeServer({ ...fresh, channels: fresh.channels.concat(ch).sort((a, b) => a.position - b.position) });
+      paintRail();
+      void selectChannel(servers.find((x) => x.id === s.id) || fresh, ch);
+    }));
+  }
+
+  function renameChannelDialog(s: Server, ch: Channel): void {
+    nameDialog('Rename channel', 'Channel name', 'Save', (name) => renameChannel(s.id, ch.id, { name }).then((updated) => {
+      const fresh = servers.find((x) => x.id === s.id);
+      if (!fresh) return;
+      mergeServer({ ...fresh, channels: fresh.channels.map((c) => (c.id === updated.id ? updated : c)) });
+      if (current === updated.id) { currentName = updated.name; paintHead(); }
+      paintRail();
+      paintList();
+    }));
+  }
+
+  function removeChannel(s: Server, ch: Channel): void {
+    modal({
+      title: 'Delete channel', body: 'Delete #' + ch.name + '? Its messages will be removed.',
+      actions: [{ label: 'Cancel' }, {
+        label: 'Delete', kind: 'danger',
+        onClick: () => {
+          deleteChannel(s.id, ch.id).then(() => {
+            const fresh = servers.find((x) => x.id === s.id);
+            if (!fresh) return;
+            mergeServer({ ...fresh, channels: fresh.channels.filter((c) => c.id !== ch.id) });
+            if (current === ch.id) leave();
+            paintRail();
+            paintList();
+          }).catch((x) => toast('Could not delete channel: ' + describeError(x), 'error'));
+        },
+      }],
+    });
+  }
+
+  async function loadServers(): Promise<void> {
+    try {
+      const loaded = await listServers();
+      if (disposed) return;
+      servers = loaded;
+      serversLoaded = true;
+      servers.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+      if (isChannel() && !activeServerId) {
+        const s = serverOfChannel(current);
+        if (s) { activeServerId = s.id; syncListPane(); }
+      }
+      if (isChannel()) { const ch = channelOf(current); if (ch) currentName = ch.name; }
+      paintRail();
+      paintList();
+      if (current) paintHead();
+    } catch {
+      // The rail is still usable (Home and + work); a reconnect reload will retry.
+    }
+  }
+
+  function takeServer(raw: unknown): void {
+    const s = normalizeServer(raw);
+    if (!s) return;
+    mergeServer(s);
+    if (isChannel() && !serverOfChannel(current)) leave();   // deleted channel, or we were removed
+    if (isChannel()) { const ch = channelOf(current); if (ch) currentName = ch.name; }
+    paintRail();
+    paintList();
+    if (current) paintHead();
+  }
+
   function paintList(): void {
+    if (activeServerId) { paintChannels(); return; }
     listItems.replaceChildren();
     if (!loadedList) { listItems.appendChild(h('p', { className: 'dim conv-empty', text: 'Loading...' })); return; }
     if (entries.length === 0) {
@@ -285,9 +515,28 @@ export function messagesView(initialUser?: string): View {
   function paintHead(): void {
     headEl.replaceChildren();
     const e = cur();
-    const back = h('button', { className: 'thread-back', attrs: { type: 'button', 'aria-label': 'Back to conversations' }, text: '‹ Back' });
+    const back = h('button', { className: 'thread-back', attrs: { type: 'button', 'aria-label': isChannel() ? 'Back to channels' : 'Back to conversations' }, text: '‹ Back' });
     back.addEventListener('click', () => leave());
     headEl.appendChild(back);
+    if (isChannel()) {
+      const s = serverOfChannel(current);
+      const ch = channelOf(current);
+      const name = ch ? ch.name : currentName;
+      headEl.appendChild(h('span', { className: 'channel-hash thread-hash dim', text: '#' }));
+      headEl.appendChild(h('div', { className: 'thread-who' },
+        h('span', { className: 'thread-channel-name', text: name }),
+        h('div', { className: 'social-sub', text: ch && ch.topic ? ch.topic : (s ? s.name : '') })));
+      if (s && ch && ownsServer(s)) {
+        const actions = h('div', { className: 'channel-actions' });
+        const rename = button('Rename', { kind: 'ghost', onClick: () => renameChannelDialog(s, ch) });
+        const del = button('Delete', { kind: 'ghost', onClick: () => removeChannel(s, ch) });
+        rename.classList.add('channel-action');
+        del.classList.add('channel-action');
+        actions.append(rename, del);
+        headEl.appendChild(actions);
+      }
+      return;
+    }
     if (isGroup()) {
       const name = e ? e.name : currentName;
       const count = e ? e.members.length : 0;
@@ -765,13 +1014,15 @@ export function messagesView(initialUser?: string): View {
   }
 
   /** A chip per emoji, plus a small button that opens the picker for any reaction. */
+  // Only renders when the message actually has reactions, so empty messages don't reserve a row of height.
   function reactionRow(m: ThreadMessage): HTMLElement | null {
     if (m.id <= 0) return null;
     const reactions = m.reactions || {};
+    const emojis = Object.keys(reactions).filter((e) => (reactions[e] || []).length > 0);
+    if (emojis.length === 0) return null;
     const row = h('div', { className: 'msg-reactions' });
-    for (const emoji of Object.keys(reactions)) {
+    for (const emoji of emojis) {
       const users = reactions[emoji] || [];
-      if (users.length === 0) continue;
       const mine = users.some((u) => u.toLowerCase() === me.toLowerCase());
       const chip = h('button', {
         className: 'msg-reaction' + (mine ? ' is-mine' : ''),
@@ -781,10 +1032,15 @@ export function messagesView(initialUser?: string): View {
       chip.addEventListener('click', () => toggleReaction(m, emoji));
       row.appendChild(chip);
     }
-    const add = h('button', { className: 'msg-reaction-add', title: 'Add reaction', attrs: { type: 'button', 'aria-label': 'Add reaction' } }, h('span', { attrs: { 'aria-hidden': 'true' }, text: '+' }));
-    add.addEventListener('click', () => { reactionTarget = m; reactionPicker.open(add); });
-    row.appendChild(add);
     return row;
+  }
+
+  /** The delivered/seen tick shown at the left gutter of your newest message. */
+  function leftTick(seen: boolean): HTMLElement {
+    const t = h('span', { className: 'msg-tick-left' + (seen ? ' is-seen' : ''), attrs: { title: seen ? 'Seen' : 'Delivered', 'aria-label': seen ? 'Seen' : 'Delivered' } });
+    t.appendChild(icon('check', 13));
+    if (seen) t.appendChild(icon('check', 13));
+    return t;
   }
 
   // Discord-style: avatar + coloured name + time on the first message of a sender's run, then flat text lines — the
@@ -838,6 +1094,9 @@ export function messagesView(initialUser?: string): View {
       const reply = h('button', { className: 'msg-reply-btn', title: 'Reply', attrs: { type: 'button', 'aria-label': 'Reply to ' + m.from } }, h('span', { attrs: { 'aria-hidden': 'true' }, text: '↩' }));
       reply.addEventListener('click', () => setReply(m));
       wrap.appendChild(reply);
+      const reactBtn = h('button', { className: 'msg-react-btn', title: 'Add reaction', attrs: { type: 'button', 'aria-label': 'Add reaction' } }, h('span', { attrs: { 'aria-hidden': 'true' }, text: '🙂' }));
+      reactBtn.addEventListener('click', () => { reactionTarget = m; reactionPicker.open(reactBtn); });
+      wrap.appendChild(reactBtn);
       col.addEventListener('dblclick', () => setReply(m));
     }
     return wrap;
@@ -845,16 +1104,9 @@ export function messagesView(initialUser?: string): View {
 
   function statusNode(): HTMLElement | null {
     const s = statusFor(thread, me, seenUpTo);
-    if (!s) return null;
+    if (!s || s.kind === 'delivered' || s.kind === 'seen') return null;   // the tick is drawn on the left of the last message
     const node = h('div', { className: 'msg-status dim' + (s.kind === 'failed' ? ' is-failed' : '') });
-    if (s.kind === 'delivered' || s.kind === 'seen') {
-      const tick = h('span', { className: 'msg-tick' + (s.kind === 'seen' ? ' is-seen' : ''), attrs: { title: s.text, 'aria-label': s.text } });
-      tick.appendChild(icon('check', 14));
-      if (s.kind === 'seen') tick.appendChild(icon('check', 14));
-      node.appendChild(tick);
-    } else {
-      node.appendChild(document.createTextNode(s.text));
-    }
+    node.appendChild(document.createTextNode(s.text));
     const failed = thread.filter((m) => m.state === 'failed' && isMine(m, me));
     if (failed.length > 0) {
       const last = failed[failed.length - 1];
@@ -885,17 +1137,28 @@ export function messagesView(initialUser?: string): View {
       more.disabled = loadingOlder;
       threadEl.appendChild(more);
     } else if (thread.length > 0) {
-      threadEl.appendChild(h('p', { className: 'dim thread-start', text: isGroup() ? 'This is the start of ' + name + '.' : 'This is the start of your conversation with ' + name + '.' }));
+      const start = isChannel() ? 'This is the start of #' + name + '.'
+        : isGroup() ? 'This is the start of ' + name + '.' : 'This is the start of your conversation with ' + name + '.';
+      threadEl.appendChild(h('p', { className: 'dim thread-start', text: start }));
     }
-    if (thread.length === 0) threadEl.appendChild(h('div', { className: 'thread-empty' }, h('p', { text: 'No messages yet.' }), h('p', { className: 'dim', text: isGroup() ? 'Say hello to the group.' : 'Say hello to ' + name + '.' })));
+    if (thread.length === 0) {
+      const hint = isChannel() ? 'Say hello in #' + name + '.' : isGroup() ? 'Say hello to the group.' : 'Say hello to ' + name + '.';
+      threadEl.appendChild(h('div', { className: 'thread-empty' }, h('p', { text: 'No messages yet.' }), h('p', { className: 'dim', text: hint })));
+    }
+    const tickStatus = statusFor(thread, me, seenUpTo);
     const status = statusNode();
     const statusAfter = (() => { let k = ''; for (const m of thread) if (isMine(m, me)) k = m.id > 0 ? String(m.id) : m.cid; return k; })();
     for (const row of groupThread(thread, me, Date.now(), readMark)) {
       if (row.kind === 'day') threadEl.appendChild(h('div', { className: 'day-sep' }, h('span', { text: row.label })));
       else if (row.kind === 'new') threadEl.appendChild(h('div', { className: 'new-sep', attrs: { role: 'separator' } }, h('span', { text: 'New messages' })));
       else {
-        threadEl.appendChild(messageNode(row));
-        if (status && row.mine && (row.msg.id > 0 ? String(row.msg.id) : row.msg.cid) === statusAfter) threadEl.appendChild(status);
+        const node = messageNode(row);
+        threadEl.appendChild(node);
+        const key = row.msg.id > 0 ? String(row.msg.id) : row.msg.cid;
+        if (row.mine && key === statusAfter) {
+          if (tickStatus && (tickStatus.kind === 'delivered' || tickStatus.kind === 'seen')) node.appendChild(leftTick(tickStatus.kind === 'seen'));
+          if (status) threadEl.appendChild(status);
+        }
       }
     }
     if (opts.forceBottom || (pinned && !opts.keepFromBottom)) threadEl.scrollTop = threadEl.scrollHeight;
@@ -911,11 +1174,13 @@ export function messagesView(initialUser?: string): View {
     pane.replaceChildren();
     root.classList.toggle('is-thread', !!current);
     if (!current) {
-      pane.appendChild(emptyState('forum', 'Pick a conversation', 'Choose someone on the left to read and send messages, or start a group.'));
+      pane.appendChild(activeServerId
+        ? emptyState('forum', 'Pick a channel', 'Choose a channel on the left to read and send messages.')
+        : emptyState('forum', 'Pick a conversation', 'Choose someone on the left to read and send messages, or start a group.'));
       return;
     }
     paintHead();
-    area.placeholder = isGroup() ? 'Message the group' : 'Write a message';
+    area.placeholder = isChannel() ? 'Message #' + (channelOf(current)?.name || currentName) : isGroup() ? 'Message the group' : 'Write a message';
     pane.append(headEl, banner, threadBox, composer);
     paintBanner();
     paintReplyBar();
@@ -1039,7 +1304,7 @@ export function messagesView(initialUser?: string): View {
     seenUpTo = 0;
     replyTo = null;
     jump.hidden = true;
-    if (!findEntry(entries, id)) entries = entries.concat({ id, kind: id.startsWith('g:') ? 'group' : 'dm', name, members: [], last: null, unread: 0, state: 'offline', detail: '', friend: false });
+    if (!findEntry(entries, id)) entries = entries.concat({ id, kind: id.startsWith('g:') || id.startsWith('ch:') ? 'group' : 'dm', name, members: [], last: null, unread: 0, state: 'offline', detail: '', friend: false });
     try { history.replaceState(null, '', messagesRoute(id)); } catch { /* the address is cosmetic */ }
     paintList();
     paintPane();
@@ -1226,6 +1491,16 @@ export function messagesView(initialUser?: string): View {
       entries = removeEntry(entries, id);
       if (id === current) leave(); else paintList();
       syncUnread();
+    } else if (event.type === 'server') {
+      takeServer(event.server);
+    } else if (event.type === 'server-left') {
+      const id = String(event.id || '');
+      servers = servers.filter((s) => s.id !== id);
+      if (activeServerId === id) { activeServerId = ''; syncListPane(); }
+      if (isChannel() && !serverOfChannel(current)) leave();
+      paintRail();
+      paintList();
+      paintPane();
     } else if (event.type === 'presence') {
       entries = applyPresence(entries, String(event.username || ''), stateOf(event.state), String(event.detail || ''));
       paintList();
@@ -1236,21 +1511,28 @@ export function messagesView(initialUser?: string): View {
       if (!offline) {
         for (const m of thread) if (m.state === 'failed' && !refused.has(m.cid)) resend(m.cid);   // back online: try the unsent ones again
         window.clearTimeout(reload);
-        reload = window.setTimeout(() => { void loadList(); if (current) void loadThread(); }, 150);
+        reload = window.setTimeout(() => { void loadList(); void loadServers(); if (current) void loadThread(); void refreshEmojis(); }, 150);
       }
     } else if (event.type === 'friends' || event.type === 'reset') {
       window.clearTimeout(reload);
-      reload = window.setTimeout(() => { void loadList(); if (current) void loadThread(); }, 150);
+      reload = window.setTimeout(() => { void loadList(); void loadServers(); if (current) void loadThread(); void refreshEmojis(); }, 150);
     }
   });
 
+  // Custom emojis are global and server-stored: load them on open, and repaint messages whenever the set changes.
+  function refreshEmojis(): Promise<void> {
+    return listEmojis().then(setCustomEmojis).catch(() => undefined);
+  }
+  const offEmojiChanges = onCustomEmojis(() => paintThread());
+
   updateCount();
+  paintRail();
   paintList();
   paintPane();
   if (current) { setActiveConversation(current); area.value = drafts.get(current); }
   autosize();
   updateCount();
-  const ready = Promise.all([loadList(), current ? loadThread() : Promise.resolve()]).then(() => undefined);
+  const ready = Promise.all([loadList(), loadServers(), current ? loadThread() : Promise.resolve(), refreshEmojis()]).then(() => undefined);
 
   return {
     element: root,
@@ -1261,6 +1543,7 @@ export function messagesView(initialUser?: string): View {
       window.clearTimeout(reload);
       document.removeEventListener('visibilitychange', onVisible);
       if (closeMenu) closeMenu();
+      offEmojiChanges();
       emoji.dispose();
       reactionPicker.dispose();
       drafts.set(current, area.value);

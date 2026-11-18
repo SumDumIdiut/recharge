@@ -292,6 +292,9 @@ namespace Recharge.Server
         private static long Num(JsonElement body, string name) =>
             body.ValueKind == JsonValueKind.Object && body.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long l) ? l : 0;
 
+        private static int? Int(JsonElement body, string name) =>
+            body.ValueKind == JsonValueKind.Object && body.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int i) ? i : (int?)null;
+
         private static CardRec? CardOf(JsonElement body)
         {
             if (body.ValueKind != JsonValueKind.Object || !body.TryGetProperty("card", out JsonElement c) || c.ValueKind != JsonValueKind.Object) return null;
@@ -360,6 +363,13 @@ namespace Recharge.Server
                 await ServeMedia(ctx, seg[3]).ConfigureAwait(false);
                 return;
             }
+            // Public: the shared emoji catalog, so pickers can load before/without a session.
+            if (seg.Length == 2 && seg[0] == "api" && seg[1] == "emojis" && method == "GET")
+            {
+                _anonLimit.Hit(ClientAddress(req), "Too many requests.");
+                await Reply(ctx, 200, Service.ListEmojis()).ConfigureAwait(false);
+                return;
+            }
 
             bool socket = seg.Length == 1 && seg[0] == "ws" && req.IsWebSocketRequest;
             string? token = BearerOf(req);
@@ -376,7 +386,8 @@ namespace Recharge.Server
             if (seg.Length < 2 || seg[0] != "api") throw new SocialException(404, "Not found.");
             _apiLimit.Hit(SocialService.Norm(me), "You are making requests too fast.");
             bool mediaUpload = seg.Length == 4 && seg[3] == "media" && method == "POST";
-            JsonElement body = method == "GET" || method == "DELETE" ? default : await ReadBody(req, mediaUpload ? _o.MaxMediaBodyBytes : _o.MaxBodyBytes).ConfigureAwait(false);
+            bool emojiUpload = seg.Length == 2 && seg[0] == "api" && seg[1] == "emojis" && method == "POST";
+            JsonElement body = method == "GET" || method == "DELETE" ? default : await ReadBody(req, mediaUpload || emojiUpload ? _o.MaxMediaBodyBytes : _o.MaxBodyBytes).ConfigureAwait(false);
 
             object result;
             string a = seg[1];
@@ -411,6 +422,12 @@ namespace Recharge.Server
                     break;
                 case "conversations":
                     result = await Conversations(method, seg, me, body, req).ConfigureAwait(false);
+                    break;
+                case "servers":
+                    result = await Servers(method, seg, me, body).ConfigureAwait(false);
+                    break;
+                case "emojis":
+                    result = Emojis(method, seg, me, body, user.Admin);
                     break;
                 case "profile" when seg.Length == 2 && method == "PUT":
                     result = Service.PutProfile(me, body);
@@ -534,6 +551,19 @@ namespace Recharge.Server
             return list;
         }
 
+        private object Emojis(string method, string[] seg, string me, JsonElement body, bool admin)
+        {
+            if (seg.Length == 2 && method == "POST")
+                return Service.UploadEmoji(me, Str(body, "shortcode"), Str(body, "mime"), Str(body, "data"));
+            if (seg.Length == 2 && method == "GET") return Service.ListEmojis();
+            if (seg.Length == 3 && method == "DELETE")
+            {
+                Service.DeleteEmoji(me, seg[2], admin);
+                return new { ok = true };
+            }
+            throw new SocialException(404, "Not found.");
+        }
+
         private async Task<object> Conversations(string method, string[] seg, string me, JsonElement body, HttpListenerRequest req)
         {
             if (seg.Length == 2 && method == "GET") return Service.Conversations(me);
@@ -572,6 +602,24 @@ namespace Recharge.Server
                 return Service.Delete(me, await ConvId(me, seg[2]).ConfigureAwait(false), midDelete);
             if (seg.Length == 5 && seg[3] == "members" && method == "DELETE")
                 return Service.RemoveMember(me, await ConvId(me, seg[2]).ConfigureAwait(false), await Resolve(seg[4]).ConfigureAwait(false));
+            throw new SocialException(404, "Not found.");
+        }
+
+        private async Task<object> Servers(string method, string[] seg, string me, JsonElement body)
+        {
+            if (seg.Length == 2 && method == "GET") return Service.Servers(me);
+            if (seg.Length == 2 && method == "POST") return Service.CreateServer(me, Str(body, "name"));
+            if (seg.Length == 3 && method == "PATCH") return Service.UpdateServer(me, seg[2], Str(body, "name"), Str(body, "icon"));
+            if (seg.Length == 4 && seg[3] == "channels" && method == "POST")
+                return Service.CreateChannel(me, seg[2], Str(body, "name"));
+            if (seg.Length == 5 && seg[3] == "channels" && method == "PATCH")
+                return Service.UpdateChannel(me, seg[2], seg[4], Str(body, "name"), Str(body, "topic"), Int(body, "position"));
+            if (seg.Length == 5 && seg[3] == "channels" && method == "DELETE")
+                return Service.DeleteChannel(me, seg[2], seg[4]);
+            if (seg.Length == 4 && seg[3] == "members" && method == "POST")
+                return Service.AddServerMember(me, seg[2], await Resolve(Str(body, "username")).ConfigureAwait(false));
+            if (seg.Length == 5 && seg[3] == "members" && method == "DELETE")
+                return Service.RemoveServerMember(me, seg[2], await Resolve(seg[4]).ConfigureAwait(false));
             throw new SocialException(404, "Not found.");
         }
 
