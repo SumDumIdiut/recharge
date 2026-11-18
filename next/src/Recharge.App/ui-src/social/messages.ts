@@ -32,6 +32,17 @@ const PAGE = 40;
 const drafts = new Drafts();
 
 /** A person's own picture and frame (hub image, then their profile look on top), at a fixed size. Falls back to coloured initials. */
+/** Make an element open `name`'s profile on click / Enter / Space. */
+function toProfile(el: HTMLElement, name: string): void {
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('title', name + '’s profile');
+  el.style.cursor = 'pointer';
+  const open = (e: Event): void => { e.stopPropagation(); e.preventDefault(); go(profileRoute(name)); };
+  el.addEventListener('click', open);
+  el.addEventListener('keydown', (e) => { const k = (e as KeyboardEvent).key; if (k === 'Enter' || k === ' ') open(e); });
+}
+
 function userAvatar(name: string, size = 32): HTMLElement {
   const slot = h('span', { className: 'msg-av', attrs: { 'data-user': name } });
   slot.style.setProperty('--sz', size + 'px');
@@ -39,6 +50,7 @@ function userAvatar(name: string, size = 32): HTMLElement {
   void hubAuthor(name).then((author) => {
     if (author && slot.isConnected) slot.replaceChildren(playerAvatar(author, size));
   });
+  toProfile(slot, name);
   return slot;
 }
 
@@ -50,6 +62,7 @@ function userName(name: string, className = 'msg-who'): HTMLElement {
   void hubAuthor(name).then((author) => {
     if (author && author.name_color && wrap.isConnected) wrap.replaceChildren(authorName(name, author.name_color, 'author'));
   });
+  toProfile(wrap, name);
   return wrap;
 }
 
@@ -77,6 +90,56 @@ function cardNode(card: Card): HTMLElement {
   const href = card.type === 'lobby' ? '#/lobbies' : libraryRoute(card.type === 'skin' ? 'skin' : 'map', card.id);
   if (href) node.appendChild(button(card.type === 'lobby' ? 'Join' : 'Open', { kind: 'secondary', onClick: () => go(href) }));
   return node;
+}
+
+// ---- lightweight message formatting: **bold**, *italic* / _italic_, ~~strike~~, ||spoiler||, `code` ----
+interface FmtRule { re: RegExp; make: (inner: string) => HTMLElement }
+const FMT_RULES: FmtRule[] = [
+  { re: /`([^`\n]+)`/, make: (s) => h('code', { className: 'msg-code', text: s }) },
+  { re: /\|\|([\s\S]+?)\|\|/, make: (s) => spoilerNode(s) },
+  { re: /\*\*([\s\S]+?)\*\*/, make: (s) => fmtInto(h('strong', {}), s) },
+  { re: /~~([\s\S]+?)~~/, make: (s) => fmtInto(h('s', {}), s) },
+  { re: /\*([^*\n]+?)\*|_([^_\n]+?)_/, make: (s) => fmtInto(h('em', {}), s) },
+];
+
+function spoilerNode(inner: string): HTMLElement {
+  const span = h('span', { className: 'msg-spoiler', attrs: { role: 'button', tabindex: '0', title: 'Spoiler — click to reveal' } });
+  fmtInto(span, inner);
+  const reveal = (e: Event): void => { e.stopPropagation(); span.classList.add('is-revealed'); };
+  span.addEventListener('click', reveal);
+  span.addEventListener('keydown', (e) => { const k = (e as KeyboardEvent).key; if (k === 'Enter' || k === ' ') reveal(e); });
+  return span;
+}
+
+/** Append text, turning newlines into <br> (and never injecting HTML — everything is a text node). */
+function appendTextLines(parent: Node, text: string): void {
+  const parts = text.split('\n');
+  parts.forEach((part, i) => {
+    if (i > 0) parent.appendChild(h('br'));
+    if (part) parent.appendChild(document.createTextNode(part));
+  });
+}
+
+/** Parse inline formatting into `parent` (earliest marker wins; code is literal). Safe: builds only text nodes and known tags. */
+function fmtInto<T extends Node>(parent: T, text: string): T {
+  let rest = text;
+  let guard = 0;
+  while (rest.length > 0 && guard++ < 10000) {
+    let best: { idx: number; len: number; node: HTMLElement } | null = null;
+    for (const r of FMT_RULES) {
+      const m = r.re.exec(rest);
+      if (m && (best === null || m.index < best.idx)) best = { idx: m.index, len: m[0].length, node: r.make(m[1] ?? m[2] ?? '') };
+    }
+    if (!best) { appendTextLines(parent, rest); break; }
+    if (best.idx > 0) appendTextLines(parent, rest.slice(0, best.idx));
+    parent.appendChild(best.node);
+    rest = rest.slice(best.idx + best.len);
+  }
+  return parent;
+}
+
+function renderMessageText(text: string): HTMLElement {
+  return fmtInto(h('div', { className: 'msg-text' }), text);
 }
 
 export function messagesView(initialUser?: string): View {
@@ -446,7 +509,7 @@ export function messagesView(initialUser?: string): View {
         userName(m.from, 'msg-who'),
         h('span', { className: 'msg-stamp dim', text: clock(m.ts), title: new Date(m.ts).toLocaleString() })));
     }
-    if (m.text) col.appendChild(h('div', { className: 'msg-text', text: m.text }));
+    if (m.text) col.appendChild(renderMessageText(m.text));
     if (m.card) col.appendChild(cardNode(m.card));
     wrap.append(gutter, col);
     if (m.id > 0) {
@@ -461,8 +524,15 @@ export function messagesView(initialUser?: string): View {
   function statusNode(): HTMLElement | null {
     const s = statusFor(thread, me, seenUpTo);
     if (!s) return null;
-    const node = h('div', { className: 'msg-status dim' + (s.text === 'Not sent' ? ' is-failed' : '') });
-    node.appendChild(document.createTextNode(s.text));
+    const node = h('div', { className: 'msg-status dim' + (s.kind === 'failed' ? ' is-failed' : '') });
+    if (s.kind === 'delivered' || s.kind === 'seen') {
+      const tick = h('span', { className: 'msg-tick' + (s.kind === 'seen' ? ' is-seen' : ''), attrs: { title: s.text, 'aria-label': s.text } });
+      tick.appendChild(icon('check', 14));
+      if (s.kind === 'seen') tick.appendChild(icon('check', 14));
+      node.appendChild(tick);
+    } else {
+      node.appendChild(document.createTextNode(s.text));
+    }
     const failed = thread.filter((m) => m.state === 'failed' && isMine(m, me));
     if (failed.length > 0) {
       const last = failed[failed.length - 1];

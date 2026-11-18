@@ -189,14 +189,17 @@ export function lastMineId(list: ThreadMessage[], me: string): number {
   return id;
 }
 
-/** The small status under your newest message: "Sending...", "Not sent", "Seen", or "Delivered". Empty when there is none. */
-export function statusFor(list: ThreadMessage[], me: string, seenUpTo: number): { key: string; text: string } | null {
+export type StatusKind = 'sending' | 'failed' | 'delivered' | 'seen';
+
+/** The small status under your newest message. `kind` lets the view show a green tick for delivered/seen instead of text. */
+export function statusFor(list: ThreadMessage[], me: string, seenUpTo: number): { key: string; text: string; kind: StatusKind } | null {
   let lastMine: ThreadMessage | null = null;
   for (const m of list) if (isMine(m, me)) lastMine = m;
   if (!lastMine) return null;
-  if (lastMine.state === 'sending') return { key: lastMine.cid, text: 'Sending...' };
-  if (lastMine.state === 'failed') return { key: lastMine.cid, text: 'Not sent' };
-  return { key: 'id' + lastMine.id, text: lastMine.id <= seenUpTo ? 'Seen' : 'Delivered' };
+  if (lastMine.state === 'sending') return { key: lastMine.cid, text: 'Sending...', kind: 'sending' };
+  if (lastMine.state === 'failed') return { key: lastMine.cid, text: 'Not sent', kind: 'failed' };
+  const seen = lastMine.id <= seenUpTo;
+  return { key: 'id' + lastMine.id, text: seen ? 'Seen' : 'Delivered', kind: seen ? 'seen' : 'delivered' };
 }
 
 // ---- conversation list and unread ----
