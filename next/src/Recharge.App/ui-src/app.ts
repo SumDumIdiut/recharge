@@ -13,6 +13,7 @@ import { notFoundPage } from './pages/notFound.js';
 import { initPerf } from './perf.js';
 import { initUnread } from './social/unread.js';
 import { initMessageAlerts } from './social/messageAlerts.js';
+import { initCallAlerts } from './social/callAlert.js';
 import { themeAllSelects } from './components/dropdown.js';
 
 const routes: PageRegistry = {
@@ -40,3 +41,4 @@ void router.start();
 void initPerf();
 initUnread();
 initMessageAlerts();
+initCallAlerts();

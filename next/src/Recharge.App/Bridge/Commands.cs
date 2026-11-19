@@ -45,6 +45,7 @@ namespace Recharge.App.Bridge
             LobbyCommands.Register(registry);
             MultiplayerCommands.Register(registry);
             SocialCommands.Register(registry);
+            VoiceCommands.Register(registry);
             SkinCommands.Register(registry);
             LoaderCommands.Register(registry);
             GunCommands.Register(registry);

@@ -121,6 +121,12 @@ namespace Recharge.App.Windows
                 _controller = await _env.CreateCoreWebView2ControllerAsync(_hwnd);
                 _controller.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x11, 0x11, 0x11);
                 CoreWebView2 web = _controller.CoreWebView2;
+                // Grant the first-party UI's microphone/camera requests (voice calls).
+                web.PermissionRequested += (sender, e) =>
+                {
+                    if (e.PermissionKind == CoreWebView2PermissionKind.Microphone || e.PermissionKind == CoreWebView2PermissionKind.Camera)
+                        e.State = CoreWebView2PermissionState.Allow;
+                };
                 bool dev = Environment.GetEnvironmentVariable("RECHARGE_DEVTOOLS") == "1";
                 web.Settings.AreDevToolsEnabled = dev;
                 web.Settings.AreDefaultContextMenusEnabled = dev;

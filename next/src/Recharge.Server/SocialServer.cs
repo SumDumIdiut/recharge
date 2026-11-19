@@ -15,7 +15,7 @@ using System.Threading.Tasks;
 namespace Recharge.Server
 {
     /// <summary>The HTTP + WebSocket front of <see cref="SocialService"/> (HttpListener, no ASP.NET).</summary>
-    public sealed class SocialServer : IDisposable
+    public sealed partial class SocialServer : IDisposable
     {
         private static readonly JsonSerializerOptions ApiJson = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -35,6 +35,18 @@ namespace Recharge.Server
             public TaskCompletionSource<bool> Signal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
+        // Voice presence only: Cloudflare session + published track names, never media or SDP.
+        private sealed class VoiceMember
+        {
+            public Conn Conn = null!;
+            public int ConnId;
+            public string Username = "";
+            public string SessionId = "";
+            public string[] Tracks = Array.Empty<string>();
+            public bool Muted;
+            public bool Cam;
+        }
+
         private const int MaxPollBuffer = 500;
         private static readonly TimeSpan PollIdle = TimeSpan.FromSeconds(45);
 
@@ -44,8 +56,12 @@ namespace Recharge.Server
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly object _connLock = new object();
         private readonly Dictionary<string, List<Conn>> _conns = new Dictionary<string, List<Conn>>(StringComparer.Ordinal);
+        private readonly object _voiceLock = new object();
+        private readonly Dictionary<string, Dictionary<int, VoiceMember>> _voice = new Dictionary<string, Dictionary<int, VoiceMember>>(StringComparer.Ordinal);
         private readonly RateLimiter _apiLimit;
         private readonly RateLimiter _anonLimit;
+        private readonly RateLimiter _voiceLimit;
+        private readonly CloudflareVoiceClient _voiceApi;
         private Task _accept = Task.CompletedTask;
         private Timer? _reaper;
         private int _nextConn;
@@ -53,7 +69,7 @@ namespace Recharge.Server
         public SocialService Service { get; }
         public int Port { get; private set; }
 
-        public SocialServer(SocialOptions options, IHubDirectory hub, IShareSigner signer)
+        public SocialServer(SocialOptions options, IHubDirectory hub, IShareSigner signer, CloudflareVoiceClient? voice = null)
         {
             _o = options;
             _hub = hub;
@@ -61,6 +77,8 @@ namespace Recharge.Server
             Service.Push += Deliver;
             _apiLimit = new RateLimiter(options.ApiPerMinute, TimeSpan.FromMinutes(1), options.Clock);
             _anonLimit = new RateLimiter(60, TimeSpan.FromMinutes(1), options.Clock);
+            _voiceLimit = new RateLimiter(120, TimeSpan.FromMinutes(1), options.Clock);
+            _voiceApi = voice ?? new CloudflareVoiceClient(clock: options.Clock);
         }
 
         public void Start()
@@ -385,8 +403,14 @@ namespace Recharge.Server
             }
             if (seg.Length < 2 || seg[0] != "api") throw new SocialException(404, "Not found.");
             _apiLimit.Hit(SocialService.Norm(me), "You are making requests too fast.");
+            if (seg[1] == "voice")
+            {
+                await VoiceApi(ctx, method, seg, me).ConfigureAwait(false);
+                return;
+            }
             bool mediaUpload = seg.Length == 4 && seg[3] == "media" && method == "POST";
-            bool emojiUpload = seg.Length == 2 && seg[0] == "api" && seg[1] == "emojis" && method == "POST";
+            bool emojiUpload = (seg.Length == 2 && seg[0] == "api" && seg[1] == "emojis" && method == "POST")
+                || (seg.Length == 4 && seg[1] == "servers" && seg[3] == "emojis" && method == "POST");
             JsonElement body = method == "GET" || method == "DELETE" ? default : await ReadBody(req, mediaUpload || emojiUpload ? _o.MaxMediaBodyBytes : _o.MaxBodyBytes).ConfigureAwait(false);
 
             object result;
@@ -555,6 +579,7 @@ namespace Recharge.Server
         {
             if (seg.Length == 2 && method == "POST")
                 return Service.UploadEmoji(me, Str(body, "shortcode"), Str(body, "mime"), Str(body, "data"));
+            if (seg.Length == 3 && seg[2] == "mine" && method == "GET") return Service.MyArsenal(me);
             if (seg.Length == 2 && method == "GET") return Service.ListEmojis();
             if (seg.Length == 3 && method == "DELETE")
             {
@@ -611,13 +636,36 @@ namespace Recharge.Server
             if (seg.Length == 2 && method == "POST") return Service.CreateServer(me, Str(body, "name"));
             if (seg.Length == 3 && method == "PATCH") return Service.UpdateServer(me, seg[2], Str(body, "name"), Str(body, "icon"));
             if (seg.Length == 4 && seg[3] == "channels" && method == "POST")
-                return Service.CreateChannel(me, seg[2], Str(body, "name"));
+                return Service.CreateChannel(me, seg[2], Str(body, "name"), Str(body, "kind"), Str(body, "categoryId"));
             if (seg.Length == 5 && seg[3] == "channels" && method == "PATCH")
-                return Service.UpdateChannel(me, seg[2], seg[4], Str(body, "name"), Str(body, "topic"), Int(body, "position"));
+                return Service.UpdateChannel(me, seg[2], seg[4], Str(body, "name"), Str(body, "topic"), Int(body, "position"), Str(body, "categoryId"));
             if (seg.Length == 5 && seg[3] == "channels" && method == "DELETE")
                 return Service.DeleteChannel(me, seg[2], seg[4]);
+            // categories
+            if (seg.Length == 4 && seg[3] == "categories" && method == "POST")
+                return Service.CreateCategory(me, seg[2], Str(body, "name"));
+            if (seg.Length == 5 && seg[3] == "categories" && method == "PATCH")
+                return Service.UpdateCategory(me, seg[2], seg[4], Str(body, "name"), Int(body, "position"));
+            if (seg.Length == 5 && seg[3] == "categories" && method == "DELETE")
+                return Service.DeleteCategory(me, seg[2], seg[4]);
+            // roles
+            if (seg.Length == 4 && seg[3] == "roles" && method == "POST")
+                return Service.CreateRole(me, seg[2], Str(body, "name"), Str(body, "color"), Flag(body, "admin") == true);
+            if (seg.Length == 5 && seg[3] == "roles" && method == "PATCH")
+                return Service.UpdateRole(me, seg[2], seg[4], Str(body, "name"), Str(body, "color"), Flag(body, "admin"), Int(body, "position"));
+            if (seg.Length == 5 && seg[3] == "roles" && method == "DELETE")
+                return Service.DeleteRole(me, seg[2], seg[4]);
+            // server emoji set
+            if (seg.Length == 4 && seg[3] == "emojis" && method == "GET")
+                return Service.ServerEmojis(me, seg[2]);
+            if (seg.Length == 4 && seg[3] == "emojis" && method == "POST")
+                return Service.AddServerEmoji(me, seg[2], Str(body, "shortcode"), Str(body, "mime"), Str(body, "data"));
+            if (seg.Length == 5 && seg[3] == "emojis" && method == "DELETE")
+                return Service.RemoveServerEmoji(me, seg[2], seg[4]);
             if (seg.Length == 4 && seg[3] == "members" && method == "POST")
                 return Service.AddServerMember(me, seg[2], await Resolve(Str(body, "username")).ConfigureAwait(false));
+            if (seg.Length == 6 && seg[3] == "members" && seg[5] == "roles" && method == "PUT")
+                return Service.SetMemberRoles(me, seg[2], await Resolve(seg[4]).ConfigureAwait(false), StrList(body, "roleIds").ToArray());
             if (seg.Length == 5 && seg[3] == "members" && method == "DELETE")
                 return Service.RemoveServerMember(me, seg[2], await Resolve(seg[4]).ConfigureAwait(false));
             throw new SocialException(404, "Not found.");
@@ -675,6 +723,7 @@ namespace Recharge.Server
                         if (list.Count == 0) _conns.Remove(key);
                     }
                 }
+                LeaveAllVoice(conn);
                 conn.Out.Writer.TryComplete();
                 Service.Disconnect(user.Username, conn.Id);
                 try { ws.Abort(); } catch (ObjectDisposedException) { }
@@ -697,6 +746,162 @@ namespace Recharge.Server
         }
 
         private void Send(Conn conn, object payload) => conn.Out.Writer.TryWrite(JsonSerializer.Serialize(payload, ApiJson));
+
+        // ---- voice rosters (ephemeral) ----
+
+        private static bool IsCall(string id) =>
+            id.StartsWith("dm:", StringComparison.Ordinal) || id.StartsWith("g:", StringComparison.Ordinal);
+
+        /// <summary>Voice rooms: server voice channels (walk-in) or DM/group conversations (ringing).</summary>
+        private string VoiceRoomId(HubUser user, JsonElement msg)
+        {
+            string id = Str(msg, "convId") ?? Str(msg, "channelId") ?? "";
+            if (id.StartsWith("ch:", StringComparison.Ordinal))
+            {
+                ChannelRec ch = Service.ChannelForMember(user.Username, id);
+                if (ch.Kind != "voice") throw new SocialException(400, "That channel isn't a voice channel.");
+                return ch.Id;
+            }
+            if (IsCall(id)) return Service.CallConversation(user.Username, id).Id;
+            throw new SocialException(400, "A conversation id is required.");
+        }
+
+        /// <summary>Call-only room id: ch: channels never ring.</summary>
+        private string CallRoomId(HubUser user, JsonElement msg)
+        {
+            string id = Str(msg, "convId") ?? Str(msg, "channelId") ?? "";
+            return Service.CallConversation(user.Username, id).Id;
+        }
+
+        private static string CallKindOf(JsonElement msg) => Str(msg, "kind") == "video" ? "video" : "audio";
+
+        /// <summary>Push a call frame to every member; optionally skip the acting user.</summary>
+        private void CallPush(string convId, string actor, object payload, bool exceptActor = false)
+        {
+            string[] members;
+            try { members = Service.CallConversation(actor, convId).Members; }
+            catch (SocialException) { return; }   // membership changed mid-call
+            string skip = SocialService.Norm(actor);
+            foreach (string member in members.Distinct())
+                if (!exceptActor || member != skip) Deliver(member, payload);
+        }
+
+        private static object[] VoiceMembers(IEnumerable<VoiceMember> members) =>
+            members.Select(m => (object)new { username = m.Username, sessionId = m.SessionId, tracks = m.Tracks, muted = m.Muted, cam = m.Cam }).ToArray();
+
+        private object[] VoiceMembersOf(string convId)
+        {
+            lock (_voiceLock)
+                return _voice.TryGetValue(convId, out Dictionary<int, VoiceMember>? roster) ? VoiceMembers(roster.Values) : Array.Empty<object>();
+        }
+
+        private void BroadcastVoice(string convId)
+        {
+            object state;
+            List<Conn> targets;
+            lock (_voiceLock)
+            {
+                if (!_voice.TryGetValue(convId, out Dictionary<int, VoiceMember>? roster)) return;
+                state = new { type = "voice.state", channelId = convId, members = VoiceMembers(roster.Values) };
+                targets = roster.Values.Select(m => m.Conn).ToList();
+            }
+            foreach (Conn c in targets) Send(c, state);
+        }
+
+        /// <summary>Caller holds _voiceLock.</summary>
+        private Dictionary<int, VoiceMember> VoiceRoster(string convId)
+        {
+            if (!_voice.TryGetValue(convId, out Dictionary<int, VoiceMember>? roster)) _voice[convId] = roster = new Dictionary<int, VoiceMember>();
+            return roster;
+        }
+
+        /// <summary>Caller holds _voiceLock.</summary>
+        private static VoiceMember VoiceMemberFor(Dictionary<int, VoiceMember> roster, Conn conn)
+        {
+            if (!roster.TryGetValue(conn.Id, out VoiceMember? m)) roster[conn.Id] = m = new VoiceMember { Conn = conn, ConnId = conn.Id, Username = conn.Name };
+            return m;
+        }
+
+        private void VoiceJoin(Conn conn, HubUser user, JsonElement msg, string? reference)
+        {
+            string id = VoiceRoomId(user, msg);
+            bool ring;
+            lock (_voiceLock)
+            {
+                Dictionary<int, VoiceMember> roster = VoiceRoster(id);
+                ring = IsCall(id) && roster.Count == 0;   // only the first joiner rings
+                VoiceMemberFor(roster, conn);
+            }
+            if (ring) CallPush(id, conn.Name, new { type = "call.ring", convId = id, from = conn.Name, kind = CallKindOf(msg) }, true);
+            BroadcastVoice(id);
+            Send(conn, new { type = "voice.state", channelId = id, members = VoiceMembersOf(id), @ref = reference });
+        }
+
+        private void CallDecline(Conn conn, HubUser user, JsonElement msg)
+        {
+            string id = CallRoomId(user, msg);
+            CallPush(id, conn.Name, new { type = "call.declined", convId = id, from = conn.Name });
+        }
+
+        private void VoicePublish(Conn conn, HubUser user, JsonElement msg)
+        {
+            string id = VoiceRoomId(user, msg);
+            string sessionId = Str(msg, "sessionId") ?? "";
+            string[] tracks = StrList(msg, "tracks").ToArray();
+            bool muted = Flag(msg, "muted") ?? false;
+            bool cam = Flag(msg, "cam") ?? false;
+            lock (_voiceLock)
+            {
+                VoiceMember m = VoiceMemberFor(VoiceRoster(id), conn);
+                m.SessionId = sessionId;
+                m.Tracks = tracks;
+                m.Muted = muted;
+                m.Cam = cam;
+            }
+            BroadcastVoice(id);
+        }
+
+        private void VoiceUpdate(Conn conn, HubUser user, JsonElement msg)
+        {
+            string id = VoiceRoomId(user, msg);
+            bool? muted = Flag(msg, "muted"), cam = Flag(msg, "cam");
+            lock (_voiceLock)
+            {
+                VoiceMember m = VoiceMemberFor(VoiceRoster(id), conn);
+                if (muted.HasValue) m.Muted = muted.Value;
+                if (cam.HasValue) m.Cam = cam.Value;
+            }
+            BroadcastVoice(id);
+        }
+
+        private void VoiceLeave(Conn conn, HubUser user, JsonElement msg)
+        {
+            string id = VoiceRoomId(user, msg);
+            bool changed, ended = false;
+            lock (_voiceLock)
+            {
+                changed = _voice.TryGetValue(id, out Dictionary<int, VoiceMember>? roster) && roster.Remove(conn.Id);
+                if (changed && roster!.Count == 0) { _voice.Remove(id); ended = IsCall(id); }
+            }
+            if (changed) BroadcastVoice(id);
+            if (ended) CallPush(id, conn.Name, new { type = "call.ended", convId = id });
+        }
+
+        private void LeaveAllVoice(Conn conn)
+        {
+            List<string> affected = new List<string>();
+            lock (_voiceLock)
+            {
+                foreach (var kv in _voice.ToList())
+                {
+                    if (!kv.Value.Remove(conn.Id)) continue;
+                    affected.Add(kv.Key);
+                    if (kv.Value.Count == 0) _voice.Remove(kv.Key);
+                }
+            }
+            foreach (string id in affected) BroadcastVoice(id);
+            foreach (string id in affected.Where(IsCall)) CallPush(id, conn.Name, new { type = "call.ended", convId = id });
+        }
 
         private async Task ReceiveLoop(Conn conn, WebSocket ws, HubUser user)
         {
@@ -759,6 +964,21 @@ namespace Recharge.Server
                         Send(conn, new { type = "sent", @ref = reference, message = sent });
                         break;
                     }
+                    case "voice.join":
+                        VoiceJoin(conn, user, msg, reference);
+                        break;
+                    case "voice.publish":
+                        VoicePublish(conn, user, msg);
+                        break;
+                    case "voice.update":
+                        VoiceUpdate(conn, user, msg);
+                        break;
+                    case "voice.leave":
+                        VoiceLeave(conn, user, msg);
+                        break;
+                    case "call.decline":
+                        CallDecline(conn, user, msg);
+                        break;
                 }
             }
             catch (SocialException e)

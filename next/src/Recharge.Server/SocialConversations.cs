@@ -136,7 +136,9 @@ namespace Recharge.Server
             if (id.StartsWith("ch:", StringComparison.Ordinal))
             {
                 // A channel id IS a conversation id; membership comes from the owning server, not a stored ConversationRec.
-                if (!_channels.TryGet(id, out ChannelRec? ch) || !_servers.TryGet(ch.ServerId, out ServerRec? s) || !s.Members.Contains(me)) throw notFound;
+                ChannelRec ch = ChannelForMember(me, id);
+                if (ch.Kind == "voice") throw new SocialException(400, "Voice channels don't carry messages.");
+                if (!_servers.TryGet(ch.ServerId, out ServerRec? s)) throw notFound;
                 return new ConversationRec { Id = id, Kind = "channel", Name = ch.Name, Members = s.Members, Owner = s.OwnerId, Created = ch.Created };
             }
             if (id.StartsWith("g:", StringComparison.Ordinal))
@@ -151,6 +153,14 @@ namespace Recharge.Server
                 return _convs.TryGet(id, out ConversationRec? d) ? d : DmRec(id, 0);
             }
             throw notFound;
+        }
+
+        /// <summary>DM/group membership for call signaling; ch: rooms are walk-in and never ring.</summary>
+        internal ConversationRec CallConversation(string meName, string id)
+        {
+            if (!IsConversationId(id) || id.StartsWith("ch:", StringComparison.Ordinal))
+                throw new SocialException(400, "Calls are only available in direct and group messages.");
+            return ConvFor(Norm(meName), id);
         }
 
         private static string OtherOf(ConversationRec c, string me) => c.Members.FirstOrDefault(k => k != me) ?? me;

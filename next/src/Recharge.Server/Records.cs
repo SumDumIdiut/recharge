@@ -85,15 +85,64 @@ namespace Recharge.Server
         public long Created { get; set; }
     }
 
-    /// <summary>A text channel in a server; its id is also the id of its conversation.</summary>
+    /// <summary>A channel in a server; text channel ids double as conversation ids, voice channels are call rooms.</summary>
     public sealed class ChannelRec
     {
         public string Id { get; set; } = "";
         public string ServerId { get; set; } = "";
         public string Name { get; set; } = "";
+        /// <summary>"text" or "voice".</summary>
+        public string Kind { get; set; } = "text";
         public string Topic { get; set; } = "";
         public int Position { get; set; }
+        /// <summary>The category this channel sits under, or "" for the uncategorised group. Old rows read as "".</summary>
+        public string CategoryId { get; set; } = "";
         public long Created { get; set; }
+    }
+
+    /// <summary>A named, ordered group of channels within a server (Discord-style category).</summary>
+    public sealed class CategoryRec
+    {
+        public string Id { get; set; } = "";
+        public string ServerId { get; set; } = "";
+        public string Name { get; set; } = "";
+        public int Position { get; set; }
+        public long Created { get; set; }
+    }
+
+    /// <summary>A cosmetic role: a coloured name label; Admin grants server management. Higher Position wins for colour.</summary>
+    public sealed class RoleRec
+    {
+        public string Id { get; set; } = "";
+        public string ServerId { get; set; } = "";
+        public string Name { get; set; } = "";
+        /// <summary>A #rrggbb colour, or "" for none.</summary>
+        public string Color { get; set; } = "";
+        public bool Admin { get; set; }
+        public int Position { get; set; }
+        public long Created { get; set; }
+    }
+
+    /// <summary>One member's role assignments in a server; keyed "serverId|userId".</summary>
+    public sealed class MemberRoleRec
+    {
+        public string ServerId { get; set; } = "";
+        public string UserId { get; set; } = "";
+        public string[] RoleIds { get; set; } = Array.Empty<string>();
+    }
+
+    /// <summary>A shortcode that belongs to a server's emoji set; keyed "serverId|shortcode". The image is the global EmojiRec.</summary>
+    public sealed class ServerEmojiRec
+    {
+        public string ServerId { get; set; } = "";
+        public string Shortcode { get; set; } = "";
+    }
+
+    /// <summary>A user's personal emoji arsenal: the shortcodes their picker offers, kept forever. Keyed by userId.</summary>
+    public sealed class ArsenalRec
+    {
+        public string UserId { get; set; } = "";
+        public string[] Shortcodes { get; set; } = Array.Empty<string>();
     }
 
     public sealed class ReadRec

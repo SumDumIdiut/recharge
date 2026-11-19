@@ -30,6 +30,9 @@
   <ItemGroup>
     <!-- Core API only (no WinForms/WPF), used by the plain Win32 shell in Windows/ -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" PrivateAssets="all" />
+    <!-- Native voice: WebRTC in the host (the Linux WebKitGTK webview has no RTCPeerConnection). Audio I/O is an ffmpeg CLI subprocess, not SIPSorceryMedia.FFmpeg (its AutoGen binds FFmpeg 7, the system has 8). -->
+    <PackageReference Include="SIPSorcery" Version="8.0.14" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
   </ItemGroup>
   <!-- The package's targets also reference its WPF and WinForms assemblies; the shell uses neither (plain Win32 + Core API), so drop them. -->
   <Target Name="DropWebView2Ui" BeforeTargets="ResolveAssemblyReferences;ResolveAssemblyReferencesDesignTime;FindReferenceAssembliesForReferences">

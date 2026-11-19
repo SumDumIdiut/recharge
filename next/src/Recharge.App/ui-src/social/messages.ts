@@ -1,5 +1,5 @@
 /** Messages: conversation list (DMs and groups), thread with history, replies, optimistic sends, live updates, read state. The rules live in convo.ts. */
-import { h } from '../dom.js';
+import { h, iconButton } from '../dom.js';
 import { go } from '../navigation.js';
 import { button } from '../components/button.js';
 import { emptyState, errorState } from '../components/emptyState.js';
@@ -9,18 +9,18 @@ import { authorName } from '../components/itemCard.js';
 import { describeError } from '../bridge.js';
 import { icon } from '../icons.js';
 import { emojiPopover } from './emojiPicker.js';
-import { customByShort, onCustomEmojis, setCustomEmojis } from './emojis.js';
+import { customByShort, onCustomEmojis, setArsenal, setCustomEmojis } from './emojis.js';
 import { currentUser } from '../account/session.js';
 import { fallbackColor, playerAvatar } from '../community/people.js';
 import { hubAuthor } from '../community/hubUsers.js';
 import { isVideoPath, libraryRoute, profileRoute } from '../community/format.js';
 import { imagePicker } from '../community/forms.js';
 import type { View } from '../community/forum.js';
-import { SocialError, createChannel, createServer, deleteChannel, deleteMessage, editMessage, listEmojis, listServers, react, renameChannel, setGroupProfile, socialJson, uploadChatMedia, userPath } from './api.js';
+import { socialMediaSrc, loadSocialBase, SocialError, createChannel, createServer, deleteChannel, deleteMessage, editMessage, listEmojis, myArsenal, listServers, react, renameChannel, renameServer, setGroupProfile, socialJson, uploadChatMedia, userPath, createCategory, updateCategory, deleteCategory, createRole, updateRole, deleteRole, setMemberRoles, listServerEmojis, addServerEmoji, removeServerEmoji, type ServerEmoji } from './api.js';
 import { handleDelete, handleEdit, handleReaction, openFeed, type FeedEvent } from './events.js';
 import {
   LIM, cleanText, isConvId, messagesRoute, normalizeConversation, normalizeConversations, normalizeFriends, normalizeMessage, normalizeMessages, normalizeServer,
-  presenceLabel, stateOf, validateGroupName, validateMessage, type Card, type Channel, type FriendsData, type Member, type ReplyRef, type Server,
+  presenceLabel, stateOf, validateGroupName, validateMessage, type Card, type Category, type Channel, type FriendsData, type Member, type ReplyRef, type Role, type Server,
 } from './model.js';
 import {
   Drafts, addPending, applyConversation, applyDelete, applyEdit, applyMessage, applyPresence, applyRead, applyReactions, buildEntries, clock, convIdOf, dmId, filterEntries, findEntry,
@@ -30,6 +30,8 @@ import {
 } from './convo.js';
 import { refreshUnread, setUnread } from './unread.js';
 import { setActiveConversation } from './messageAlerts.js';
+import { VoiceClient, type CallKind, type VoiceState } from './voice.js';
+import { CALL_ACCEPT_EVENT, takeCallJoin } from './callAlert.js';
 
 const PAGE = 40;
 const DEFAULT_GROUP_COLOR = '#2ea043';
@@ -80,7 +82,7 @@ function groupTile(name: string, size = 36, avatar = '', color = ''): HTMLElemen
   const tile = h('span', { className: 'group-tile' + (avatar ? ' has-avatar' : '') });
   tile.style.setProperty('--sz', size + 'px');
   tile.style.setProperty('--gc', color || fallbackColor(name));
-  if (avatar) tile.appendChild(h('img', { attrs: { src: avatar, alt: name + ' group picture', decoding: 'async' } }));
+  if (avatar) tile.appendChild(h('img', { attrs: { src: socialMediaSrc(avatar), alt: name + ' group picture', decoding: 'async' } }));
   else tile.appendChild(icon('users', Math.round(size * 0.55)));
   return tile;
 }
@@ -90,7 +92,7 @@ function serverTile(server: Server, size = 40): HTMLElement {
   const tile = h('span', { className: 'server-tile' + (server.icon ? ' has-avatar' : '') });
   tile.style.setProperty('--sz', size + 'px');
   tile.style.setProperty('--gc', fallbackColor(server.name));
-  if (server.icon) tile.appendChild(h('img', { attrs: { src: server.icon, alt: '', decoding: 'async' } }));
+  if (server.icon) tile.appendChild(h('img', { attrs: { src: socialMediaSrc(server.icon), alt: '', decoding: 'async' } }));
   else {
     const initials = server.name.trim().split(/\s+/).slice(0, 2).map((w) => w.charAt(0)).join('').toUpperCase() || '#';
     tile.appendChild(h('span', { className: 'server-initials', text: initials }));
@@ -99,7 +101,7 @@ function serverTile(server: Server, size = 40): HTMLElement {
 }
 
 const convPath = (key: string): string => '/api/conversations/' + userPath(key);
-const avatarUrl = (name: string): string => '/api/conversations/media/' + encodeURIComponent(name);
+const avatarUrl = (name: string): string => socialMediaSrc('/api/conversations/media/' + encodeURIComponent(name));
 
 /** A DM is addressed by the other person's name (which works before the chat has any messages); groups and channels by id. */
 function pathKey(e: Entry | undefined, id: string): string {
@@ -122,8 +124,9 @@ function mediaNode(urls: string[]): HTMLElement | null {
   if (urls.length === 0) return null;
   const strip = h('div', { className: 'msg-media' });
   for (const url of urls) {
-    if (isVideoPath(url)) strip.appendChild(h('video', { attrs: { src: url, controls: 'controls', playsinline: 'playsinline', preload: 'metadata' } }));
-    else strip.appendChild(h('img', { attrs: { src: url, alt: 'Attached picture', decoding: 'async' } }));
+    const src = socialMediaSrc(url);
+    if (isVideoPath(url)) strip.appendChild(h('video', { attrs: { src, controls: 'controls', playsinline: 'playsinline', preload: 'metadata' } }));
+    else strip.appendChild(h('img', { attrs: { src, alt: 'Attached picture', decoding: 'async' } }));
   }
   return strip;
 }
@@ -153,14 +156,14 @@ function shortcodeNode(short: string): HTMLElement {
   const full = ':' + short + ':';
   const custom = customByShort.get(short);
   if (!custom) return h('span', { text: full });
-  return h('img', { className: 'msg-emoji', attrs: { src: custom.url, alt: full, decoding: 'async' } });
+  return h('img', { className: 'msg-emoji', attrs: { src: socialMediaSrc(custom.url), alt: full, decoding: 'async' } });
 }
 
 /** Reaction chip face: custom art when registered, otherwise the emoji text. */
 function reactionFace(value: string): HTMLElement {
   const custom = customByShort.get(value);
   return custom
-    ? h('img', { className: 'msg-emoji', attrs: { src: custom.url, alt: '', decoding: 'async' } })
+    ? h('img', { className: 'msg-emoji', attrs: { src: socialMediaSrc(custom.url), alt: '', decoding: 'async' } })
     : h('span', { attrs: { 'aria-hidden': 'true' }, text: value });
 }
 
@@ -201,7 +204,8 @@ export function messagesView(initialUser?: string): View {
   const rail = h('nav', { className: 'server-rail', attrs: { 'aria-label': 'Servers' } });
   const listBox = h('aside', { className: 'conv-list', attrs: { 'aria-label': 'Conversations' } });
   const pane = h('section', { className: 'conv-pane' });
-  root.append(rail, listBox, pane);
+  const memberPane = h('aside', { className: 'member-pane', attrs: { 'aria-label': 'Members' }, hidden: true });
+  root.append(rail, listBox, pane, memberPane);
 
   let entries: Entry[] = [];
   let friendsData: FriendsData | null = null;
@@ -232,6 +236,15 @@ export function messagesView(initialUser?: string): View {
   let editFocusId: number | null = null;
   let uploading = false;
   let reactionTarget: ThreadMessage | null = null;
+  let voice: VoiceClient | null = null;
+  let voiceState: VoiceState | null = null;
+  let voiceError = '';
+  let voiceBusy = false;
+  let joinedVoiceId = '';   // the voice conv the user has committed to (shows their own tile + joined controls while media connects)
+  let voicePaneShown = false;
+  let deafened = false;
+  const speaking = new Set<string>();
+  const collapsedCats = new Set<string>();   // server channel categories the user has folded away (key: serverId:kind)
 
   const cur = (): Entry | undefined => findEntry(entries, current);
   const isGroup = (): boolean => (cur()?.kind === 'group') || current.startsWith('g:');
@@ -241,6 +254,8 @@ export function messagesView(initialUser?: string): View {
     for (const s of servers) { const ch = s.channels.find((c) => c.id === id); if (ch) return ch; }
     return undefined;
   };
+  const isVoice = (): boolean => channelOf(current)?.kind === 'voice';
+  const isCall = (): boolean => current.startsWith('dm:') || current.startsWith('g:');
   const serverOfChannel = (id: string): Server | undefined => servers.find((s) => s.channels.some((c) => c.id === id));
   const ownsServer = (s: Server | undefined): boolean => !!s && (
     s.owner.toLowerCase() === me.toLowerCase() || s.members.some((m) => m.admin && m.username.toLowerCase() === me.toLowerCase()));
@@ -274,6 +289,11 @@ export function messagesView(initialUser?: string): View {
   const mediaBox = h('div', { className: 'composer-media' }, pictures.element);
   const composer = h('form', { className: 'composer' }, replyBar, mediaBox, h('div', { className: 'composer-line' }, area, emoji.button, sendBtn), h('div', { className: 'composer-row' }, error, count));
   const threadBox = h('div', { className: 'thread-box' }, threadEl, jump);
+  const voiceNotice = h('p', { className: 'voice-notice', attrs: { role: 'status' }, hidden: true });
+  const voiceTiles = h('div', { className: 'voice-tiles' });
+  const voiceControls = h('div', { className: 'voice-controls' });
+  const voiceRoom = h('div', { className: 'voice-room' }, voiceNotice, voiceTiles, voiceControls);
+  const callDock = h('div', { className: 'call-dock', attrs: { hidden: 'hidden' } }, voiceRoom);
 
   // ---- list ----
   function rowAvatar(e: Entry): HTMLElement {
@@ -286,6 +306,7 @@ export function messagesView(initialUser?: string): View {
     servers = servers.some((x) => x.id === s.id) ? servers.map((x) => (x.id === s.id ? s : x)) : servers.concat(s);
     servers.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     serversLoaded = true;
+    if (isChannel() && serverOfChannel(current)?.id === s.id) paintMemberPane();
   }
 
   function paintRail(): void {
@@ -326,24 +347,130 @@ export function messagesView(initialUser?: string): View {
       channelItems.appendChild(h('p', { className: 'dim conv-empty', text: serversLoaded ? 'No servers yet. Use + to make one.' : 'Loading...' }));
       return;
     }
-    const title = h('div', { className: 'conv-titlebar' }, h('h2', { className: 'conv-title', text: s.name }));
-    if (ownsServer(s)) {
-      const add = button('Add channel', { kind: 'secondary', icon: 'plus', onClick: () => newChannel(s) });
-      add.classList.add('conv-new');
-      title.appendChild(add);
+    const manage = s.manage;
+    const title = h('div', { className: 'conv-titlebar channel-serverbar' }, h('h2', { className: 'conv-title', text: s.name }));
+    if (manage) {
+      const actions = h('div', { className: 'conv-title-actions' });
+      actions.append(
+        iconButton('New category', icon('plus', 16), () => newCategory(s), 'channel-head-btn'),
+        iconButton('Server settings', icon('settings', 16), () => openServerSettings(s), 'channel-head-btn'),
+      );
+      title.appendChild(actions);
     }
     channelHead.append(title, h('div', { className: 'channel-sub dim', text: s.members.length + (s.members.length === 1 ? ' member' : ' members') }));
-    for (const ch of s.channels) {
+
+    const channelRow = (ch: Channel): void => {
       const on = ch.id === current;
+      const voiceCh = ch.kind === 'voice';
       const row = h('button', {
-        className: 'channel-item' + (on ? ' is-on' : ''),
-        attrs: { type: 'button', 'aria-current': on ? 'true' : 'false', title: ch.topic || '#' + ch.name },
+        className: 'channel-item' + (on ? ' is-on' : '') + (voiceCh ? ' is-voice' : ''),
+        attrs: { type: 'button', 'aria-current': on ? 'true' : 'false', title: ch.topic || (voiceCh ? 'Voice: ' : '#') + ch.name },
       });
-      row.append(h('span', { className: 'channel-hash dim', text: '#' }), h('span', { className: 'channel-name', text: ch.name }));
+      row.append(h('span', { className: 'channel-hash dim' }, voiceCh ? icon('lobbies', 18) : h('span', { text: '#' })), h('span', { className: 'channel-name', text: ch.name }));
       row.addEventListener('click', () => void selectChannel(s, ch));
+      if (manage) row.addEventListener('contextmenu', (ev) => { ev.preventDefault(); openChannelMenu(s, ch, ev.clientX, ev.clientY); });
       channelItems.appendChild(row);
+      // Discord shows who is connected beneath a voice channel; we know the roster for the room we're in.
+      if (voiceCh && voiceState && voiceState.convId === ch.id && voiceState.members.length) {
+        const roster = h('ul', { className: 'channel-voice-roster', attrs: { 'aria-label': ch.name + ' voice members' } });
+        for (const m of voiceState.members) {
+          const nm = userName(m.username, 'channel-voice-name');
+          tintName(nm, s, m.username);
+          roster.appendChild(h('li', { className: 'channel-voice-member' + (m.muted ? ' is-muted' : '') + (speaking.has(m.username.toLowerCase()) ? ' is-speaking' : '') },
+            userAvatar(m.username, 24), nm,
+            m.cam ? icon('video', 14) : m.muted ? icon('x', 14) : h('span', { className: 'channel-voice-spk' })));
+        }
+        channelItems.appendChild(roster);
+      }
+    };
+
+    const kindOf = (c: Channel): 'text' | 'voice' => (c.kind === 'voice' ? 'voice' : 'text');
+    const group = (catId: string, label: string, cat?: Category, kind?: 'text' | 'voice'): void => {
+      const chans = s.channels.filter((c) => (c.categoryId || '') === catId && (!kind || kindOf(c) === kind))
+        .slice().sort((a, b) => (kindOf(a) === 'voice' ? 1 : 0) - (kindOf(b) === 'voice' ? 1 : 0) || (a.position - b.position) || a.name.localeCompare(b.name));
+      if (chans.length === 0 && !(manage && (cat || kind))) return;   // empty text/voice headers (and named categories) stay visible to managers
+      const key = s.id + ':' + (catId || '_uncat') + ':' + (kind || 'all');
+      const folded = collapsedCats.has(key);
+      const head = h('div', { className: 'channel-cat' });
+      const toggle = h('button', {
+        className: 'channel-cat-toggle',
+        attrs: { type: 'button', 'aria-expanded': folded ? 'false' : 'true', title: (folded ? 'Show ' : 'Hide ') + label },
+      }, h('span', { className: 'channel-cat-caret' }, icon(folded ? 'chevron-right' : 'chevron-down', 14)), h('span', { className: 'channel-cat-label', text: label }));
+      toggle.addEventListener('click', () => { if (folded) collapsedCats.delete(key); else collapsedCats.add(key); paintChannels(); });
+      head.appendChild(toggle);
+      if (manage) {
+        if (cat) head.appendChild(iconButton('Edit category', icon('settings', 14), () => editCategory(s, cat), 'channel-cat-add'));
+        head.appendChild(iconButton('Add channel', icon('plus', 16), () => newChannelDialog(s, catId, kind || 'text'), 'channel-cat-add'));
+      }
+      channelItems.appendChild(head);
+      if (!folded) for (const ch of chans) channelRow(ch);
+    };
+
+    // Uncategorised channels keep the Text / Voice split; named categories list their channels (text first).
+    group('', 'Text Channels', undefined, 'text');
+    group('', 'Voice Channels', undefined, 'voice');
+    for (const cat of s.categories) group(cat.id, cat.name, cat);
+    if (s.channels.length === 0 && !manage) channelItems.appendChild(h('p', { className: 'dim conv-empty', text: 'No channels yet.' }));
+  }
+
+  /** A member's highest role colour in this server, or '' when none. */
+  function serverRoleColor(s: Server, username: string): string {
+    const m = s.members.find((x) => x.username.toLowerCase() === username.toLowerCase());
+    if (!m) return '';
+    let best: Role | undefined;
+    for (const rid of m.roles) {
+      const r = s.roles.find((x) => x.id === rid);
+      if (r && r.color && (!best || r.position > best.position)) best = r;
     }
-    if (s.channels.length === 0) channelItems.appendChild(h('p', { className: 'dim conv-empty', text: 'No channels yet.' }));
+    return best ? best.color : '';
+  }
+
+  /** Paint a rendered name in the member's top role colour, if they have one. */
+  function tintName(el: HTMLElement, s: Server, username: string): void {
+    const color = serverRoleColor(s, username);
+    if (color) el.style.color = color;
+  }
+
+  /** A member's highest-position role (any role, not just coloured), for grouping. */
+  function topRole(s: Server, m: Member): Role | undefined {
+    let best: Role | undefined;
+    for (const rid of m.roles) { const r = s.roles.find((x) => x.id === rid); if (r && (!best || r.position > best.position)) best = r; }
+    return best;
+  }
+
+  /** Discord-style member list on the right of a server channel: online grouped by top role, then plain Online, then Offline. */
+  function paintMemberPane(): void {
+    const s = isChannel() ? serverOfChannel(current) : undefined;
+    if (!s) { memberPane.hidden = true; memberPane.replaceChildren(); return; }
+    memberPane.hidden = false;
+    memberPane.replaceChildren();
+    memberPane.appendChild(h('div', { className: 'member-pane-head', text: s.members.length + (s.members.length === 1 ? ' member' : ' members') }));
+
+    const online = s.members.filter((m) => m.state !== 'offline');
+    const offline = s.members.filter((m) => m.state === 'offline');
+    const groups: { label: string; color: string; members: Member[] }[] = [];
+    for (const r of s.roles) {
+      const mem = online.filter((m) => { const t = topRole(s, m); return t ? t.id === r.id : false; });
+      if (mem.length) groups.push({ label: r.name, color: r.color, members: mem });
+    }
+    const plainOnline = online.filter((m) => !topRole(s, m));
+    if (plainOnline.length) groups.push({ label: 'Online', color: '', members: plainOnline });
+    if (offline.length) groups.push({ label: 'Offline', color: '', members: offline });
+
+    for (const g of groups) {
+      const head = h('div', { className: 'member-pane-cat', text: g.label.toUpperCase() + ' — ' + g.members.length });
+      if (g.color) head.style.color = g.color;
+      memberPane.appendChild(head);
+      for (const m of g.members) {
+        const nm = userName(m.username, 'member-pane-name');
+        tintName(nm, s, m.username);
+        const row = h('a', { className: 'member-pane-row' + (m.state === 'offline' ? ' is-off' : ''), attrs: { href: profileRoute(m.username), title: m.username } },
+          h('span', { className: 'member-pane-av' }, userAvatar(m.username, 28), h('span', { className: 'presence-dot member-pane-dot is-' + m.state })), nm);
+        if (m.username.toLowerCase() === s.owner.toLowerCase()) row.appendChild(h('span', { className: 'role-admin-badge member-pane-badge', text: 'owner' }));
+        else if (m.admin) row.appendChild(h('span', { className: 'role-admin-badge member-pane-badge', text: 'admin' }));
+        memberPane.appendChild(row);
+      }
+    }
   }
 
   function syncListPane(): void {
@@ -411,13 +538,253 @@ export function messagesView(initialUser?: string): View {
     }));
   }
 
-  function newChannel(s: Server): void {
-    nameDialog('New channel', 'Channel name', 'Create channel', (name) => createChannel(s.id, name).then((ch) => {
+  function newChannelDialog(s: Server, categoryId = '', defaultKind: 'text' | 'voice' = 'text'): void {
+    const input = h('input', { className: 'input', attrs: { type: 'text', placeholder: 'Channel name', 'aria-label': 'Channel name', maxlength: '60', autocomplete: 'off' } });
+    const err = h('p', { className: 'form-error', attrs: { role: 'alert' }, hidden: true });
+    let kind: 'text' | 'voice' = defaultKind;
+    const textBtn = h('button', { className: 'seg' + (defaultKind === 'text' ? ' is-on' : ''), attrs: { type: 'button' } }, icon('forum', 16), h('span', { text: 'Text' }));
+    const voiceBtn = h('button', { className: 'seg' + (defaultKind === 'voice' ? ' is-on' : ''), attrs: { type: 'button' } }, icon('lobbies', 16), h('span', { text: 'Voice' }));
+    const pick = (k: 'text' | 'voice'): void => { kind = k; textBtn.classList.toggle('is-on', k === 'text'); voiceBtn.classList.toggle('is-on', k === 'voice'); };
+    textBtn.addEventListener('click', () => pick('text'));
+    voiceBtn.addEventListener('click', () => pick('voice'));
+    let busy = false;
+    const overlay = modal({
+      title: 'New channel', body: h('div', { className: 'group-form' }, h('div', { className: 'channel-kind-seg' }, textBtn, voiceBtn), input, err),
+      actions: [{ label: 'Cancel' }, {
+        label: 'Create channel', kind: 'primary',
+        onClick: () => {
+          const name = input.value.trim();
+          const problem = !name ? 'Give it a name.' : validateGroupName(name);
+          err.hidden = !problem; err.textContent = problem || '';
+          if (problem || busy) return false;
+          busy = true; closeModal(overlay);
+          createChannel(s.id, name, kind, categoryId || undefined).then((ch) => {
+            const fresh = servers.find((x) => x.id === s.id) || s;
+            mergeServer({ ...fresh, channels: fresh.channels.concat(ch).sort((a, b) => a.position - b.position) });
+            paintRail();
+            void selectChannel(servers.find((x) => x.id === s.id) || fresh, ch);
+          }).catch((x) => toast('Could not create channel: ' + describeError(x), 'error'));
+          return false;
+        },
+      }],
+    });
+  }
+
+  function newCategory(s: Server): void {
+    nameDialog('New category', 'Category name', 'Create category', (name) => createCategory(s.id, name).then((cat) => {
       const fresh = servers.find((x) => x.id === s.id) || s;
-      mergeServer({ ...fresh, channels: fresh.channels.concat(ch).sort((a, b) => a.position - b.position) });
-      paintRail();
-      void selectChannel(servers.find((x) => x.id === s.id) || fresh, ch);
+      mergeServer({ ...fresh, categories: fresh.categories.concat(cat).sort((a, b) => a.position - b.position) });
+      paintList();
     }));
+  }
+
+  function editCategory(s: Server, cat: Category): void {
+    const input = h('input', { className: 'input', attrs: { type: 'text', 'aria-label': 'Category name', maxlength: '60', autocomplete: 'off' } });
+    input.value = cat.name;
+    const err = h('p', { className: 'form-error', attrs: { role: 'alert' }, hidden: true });
+    let busy = false;
+    const overlay = modal({
+      title: 'Edit category', body: h('div', { className: 'group-form' }, input, err),
+      actions: [
+        {
+          label: 'Delete', kind: 'danger', onClick: () => {
+            if (busy) return false; busy = true; closeModal(overlay);
+            deleteCategory(s.id, cat.id).then(() => {
+              const fresh = servers.find((x) => x.id === s.id); if (!fresh) return;
+              mergeServer({ ...fresh, categories: fresh.categories.filter((c) => c.id !== cat.id), channels: fresh.channels.map((c) => (c.categoryId === cat.id ? { ...c, categoryId: '' } : c)) });
+              paintList();
+            }).catch((x) => toast('Could not delete category: ' + describeError(x), 'error'));
+            return false;
+          },
+        },
+        { label: 'Cancel' },
+        {
+          label: 'Save', kind: 'primary', onClick: () => {
+            const name = input.value.trim();
+            const problem = !name ? 'Give it a name.' : validateGroupName(name);
+            err.hidden = !problem; err.textContent = problem || '';
+            if (problem || busy) return false;
+            busy = true; closeModal(overlay);
+            updateCategory(s.id, cat.id, { name }).then((updated) => {
+              const fresh = servers.find((x) => x.id === s.id); if (!fresh) return;
+              mergeServer({ ...fresh, categories: fresh.categories.map((c) => (c.id === updated.id ? updated : c)) });
+              paintList();
+            }).catch((x) => toast('Could not rename category: ' + describeError(x), 'error'));
+            return false;
+          },
+        },
+      ],
+    });
+  }
+
+  function settingsSection(title: string, ...children: Node[]): HTMLElement {
+    return h('section', { className: 'settings-section' }, h('h3', { className: 'settings-h', text: title }), ...children);
+  }
+
+  function editRole(s: Server, role: Role | null, done: () => void): void {
+    const name = h('input', { className: 'input', attrs: { type: 'text', placeholder: 'Role name', 'aria-label': 'Role name', maxlength: '40', autocomplete: 'off' } });
+    name.value = role ? role.name : '';
+    const color = h('input', { className: 'role-color', attrs: { type: 'color', 'aria-label': 'Role colour' } });
+    color.value = role && role.color ? role.color : '#88ccff';
+    const noColor = h('input', { attrs: { type: 'checkbox' } });
+    noColor.checked = !!role && !role.color;
+    const admin = h('input', { attrs: { type: 'checkbox' } });
+    admin.checked = !!role && role.admin;
+    const err = h('p', { className: 'form-error', attrs: { role: 'alert' }, hidden: true });
+    let busy = false;
+    const body = h('div', { className: 'group-form' },
+      name,
+      h('label', { className: 'settings-check' }, color, h('span', { text: 'Name colour' })),
+      h('label', { className: 'settings-check' }, noColor, h('span', { text: 'No colour' })),
+      h('label', { className: 'settings-check' }, admin, h('span', { text: 'Admin — can manage this server' })),
+      err);
+    const overlay = modal({
+      title: role ? 'Edit role' : 'New role', body,
+      actions: [{ label: 'Cancel' }, {
+        label: 'Save', kind: 'primary', onClick: () => {
+          const nm = name.value.trim();
+          if (!nm) { err.hidden = false; err.textContent = 'Give it a name.'; return false; }
+          if (busy) return false; busy = true; closeModal(overlay);
+          const col = noColor.checked ? '' : color.value;
+          const p = role ? updateRole(s.id, role.id, { name: nm, color: col, admin: admin.checked }) : createRole(s.id, nm, col, admin.checked);
+          p.then(done).catch((x) => toast('Could not save role: ' + describeError(x), 'error'));
+          return false;
+        },
+      }],
+    });
+  }
+
+  function emojiAddRow(s: Server, done: () => void): HTMLElement {
+    const short = h('input', { className: 'input', attrs: { type: 'text', placeholder: 'shortcode', maxlength: '32', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Emoji shortcode' } });
+    const file = h('input', { className: 'settings-emoji-file', attrs: { type: 'file', accept: 'image/png,image/gif,image/webp', 'aria-label': 'Emoji image (PNG, GIF or WebP)' } });
+    const msg = h('p', { className: 'form-error', attrs: { role: 'alert' }, hidden: true });
+    const add = button('Add emoji', { kind: 'secondary', icon: 'plus', onClick: () => {
+      const sc = short.value.trim().toLowerCase();
+      const f = file.files && file.files[0];
+      if (!/^[a-z0-9_]{2,32}$/.test(sc)) { msg.hidden = false; msg.textContent = 'Shortcode: 2-32 letters, numbers or underscores.'; return; }
+      if (!f) { msg.hidden = false; msg.textContent = 'Choose a PNG, GIF or WebP image.'; return; }
+      msg.hidden = true;
+      addServerEmoji(s.id, sc, f).then(() => { short.value = ''; file.value = ''; done(); }).catch((x) => { msg.hidden = false; msg.textContent = describeError(x); });
+    } });
+    return h('div', { className: 'settings-emoji-add' }, h('div', { className: 'settings-emoji-add-row' }, file), h('div', { className: 'settings-emoji-add-row' }, short, add), msg);
+  }
+
+  function openServerSettings(s0: Server): void {
+    const body = h('div', { className: 'server-settings' });
+    let emojis: ServerEmoji[] = [];
+    const cur = (): Server => servers.find((x) => x.id === s0.id) || s0;
+    const refresh = (): void => { void loadServers().then(() => render()); };
+
+    const render = (): void => {
+      const s = cur();
+      body.replaceChildren();
+
+      // Overview — rename
+      const nameInput = h('input', { className: 'input', attrs: { type: 'text', 'aria-label': 'Server name', maxlength: '60', autocomplete: 'off' } });
+      nameInput.value = s.name;
+      const saveName = button('Save', { kind: 'primary', onClick: () => {
+        const name = nameInput.value.trim(); if (!name) return;
+        renameServer(s.id, name).then((up) => { mergeServer(up); render(); }).catch((x) => toast('Could not rename: ' + describeError(x), 'error'));
+      } });
+      body.appendChild(settingsSection('Server name', h('div', { className: 'settings-row' }, nameInput, saveName)));
+
+      // Roles
+      const rolesBox = h('div', { className: 'settings-roles' });
+      for (const r of s.roles) {
+        const chip = h('span', { className: 'role-chip', text: r.name });
+        if (r.color) chip.style.color = r.color;
+        rolesBox.appendChild(h('div', { className: 'settings-list-row' },
+          chip,
+          r.admin ? h('span', { className: 'role-admin-badge', text: 'admin' }) : h('span'),
+          h('div', { className: 'settings-row-actions' },
+            button('Edit', { kind: 'ghost', onClick: () => editRole(s, r, refresh) }),
+            button('Delete', { kind: 'ghost', onClick: () => deleteRole(s.id, r.id).then(refresh).catch((x) => toast('Could not delete role: ' + describeError(x), 'error')) }))));
+      }
+      if (s.roles.length === 0) rolesBox.appendChild(h('p', { className: 'dim', text: 'No roles yet.' }));
+      rolesBox.appendChild(button('Add role', { kind: 'secondary', icon: 'plus', onClick: () => editRole(s, null, refresh) }));
+
+      const membersBox = h('div', { className: 'settings-members' });
+      for (const m of s.members) {
+        const row = h('div', { className: 'settings-member-row' });
+        const nm = userName(m.username, 'settings-member-name'); tintName(nm, s, m.username);
+        row.append(userAvatar(m.username, 28), nm);
+        if (m.username.toLowerCase() === s.owner.toLowerCase()) row.appendChild(h('span', { className: 'role-admin-badge', text: 'owner' }));
+        const toggles = h('div', { className: 'role-toggles' });
+        for (const r of s.roles) {
+          const on = m.roles.includes(r.id);
+          const t = h('button', { className: 'role-toggle' + (on ? ' is-on' : ''), attrs: { type: 'button', 'aria-pressed': on ? 'true' : 'false' }, text: r.name });
+          if (r.color && on) { t.style.borderColor = r.color; t.style.color = r.color; }
+          t.addEventListener('click', () => {
+            const next = on ? m.roles.filter((x) => x !== r.id) : m.roles.concat(r.id);
+            setMemberRoles(s.id, m.username, next).then(refresh).catch((x) => toast('Could not set roles: ' + describeError(x), 'error'));
+          });
+          toggles.appendChild(t);
+        }
+        row.appendChild(toggles);
+        membersBox.appendChild(row);
+      }
+      body.appendChild(settingsSection('Roles', rolesBox, s.roles.length ? h('p', { className: 'dim settings-note', text: 'Give members roles:' }) : h('span'), membersBox));
+
+      // Emoji
+      const grid = h('div', { className: 'settings-emoji-grid' });
+      for (const e of emojis) {
+        const cell = h('div', { className: 'settings-emoji' },
+          h('img', { attrs: { src: socialMediaSrc(e.url), alt: ':' + e.shortcode + ':', title: ':' + e.shortcode + ':', decoding: 'async' } }),
+          h('span', { className: 'settings-emoji-code dim', text: ':' + e.shortcode + ':' }));
+        cell.appendChild(iconButton('Remove emoji', icon('x', 14), () => {
+          removeServerEmoji(s.id, e.shortcode).then(() => { emojis = emojis.filter((x) => x.shortcode !== e.shortcode); render(); }).catch((x) => toast('Could not remove: ' + describeError(x), 'error'));
+        }, 'settings-emoji-rm'));
+        grid.appendChild(cell);
+      }
+      if (emojis.length === 0) grid.appendChild(h('p', { className: 'dim', text: 'No server emoji yet.' }));
+      body.appendChild(settingsSection('Emoji',
+        h('p', { className: 'dim settings-note', text: 'Anyone who joins this server unlocks these in their own emoji picker — forever, anywhere.' }),
+        grid, emojiAddRow(s, () => { void reloadEmojis(); })));
+    };
+
+    const reloadEmojis = async (): Promise<void> => {
+      try { emojis = await listServerEmojis(s0.id); } catch { emojis = []; }
+      render();
+    };
+    modal({ title: 'Server settings', body, actions: [{ label: 'Done' }] });
+    render();
+    void reloadEmojis();
+  }
+
+  let closeContextMenu: (() => void) | null = null;
+  /** A small floating menu at (x, y); each item is [label, run] (a 'danger' third entry tints it). Closes on outside click or Escape. */
+  function contextMenu(x: number, y: number, items: { label: string; run: () => void; danger?: boolean }[]): void {
+    if (closeContextMenu) closeContextMenu();
+    const menu = h('div', { className: 'ctx-menu', attrs: { role: 'menu' } });
+    for (const it of items) {
+      const b = h('button', { className: 'ctx-item' + (it.danger ? ' is-danger' : ''), attrs: { type: 'button', role: 'menuitem' }, text: it.label });
+      b.addEventListener('click', () => { close(); it.run(); });
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    const mw = menu.offsetWidth || 180, mh = menu.offsetHeight || 80;
+    menu.style.left = Math.round(Math.min(x, window.innerWidth - mw - 8)) + 'px';
+    menu.style.top = Math.round(Math.min(y, window.innerHeight - mh - 8)) + 'px';
+    const onDown = (ev: Event): void => { if (!menu.contains(ev.target as Node)) close(); };
+    const onKey = (ev: KeyboardEvent): void => { if (ev.key === 'Escape') close(); };
+    function close(): void {
+      menu.remove();
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+      if (closeContextMenu === close) closeContextMenu = null;
+    }
+    closeContextMenu = close;
+    setTimeout(() => {
+      document.addEventListener('pointerdown', onDown, true);
+      document.addEventListener('keydown', onKey, true);
+    }, 0);
+  }
+
+  function openChannelMenu(s: Server, ch: Channel, x: number, y: number): void {
+    contextMenu(x, y, [
+      { label: 'Rename channel', run: () => renameChannelDialog(s, ch) },
+      { label: 'Delete channel', run: () => removeChannel(s, ch), danger: true },
+    ]);
   }
 
   function renameChannelDialog(s: Server, ch: Channel): void {
@@ -464,7 +831,7 @@ export function messagesView(initialUser?: string): View {
       if (isChannel()) { const ch = channelOf(current); if (ch) currentName = ch.name; }
       paintRail();
       paintList();
-      if (current) paintHead();
+      if (current) { paintHead(); syncVoicePane(); }
     } catch {
       // The rail is still usable (Home and + work); a reconnect reload will retry.
     }
@@ -478,7 +845,7 @@ export function messagesView(initialUser?: string): View {
     if (isChannel()) { const ch = channelOf(current); if (ch) currentName = ch.name; }
     paintRail();
     paintList();
-    if (current) paintHead();
+    if (current) { paintHead(); syncVoicePane(); }
   }
 
   function paintList(): void {
@@ -512,8 +879,17 @@ export function messagesView(initialUser?: string): View {
   // ---- thread header ----
   const amAdmin = (e: Entry | undefined): boolean => !!e && e.members.some((m) => m.admin && m.username.toLowerCase() === me.toLowerCase());
 
+  /** DM/group only: channels already have their own Join voice control. */
+  function callButtons(): HTMLElement {
+    const busy = !!voice && voice.convId === current && (voice.joined || voiceBusy);
+    return h('div', { className: 'thread-call-actions' },
+      button('Call', { kind: 'ghost', icon: 'phone', title: 'Start an audio call', disabled: busy, onClick: () => startCall('audio') }),
+      button('Video call', { kind: 'ghost', icon: 'camera', title: 'Start a video call', disabled: busy, onClick: () => startCall('video') }));
+  }
+
   function paintHead(): void {
     headEl.replaceChildren();
+    paintMemberPane();
     const e = cur();
     const back = h('button', { className: 'thread-back', attrs: { type: 'button', 'aria-label': isChannel() ? 'Back to channels' : 'Back to conversations' }, text: '‹ Back' });
     back.addEventListener('click', () => leave());
@@ -522,19 +898,14 @@ export function messagesView(initialUser?: string): View {
       const s = serverOfChannel(current);
       const ch = channelOf(current);
       const name = ch ? ch.name : currentName;
-      headEl.appendChild(h('span', { className: 'channel-hash thread-hash dim', text: '#' }));
+      const voiceCh = isVoice();
+      headEl.appendChild(h('span', { className: 'channel-hash thread-hash dim' }, voiceCh ? icon('lobbies', 22) : h('span', { text: '#' })));
       headEl.appendChild(h('div', { className: 'thread-who' },
         h('span', { className: 'thread-channel-name', text: name }),
-        h('div', { className: 'social-sub', text: ch && ch.topic ? ch.topic : (s ? s.name : '') })));
-      if (s && ch && ownsServer(s)) {
-        const actions = h('div', { className: 'channel-actions' });
-        const rename = button('Rename', { kind: 'ghost', onClick: () => renameChannelDialog(s, ch) });
-        const del = button('Delete', { kind: 'ghost', onClick: () => removeChannel(s, ch) });
-        rename.classList.add('channel-action');
-        del.classList.add('channel-action');
-        actions.append(rename, del);
-        headEl.appendChild(actions);
-      }
+        h('div', { className: 'social-sub', text: voiceCh
+          ? (voiceState && voiceState.convId === current ? voiceState.members.length : 0) + ' in voice'
+          : (ch && ch.topic ? ch.topic : (s ? s.name : '')) })));
+      // Channel management lives on the sidebar row's right-click menu now, not here.
       return;
     }
     if (isGroup()) {
@@ -554,6 +925,7 @@ export function messagesView(initialUser?: string): View {
         if (e.members.length > 5) stack.appendChild(h('span', { className: 'member-more', text: '+' + (e.members.length - 5) }));
         headEl.appendChild(stack);
       }
+      headEl.appendChild(callButtons());
       headEl.appendChild(groupMenu(e));
       return;
     }
@@ -564,6 +936,7 @@ export function messagesView(initialUser?: string): View {
     text.appendChild(h('a', { className: 'social-name', attrs: { href: profileRoute(name) } }, userName(name, 'thread-name')));
     text.appendChild(h('div', { className: 'social-sub' }, h('span', { className: 'presence-dot is-' + state }), presenceLabel(state, e ? e.detail : '')));
     headEl.appendChild(text);
+    headEl.appendChild(callButtons());
   }
 
   // ---- group menu and dialogs ----
@@ -1065,8 +1438,11 @@ export function messagesView(initialUser?: string): View {
       col.appendChild(quote);
     }
     if (row.first) {
+      const who = userName(m.from, 'msg-who');
+      const chSrv = isChannel() ? serverOfChannel(current) : undefined;
+      if (chSrv) tintName(who, chSrv, m.from);
       const head = h('div', { className: 'msg-head' },
-        userName(m.from, 'msg-who'),
+        who,
         h('span', { className: 'msg-stamp dim', text: clock(m.ts), title: new Date(m.ts).toLocaleString() }));
       if (!deleted && (m.editedAt || 0) > 0) head.appendChild(h('span', { className: 'msg-edited dim', text: '(edited)', title: 'Edited ' + new Date(m.editedAt as number).toLocaleString() }));
       col.appendChild(head);
@@ -1170,18 +1546,151 @@ export function messagesView(initialUser?: string): View {
     banner.hidden = !offline;
   }
 
+  // ---- voice rooms and calls ----
+  function stopVoice(): void {
+    if (voice) voice.leave();
+    voice = null;
+    voiceState = null;
+    voiceError = '';
+    voiceBusy = false;
+    joinedVoiceId = '';
+    deafened = false;
+    speaking.clear();
+  }
+
+  function ensureVoice(): VoiceClient | null {
+    if (disposed || !(isVoice() || isCall())) return null;
+    if (voice && voice.convId === current) return voice;
+    stopVoice();
+    voice = new VoiceClient(current, me, {
+      onState: (state) => { voiceState = state; paintVoiceRoom(); paintHead(); },
+      onTrack: () => paintVoiceRoom(),
+      onTrackLost: () => paintVoiceRoom(),
+      onError: (message) => { voiceError = message; paintVoiceRoom(); },
+      onLevel: (name, active) => { if (active) speaking.add(name); else speaking.delete(name); paintVoiceRoom(); },
+    });
+    if (isVoice()) voice.enter();   // channel roster preview only; calls ring on join
+    return voice;
+  }
+
+  /** Servers arrive after the hash route; switch the pane once a voice channel is known. */
+  function syncVoicePane(): void {
+    if (!current || disposed) return;
+    const nowVoice = isVoice();
+    if (nowVoice !== voicePaneShown) paintPane();
+    if (nowVoice) ensureVoice();
+    else if (voice && !isCall()) stopVoice();
+  }
+
+  async function joinVoice(kind: CallKind = 'audio'): Promise<void> {
+    let client = ensureVoice();
+    if (!client || voiceBusy || client.joined) return;
+    if (client.closed) { stopVoice(); client = ensureVoice(); if (!client) return; }
+    joinedVoiceId = current;   // you're in the room now (your tile shows); media connects in the background
+    voiceBusy = true;
+    voiceError = '';
+    paintVoiceRoom();
+    paintHead();
+    await client.join(kind);
+    voiceBusy = false;
+    if (!disposed && voice === client) { paintVoiceRoom(); paintHead(); }
+  }
+
+  function startCall(kind: CallKind): void {
+    if (!disposed && isCall()) void joinVoice(kind);
+  }
+
+  /** An accepted incoming call joins from whichever view the router lands in. */
+  function usePendingCall(): void {
+    if (disposed || !current) return;
+    const next = takeCallJoin(current);
+    if (next) void joinVoice(next.kind);
+  }
+
+  function leaveVoice(): void {
+    const wasCall = isCall();
+    stopVoice();
+    if (!disposed) { if (wasCall) paintPane(); else if (isVoice()) paintVoiceRoom(); }
+  }
+
+  function paintVoiceRoom(): void {
+    if (disposed || !voiceRoom.isConnected || !(isVoice() || isCall())) return;
+    callDock.hidden = !(isCall() && !!voice && voice.convId === current);
+    voiceNotice.hidden = !voiceError;
+    voiceNotice.textContent = voiceError;
+    voiceTiles.replaceChildren();
+    const inThisRoom = joinedVoiceId === current;
+    const members = voiceState && voiceState.convId === current ? voiceState.members.slice() : [];
+    // Once you've joined, your own tile shows straight away (Discord-style), even before the SFU roster round-trips.
+    if (inThisRoom && !members.some((m) => m.username.toLowerCase() === me.toLowerCase())) {
+      members.unshift({ username: me, muted: voice ? voice.isMuted : false, cam: voice ? voice.cameraOn : false } as never);
+    }
+    if (members.length === 0) {
+      voiceTiles.appendChild(h('p', { className: 'dim voice-empty', text: voice
+        ? (isCall() ? 'Connecting...' : 'You are the first one here.')
+        : 'Nobody here yet. Join to see who is in this room.' }));
+    }
+    for (const m of members) {
+      const mine = m.username.toLowerCase() === me.toLowerCase();
+      const tile = h('div', {
+        className: 'voice-tile' + (mine ? ' is-me' : '') + (m.muted ? ' is-muted' : '') + (speaking.has(m.username.toLowerCase()) ? ' is-speaking' : ''),
+      });
+      tile.appendChild(userAvatar(m.username, 64));
+      tile.appendChild(h('div', { className: 'voice-person' },
+        userName(m.username, 'voice-name'),
+        h('span', { className: 'voice-state dim', text: m.muted ? 'Muted' : m.cam ? 'Camera on' : mine ? 'You' : '' })));
+      if (voice) {
+        const audio = voice.mediaFor(m.username, 'mic');
+        if (audio) { audio.classList.add('voice-media-mic'); tile.appendChild(audio); }
+      }
+      if (voice && m.cam) {
+        const video = voice.mediaFor(m.username, 'cam');
+        if (video) { video.classList.add('voice-cam'); tile.appendChild(video); }
+      }
+      voiceTiles.appendChild(tile);
+    }
+    voiceControls.replaceChildren();
+    if (!inThisRoom) {
+      const label = isCall() ? (voiceBusy ? 'Calling...' : 'Join call') : voiceBusy ? 'Joining...' : 'Join voice';
+      const join = button(label, { kind: 'primary', icon: isCall() ? 'phone' : 'lobbies', disabled: voiceBusy, onClick: () => { void joinVoice(); } });
+      voiceControls.append(join, h('span', { className: 'voice-hint dim', text: members.length
+        ? members.length + (members.length === 1 ? ' person here' : ' people here')
+        : isCall() ? 'Ringing...' : 'Be the first to talk' }));
+      return;
+    }
+    if (voiceBusy || !voice || !voice.joined) voiceControls.appendChild(h('span', { className: 'voice-hint dim', text: voiceError || 'Connecting audio…' }));
+    voiceControls.append(
+      button(voice.isMuted ? 'Unmute' : 'Mute', { kind: voice.isMuted ? 'secondary' : 'primary', icon: 'forum', onClick: () => voice && voice.toggleMute() }),
+      button(voice.cameraOn ? 'Camera off' : 'Camera on', { kind: 'secondary', icon: 'image', onClick: () => { if (voice) void voice.toggleCamera(); } }),
+      button(deafened ? 'Undeafen' : 'Deafen', { kind: 'secondary', icon: 'bell', onClick: () => { deafened = !deafened; if (voice) voice.setDeafened(deafened); paintVoiceRoom(); } }),
+      button('Leave', { kind: 'danger', icon: 'x', onClick: () => leaveVoice() }),
+    );
+  }
+
   function paintPane(): void {
     pane.replaceChildren();
     root.classList.toggle('is-thread', !!current);
     if (!current) {
+      voicePaneShown = false;
       pane.appendChild(activeServerId
         ? emptyState('forum', 'Pick a channel', 'Choose a channel on the left to read and send messages.')
         : emptyState('forum', 'Pick a conversation', 'Choose someone on the left to read and send messages, or start a group.'));
       return;
     }
     paintHead();
+    const voiceNow = isVoice();
+    voicePaneShown = voiceNow;
+    if (voiceNow) {
+      ensureVoice();
+      pane.append(headEl, voiceRoom);
+      paintVoiceRoom();
+      return;
+    }
     area.placeholder = isChannel() ? 'Message #' + (channelOf(current)?.name || currentName) : isGroup() ? 'Message the group' : 'Write a message';
-    pane.append(headEl, banner, threadBox, composer);
+    if (callDock.firstChild !== voiceRoom) callDock.appendChild(voiceRoom);
+    pane.append(headEl, banner, callDock, threadBox, composer);
+    callDock.hidden = !(voice && voice.convId === current);
+    if (!callDock.hidden) paintVoiceRoom();
     paintBanner();
     paintReplyBar();
     paintThread({ forceBottom: true });
@@ -1189,6 +1698,7 @@ export function messagesView(initialUser?: string): View {
 
   function leave(): void {
     if (closeMenu) closeMenu();
+    stopVoice();
     drafts.set(current, area.value);
     editing = null;
     editFocusId = null;
@@ -1200,6 +1710,7 @@ export function messagesView(initialUser?: string): View {
     try { history.replaceState(null, '', messagesRoute()); } catch { /* the address is cosmetic */ }
     paintList();
     paintPane();
+    paintMemberPane();
   }
 
   // ---- read state ----
@@ -1287,8 +1798,9 @@ export function messagesView(initialUser?: string): View {
   }
 
   async function select(id: string, name: string): Promise<void> {
-    if (id === current && threadReady) { area.focus(); return; }
+    if (id === current && (isVoice() ? !!voice : threadReady)) { area.focus(); return; }
     if (closeMenu) closeMenu();
+    if (id !== current) stopVoice();
     drafts.set(current, area.value);
     editing = null;
     editFocusId = null;
@@ -1311,7 +1823,9 @@ export function messagesView(initialUser?: string): View {
     area.value = drafts.get(id);
     autosize();
     updateCount();
-    await loadThread();
+    if (isVoice()) threadReady = true;   // voice channels have no message history
+    else await loadThread();
+    usePendingCall();
     area.focus();
   }
 
@@ -1457,6 +1971,14 @@ export function messagesView(initialUser?: string): View {
     syncUnread();
   }
 
+  const onCallAccept = (event: Event): void => {
+    const detail = (event as CustomEvent<{ convId: string; kind: CallKind }>).detail;
+    if (!detail || detail.convId !== current) return;   // a remounted view consumes the pending join
+    const next = takeCallJoin(current);
+    if (next) void joinVoice(next.kind);
+  };
+  window.addEventListener(CALL_ACCEPT_EVENT, onCallAccept);
+
   const stop = openFeed((event: FeedEvent) => {
     if (disposed) return;
     if (event.type === 'message') {
@@ -1491,6 +2013,11 @@ export function messagesView(initialUser?: string): View {
       entries = removeEntry(entries, id);
       if (id === current) leave(); else paintList();
       syncUnread();
+    } else if (event.type === 'call.ended' || event.type === 'call.declined') {
+      if (String(event.convId || '') === current && isCall() && voice && (event.type === 'call.ended' || !voice.joined)) {
+        stopVoice();
+        paintPane();
+      }
     } else if (event.type === 'server') {
       takeServer(event.server);
     } else if (event.type === 'server-left') {
@@ -1511,7 +2038,7 @@ export function messagesView(initialUser?: string): View {
       if (!offline) {
         for (const m of thread) if (m.state === 'failed' && !refused.has(m.cid)) resend(m.cid);   // back online: try the unsent ones again
         window.clearTimeout(reload);
-        reload = window.setTimeout(() => { void loadList(); void loadServers(); if (current) void loadThread(); void refreshEmojis(); }, 150);
+        reload = window.setTimeout(() => { void loadList(); void loadServers(); if (current && !isVoice()) void loadThread(); void refreshEmojis(); }, 150);
       }
     } else if (event.type === 'friends' || event.type === 'reset') {
       window.clearTimeout(reload);
@@ -1519,9 +2046,13 @@ export function messagesView(initialUser?: string): View {
     }
   });
 
-  // Custom emojis are global and server-stored: load them on open, and repaint messages whenever the set changes.
+  // Emoji: the full registry renders every :shortcode: for everyone; the arsenal is what the picker offers (own uploads +
+  // everything unlocked by joining servers). Load both on open and repaint when either changes.
   function refreshEmojis(): Promise<void> {
-    return listEmojis().then(setCustomEmojis).catch(() => undefined);
+    return Promise.all([
+      listEmojis().then(setCustomEmojis).catch(() => undefined),
+      myArsenal().then(setArsenal).catch(() => undefined),
+    ]).then(() => undefined);
   }
   const offEmojiChanges = onCustomEmojis(() => paintThread());
 
@@ -1532,15 +2063,17 @@ export function messagesView(initialUser?: string): View {
   if (current) { setActiveConversation(current); area.value = drafts.get(current); }
   autosize();
   updateCount();
-  const ready = Promise.all([loadList(), loadServers(), current ? loadThread() : Promise.resolve(), refreshEmojis()]).then(() => undefined);
+  const ready = Promise.all([loadSocialBase(), loadList(), loadServers(), current ? loadThread() : Promise.resolve(), refreshEmojis()]).then(() => { usePendingCall(); });
 
   return {
     element: root,
     ready,
     dispose(): void {
+      stopVoice();
       disposed = true;
       setActiveConversation(null);
       window.clearTimeout(reload);
+      window.removeEventListener(CALL_ACCEPT_EVENT, onCallAccept);
       document.removeEventListener('visibilitychange', onVisible);
       if (closeMenu) closeMenu();
       offEmojiChanges();

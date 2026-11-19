@@ -1,7 +1,7 @@
 /** Reusable emoji popover: category tabs, custom-art tab with upload, caret-safe pick callback. */
 import { h } from '../dom.js';
-import { CUSTOM_EMOJIS, EMOJI_CATEGORIES, onCustomEmojis, setCustomEmojis, type CustomEmoji } from './emojis.js';
-import { listEmojis, uploadEmoji } from './api.js';
+import { ARSENAL, EMOJI_CATEGORIES, onCustomEmojis, setArsenal, setCustomEmojis, type CustomEmoji } from './emojis.js';
+import { listEmojis, myArsenal, socialMediaSrc, uploadEmoji } from './api.js';
 
 const SHORT_RE = /^[a-z0-9_]{2,32}$/;
 const EMOJI_TYPES = ['image/png', 'image/gif', 'image/webp'];
@@ -54,17 +54,17 @@ export function emojiPopover(onPick: (value: string, custom?: CustomEmoji) => vo
     grid.setAttribute('aria-label', tabName + ' emoji');
     uploadBox.hidden = tabName !== 'Custom';
     if (tabName === 'Custom') {
-      if (CUSTOM_EMOJIS.length === 0) {
-        grid.appendChild(h('p', { className: 'emoji-empty dim', text: 'No custom emoji yet' }));
+      if (ARSENAL.length === 0) {
+        grid.appendChild(h('p', { className: 'emoji-empty dim', text: 'No custom emoji yet — upload one, or join a server to collect its emoji' }));
         return;
       }
-      for (const custom of CUSTOM_EMOJIS) {
+      for (const custom of ARSENAL) {
         const value = pickerValue(custom);
         const item = h('button', {
           className: 'emoji-item emoji-item-custom',
           title: value,
           attrs: { type: 'button', 'aria-label': value },
-        }, h('img', { attrs: { src: custom.url, alt: '', decoding: 'async' } }));
+        }, h('img', { attrs: { src: socialMediaSrc(custom.url), alt: '', decoding: 'async' } }));
         item.addEventListener('click', () => pick(value, custom));
         grid.appendChild(item);
       }
@@ -153,7 +153,8 @@ export function emojiPopover(onPick: (value: string, custom?: CustomEmoji) => vo
     say('Uploading...');
     try {
       await uploadEmoji(sc, file);
-      setCustomEmojis(await listEmojis());   // refresh the shared set for this picker and all open views
+      setCustomEmojis(await listEmojis());   // refresh the render registry for all open views
+      setArsenal(await myArsenal());         // the upload also landed in my own arsenal
       fileInput.value = '';
       shortInput.value = '';
       say('Added :' + sc + ':', true);

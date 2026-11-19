@@ -42,6 +42,15 @@ namespace Recharge.App.Native
         internal static extern IntPtr webkit_user_content_manager_new();
 
         [DllImport(Lib)]
+        internal static extern void webkit_settings_set_enable_media_stream(IntPtr settings, int enabled);
+
+        [DllImport(Lib)]
+        internal static extern void webkit_settings_set_enable_webrtc(IntPtr settings, int enabled);
+
+        [DllImport(Lib)]
+        internal static extern void webkit_permission_request_allow(IntPtr request);
+
+        [DllImport(Lib)]
         internal static extern IntPtr webkit_user_script_new(
             [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
             int injectedFrames,

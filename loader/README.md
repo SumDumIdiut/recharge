@@ -1,5 +1,7 @@
 # RechargeLoader
 
+> **Note:** this describes the earlier RechargeLoader. The current Recharge (the C#/.NET app under `next/`) ships its own .NET loader; this doc is kept for reference. See the main [`README.md`](../README.md).
+
 RechargeLoader is the mod-loading framework for **IGTAP** (*an Incremental
 Game That's Also a Platformer*). It lets independent mods load into the real
 game, get a handle on real game objects (the pause menu, in particular), and

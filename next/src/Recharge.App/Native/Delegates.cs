@@ -20,4 +20,7 @@ namespace Recharge.App.Native
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void GAsyncReadyCallback(IntPtr sourceObject, IntPtr result, IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int WebKitPermissionRequestCallback(IntPtr webView, IntPtr request, IntPtr userData);
 }

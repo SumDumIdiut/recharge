@@ -1,5 +1,7 @@
 # Tauri + Vanilla
 
+> **Legacy.** This is the old Tauri desktop app. The current Recharge is the C#/.NET app under `next/` (source in the sibling `recharge-next` tree). See the main [`README.md`](../README.md).
+
 This template should help get you started developing with Tauri in vanilla HTML, CSS and Javascript.
 
 ## Recommended IDE Setup

@@ -74,6 +74,41 @@ namespace Recharge.App.Game
             return true;
         }
 
+        /// <summary>The Steam appid from the game's app manifest (steamapps/appmanifest_&lt;id&gt;.acf whose installdir matches the game
+        /// folder), or null. Steam-installed games usually have no steam_appid.txt, so this is the normal way to learn the appid.</summary>
+        public static string? AppIdFromManifest(string gameDir)
+        {
+            try
+            {
+                string installName = new DirectoryInfo(gameDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).Name;
+                string? common = Path.GetDirectoryName(gameDir);                         // .../steamapps/common
+                string? steamapps = common != null ? Path.GetDirectoryName(common) : null; // .../steamapps
+                if (steamapps == null || !Directory.Exists(steamapps)) return null;
+                foreach (string acf in Directory.EnumerateFiles(steamapps, "appmanifest_*.acf"))
+                {
+                    string text = File.ReadAllText(acf);
+                    string? dir = VdfValue(text, "installdir");
+                    if (dir != null && dir.Equals(installName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string? id = VdfValue(text, "appid");
+                        if (id != null && id.Length > 0 && id.Length <= 12 && IsDigits(id)) return id;
+                    }
+                }
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        /// <summary>First quoted value after a quoted key in a Steam VDF blob (enough for an appmanifest).</summary>
+        private static string? VdfValue(string vdf, string key)
+        {
+            int i = vdf.IndexOf("\"" + key + "\"", StringComparison.OrdinalIgnoreCase);
+            if (i < 0) return null;
+            int q1 = vdf.IndexOf('"', i + key.Length + 2); if (q1 < 0) return null;
+            int q2 = vdf.IndexOf('"', q1 + 1); if (q2 < 0) return null;
+            return vdf.Substring(q1 + 1, q2 - q1 - 1).Trim();
+        }
+
         /// <summary>
         /// game.launch: when the game is already connected only the intent is sent; otherwise the build is switched when asked (modded or
         /// vanilla), the game is started, and the intent is sent as soon as it connects. Returns {launched, intent?, build?}.
@@ -105,7 +140,8 @@ namespace Recharge.App.Game
             }
 
             string game = _findGame() ?? throw new InvalidOperationException("io: IGTAP wasn't found");
-            string appId = ReadAppId(game) ?? throw new InvalidOperationException("io: no steam_appid.txt in the game folder");
+            string appId = ReadAppId(game) ?? AppIdFromManifest(game)
+                ?? throw new InvalidOperationException("io: couldn't find IGTAP's Steam app id (no steam_appid.txt and no Steam app manifest for the game)");
             await WaitForPreviousGameToExit(game).ConfigureAwait(false);
             if (modded != null && _switchBuild != null)
             {

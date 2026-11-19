@@ -1,5 +1,7 @@
 # Game runner
 
+> **Legacy.** Part of the old Tauri-based Recharge. See the main [`README.md`](../README.md).
+
 A tiny Electron app that plays a Unity WebGL build in its own window. Recharge
 downloads the Electron runtime on demand (it isn't bundled) and starts this:
 

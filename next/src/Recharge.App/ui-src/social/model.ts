@@ -11,12 +11,16 @@ export interface Card { type: 'map' | 'skin' | 'lobby'; id: string; name: string
 export interface ReplyRef { id: number; from: string; text: string }
 export type Reactions = Record<string, string[]>;
 export interface Message { id: number; convId: string; from: string; to: string; text: string; card: Card | null; ts: number; cid: string; replyTo: ReplyRef | null; reactions?: Reactions; editedAt?: number; deletedAt?: number; media?: string[] }
-export interface Member { username: string; state: PresenceState; admin: boolean }
+export interface Member { username: string; state: PresenceState; admin: boolean; roles: string[] }
+/** A cosmetic server role: a coloured name label; admin grants management. */
+export interface Role { id: string; name: string; color: string; admin: boolean; position: number }
+/** A named group of channels within a server. */
+export interface Category { id: string; name: string; position: number }
 export interface Conversation { id: string; kind: 'dm' | 'group'; name: string; color?: string; avatar?: string; members: Member[]; last: Message | null; unread: number; friend: boolean; state: PresenceState }
 export interface MessagePage { messages: Message[]; hasMore: boolean; readUpTo: number; seenUpTo: number; conversation: Conversation | null }
-/** A server's text channel. Its id is also the conversation id used by the message endpoints. */
-export interface Channel { id: string; name: string; topic: string; position: number }
-export interface Server { id: string; name: string; icon: string; owner: string; members: Member[]; channels: Channel[] }
+/** A server channel. Text ids double as conversation ids; voice ids are call rooms. */
+export interface Channel { id: string; name: string; topic: string; position: number; kind?: 'text' | 'voice'; categoryId: string }
+export interface Server { id: string; name: string; icon: string; owner: string; manage: boolean; members: Member[]; channels: Channel[]; categories: Category[]; roles: Role[] }
 
 const STATES: PresenceState[] = ['online', 'game', 'lobby', 'editing', 'offline'];
 
@@ -102,7 +106,21 @@ export function normalizeMessage(raw: unknown): Message {
 
 export function normalizeMember(raw: unknown): Member {
   const o = obj(raw);
-  return { username: text(o.username), state: stateOf(o.state), admin: o.admin === true };
+  return { username: text(o.username), state: stateOf(o.state), admin: o.admin === true, roles: list(o.roles).map(text).filter(Boolean) };
+}
+
+export function normalizeRole(raw: unknown): Role | null {
+  const o = obj(raw);
+  const id = text(o.id);
+  if (!id) return null;
+  return { id, name: text(o.name) || 'role', color: text(o.color), admin: o.admin === true, position: num(o.position) };
+}
+
+export function normalizeCategory(raw: unknown): Category | null {
+  const o = obj(raw);
+  const id = text(o.id);
+  if (!id) return null;
+  return { id, name: text(o.name) || 'category', position: num(o.position) };
 }
 
 /** A conversation from the server; null when it is unusable (no name). Old servers sent `username` instead of `name`. */
@@ -136,7 +154,10 @@ export function normalizeChannel(raw: unknown): Channel | null {
   const o = obj(raw);
   const id = text(o.id);
   if (!id) return null;
-  return { id, name: text(o.name) || 'channel', topic: text(o.topic), position: num(o.position) };
+  const channel: Channel = { id, name: text(o.name) || 'channel', topic: text(o.topic), position: num(o.position), categoryId: text(o.categoryId) };
+  // Only voice is marked: text channels keep the old shape for callers that compare objects.
+  if (o.kind === 'voice' || o.type === 'voice') channel.kind = 'voice';
+  return channel;
 }
 
 /** A server from GET /api/servers or a pushed `server` event; null when it has no id. */
@@ -147,8 +168,12 @@ export function normalizeServer(raw: unknown): Server | null {
   const channels = list(o.channels).map(normalizeChannel).filter((c): c is Channel => c !== null)
     .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
   return {
-    id, name: text(o.name) || id, icon: text(o.icon), owner: text(o.owner),
+    id, name: text(o.name) || id, icon: text(o.icon), owner: text(o.owner), manage: o.manage === true,
     members: list(o.members).map(normalizeMember).filter((m) => m.username), channels,
+    categories: list(o.categories).map(normalizeCategory).filter((c): c is Category => c !== null)
+      .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name)),
+    roles: list(o.roles).map(normalizeRole).filter((r): r is Role => r !== null)
+      .sort((a, b) => b.position - a.position || a.name.localeCompare(b.name)),
   };
 }
 

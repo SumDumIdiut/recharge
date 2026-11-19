@@ -33,6 +33,11 @@ namespace Recharge.Server
         private readonly JsonlStore<EmojiRec> _emojis;
         private readonly JsonlStore<ServerRec> _servers;
         private readonly JsonlStore<ChannelRec> _channels;
+        private readonly JsonlStore<CategoryRec> _categories;
+        private readonly JsonlStore<RoleRec> _roles;
+        private readonly JsonlStore<MemberRoleRec> _memberRoles;
+        private readonly JsonlStore<ServerEmojiRec> _serverEmojis;
+        private readonly JsonlStore<ArsenalRec> _arsenals;
         private readonly Dictionary<string, List<MessageRec>> _byConv = new Dictionary<string, List<MessageRec>>(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<int, Live>> _live = new Dictionary<string, Dictionary<int, Live>>(StringComparer.Ordinal);
         private readonly RateLimiter _messageLimit;
@@ -81,6 +86,11 @@ namespace Recharge.Server
             _emojis = new JsonlStore<EmojiRec>(System.IO.Path.Combine(dir, "emojis.jsonl"));
             _servers = new JsonlStore<ServerRec>(System.IO.Path.Combine(dir, "servers.jsonl"));
             _channels = new JsonlStore<ChannelRec>(System.IO.Path.Combine(dir, "channels.jsonl"));
+            _categories = new JsonlStore<CategoryRec>(System.IO.Path.Combine(dir, "categories.jsonl"));
+            _roles = new JsonlStore<RoleRec>(System.IO.Path.Combine(dir, "roles.jsonl"));
+            _memberRoles = new JsonlStore<MemberRoleRec>(System.IO.Path.Combine(dir, "memberroles.jsonl"));
+            _serverEmojis = new JsonlStore<ServerEmojiRec>(System.IO.Path.Combine(dir, "serveremojis.jsonl"));
+            _arsenals = new JsonlStore<ArsenalRec>(System.IO.Path.Combine(dir, "arsenal.jsonl"));
             Migrate();
             foreach (MessageRec m in _messages.Items.Values.OrderBy(m => m.Id))
             {

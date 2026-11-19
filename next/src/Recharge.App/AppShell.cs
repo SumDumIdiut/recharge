@@ -11,6 +11,7 @@ namespace Recharge.App
     internal sealed class AppShell
     {
         private static readonly GtkDestroyCallback DestroyCallback = OnDestroy;
+        private static readonly WebKitPermissionRequestCallback PermissionCallback = OnPermissionRequest;
 
         private AppShell(IntPtr window, IntPtr view, BridgeHost bridge)
         {
@@ -50,8 +51,19 @@ namespace Recharge.App
             IntPtr userContentManager = WebKit.webkit_user_content_manager_new();
             IntPtr view = WebKit.webkit_web_view_new_with_user_content_manager(userContentManager);
 
+            // The first-party UI asks for the mic/camera for voice calls; grant those permission requests.
+            GObject.g_signal_connect_data(
+                view,
+                "permission-request",
+                Marshal.GetFunctionPointerForDelegate(PermissionCallback),
+                IntPtr.Zero,
+                IntPtr.Zero,
+                0);
+
             IntPtr settings = WebKit.webkit_web_view_get_settings(view);
             WebKit.webkit_settings_set_enable_smooth_scrolling(settings, 1);
+            WebKit.webkit_settings_set_enable_media_stream(settings, 1);
+            WebKit.webkit_settings_set_enable_webrtc(settings, 1);
             WebKit.webkit_settings_set_enable_developer_extras(
                 settings,
                 Environment.GetEnvironmentVariable("RECHARGE_DEVTOOLS") == "1" ? 1 : 0);
@@ -77,5 +89,12 @@ namespace Recharge.App
         internal void Load(string uri) => WebKit.webkit_web_view_load_uri(View, uri);
 
         private static void OnDestroy(IntPtr widget, IntPtr userData) => Gtk.gtk_main_quit();
+
+        // The WebView hosts only our own UI, which requests the mic/camera for voice calls — grant it.
+        private static int OnPermissionRequest(IntPtr webView, IntPtr request, IntPtr userData)
+        {
+            WebKit.webkit_permission_request_allow(request);
+            return 1; // TRUE: request handled
+        }
     }
 }

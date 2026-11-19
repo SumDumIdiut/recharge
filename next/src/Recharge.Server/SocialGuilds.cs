@@ -6,7 +6,7 @@ using System.Security.Cryptography;
 
 namespace Recharge.Server
 {
-    /// <summary>Servers and their text channels. Channel ids resolve as conversations in <see cref="SocialService"/>.</summary>
+    /// <summary>Servers and their channels. Text channel ids resolve as conversations; voice channels are call rooms.</summary>
     public sealed partial class SocialService
     {
         private const int ChannelTopicChars = 280;
@@ -35,18 +35,63 @@ namespace Recharge.Server
             return c;
         }
 
+        /// <summary>A channel whose server the user belongs to; shared by text conversations and voice signaling.</summary>
+        internal ChannelRec ChannelForMember(string meName, string channelId)
+        {
+            string me = Norm(meName);
+            if (!channelId.StartsWith("ch:", StringComparison.Ordinal) ||
+                !_channels.TryGet(channelId, out ChannelRec? c) ||
+                !_servers.TryGet(c.ServerId, out ServerRec? s) || !s.Members.Contains(me))
+                throw new SocialException(404, "That channel was not found.");
+            return c;
+        }
+
         private object ChannelView(ChannelRec c) => new
         {
-            id = c.Id, serverId = c.ServerId, name = c.Name, topic = c.Topic,
-            position = c.Position, created = c.Created, type = "text",
+            id = c.Id, serverId = c.ServerId, name = c.Name, kind = c.Kind, topic = c.Topic,
+            position = c.Position, categoryId = c.CategoryId, created = c.Created, type = c.Kind,
         };
+
+        // ---- roles / categories helpers ----
+        private IEnumerable<CategoryRec> CategoriesOf(string serverId) =>
+            _categories.Items.Values.Where(c => c.ServerId == serverId).OrderBy(c => c.Position).ThenBy(c => c.Created);
+
+        private IEnumerable<RoleRec> RolesOf(string serverId) =>
+            _roles.Items.Values.Where(r => r.ServerId == serverId).OrderByDescending(r => r.Position).ThenBy(r => r.Created);
+
+        private string[] MemberRoleIds(string serverId, string user) =>
+            _memberRoles.TryGet(serverId + "|" + user, out MemberRoleRec? mr)
+                ? mr.RoleIds.Where(id => _roles.TryGet(id, out RoleRec? r) && r.ServerId == serverId).ToArray()
+                : Array.Empty<string>();
+
+        /// <summary>The owner, or a member wearing a role marked Admin.</summary>
+        private bool IsAdmin(ServerRec s, string user)
+        {
+            if (s.OwnerId == user) return true;
+            foreach (string rid in MemberRoleIds(s.Id, user))
+                if (_roles.TryGet(rid, out RoleRec? r) && r.Admin) return true;
+            return false;
+        }
+
+        /// <summary>A server the user may manage (owner or an admin role). 403 otherwise.</summary>
+        private ServerRec ManagedServerFor(string me, string id)
+        {
+            ServerRec s = ServerFor(me, id);
+            if (!IsAdmin(s, me)) throw new SocialException(403, "Only the server's owner or an admin can do that.");
+            return s;
+        }
+
+        private object RoleView(RoleRec r) => new { id = r.Id, name = r.Name, color = r.Color, admin = r.Admin, position = r.Position };
 
         private object ServerView(ServerRec s, string me) => new
         {
             id = s.Id, name = s.Name,
             icon = IsAvatarName(s.Icon) && File.Exists(Path.Combine(_mediaDir, s.Icon)) ? MediaUrl(s.Icon) : "",
             owner = Display(s.OwnerId), ownerId = s.OwnerId, created = s.Created,
-            members = s.Members.Select(k => (object)new { username = Display(k), state = MemberState(me, k), admin = k == s.OwnerId }).ToList(),
+            manage = IsAdmin(s, me),
+            members = s.Members.Select(k => (object)new { username = Display(k), state = MemberState(me, k), admin = IsAdmin(s, k), roles = MemberRoleIds(s.Id, k) }).ToList(),
+            categories = CategoriesOf(s.Id).Select(c => (object)new { id = c.Id, name = c.Name, position = c.Position }).ToList(),
+            roles = RolesOf(s.Id).Select(RoleView).ToList(),
             channels = ChannelsOf(s.Id).Select(ChannelView).ToList(),
         };
 
@@ -56,12 +101,12 @@ namespace Recharge.Server
                 Notify(member, new { type = "server", server = ServerView(s, member) });
         }
 
-        private ChannelRec AddChannelLocked(ServerRec s, string name, string topic, int position)
+        private ChannelRec AddChannelLocked(ServerRec s, string name, string topic, int position, string kind)
         {
             var c = new ChannelRec
             {
                 Id = "ch:" + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant(),
-                ServerId = s.Id, Name = name, Topic = topic, Position = position, Created = Now(),
+                ServerId = s.Id, Name = name, Kind = kind, Topic = topic, Position = position, Created = Now(),
             };
             _channels.Put(c.Id, c);
             return c;
@@ -91,7 +136,7 @@ namespace Recharge.Server
                     Name = title, OwnerId = me, Members = new[] { me }, Created = Now(),
                 };
                 _servers.Put(s.Id, s);
-                AddChannelLocked(s, "general", "", 0);
+                AddChannelLocked(s, "general", "", 0, "text");
                 PushServer(s);
                 return ServerView(s, me);
             }
@@ -102,7 +147,7 @@ namespace Recharge.Server
         {
             lock (_gate)
             {
-                ServerRec s = OwnedServerFor(Norm(meName), id);
+                ServerRec s = ManagedServerFor(Norm(meName), id);
                 if (name is not null)
                 {
                     string title = CleanGroupName(name);
@@ -122,25 +167,40 @@ namespace Recharge.Server
             }
         }
 
-        public object CreateChannel(string meName, string id, string? name)
+        public object CreateChannel(string meName, string id, string? name, string? kind, string? categoryId = null)
         {
             lock (_gate)
             {
-                ServerRec s = OwnedServerFor(Norm(meName), id);
+                ServerRec s = ManagedServerFor(Norm(meName), id);
                 string title = CleanGroupName(name);
                 if (title.Length == 0) throw new SocialException(400, "A channel needs a name.");
+                string channelKind = (kind ?? "text").Trim().ToLowerInvariant();
+                if (channelKind != "text" && channelKind != "voice") throw new SocialException(400, "A channel is either text or voice.");
+                string cat = CategoryIn(s, categoryId);
                 int next = ChannelsOf(s.Id).Select(c => c.Position).DefaultIfEmpty(-1).Max() + 1;
-                ChannelRec c = AddChannelLocked(s, title, "", next);
+                ChannelRec c = AddChannelLocked(s, title, "", next, channelKind);
+                c.CategoryId = cat;
+                _channels.Put(c.Id, c);
                 PushServer(s);
                 return ChannelView(c);
             }
         }
 
-        public object UpdateChannel(string meName, string id, string channelId, string? name, string? topic, int? position)
+        /// <summary>Validate a category id against the server; "" or null → uncategorised.</summary>
+        private string CategoryIn(ServerRec s, string? categoryId)
+        {
+            string cat = (categoryId ?? "").Trim();
+            if (cat.Length == 0) return "";
+            if (!_categories.TryGet(cat, out CategoryRec? c) || c.ServerId != s.Id)
+                throw new SocialException(404, "That category was not found.");
+            return cat;
+        }
+
+        public object UpdateChannel(string meName, string id, string channelId, string? name, string? topic, int? position, string? categoryId = null)
         {
             lock (_gate)
             {
-                ServerRec s = OwnedServerFor(Norm(meName), id);
+                ServerRec s = ManagedServerFor(Norm(meName), id);
                 ChannelRec c = ChannelFor(s, channelId);
                 if (name is not null)
                 {
@@ -155,6 +215,7 @@ namespace Recharge.Server
                     c.Topic = t;
                 }
                 if (position is not null) c.Position = (int)Math.Clamp(position.Value, -1000, 1000);
+                if (categoryId is not null) c.CategoryId = CategoryIn(s, categoryId);
                 _channels.Put(c.Id, c);
                 PushServer(s);
                 return ChannelView(c);
@@ -165,7 +226,7 @@ namespace Recharge.Server
         {
             lock (_gate)
             {
-                ServerRec s = OwnedServerFor(Norm(meName), id);
+                ServerRec s = ManagedServerFor(Norm(meName), id);
                 ChannelRec c = ChannelFor(s, channelId);
                 if (ChannelsOf(s.Id).Count() <= 1) throw new SocialException(400, "A server needs at least one channel.");
                 _channels.Remove(c.Id);
@@ -180,10 +241,11 @@ namespace Recharge.Server
             lock (_gate)
             {
                 string me = Norm(meName), who = Norm(userName);
-                ServerRec s = OwnedServerFor(me, id);
+                ServerRec s = ManagedServerFor(me, id);
                 if (s.Members.Contains(who)) throw new SocialException(409, Display(who) + " is already in this server.");
                 s.Members = s.Members.Append(who).ToArray();
                 _servers.Put(s.Id, s);
+                GrantServerEmojis(who, s.Id);   // joining unlocks the server's emoji into your arsenal, forever
                 PushServer(s);
                 return ServerView(s, me);
             }
@@ -200,10 +262,14 @@ namespace Recharge.Server
                 if (!s.Members.Contains(who)) throw new SocialException(404, "That user is not in this server.");
                 string[] rest = s.Members.Where(k => k != who).ToArray();
                 Notify(who, new { type = "server-left", id = s.Id });
+                _memberRoles.Remove(s.Id + "|" + who);   // their role wear-list in this server; arsenal is theirs to keep
                 if (rest.Length == 0)
                 {
                     _servers.Remove(s.Id);
                     foreach (ChannelRec c in ChannelsOf(s.Id).ToList()) _channels.Remove(c.Id);
+                    foreach (CategoryRec c in CategoriesOf(s.Id).ToList()) _categories.Remove(c.Id);
+                    foreach (RoleRec r in RolesOf(s.Id).ToList()) _roles.Remove(r.Id);
+                    foreach (ServerEmojiRec e in _serverEmojis.Items.Values.Where(e => e.ServerId == s.Id).ToList()) _serverEmojis.Remove(e.ServerId + "|" + e.Shortcode);
                     return new { status = who == me ? "left" : "removed" };
                 }
                 s.Members = rest;

@@ -110,6 +110,17 @@ const ICONS: Record<string, Shape[]> = {
   play: [
     { tag: 'path', attrs: { d: 'M8 5.5a1 1 0 0 1 1.5-.9l9 6.5a1 1 0 0 1 0 1.8l-9 6.5A1 1 0 0 1 8 18.5z' } },
   ],
+  phone: [
+    { tag: 'path', attrs: { d: 'M8.2 3.5 5.5 4.6a1.5 1.5 0 0 0-.9 1.7c.6 6.1 4.6 10.1 10.7 10.7a1.5 1.5 0 0 0 1.7-.9l1.1-2.7a1.5 1.5 0 0 0-.6-1.8l-2.6-1.6a1.5 1.5 0 0 0-1.8.2l-1.2 1.2a13 13 0 0 1-3.2-3.2l1.2-1.2a1.5 1.5 0 0 0 .2-1.8L9.9 4.1a1.5 1.5 0 0 0-1.7-.6z' } },
+  ],
+  video: [
+    { tag: 'rect', attrs: { x: '3.5', y: '6', width: '12', height: '12', rx: '2.5' } },
+    { tag: 'path', attrs: { d: 'm15.5 10 5-3v10l-5-3z' } },
+  ],
+  camera: [
+    { tag: 'rect', attrs: { x: '3.5', y: '6', width: '12', height: '12', rx: '2.5' } },
+    { tag: 'path', attrs: { d: 'm15.5 10 5-3v10l-5-3z' } },
+  ],
   plus: [
     { tag: 'path', attrs: { d: 'M12 5v14M5 12h14' } },
   ],

@@ -9,4 +9,10 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <!-- SIPSorcery 8.0.14 is the validated WebRTC build for native voice. Its two advisories concern RTP handling paths we
+       never expose (we only publish/consume our own Opus RTP against our own SFU). Vetted 2026-11-19; suppress just these. -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-28gm-jrmw-xx93" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jwjp-4649-v8jp" />
+  </ItemGroup>
 </Project>

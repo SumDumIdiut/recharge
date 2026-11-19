@@ -7,7 +7,7 @@ import { button } from '../components/button.js';
 import { toast } from '../components/toast.js';
 import { emptyState, errorState } from '../components/emptyState.js';
 import { authorName, imagesSettled, itemMedia, KIND_ICON } from '../components/itemCard.js';
-import { loadInstalled, loadKind, onHubChange } from '../lib/hub.js';
+import { invalidateInstalled, loadInstalled, loadKind, onHubChange } from '../lib/hub.js';
 import { safeHref } from '../community/format.js';
 import { perfRouteData } from '../perf.js';
 import {
@@ -327,6 +327,29 @@ function hubTile(item: Item): HTMLElement {
   return tile;
 }
 
+/** Apply every pending update in place (no navigation), then repaint the home page. */
+async function updateAll(btn: HTMLButtonElement, updates: Item[], mapNames: string[]): Promise<void> {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.querySelector('span');
+  if (label) label.textContent = 'Updating…';
+  let ok = 0;
+  const failed: string[] = [];
+  for (const item of updates) {
+    try {
+      await call('library.update', { kind: item.kind, id: item.id, ...(item.kind === 'maps' ? { otherNames: mapNames } : {}) });
+      ok++;
+    } catch (error) {
+      failed.push(item.name);
+      console.error('update failed for ' + item.id + ': ' + describeError(error));
+    }
+  }
+  invalidateInstalled();
+  if (failed.length) toast('Updated ' + ok + ', could not update ' + failed.length + ' (' + failed.join(', ') + ')', 'error');
+  else toast(ok === 1 ? 'Updated 1 item' : 'Updated ' + ok + ' items', 'success');
+  void loadData(generation);
+}
+
 async function loadData(token: number): Promise<void> {
   const lists = { maps: null, mods: null, skins: null, backgrounds: null, playlists: null, games: null } as Lists;
   const failed: Kind[] = [];
@@ -346,8 +369,9 @@ async function loadData(token: number): Promise<void> {
 
   const annotated = {} as Lists;
   for (const kind of KINDS) annotated[kind] = lists[kind] ? annotate((lists[kind] as Item[]).filter((item) => !isEmbeddedMod(item)), installed) : null;
-  // Two rows of the four-column grid, so the card stays compact.
-  const fresh = newestAcross(annotated, 8);
+  const updates = updatesOf(mine);
+  // Two rows of four normally; a single row when the updates card is taking the lead, so the home page stays compact.
+  const fresh = newestAcross(annotated, updates.length > 0 ? 4 : 8);
   if (fresh.length > 0) {
     const tiles = h('div', { className: 'hub-tile-grid' });
     for (const item of fresh) tiles.appendChild(hubTile(item));
@@ -358,10 +382,12 @@ async function loadData(token: number): Promise<void> {
     fillCard(newHost, emptyState('sparkles', 'Nothing yet', 'New items from the hub will show up here.'));
   }
 
-  const updates = updatesOf(mine);
   if (updates.length > 0) {
     const head = h('p', { className: 'updates-count' }, h('strong', { text: String(updates.length) }), updates.length === 1 ? ' update available' : ' updates available');
-    const more = h('a', { className: 'link-btn', attrs: { href: '#/library?mode=updates' }, text: 'See all updates' });
+    // "Update all" applies every pending update in place — no menu change (the old "See all updates" always wrong-footed to Maps).
+    const more = button('Update all', { kind: 'primary', icon: 'download' });
+    more.classList.add('updates-all-btn');
+    more.addEventListener('click', () => void updateAll(more, updates, (annotated.maps || []).map((m) => m.name)));
     // One row, all the way across the wide lead card: every update side by side, names cutting off instead of wrapping.
     const strip = h('div', { className: 'updates-strip' });
     for (const item of updates) strip.appendChild(miniRow(item, item.kind === 'maps' ? 'Revision ' + (item.installed?.revision ?? '?') + ' → ' + item.revision : (item.installed?.version || '?') + ' → ' + item.version));

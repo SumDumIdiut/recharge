@@ -94,6 +94,9 @@ namespace Recharge.App.Social
         private bool _connected;
         private string _presenceFrame = "{\"type\":\"presence\",\"state\":\"online\"}";
         private ClientWebSocket? _socket;
+        // Behind /recharge/ the event feed uses long-poll, but voice presence frames still need a real socket.
+        // This second, outbound-only connection is drained (its pushes already arrive on the poll feed).
+        private ClientWebSocket? _outbound;
         private bool _polling;
         private string _sid = Guid.NewGuid().ToString("N");
         private DateTime _socketFailedAt = DateTime.MinValue;
@@ -104,6 +107,12 @@ namespace Recharge.App.Social
         public SocialHub(SocialHubOptions options) { _o = options; }
 
         public bool IsConnected { get { lock (_gate) return _connected; } }
+
+        /// <summary>Fires for every frame put on the event feed, including frames pushed by the host itself.</summary>
+        public event Action<JsonObject>? FrameReceived;
+
+        /// <summary>Add a host-generated frame to the same numbered feed the page polls with social.events.</summary>
+        public void Push(JsonObject frame) => Append(frame);
 
         // ---- REST ----
 
@@ -165,6 +174,9 @@ namespace Recharge.App.Social
         private void CloseSocketLocked()
         {
             try { _socket?.Abort(); } catch (ObjectDisposedException) { }
+            try { _outbound?.Abort(); } catch (ObjectDisposedException) { }
+            try { _outbound?.Dispose(); } catch (ObjectDisposedException) { }
+            _outbound = null;
             try { _pollCts?.Cancel(); } catch (ObjectDisposedException) { }
         }
 
@@ -184,14 +196,95 @@ namespace Recharge.App.Social
             else if (polling) _ = PostPresence(text);
         }
 
-        /// <summary>Send a raw frame (used for messages over the socket); false when not connected.</summary>
+        /// <summary>Send a raw frame (voice presence, call.decline); false when the social server is unreachable.</summary>
         public bool TrySend(JsonObject frame)
         {
+            string text = JsonWriter.Write(frame, 0);
             ClientWebSocket? socket;
-            lock (_gate) socket = _connected && !_polling ? _socket : null;
-            if (socket is null) return false;
-            _ = SendFrame(socket, JsonWriter.Write(frame, 0));
+            bool polling;
+            lock (_gate)
+            {
+                socket = _connected && !_polling ? _socket : null;
+                polling = _connected && _polling;
+            }
+            if (socket is not null)
+            {
+                _ = SendFrame(socket, text);
+                return true;
+            }
+            if (!polling) return false;
+            ClientWebSocket? outbound = EnsureOutbound();
+            if (outbound is null) return false;
+            _ = SendFrame(outbound, text);
             return true;
+        }
+
+        /// <summary>Open (or reuse) the outbound socket used when the event feed is on long-poll.</summary>
+        private ClientWebSocket? EnsureOutbound()
+        {
+            lock (_gate)
+            {
+                if (_disposed || !_watching) return null;
+                if (_outbound is { State: WebSocketState.Open }) return _outbound;
+                string? token = _o.Token();
+                if (string.IsNullOrEmpty(token)) return null;
+                string url = _o.BaseUrl();
+                url = (url.StartsWith("https://", StringComparison.Ordinal) ? "wss://" + url.Substring(8) : "ws://" + url.Substring(7)) + "/ws";
+
+                var socket = new ClientWebSocket();
+                socket.Options.SetRequestHeader("Authorization", "Bearer " + token);
+                socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                try { socket.ConnectAsync(new Uri(url), timeout.Token).GetAwaiter().GetResult(); }
+                catch (Exception e) when (e is WebSocketException || e is HttpRequestException || e is OperationCanceledException)
+                {
+                    try { socket.Dispose(); } catch (ObjectDisposedException) { }
+                    return null;
+                }
+                _outbound = socket;
+                _ = Drain(socket);
+                return socket;
+            }
+        }
+
+        /// <summary>
+        /// Drain the outbound socket. Voice pushes go only to connections that sent voice.join, so in long-poll mode they
+        /// arrive here rather than on the poll feed; forward just those to the event list (other pushes are already there).
+        /// </summary>
+        private async Task Drain(ClientWebSocket socket)
+        {
+            var buffer = new byte[16 * 1024];
+            try
+            {
+                while (!_disposed && socket.State == WebSocketState.Open)
+                {
+                    using var message = new MemoryStream();
+                    WebSocketReceiveResult result;
+                    do
+                    {
+                        result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token).ConfigureAwait(false);
+                        if (result.MessageType == WebSocketMessageType.Close) return;
+                        if (message.Length + result.Count > 256 * 1024) break;
+                        if (result.MessageType == WebSocketMessageType.Text) message.Write(buffer, 0, result.Count);
+                    } while (!result.EndOfMessage);
+                    if (result.MessageType != WebSocketMessageType.Text) continue;
+                    try
+                    {
+                        if (JsonReader.Parse(Encoding.UTF8.GetString(message.ToArray())) is JsonObject frame &&
+                            frame["type"] is JsonString type && type.Value == "voice.state")
+                        {
+                            Append(frame);
+                        }
+                    }
+                    catch (Exception) { /* an unreadable frame is ignored */ }
+                }
+            }
+            catch (Exception) { /* a closed or replaced socket is fine */ }
+            finally
+            {
+                lock (_gate) { if (ReferenceEquals(_outbound, socket)) _outbound = null; }
+                try { socket.Dispose(); } catch (ObjectDisposedException) { }
+            }
         }
 
         private static async Task SendFrame(ClientWebSocket socket, string text)
@@ -372,6 +465,8 @@ namespace Recharge.App.Social
                     _dropped += drop;
                 }
             }
+            try { FrameReceived?.Invoke(frame); }
+            catch (Exception) { /* a listener must never break the social socket */ }
         }
 
         /// <summary>Everything after <paramref name="since"/>. reset is true when events the page hadn't seen were dropped.</summary>
