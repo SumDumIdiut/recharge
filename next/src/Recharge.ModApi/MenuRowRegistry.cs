@@ -5,8 +5,8 @@ using System.Linq;
 namespace Recharge.ModApi
 {
     /// <summary>
-    /// The list of mod-contributed pause-menu rows (page 2+ of the pager).
-    /// Purely data - knows nothing about how rows get drawn or paged.
+    /// The list of mod-contributed rows for the in-game Mods menu.
+    /// Purely data - knows nothing about how the rows are drawn.
     /// Session-wide (static): mods re-register on every scene load (a fresh
     /// pauseMenuScript needs its own copy rebuilt), so entries are keyed by
     /// a stable row name and upserted, never blindly appended.
@@ -18,7 +18,7 @@ namespace Recharge.ModApi
             public string RowName;
             public string Label;
             public Action OnClick;
-            /// <summary>When set and false, the row is left out of the pager (re-checked every time the menu is shown).</summary>
+            /// <summary>When set and false, the row is left out of Mods (re-checked every time the menu is shown).</summary>
             public Func<bool> Visible;
         }
 

@@ -1,466 +1,552 @@
 using System;
+using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 namespace Recharge.ModApi
 {
     /// <summary>
-    /// Pages 2+ reuse the real StartGame/DeleteSave/Settings row slots for
-    /// mod-contributed rows; page 1 is the untouched vanilla rows. A "Page 1/2 >"
-    /// button under the last row switches pages (shown only when there's more than one).
-    /// The vanilla rows' real Ys are captured at build and page 1 restores them: the
-    /// game's row pitch is not uniform (65.9/67.4/58.3 in IGTAP), so a uniform
-    /// re-derivation lifted the lower rows off the vanilla divider bars.
+    /// Adds a Mods row between Settings and Quit. Its list opens beside the
+    /// game's menu, and the map picker can use the same fitted frame.
     /// </summary>
     internal static class MenuPager
     {
-        private const int MaxRowsPerPage = 3;
-
-        private class Runtime : MonoBehaviour
+        private sealed class Runtime : MonoBehaviour
         {
-            public RectTransform StartGame;
-            public RectTransform DeleteSave;
-            public RectTransform Settings;
-            public RectTransform Quit;
-            public RectTransform Background;
-            public GameObject[] Slots;
-            public float TopY;
-            public float RowSpacing;
-            public float PanelTopY;
-            public float BackgroundScaleY = 1f;
-            public bool ChildBackground;
-            public float BottomMargin;
-            public float QuitY;
-            public GameObject PageButton;
-            public int CurrentPage;
-            public float QuitTargetY;
-            // The rows' real positions as the game had them when the pager was built;
-            // page 1 puts every row back onto these so the vanilla divider bars line up.
-            public float VanillaYStart;
-            public float VanillaYDelete;
-            public float VanillaYSettings;
-            public float OriginalQuitY;
-            // The panel's own size/pos before we touched it; restored verbatim when there
-            // are no mod rows, so an unmodded menu is pixel-identical to the game's.
-            public float BgOrigSizeY;
-            public float BgOrigPosY;
-            public bool BgCaptured;
-            public bool LayoutLogged;
-            public System.Collections.Generic.List<GameObject> VanillaDividers = new System.Collections.Generic.List<GameObject>();
-            public System.Collections.Generic.List<GameObject> PagerDividers = new System.Collections.Generic.List<GameObject>();
+            private const float Margin = 10f;
+            private const float MainBottomMargin = 24f;
+            private const float Padding = 8f;
+            private const int RowsPerPage = 6;
+            private const float TitleContentLiftFraction = 0.21f;
+            private const float DividerInsetFraction = 0.08f;
 
-            // Re-apply the layout whenever the pager is shown again (e.g. a mod
-            // panel that borrowed the Quit row closed), so Quit always lands
-            // below the page row.
+            private readonly Vector3[] _corners = new Vector3[4];
+            private readonly Button[] _rows = new Button[RowsPerPage];
+            private readonly RectTransform[] _listDividers = new RectTransform[RowsPerPage];
+            private readonly List<(RectTransform Rect, Vector2 Original, Vector2 Raised)> _titleElements =
+                new List<(RectTransform Rect, Vector2 Original, Vector2 Raised)>();
+            private RectTransform _main;
+            private RectTransform _frame;
+            private RectTransform _canvas;
+            private RectTransform _settings;
+            private RectTransform _quit;
+            private TMP_Text _titleQuitLabel;
+            private RectTransform _nativeDivider;
+            private RectTransform _divider;
+            private TMP_FontAsset _font;
+            private RectTransform _panel;
+            private Button _toggle;
+            private Button _pageButton;
+            private ColorBlock _menuColors;
+            private Vector2 _frameSize;
+            private Vector2 _framePosition;
+            private Vector2 _mainPosition;
+            private Vector2 _expandedPosition;
+            private Vector3 _mainScale;
+            private Vector2 _quitPosition;
+            private Vector2 _quitWithMods;
+            private ContentSizeFitter _fitter;
+            private ContentSizeFitter.FitMode _verticalFit;
+            private float _mainLift;
+            private Rect _fitArea;
+            private bool _frameExpanded;
+            private bool _modsVisible = true;
+            private Button _returnTo;
+            private bool _open;
+            private int _pageIndex;
+            private int _pageCount = 1;
+            private int _shownFrame;
+
+            public void Build(RectTransform main, RectTransform frame, RectTransform canvas,
+                RectTransform settings, RectTransform quit, TMP_FontAsset font)
+            {
+                _main = main;
+                _frame = frame;
+                _canvas = canvas;
+                _settings = settings;
+                _quit = quit;
+                if (main.Find("StartGame") != null)
+                    _titleQuitLabel = quit.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+                _font = font;
+
+                var quitButton = quit.GetComponent<Button>();
+                _menuColors = quitButton.colors;
+                if (_menuColors.normalColor.r <= _menuColors.normalColor.g)
+                    _menuColors.normalColor = new Color(1f, 0.53f, 0.08f, 1f);
+                _menuColors.highlightedColor = Color.green;
+                _menuColors.selectedColor = Color.green;
+                _menuColors.pressedColor = Color.green;
+                _menuColors.colorMultiplier = 1f;
+
+                var toggle = UnityEngine.Object.Instantiate(quit.gameObject, quit.parent);
+                toggle.name = "ModsPagerToggle";
+                toggle.SetActive(false);
+                PanelLayoutHelper.IgnoreLayout(toggle);
+                MenuUiUtil.SetButtonLabel(toggle, "Mods >");
+                PauseMenuHelper.SetButtonAction(toggle, Toggle);
+                _toggle = toggle.GetComponent<Button>();
+                _toggle.navigation = new Navigation { mode = Navigation.Mode.Automatic };
+                ApplyMenuColors(_toggle);
+                _divider = CreateMenuDivider();
+
+                // A sibling on the root canvas can sit outside the vanilla frame,
+                // including when the game's own layout or mask controls that frame.
+                _panel = CreateRect("RechargeModsMenu", canvas);
+                _panel.gameObject.SetActive(false);
+                _panel.anchorMin = _panel.anchorMax = canvas.pivot;
+                _panel.pivot = new Vector2(0f, 1f);
+
+                var image = _panel.gameObject.AddComponent<Image>();
+                var frameImage = frame.GetComponent<Image>();
+                image.sprite = frameImage != null ? frameImage.overrideSprite : null;
+                image.color = frameImage != null ? frameImage.color : new Color(0.23f, 0.23f, 0.23f, 1f);
+                if (image.sprite != null && image.sprite.border.sqrMagnitude > 0f) image.type = Image.Type.Sliced;
+
+                for (int i = 0; i < _rows.Length; i++)
+                    _rows[i] = CreateButton(_panel, "ModRow" + i);
+                _pageButton = CreateButton(_panel, "ModsPage");
+                _pageButton.onClick.AddListener(NextPage);
+                var source = _nativeDivider != null ? _nativeDivider.GetComponentInChildren<Graphic>(true) : null;
+                for (int i = 0; i < _listDividers.Length; i++)
+                {
+                    var divider = PanelWidgets.CreateDivider(_panel, Vector2.zero, 0f,
+                        source != null ? source.color : new Color(1f, 1f, 1f, 0.25f));
+                    divider.layer = _panel.gameObject.layer;
+                    divider.GetComponent<Image>().raycastTarget = false;
+                    _listDividers[i] = (RectTransform)divider.transform;
+                }
+                Refresh();
+            }
+
             private void OnEnable()
             {
-                if (Quit != null && Slots != null) ShowPage(this, CurrentPage);
+                _shownFrame = Time.frameCount;
+                Canvas.willRenderCanvases += FitVisibleMenu;
+                Refresh();
+                if (_returnTo != null && _open) Select(_returnTo.interactable ? _returnTo : _rows[0]);
+                _returnTo = null;
             }
 
-            // The page button is a sibling of Quit (same parent and anchors), so it
-            // doesn't hide with the pager on its own.
             private void OnDisable()
             {
-                if (PageButton != null) PageButton.SetActive(false);
+                Canvas.willRenderCanvases -= FitVisibleMenu;
+                // The picker can keep using the expanded frame while the menu is hidden.
+                if (_modsVisible) SetFrameExpanded(false);
+                if (_panel != null) _panel.gameObject.SetActive(false);
+                if (_returnTo == null) _open = false;
             }
 
-            // Keep every visible row on its target: the vanilla rows on page 1 sit at
-            // their captured Ys (never re-derived), slots and Quit follow the pager,
-            // so the game's own layout passes can never park a row between the bars.
-            private void LateUpdate()
+            private void OnDestroy()
             {
-                if (CurrentPage <= 0)
+                if (_toggle != null) UnityEngine.Object.Destroy(_toggle.gameObject);
+                if (_divider != null) UnityEngine.Object.Destroy(_divider.gameObject);
+                if (_panel != null) UnityEngine.Object.Destroy(_panel.gameObject);
+            }
+
+            public void Refresh()
+            {
+                if (_panel == null || !_modsVisible) return;
+                var entries = MenuRowRegistry.Visible();
+                if (entries.Count == 0) _open = false;
+                SetFrameExpanded(isActiveAndEnabled && entries.Count > 0);
+                MenuUiUtil.SetButtonLabel(_toggle.gameObject, _open ? "Mods <" : "Mods >");
+                bool showList = _frameExpanded && _open;
+                if (showList) ShowPage(entries);
+                _panel.gameObject.SetActive(showList);
+                if (_panel.gameObject.activeInHierarchy) Layout();
+            }
+
+            public bool SetModsVisible(bool visible)
+            {
+                if (_modsVisible == visible) return _frameExpanded;
+                _modsVisible = visible;
+                SetModsRowVisible(visible && _frameExpanded);
+                if (!visible)
                 {
-                    SetY(StartGame, VanillaYStart);
-                    if (DeleteSave != null) SetY(DeleteSave, VanillaYDelete);
-                    SetY(Settings, VanillaYSettings);
+                    _open = false;
+                    _panel.gameObject.SetActive(false);
                 }
-                if (Quit != null) SetY(Quit, QuitTargetY);
-                if (PageButton != null && PageButton.activeSelf) SetY((RectTransform)PageButton.transform, QuitTargetY + RowSpacing);
+                else
+                {
+                    Refresh();
+                }
+                return _frameExpanded;
             }
 
-            private static void SetY(RectTransform r, float y)
+            private void ShowPage(IReadOnlyList<MenuRowRegistry.Entry> entries)
             {
-                if (Mathf.Abs(r.anchoredPosition.y - y) > 0.01f) r.anchoredPosition = new Vector2(r.anchoredPosition.x, y);
+                _pageCount = Math.Max(1, (int)Math.Ceiling(entries.Count / (double)RowsPerPage));
+                _pageIndex = Math.Min(_pageIndex, _pageCount - 1);
+                int start = _pageIndex * RowsPerPage;
+                for (int i = 0; i < _rows.Length; i++)
+                {
+                    var row = _rows[i];
+                    var entry = start + i < entries.Count ? entries[start + i] : null;
+                    row.interactable = entry != null;
+                    MenuUiUtil.SetButtonLabel(row.gameObject, entry?.Label ?? "");
+                    PauseMenuHelper.SetButtonAction(row.gameObject, entry == null ? null : () => OpenEntry(row, entry));
+                }
+                MenuUiUtil.SetButtonLabel(_pageButton.gameObject, "Page " + (_pageIndex + 1) + " / " + _pageCount);
             }
 
-            // Escape returns to the vanilla page from a mods page.
+            private void SetFrameExpanded(bool expanded)
+            {
+                if (_frameExpanded == expanded) return;
+                _frameExpanded = expanded;
+                if (!expanded)
+                {
+                    SetModsRowVisible(false);
+                    if (_quit != null) _quit.anchoredPosition = _quitPosition;
+                    foreach (var element in _titleElements)
+                        if (element.Rect != null) element.Rect.anchoredPosition = element.Original;
+                    _titleElements.Clear();
+                    if (_frame != null)
+                    {
+                        _frame.sizeDelta = _frameSize;
+                        _frame.anchoredPosition = _framePosition;
+                    }
+                    if (_main != null)
+                    {
+                        _main.anchoredPosition = _mainPosition;
+                        _main.localScale = _mainScale;
+                    }
+                    if (_fitter != null) _fitter.verticalFit = _verticalFit;
+                    return;
+                }
+
+                _mainPosition = _main.anchoredPosition;
+                _mainScale = _main.localScale;
+                _framePosition = _frame.anchoredPosition;
+                _frameSize = _frame.sizeDelta;
+                _quitPosition = _quit.anchoredPosition;
+                _fitter = _frame.GetComponent<ContentSizeFitter>();
+                if (_fitter != null)
+                {
+                    _verticalFit = _fitter.verticalFit;
+                    _fitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
+                }
+
+                // Put Mods in Quit's original slot and move Quit down by one native row.
+                float step = _settings.anchoredPosition.y - _quitPosition.y;
+                if (step <= 0f) step = 60f;
+                ((RectTransform)_toggle.transform).anchoredPosition = _quitPosition;
+                _quitWithMods = _quitPosition - Vector2.up * step;
+                _quit.anchoredPosition = _quitWithMods;
+                var growth = _quit.parent.TransformVector(Vector3.up * step);
+                // Raise the entire menu by half the added row, which keeps
+                // its centre near the original one. The viewport can lift it more.
+                _mainLift = Mathf.Abs(_canvas.InverseTransformVector(growth).y) * 0.5f;
+                var frameGrowth = Mathf.Abs(_frame.InverseTransformVector(growth).y);
+                var parentGrowth = _frame.parent.InverseTransformVector(growth).y;
+                _frame.sizeDelta += new Vector2(0f, frameGrowth);
+                _frame.anchoredPosition -= Vector2.up * (parentGrowth * (1f - _frame.pivot.y));
+                _expandedPosition = _main.anchoredPosition;
+                if (_divider != null)
+                    _divider.anchoredPosition = new Vector2(_divider.anchoredPosition.x, _quitPosition.y - step * 0.5f);
+                SetModsRowVisible(true);
+                if (_main.Find("StartGame") != null) RaiseTitleContent(growth * TitleContentLiftFraction);
+                _fitArea = default;
+            }
+
+            private void SetModsRowVisible(bool visible)
+            {
+                _toggle.gameObject.SetActive(visible);
+                if (_divider != null) _divider.gameObject.SetActive(visible);
+            }
+
+            private void RaiseTitleContent(Vector3 lift)
+            {
+                // Keep the dividers aligned with the raised labels inside the title frame.
+                foreach (var rect in _main.GetComponentsInChildren<RectTransform>())
+                {
+                    bool divider = rect == _divider || ((rect.parent == _main || rect.parent == _quit.parent)
+                        && rect.name.StartsWith("Line", StringComparison.Ordinal));
+                    if (!divider)
+                    {
+                        var graphic = rect.GetComponent<Graphic>();
+                        if (graphic == null || !graphic.isActiveAndEnabled || (!(graphic is TMP_Text) && !(graphic is Text))) continue;
+                    }
+                    var original = rect.anchoredPosition;
+                    var raised = original + (Vector2)rect.parent.InverseTransformVector(lift);
+                    _titleElements.Add((rect, original, raised));
+                    rect.anchoredPosition = raised;
+                }
+            }
+
+            private RectTransform CreateMenuDivider()
+            {
+                foreach (Transform child in _quit.parent)
+                {
+                    if (!(child is RectTransform line) || !child.name.StartsWith("Line", StringComparison.Ordinal)) continue;
+                    if (line.anchoredPosition.y <= _quit.anchoredPosition.y || line.anchoredPosition.y >= _settings.anchoredPosition.y) continue;
+                    _nativeDivider = line;
+                    var divider = UnityEngine.Object.Instantiate(line, line.parent);
+                    divider.name = "ModsPagerDivider";
+                    divider.gameObject.SetActive(false);
+                    PanelLayoutHelper.IgnoreLayout(divider.gameObject);
+                    return divider;
+                }
+                return null;
+            }
+
+            private Vector2 VerticalBounds(RectTransform rect)
+            {
+                rect.GetWorldCorners(_corners);
+                return new Vector2(_canvas.InverseTransformPoint(_corners[0]).y, _canvas.InverseTransformPoint(_corners[2]).y);
+            }
+
+            private Vector2 MainMenuBounds()
+            {
+                var frame = VerticalBounds(_frame);
+                var quit = VerticalBounds(_quit);
+                if (!_modsVisible)
+                {
+                    // Fit to the main menu's Quit position while the picker uses it as Back.
+                    var offset = _quit.parent.TransformVector(_quitWithMods - _quit.anchoredPosition);
+                    quit += Vector2.one * _canvas.InverseTransformVector(offset).y;
+                }
+                return new Vector2(Mathf.Min(frame.x, quit.x), Mathf.Max(frame.y, quit.y));
+            }
+
+            private void FitMainMenu()
+            {
+                _fitArea = _canvas.rect;
+                float height = _fitArea.height - MainBottomMargin - Margin;
+                if (height <= 0f) return;
+
+                // Start every fit from the expanded layout at native scale.
+                _main.anchoredPosition = _expandedPosition;
+                _main.localScale = _mainScale;
+                var bounds = MainMenuBounds();
+                float fullHeight = bounds.y - bounds.x;
+                if (fullHeight > height)
+                {
+                    _main.localScale = _mainScale * (height / fullHeight);
+                    bounds = MainMenuBounds();
+                }
+                float shift = Mathf.Clamp(_mainLift, _fitArea.yMin + MainBottomMargin - bounds.x, _fitArea.yMax - Margin - bounds.y);
+                _main.anchoredPosition += (Vector2)_main.parent.InverseTransformVector(_canvas.TransformVector(Vector3.up * shift));
+            }
+
+            private void Toggle()
+            {
+                _open = !_open;
+                if (_open) _pageIndex = 0;
+
+                Refresh();
+                if (_toggle.isActiveAndEnabled) Select(_open ? _rows[0] : _toggle);
+            }
+
+            private void NextPage()
+            {
+                if (_pageCount <= 1) return;
+                _pageIndex = (_pageIndex + 1) % _pageCount;
+                Refresh();
+            }
+
+            private void OpenEntry(Button row, MenuRowRegistry.Entry entry)
+            {
+                _returnTo = row;
+                _main.gameObject.SetActive(false);
+                try { entry.OnClick(); }
+                catch { _main.gameObject.SetActive(true); throw; }
+            }
+
+            private static void Select(Button button)
+            {
+                var events = EventSystem.current;
+                if (events != null) events.SetSelectedGameObject(button.gameObject);
+            }
+
             private void Update()
             {
-                if (CurrentPage <= 0) return;
+                if (!_open || _panel == null) return;
                 var kb = Keyboard.current;
-                if (kb != null && kb.escapeKey.wasPressedThisFrame) ShowPage(this, 0);
+                // An Escape that just closed a mod's settings also re-enables this menu.
+                if (Time.frameCount != _shownFrame && kb != null && kb.escapeKey.wasPressedThisFrame) Toggle();
             }
+
+            private void FitVisibleMenu()
+            {
+                if (!_frameExpanded) return;
+                if (_modsVisible && _titleQuitLabel != null && _titleQuitLabel.text == "Quit game")
+                {
+                    // Keep the title button's localizer and the map picker's label ownership.
+                    var label = _titleQuitLabel.GetComponent<ModLabel>();
+                    if (label != null) label.Text = "Quit Game";
+                    else _titleQuitLabel.text = "Quit Game";
+                }
+                // Unity can rebuild the layout without changing the canvas size.
+                // Check the real frame and Quit bounds just before rendering.
+                if (_modsVisible && _quit.anchoredPosition != _quitWithMods) _quit.anchoredPosition = _quitWithMods;
+                foreach (var element in _titleElements)
+                    if (element.Rect != null && element.Rect.anchoredPosition != element.Raised)
+                        element.Rect.anchoredPosition = element.Raised;
+                var area = _canvas.rect;
+                var bounds = MainMenuBounds();
+                if (_fitArea != area || bounds.x < area.yMin + MainBottomMargin - 0.1f
+                    || bounds.y > area.yMax - Margin + 0.1f) FitMainMenu();
+                if (_panel != null && _panel.gameObject.activeInHierarchy) Layout();
+            }
+
+            private void Layout()
+            {
+                Rect area = _canvas.rect;
+                if (area.width <= Margin * 2f || area.height <= (Margin + Padding) * 2f) return;
+                _frame.GetWorldCorners(_corners);
+                var bottomLeft = _canvas.InverseTransformPoint(_corners[0]);
+                var topRight = _canvas.InverseTransformPoint(_corners[2]);
+
+                // Match the fitted main frame and share its height across all rows.
+                float height = Mathf.Min(topRight.y - bottomLeft.y, area.height - Margin * 2f);
+                if (height <= Padding * 2f) return;
+                float rowHeight = (height - Padding * 2f) / (RowsPerPage + 1);
+                float width = Mathf.Clamp(topRight.x - bottomLeft.x, 176f, 320f);
+                float right = topRight.x + Margin;
+                float available = area.xMax - Margin - right;
+                width = Mathf.Min(width, area.width - Margin * 2f);
+                // With room beside the main menu, dock there. On narrow windows,
+                // the same button and list fit at the right edge of the canvas.
+                if (available >= Mathf.Min(width, 176f)) width = Mathf.Min(width, available);
+                float x = Mathf.Clamp(right, area.xMin + Margin, area.xMax - Margin - width);
+                float y = Mathf.Clamp(topRight.y, area.yMin + Margin + height, area.yMax - Margin);
+                _panel.anchoredPosition = new Vector2(x, y);
+                _panel.sizeDelta = new Vector2(width, height);
+
+                float lineHeight = 2f;
+                if (_nativeDivider != null)
+                {
+                    var line = VerticalBounds(_nativeDivider);
+                    lineHeight = Mathf.Min(rowHeight, Mathf.Max(1f, line.y - line.x));
+                }
+                float dividerInset = width * DividerInsetFraction;
+                for (int i = 0; i < _rows.Length; i++)
+                {
+                    PlaceRow((RectTransform)_rows[i].transform, Padding + i * rowHeight, rowHeight);
+                    PlaceRow(_listDividers[i], Padding + (i + 1) * rowHeight - lineHeight * 0.5f, lineHeight, dividerInset);
+                }
+                PlaceRow((RectTransform)_pageButton.transform, Padding + RowsPerPage * rowHeight, rowHeight);
+            }
+
+            private Button CreateButton(Transform parent, string name)
+            {
+                var row = CreateRect(name, parent);
+                var image = row.gameObject.AddComponent<Image>();
+                image.color = Color.clear;
+                image.canvasRenderer.cullTransparentMesh = false;
+                var button = row.gameObject.AddComponent<Button>();
+                var text = PanelWidgets.CreateLabel(row, _font, Vector2.zero, Vector2.zero, "", 22f, Color.white);
+                text.name = "Text (TMP)";
+                text.gameObject.layer = row.gameObject.layer;
+                text.raycastTarget = false;
+                var textRect = text.rectTransform;
+                textRect.anchorMin = Vector2.zero;
+                textRect.anchorMax = Vector2.one;
+                textRect.offsetMin = new Vector2(5f, 0f);
+                textRect.offsetMax = new Vector2(-5f, 0f);
+                ApplyMenuColors(button);
+                return button;
+            }
+
+            private void ApplyMenuColors(Button button)
+            {
+                // Tint the TMP label through Unity's button states. The
+                // row's image still receives mouse events across its full area.
+                MenuUiUtil.SetButtonTextColor(button.gameObject, Color.white);
+                var text = button.transform.Find("Text (TMP)");
+                button.targetGraphic = text != null ? text.GetComponent<TMP_Text>() : button.targetGraphic;
+                button.transition = Selectable.Transition.ColorTint;
+                button.colors = _menuColors;
+            }
+
+            private static void PlaceRow(RectTransform row, float top, float height, float inset = Padding)
+            {
+                row.anchorMin = new Vector2(0f, 1f);
+                row.anchorMax = Vector2.one;
+                row.pivot = new Vector2(0.5f, 1f);
+                row.anchoredPosition = new Vector2(0f, -top);
+                row.sizeDelta = new Vector2(-2f * inset, height);
+            }
+        }
+
+        public static bool SetModsVisible(pauseMenuScript menu, bool visible)
+        {
+            var root = MenuReflection.MainBit(menu)?.transform.Find("ModsPager");
+            var runtime = root != null ? root.GetComponent<Runtime>() : null;
+            return runtime != null && runtime.SetModsVisible(visible);
         }
 
         public static GameObject EnsureBuilt(pauseMenuScript menu)
         {
-            var mainBit = MenuReflection.MainBit(menu);
-            var existing = mainBit.transform.Find("ModsPager");
+            var main = MenuReflection.MainBit(menu);
+            var existing = main.transform.Find("ModsPager");
             if (existing != null)
             {
-                var existingRt = existing.GetComponent<Runtime>();
-                if (existingRt != null) ShowPage(existingRt, existingRt.CurrentPage);
+                existing.GetComponent<Runtime>()?.Refresh();
                 return existing.gameObject;
             }
-            return Build(mainBit);
+
+            var mainRect = main.transform as RectTransform;
+            var canvas = main.GetComponentInParent<Canvas>(true)?.rootCanvas;
+            var settings = main.transform.Find("Settings") as RectTransform;
+            var quit = FindQuit(main.transform);
+            var font = settings != null ? settings.GetComponentInChildren<TMP_Text>(true)?.font : null;
+            if (mainRect == null || canvas == null || !(canvas.transform is RectTransform canvasRect) || quit == null || font == null) return null;
+
+            var root = CreateRect("ModsPager", main.transform);
+            PanelLayoutHelper.IgnoreLayout(root.gameObject);
+            var runtime = root.gameObject.AddComponent<Runtime>();
+            runtime.Build(mainRect, FindFrame(mainRect), canvasRect, settings, quit, font);
+            return root.gameObject;
         }
 
-        private static RectTransform FindFirst(Transform parent, params string[] names)
+        private static RectTransform FindQuit(Transform main)
         {
-            foreach (var name in names)
+            RectTransform best = null;
+            foreach (var button in main.GetComponentsInChildren<Button>(true))
             {
-                var found = parent.Find(name) as RectTransform;
-                if (found != null) return found;
+                if (!button.gameObject.activeInHierarchy || !(button.transform is RectTransform rect)) continue;
+                var label = button.GetComponentInChildren<TMP_Text>(true)?.text ?? "";
+                if (button.name.IndexOf("quit", StringComparison.OrdinalIgnoreCase) < 0
+                    && label.IndexOf("quit", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (best == null || rect.anchoredPosition.y < best.anchoredPosition.y) best = rect;
+            }
+            if (best != null) return best;
+
+            foreach (var name in new[] { "QuitToDesktop", "Quit to menu", "QuitToMenu" })
+            {
+                var quit = main.Find(name) as RectTransform;
+                if (quit != null && quit.GetComponent<Button>() != null) return quit;
             }
             return null;
         }
 
-        private static string LabelOf(Transform t)
+        // At the title screen the panel itself is the image. The in-game menu
+        // puts its backdrop on a child; use that frame as the docking reference.
+        private static RectTransform FindFrame(RectTransform main)
         {
-            var tmp = t.GetComponentInChildren<TMPro.TMP_Text>(true);
-            return tmp != null ? tmp.text : null;
-        }
-
-        // The visible quit button: an active Button whose label (or name) says quit,
-        // lowest on screen if several match; falls back to the known names.
-        private static RectTransform FindQuit(Transform mainBit, RectTransform startGame, RectTransform settings)
-        {
-            RectTransform best = null;
-            foreach (var b in mainBit.GetComponentsInChildren<Button>(true))
-            {
-                if (b.transform == startGame || b.transform == settings) continue;
-                if (b.name.StartsWith("ModsPager")) continue;
-                var label = LabelOf(b.transform) ?? "";
-                bool quitLike = label.IndexOf("quit", StringComparison.OrdinalIgnoreCase) >= 0
-                    || b.name.IndexOf("quit", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (!quitLike || !b.gameObject.activeInHierarchy) continue;
-                var r = b.transform as RectTransform;
-                if (r == null) continue;
-                if (best == null || r.anchoredPosition.y < best.anchoredPosition.y) best = r;
-            }
-            return best ?? FindFirst(mainBit, "QuitToDesktop", "Quit to menu", "QuitToMenu");
-        }
-
-        private static void LogLayout(Transform mainBit, string stage, Runtime rt)
-        {
-            try
-            {
-                var sb = new System.Text.StringBuilder();
-                sb.Append("[Recharge] MenuPager layout (").Append(stage).Append("): panel=").Append(mainBit.name).AppendLine();
-                foreach (var c in mainBit.GetComponents<Component>())
-                    if (c is LayoutGroup || c is ContentSizeFitter || c is Canvas || c is LayoutElement)
-                        sb.Append("  panel component: ").Append(c.GetType().Name).AppendLine();
-                foreach (Transform child in mainBit)
-                {
-                    var r = child as RectTransform;
-                    sb.Append("  ").Append(child.name).Append(" active=").Append(child.gameObject.activeSelf);
-                    if (r != null)
-                        sb.Append(" y=").Append(r.anchoredPosition.y).Append(" aMinY=").Append(r.anchorMin.y).Append(" aMaxY=").Append(r.anchorMax.y)
-                          .Append(" pivY=").Append(r.pivot.y).Append(" h=").Append(r.rect.height);
-                    var label = LabelOf(child);
-                    if (label != null) sb.Append(" label='").Append(label).Append("'");
-                    sb.AppendLine();
-                }
-                if (rt != null)
-                {
-                    sb.Append("  picked: Start=").Append(rt.StartGame?.name).Append(" Delete=").Append(rt.DeleteSave?.name)
-                      .Append(" Settings=").Append(rt.Settings?.name).Append(" Quit=").Append(rt.Quit?.name)
-                      .Append(" quitParent=").Append(rt.Quit?.parent?.name).AppendLine();
-                    sb.Append("  topY=").Append(rt.TopY).Append(" rowSpacing=").Append(rt.RowSpacing).Append(" QuitY=").Append(rt.QuitY)
-                      .Append(" quitTarget=").Append(rt.QuitTargetY).AppendLine();
-                    if (rt.PageButton != null)
-                    {
-                        var p = (RectTransform)rt.PageButton.transform;
-                        sb.Append("  pageButton: y=").Append(p.anchoredPosition.y).Append(" aMinY=").Append(p.anchorMin.y).Append(" aMaxY=").Append(p.anchorMax.y)
-                          .Append(" pivY=").Append(p.pivot.y).Append(" parent=").Append(p.parent?.name).AppendLine();
-                    }
-                }
-                Debug.Log(sb.ToString());
-            }
-            catch (Exception e) { Debug.Log("[Recharge] MenuPager layout log failed: " + e.Message); }
-        }
-
-        private static GameObject Build(GameObject mainBitGo)
-        {
-            var startGame = FindFirst(mainBitGo.transform, "StartGame", "Resume");
-            var deleteSave = FindFirst(mainBitGo.transform, "DeleteSave", "Checkpoint Toggle", "CheckpointToggle");
-            var settings = FindFirst(mainBitGo.transform, "Settings");
-            var quit = FindQuit(mainBitGo.transform, startGame, settings);
-            if (startGame == null || settings == null || quit == null) { LogLayout(mainBitGo.transform, "build-failed", null); return null; }
-            LogLayout(mainBitGo.transform, "before", null);
-
-            float rowSpacing = settings.anchoredPosition.y - quit.anchoredPosition.y;
-            if (rowSpacing <= 0f) rowSpacing = 60f;
-            float topY = startGame.anchoredPosition.y;
-            float originalQuitY = quit.anchoredPosition.y;
-            var background = mainBitGo.GetComponent<RectTransform>();
-            // The title-screen panel is itself the background image. The in-game
-            // pause panel is a bare container whose background is a child Image,
-            // so resizing the container did nothing and Main Menu hung off the end.
-            bool childBackground = false;
-            float backgroundScaleY = 1f;
-            if (mainBitGo.GetComponent<Graphic>() == null)
-            {
-                var childBg = FindBackgroundChild(mainBitGo.transform);
-                if (childBg != null)
-                {
-                    background = childBg;
-                    childBackground = true;
-                    backgroundScaleY = Mathf.Max(0.0001f, Mathf.Abs(childBg.localScale.y));
-                }
-            }
-            float panelTopY = 0f, bottomMargin = 0f;
-            if (background != null)
-            {
-                // A ContentSizeFitter would force the height back every frame and
-                // clip the extra row, so the vertical fit is handed to us here.
-                var fitter = background.GetComponent<ContentSizeFitter>();
-                if (fitter != null) fitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
-                panelTopY = TopEdge(background, backgroundScaleY);
-                var panelBottomEdge = BottomEdge(background, backgroundScaleY);
-                // Title panel keeps its 20 extra; the pause panel's own bottom edge already
-                // matches vanilla (about 13 below the Quit row), so adding 20 left a wide empty band.
-                bottomMargin = originalQuitY - panelBottomEdge + (childBackground ? 0f : 20f);
-                if (childBackground)
-                    Debug.Log("[Recharge] MenuPager pause bottomMargin=" + bottomMargin + " (quitY=" + originalQuitY + " panelBottom=" + panelBottomEdge + " panelTop=" + panelTopY + " scaleY=" + backgroundScaleY + ")");
-            }
-
-            var vanillaDividers = new System.Collections.Generic.List<GameObject>();
-            HideVanillaDividersInPagerRegion(mainBitGo.transform, topY, originalQuitY, vanillaDividers, out var dividerTemplate);
-
-            var pagerGo = new GameObject("ModsPager", typeof(RectTransform));
-            pagerGo.transform.SetParent(quit.parent, false);
-
-            var rt = pagerGo.AddComponent<Runtime>();
-            rt.StartGame = startGame;
-            rt.DeleteSave = deleteSave;
-            rt.Settings = settings;
-            rt.Quit = quit;
-            rt.Background = background;
-            if (background != null) { rt.BgOrigSizeY = background.sizeDelta.y; rt.BgOrigPosY = background.anchoredPosition.y; rt.BgCaptured = true; }
-            rt.TopY = topY;
-            rt.RowSpacing = rowSpacing;
-            rt.PanelTopY = panelTopY;
-            rt.BackgroundScaleY = backgroundScaleY;
-            rt.ChildBackground = childBackground;
-            rt.BottomMargin = bottomMargin;
-            rt.CurrentPage = 0;
-            rt.VanillaYStart = topY;
-            if (deleteSave != null) rt.VanillaYDelete = deleteSave.anchoredPosition.y;
-            rt.VanillaYSettings = settings.anchoredPosition.y;
-            rt.OriginalQuitY = originalQuitY;
-
-            float quitY = topY - (MaxRowsPerPage + 1) * rowSpacing;
-            quit.anchoredPosition = new Vector2(quit.anchoredPosition.x, quitY);
-            rt.QuitY = quitY;
-            rt.QuitTargetY = quitY;
-            ResizeBackgroundToFit(background, panelTopY, quitY, bottomMargin, backgroundScaleY, childBackground);
-
-            rt.VanillaDividers = vanillaDividers;
-            rt.PagerDividers = CreateDividers(dividerTemplate, topY, rowSpacing);
-            rt.Slots = CreateSlots(quit, settings);
-            rt.PageButton = CreatePageButton(rt, pagerGo, quit, settings);
-
-            ShowPage(rt, 0);
-            return pagerGo;
-        }
-
-        private static void HideVanillaDividersInPagerRegion(Transform mainBit, float topY, float originalQuitY, System.Collections.Generic.List<GameObject> hidden, out Transform dividerTemplate)
-        {
-            float regionTop = topY - 0.01f;
-            float regionBottom = originalQuitY + 0.01f;
-            dividerTemplate = null;
-            foreach (Transform child in mainBit)
-            {
-                if (!child.name.StartsWith("Line")) continue;
-                var lineRt = child as RectTransform;
-                if (lineRt == null) continue;
-                if (lineRt.anchoredPosition.y <= regionTop && lineRt.anchoredPosition.y >= regionBottom)
-                { child.gameObject.SetActive(false); hidden.Add(child.gameObject); }
-                else if (dividerTemplate == null && child.gameObject.activeSelf)
-                    dividerTemplate = child;
-            }
-        }
-
-        // Edges in the parent's space; the local scale matters for the child
-        // background of the pause panel (1 for the title-screen panel).
-        private static float TopEdge(RectTransform rt, float scaleY) => rt.anchoredPosition.y + (1f - rt.pivot.y) * rt.sizeDelta.y * scaleY;
-        private static float BottomEdge(RectTransform rt, float scaleY) => rt.anchoredPosition.y - rt.pivot.y * rt.sizeDelta.y * scaleY;
-
-        // The biggest plain Image directly under the pause panel (not a button row or divider).
-        private static RectTransform FindBackgroundChild(Transform panel)
-        {
-            RectTransform best = null;
+            if (main.GetComponent<Graphic>() != null) return main;
+            var best = main;
             float bestArea = 0f;
-            foreach (Transform child in panel)
+            foreach (Transform child in main)
             {
-                var r = child as RectTransform;
-                if (r == null || child.GetComponent<Image>() == null || child.GetComponent<Button>() != null) continue;
-                if (child.name.StartsWith("Line") || child.name.StartsWith("ModsPager")) continue;
-                float area = r.rect.width * r.rect.height;
-                if (area > bestArea) { bestArea = area; best = r; }
+                if (!(child is RectTransform rect) || child.GetComponent<Image>() == null || child.GetComponent<Button>() != null) continue;
+                if (child.name.StartsWith("Line", StringComparison.Ordinal)) continue;
+                float area = rect.rect.width * rect.rect.height;
+                if (area > bestArea) { best = rect; bestArea = area; }
             }
             return best;
         }
 
-        // Anchors and pivots vary between menus, so set the height and then place
-        // the rect from its own pivot instead of assuming a centered one.
-        private static void ResizeBackgroundToFit(RectTransform background, float panelTopY, float quitY, float bottomMargin, float scaleY, bool child)
+        private static RectTransform CreateRect(string name, Transform parent)
         {
-            if (background == null) return;
-            float bottomEdge = quitY - bottomMargin;
-            if (child)
-            {
-                float height = (panelTopY - bottomEdge) / scaleY;
-                background.sizeDelta = new Vector2(background.sizeDelta.x, background.sizeDelta.y + (height - background.rect.height));
-                background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * height * scaleY);
-                return;
-            }
-            background.sizeDelta = new Vector2(background.sizeDelta.x, panelTopY - bottomEdge);
-            background.anchoredPosition = new Vector2(background.anchoredPosition.x, bottomEdge + background.pivot.y * background.sizeDelta.y);
-        }
-
-        // Put the panel back to the size/position the game gave it (the no-mods case).
-        private static void RestoreBackground(Runtime rt)
-        {
-            if (!rt.BgCaptured || rt.Background == null) return;
-            rt.Background.sizeDelta = new Vector2(rt.Background.sizeDelta.x, rt.BgOrigSizeY);
-            rt.Background.anchoredPosition = new Vector2(rt.Background.anchoredPosition.x, rt.BgOrigPosY);
-        }
-
-        private static System.Collections.Generic.List<GameObject> CreateDividers(Transform dividerTemplate, float topY, float rowSpacing)
-        {
-            var made = new System.Collections.Generic.List<GameObject>();
-            if (dividerTemplate == null) return made;
-            for (int i = 0; i < MaxRowsPerPage + 1; i++)
-            {
-                var divider = UnityEngine.Object.Instantiate(dividerTemplate.gameObject, dividerTemplate.parent);
-                divider.name = "ModsPagerDivider" + i;
-                var dividerRt = (RectTransform)divider.transform;
-                dividerRt.anchoredPosition = new Vector2(dividerRt.anchoredPosition.x, topY - (i + 0.5f) * rowSpacing);
-                made.Add(divider);
-            }
-            return made;
-        }
-
-        private static GameObject[] CreateSlots(RectTransform quit, RectTransform settings)
-        {
-            var slots = new GameObject[MaxRowsPerPage];
-            for (int i = 0; i < MaxRowsPerPage; i++)
-            {
-                var slotGo = UnityEngine.Object.Instantiate(quit.gameObject, quit.parent);
-                slotGo.name = "ModsPagerSlot" + i;
-                slotGo.SetActive(false);
-                MenuUiUtil.CopyButtonTextColor(settings.gameObject, slotGo);
-                slots[i] = slotGo;
-            }
-            return slots;
-        }
-
-        // A row above Quit (sibling of Quit; Runtime.OnDisable hides it with the pager) that steps to the next page.
-        private static GameObject CreatePageButton(Runtime rt, GameObject pagerGo, RectTransform quit, RectTransform settings)
-        {
-            var pagerRt = (RectTransform)pagerGo.transform;
-            pagerRt.anchorMin = Vector2.zero;
-            pagerRt.anchorMax = Vector2.one;
-            pagerRt.offsetMin = Vector2.zero;
-            pagerRt.offsetMax = Vector2.zero;
-            var go = UnityEngine.Object.Instantiate(quit.gameObject, quit.parent);
-            go.name = "ModsPagerPageButton";
-            var goRt = (RectTransform)go.transform;
-            goRt.anchorMin = quit.anchorMin;
-            goRt.anchorMax = quit.anchorMax;
-            goRt.pivot = quit.pivot;
-            goRt.sizeDelta = quit.sizeDelta;
-            goRt.anchoredPosition = new Vector2(quit.anchoredPosition.x, rt.QuitY + rt.RowSpacing);
-            MenuUiUtil.CopyButtonTextColor(settings.gameObject, go);
-            var btn = go.GetComponent<Button>();
-            btn.onClick = new Button.ButtonClickedEvent();
-            btn.onClick.AddListener(() => ShowPage(rt, rt.CurrentPage + 1));
-            go.SetActive(false);
-            return go;
-        }
-
-        private static void ShowPage(Runtime rt, int page)
-        {
-            var rows = MenuRowRegistry.Visible();
-            int modPageCount = rows.Count == 0 ? 0 : (int)Math.Ceiling(rows.Count / (double)MaxRowsPerPage);
-            int totalPages = 1 + modPageCount;
-            if (page < 0) page = totalPages - 1;
-            if (page >= totalPages) page = 0;
-            rt.CurrentPage = page;
-
-            // The page button, and room for it in the panel, only when there's a page to go to.
-            if (rt.PageButton != null)
-            {
-                bool paged = totalPages > 1;
-                // Page 1 keeps the vanilla rows and their vanilla divider bars; the mod
-                // pages are our uniform grid with the pager's own bars (they match).
-                foreach (var d in rt.VanillaDividers) if (d != null) d.SetActive(page == 0);
-                foreach (var d in rt.PagerDividers) if (d != null) d.SetActive(page > 0);
-                rt.PageButton.SetActive(paged);
-                if (paged) MenuUiUtil.SetButtonLabel(rt.PageButton, "Page " + (page + 1) + "/" + totalPages + "  >");
-                // Vanilla page with mods: Page button takes Quit's slot, Quit drops one vanilla
-                // row — compact, not the mod-grid slot that left a tall "super high" gap.
-                float vanillaPitch = rt.VanillaYSettings - rt.OriginalQuitY;
-                float bottomY = page > 0 ? rt.QuitY : (paged ? rt.OriginalQuitY - vanillaPitch : rt.OriginalQuitY);
-                float pageButtonY = (page == 0 && paged) ? rt.OriginalQuitY : bottomY + rt.RowSpacing;
-                rt.Quit.anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, bottomY);
-                rt.QuitTargetY = bottomY;
-                if (paged) ((RectTransform)rt.PageButton.transform).anchoredPosition = new Vector2(rt.Quit.anchoredPosition.x, pageButtonY);
-                // With mod rows, size the panel to the new layout; with none, leave it exactly vanilla (no extra band below Quit).
-                if (!paged && page == 0) RestoreBackground(rt);
-                else ResizeBackgroundToFit(rt.Background, rt.PanelTopY, bottomY, rt.BottomMargin, rt.BackgroundScaleY, rt.ChildBackground);
-            }
-
-            if (page == 0) ShowVanillaPage(rt);
-            else ShowModPage(rt, rows, page);
-            if (!rt.LayoutLogged) { rt.LayoutLogged = true; LogLayout(rt.Quit.parent, "after", rt); }
-        }
-
-        private static void ShowVanillaPage(Runtime rt)
-        {
-            // The captured Ys, not a derived grid: the game's pitch is uneven
-            // (65.9/67.4/58.3 between the four rows), and forcing a uniform grid
-            // lifted the lower rows above the vanilla divider bars.
-            rt.StartGame.gameObject.SetActive(true);
-            rt.StartGame.anchoredPosition = new Vector2(rt.StartGame.anchoredPosition.x, rt.VanillaYStart);
-            rt.DeleteSave?.gameObject.SetActive(true);
-            if (rt.DeleteSave != null) rt.DeleteSave.anchoredPosition = new Vector2(rt.DeleteSave.anchoredPosition.x, rt.VanillaYDelete);
-            rt.Settings.gameObject.SetActive(true);
-            rt.Settings.anchoredPosition = new Vector2(rt.Settings.anchoredPosition.x, rt.VanillaYSettings);
-            foreach (var slot in rt.Slots) slot.SetActive(false);
-        }
-
-        private static void ShowModPage(Runtime rt, System.Collections.Generic.IReadOnlyList<MenuRowRegistry.Entry> rows, int page)
-        {
-            rt.StartGame.gameObject.SetActive(false);
-            if (rt.DeleteSave != null) rt.DeleteSave.gameObject.SetActive(false);
-            rt.Settings.gameObject.SetActive(false);
-
-            int startIdx = (page - 1) * MaxRowsPerPage;
-            int count = Math.Max(0, Math.Min(MaxRowsPerPage, rows.Count - startIdx));
-            var mainBit = rt.StartGame.transform.parent.gameObject;
-            for (int i = 0; i < MaxRowsPerPage; i++)
-            {
-                var slot = rt.Slots[i];
-                if (i >= count) { slot.SetActive(false); continue; }
-
-                var spec = rows[startIdx + i];
-                slot.SetActive(true);
-                var slotRt = (RectTransform)slot.transform;
-                slotRt.anchoredPosition = new Vector2(slotRt.anchoredPosition.x, rt.TopY - i * rt.RowSpacing);
-                MenuUiUtil.SetButtonLabel(slot, spec.Label);
-                var btn = slot.GetComponent<Button>();
-                btn.onClick = new Button.ButtonClickedEvent();
-                btn.onClick.AddListener(() =>
-                {
-                    mainBit.SetActive(false);
-                    spec.OnClick();
-                });
-            }
+            var go = new GameObject(name, typeof(RectTransform));
+            go.layer = parent.gameObject.layer;
+            go.transform.SetParent(parent, false);
+            return (RectTransform)go.transform;
         }
     }
 }
