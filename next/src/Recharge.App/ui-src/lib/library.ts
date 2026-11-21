@@ -1,6 +1,6 @@
 /** Pure Library logic: kinds, rows, colours, search, sort, install matching, updates. No DOM. */
 import { slug } from '../util.js';
-import { isNewer } from './version.js';
+import { compareParsed, isNewer, parseVersion } from './version.js';
 import { githubRepoUrl } from './sourceUrl.js';
 
 export type Kind = 'maps' | 'mods' | 'skins' | 'backgrounds' | 'playlists' | 'games';
@@ -219,7 +219,15 @@ export function statusOf(item: Item, ref: InstalledRef | null): Status {
     return hub > have ? 'update' : 'installed';
   }
   if (item.kind === 'mods') {
-    if (ref.revision !== null && item.revision !== null && item.revision > ref.revision) return 'update';
+    const have = parseVersion(ref.version);
+    const hub = parseVersion(item.version);
+    const newerRevision = ref.revision !== null && item.revision !== null && item.revision > ref.revision;
+    if (have && hub) {
+      const order = compareParsed(hub, have);
+      // A new revision can repackage the same version without downgrading a newer build.
+      return order > 0 || (order === 0 && newerRevision) ? 'update' : 'installed';
+    }
+    if (newerRevision) return 'update';
     return ref.version && item.version && isNewer(item.version, ref.version) ? 'update' : 'installed';
   }
   // Skins, backgrounds, playlists: by revision, like maps; an unrecorded revision counts as 1.
