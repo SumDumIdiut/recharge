@@ -102,9 +102,11 @@ internal static class MapMenuBuilder
         private Vector2 _quitOrigPos;
         private readonly List<GameObject> _hiddenDividers = new List<GameObject>();
         private readonly List<GameObject> _pickerDividers = new List<GameObject>();
+        private SavePicker _saves;
 
         public void Open(bool deleteMode)
         {
+            _saves?.Hide();
             _deleteMode = deleteMode;
             _pageIndex = 0;
             _deleteCounters.Clear();
@@ -230,9 +232,10 @@ internal static class MapMenuBuilder
 
         // Safety nets: whenever the panel goes away the lines come back; if it
         // returns while the picker is still open, the picker lines return too.
-        private void OnDisable() { RestorePickerDividers(); }
-        private void OnDestroy() { RestorePickerDividers(); }
+        private void OnDisable() { _saves?.Hide(); RestorePickerDividers(); }
+        private void OnDestroy() { _saves?.Destroy(); RestorePickerDividers(); }
         private void OnEnable() { if (_open && _rowYs != null) ApplyPickerDividers(); }
+        private void LateUpdate() => _saves?.Layout();
 
         // Escape backs out of the picker, same as the Back row.
         private void Update()
@@ -245,6 +248,7 @@ internal static class MapMenuBuilder
         public void Close()
         {
             if (!_open) return;
+            if (_saves?.Visible == true) { _saves.Back(); return; }
             _open = false;
             RestorePickerDividers();
             foreach (var slot in Slots) slot.SetActive(false);
@@ -303,8 +307,31 @@ internal static class MapMenuBuilder
 
         private void ClickRow(GameObject slot, MapPage page)
         {
+            if (page.Kind != MapPageKind.BSide && SaveSlots.Library != null)
+            {
+                var custom = page.Kind == MapPageKind.Custom;
+                _saves ??= new SavePicker((RectTransform)transform, StartGame.GetComponent<Button>());
+                _saves.Open(custom ? SaveLibrary.Custom : SaveLibrary.Vanilla,
+                    custom ? SaveSlots.MapId(page.MapId) : SaveLibrary.BaseGame, page.Label,
+                    custom ? SaveSlots.Revision(page.MapId) : null, _deleteMode,
+                    entry => PlaySave(page, entry));
+                return;
+            }
+            _saves?.Hide();
             if (_deleteMode) ClickDelete(slot, page);
             else ClickPlay(page);
+        }
+
+        private void PlaySave(MapPage page, SaveEntry entry)
+        {
+            if (DoorTransition.Busy) return;
+            var session = SaveSlots.Prepare(entry, page.MapId);
+            if (page.Kind == MapPageKind.Custom)
+                MapManager.Instance.PlayMap(page.MapId, Menu, false, session);
+            else
+                MapManager.LeaveTo(Menu, false, session);
+            _saves.Hide();
+            if (Menu.menuOpen) Menu.menuButtonPressed();
         }
 
         private void ClickPlay(MapPage page)

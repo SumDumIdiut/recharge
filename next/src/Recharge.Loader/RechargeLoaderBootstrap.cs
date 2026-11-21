@@ -28,6 +28,12 @@ public static class RechargeLoaderBootstrap
     /// <summary>The loader's one connection to the app (the app admits a single game connection); null when the game wasn't launched by it.</summary>
     public static LinkClient SharedLink { get; private set; }
 
+    // These calls are installed into the native game. With no managed session
+    // they return the original paths and keys, so vanilla progress stays put.
+    public static string ResolveSavePath(string path) => Recharge.Module.Maps.RechargeMapsModule.ResolveSavePath(path);
+    public static string ResolveSavePreference(string key) => Recharge.Module.Maps.RechargeMapsModule.ResolveSavePreference(key);
+    public static void NativeSaveComplete() => Recharge.Module.Maps.RechargeMapsModule.NativeSaveComplete();
+
     public static void Init(pauseMenuScript menu)
     {
         if (_initialized) return;
