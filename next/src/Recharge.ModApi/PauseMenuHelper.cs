@@ -4,9 +4,8 @@ using UnityEngine;
 namespace Recharge.ModApi
 {
     /// <summary>
-    /// Public entry point for adding an entry to the real pause menu. Page 1
-    /// is the untouched vanilla menu; every mod's entry lives on page 2+,
-    /// sharing the same row slots. Hands off to <see cref="MenuRowRegistry"/>,
+    /// Public entry point for adding an entry to the Mods list next to the
+    /// game's menu. Hands off to <see cref="MenuRowRegistry"/>,
     /// <see cref="MenuPanelRegistry"/>, <see cref="MenuPager"/> and
     /// <see cref="MenuUiUtil"/> for each concern.
     /// </summary>
@@ -30,11 +29,16 @@ namespace Recharge.ModApi
             });
         }
 
-        /// <summary>The pause menu's main (page 1) container, or null if the game's menu doesn't have the expected shape.</summary>
+        /// <summary>The main menu container, or null if the game's menu doesn't have the expected shape.</summary>
         public static GameObject MainBit(pauseMenuScript menu) => menu != null ? MenuReflection.MainBit(menu) : null;
 
         /// <summary>The pause menu's settings container (the template every mod panel is cloned from), or null.</summary>
         public static GameObject SettingsBit(pauseMenuScript menu) => menu != null ? MenuReflection.SettingsBit(menu) : null;
+
+        /// <summary>Shows or hides Mods while another view uses the main menu frame.</summary>
+        /// <returns>True if the main menu frame is expanded for the Mods row.</returns>
+        public static bool SetModsMenuVisible(pauseMenuScript menu, bool visible) =>
+            menu != null && MenuPager.SetModsVisible(menu, visible);
 
         // The overloads without "visible" stay as separate methods: mods compiled against the older signatures bind to them by exact shape.
         public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick) => AddRow(menu, rowName, label, onClick, null);
