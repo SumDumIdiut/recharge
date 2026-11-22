@@ -219,8 +219,10 @@ namespace Recharge.ModApi
                 _listOwner = owner;
                 _pageIndex = 0;
                 _open = false;
-                SetFrameExpanded(isActiveAndEnabled && MenuRowRegistry.Visible().Count > 0);
-                MenuUiUtil.SetButtonLabel(_toggle.gameObject, _open ? "Mods <" : "Mods >");
+                // A list needs the wider frame even when no mods are installed (and so no Mods row).
+                SetFrameExpanded(isActiveAndEnabled);
+                SetModsRowVisible(MenuRowRegistry.Visible().Count > 0);
+                MenuUiUtil.SetButtonLabel(_toggle.gameObject, "Mods >");
                 ShowListPage();
                 _panel.gameObject.SetActive(true);
                 if (_panel.gameObject.activeInHierarchy) Layout();
@@ -557,6 +559,9 @@ namespace Recharge.ModApi
 
         public static bool ShowList(pauseMenuScript menu, string owner, IReadOnlyList<PauseMenuHelper.SideListRow> rows)
         {
+            if (menu == null) return false;
+            // A list may be the first thing to need the panel (a mod-less install has no other reason to build it).
+            EnsureBuilt(menu);
             var runtime = RuntimeFor(menu);
             return runtime != null && runtime.ShowList(owner, rows);
         }
