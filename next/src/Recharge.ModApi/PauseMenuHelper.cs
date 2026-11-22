@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Recharge.ModApi
@@ -39,6 +40,43 @@ namespace Recharge.ModApi
         /// <returns>True if the main menu frame is expanded for the Mods row.</returns>
         public static bool SetModsMenuVisible(pauseMenuScript menu, bool visible) =>
             menu != null && MenuPager.SetModsVisible(menu, visible);
+
+        /// <summary>
+        /// One row of a side list: its text and what a click does. Change <see cref="Label"/>
+        /// and call <see cref="RefreshSideList"/> to update a row in place (a delete confirmation,
+        /// a map being removed, ...).
+        /// </summary>
+        public sealed class SideListRow
+        {
+            public string Label;
+            public Action OnClick;
+
+            public SideListRow(string label, Action onClick = null)
+            {
+                Label = label;
+                OnClick = onClick;
+            }
+        }
+
+        /// <summary>
+        /// Shows <paramref name="rows"/> in the Mods menu's side panel - the same frame, row
+        /// styling and paging - so a mod's own list (the map picker) looks and behaves like Mods
+        /// instead of taking over the main menu. The main menu's rows keep working; Escape closes
+        /// the list and Mods takes the panel back. <paramref name="owner"/> names the list so the
+        /// caller can tell its own list from another one. False when the menu has no side panel.
+        /// </summary>
+        public static bool ShowSideList(pauseMenuScript menu, string owner, IReadOnlyList<SideListRow> rows) =>
+            menu != null && MenuPager.ShowList(menu, owner, rows);
+
+        /// <summary>True while the list with this owner is the one in the side panel.</summary>
+        public static bool IsSideListOpen(pauseMenuScript menu, string owner) =>
+            menu != null && MenuPager.IsListOpen(menu, owner);
+
+        /// <summary>Closes the side list (Mods comes back if it was open). False when no list was open.</summary>
+        public static bool CloseSideList(pauseMenuScript menu) => menu != null && MenuPager.CloseList(menu);
+
+        /// <summary>Re-reads every row's <see cref="SideListRow.Label"/> after a click changed one.</summary>
+        public static void RefreshSideList(pauseMenuScript menu) => MenuPager.Refresh(menu);
 
         // The overloads without "visible" stay as separate methods: mods compiled against the older signatures bind to them by exact shape.
         public static GameObject AddRow(pauseMenuScript menu, string rowName, string label, Action onClick) => AddRow(menu, rowName, label, onClick, null);

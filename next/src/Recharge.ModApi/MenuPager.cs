@@ -59,6 +59,11 @@ namespace Recharge.ModApi
             private int _pageIndex;
             private int _pageCount = 1;
             private int _shownFrame;
+            private IReadOnlyList<PauseMenuHelper.SideListRow> _list;
+            private string _listOwner;
+
+            /// <summary>The panel is showing an external list (e.g. the map picker) instead of the Mods rows.</summary>
+            private bool ListOpen => _list != null;
 
             public void Build(RectTransform main, RectTransform frame, RectTransform canvas,
                 RectTransform settings, RectTransform quit, TMP_FontAsset font)
@@ -133,6 +138,9 @@ namespace Recharge.ModApi
             private void OnDisable()
             {
                 Canvas.willRenderCanvases -= FitVisibleMenu;
+                // A list (map picker) never outlives the menu it was opened from.
+                _list = null;
+                _listOwner = null;
                 // The picker can keep using the expanded frame while the menu is hidden.
                 if (_modsVisible) SetFrameExpanded(false);
                 if (_panel != null) _panel.gameObject.SetActive(false);
@@ -148,7 +156,14 @@ namespace Recharge.ModApi
 
             public void Refresh()
             {
-                if (_panel == null || !_modsVisible) return;
+                if (_panel == null) return;
+                if (ListOpen)
+                {
+                    ShowListPage();
+                    if (_panel.gameObject.activeInHierarchy) Layout();
+                    return;
+                }
+                if (!_modsVisible) return;
                 var entries = MenuRowRegistry.Visible();
                 if (entries.Count == 0) _open = false;
                 SetFrameExpanded(isActiveAndEnabled && entries.Count > 0);
@@ -191,6 +206,59 @@ namespace Recharge.ModApi
                 }
                 MenuUiUtil.SetButtonLabel(_pageButton.gameObject, "Page " + (_pageIndex + 1) + " / " + _pageCount);
             }
+
+            /// <summary>
+            /// Hands the side panel to an external list (the map picker, ...) with the Mods list's
+            /// frame, paging and row styling. The main menu is left untouched, so its own rows keep
+            /// working while the list is open.
+            /// </summary>
+            public bool ShowList(string owner, IReadOnlyList<PauseMenuHelper.SideListRow> rows)
+            {
+                if (_panel == null || rows == null) return false;
+                _list = rows;
+                _listOwner = owner;
+                _pageIndex = 0;
+                _open = false;
+                SetFrameExpanded(isActiveAndEnabled && MenuRowRegistry.Visible().Count > 0);
+                MenuUiUtil.SetButtonLabel(_toggle.gameObject, _open ? "Mods <" : "Mods >");
+                ShowListPage();
+                _panel.gameObject.SetActive(true);
+                if (_panel.gameObject.activeInHierarchy) Layout();
+                if (rows.Count > 0) Select(_rows[0]);
+                return true;
+            }
+
+            private void ShowListPage()
+            {
+                int count = _list?.Count ?? 0;
+                _pageCount = Math.Max(1, (int)Math.Ceiling(count / (double)RowsPerPage));
+                _pageIndex = Math.Min(_pageIndex, _pageCount - 1);
+                int start = _pageIndex * RowsPerPage;
+                for (int i = 0; i < _rows.Length; i++)
+                {
+                    var row = _rows[i];
+                    var entry = start + i < count ? _list[start + i] : null;
+                    row.interactable = entry != null;
+                    MenuUiUtil.SetButtonLabel(row.gameObject, entry?.Label ?? "");
+                    PauseMenuHelper.SetButtonAction(row.gameObject, entry == null ? null : () => entry.OnClick?.Invoke());
+                }
+                MenuUiUtil.SetButtonLabel(_pageButton.gameObject, "Page " + (_pageIndex + 1) + " / " + _pageCount);
+            }
+
+            /// <summary>Closes an external list; the Mods list comes back if it was open.</summary>
+            public bool CloseList()
+            {
+                if (!ListOpen) return false;
+                _list = null;
+                _listOwner = null;
+                _pageIndex = 0;
+                if (_panel != null) _panel.gameObject.SetActive(false);
+                Refresh();
+                if (_toggle != null && _toggle.isActiveAndEnabled) Select(_toggle);
+                return true;
+            }
+
+            public bool IsListOpen(string owner) => ListOpen && _listOwner == owner;
 
             private void SetFrameExpanded(bool expanded)
             {
@@ -333,6 +401,8 @@ namespace Recharge.ModApi
 
             private void Toggle()
             {
+                // Mods clicked while another list (the map picker) owns the panel: switch to Mods.
+                if (ListOpen) { _list = null; _listOwner = null; }
                 _open = !_open;
                 if (_open) _pageIndex = 0;
 
@@ -363,32 +433,39 @@ namespace Recharge.ModApi
 
             private void Update()
             {
-                if (!_open || _panel == null) return;
+                if (_panel == null) return;
                 var kb = Keyboard.current;
+                if (kb == null || !kb.escapeKey.wasPressedThisFrame) return;
+                // Escape backs out of an external list first, then out of Mods.
+                if (ListOpen) { CloseList(); return; }
                 // An Escape that just closed a mod's settings also re-enables this menu.
-                if (Time.frameCount != _shownFrame && kb != null && kb.escapeKey.wasPressedThisFrame) Toggle();
+                if (_open && Time.frameCount != _shownFrame) Toggle();
             }
 
             private void FitVisibleMenu()
             {
-                if (!_frameExpanded) return;
-                if (_modsVisible && _titleQuitLabel != null && _titleQuitLabel.text == "Quit game")
+                // A side list still needs re-docking on resize when no mods expanded the frame.
+                if (!_frameExpanded && !ListOpen) return;
+                if (_frameExpanded)
                 {
-                    // Keep the title button's localizer and the map picker's label ownership.
-                    var label = _titleQuitLabel.GetComponent<ModLabel>();
-                    if (label != null) label.Text = "Quit Game";
-                    else _titleQuitLabel.text = "Quit Game";
+                    if (_modsVisible && _titleQuitLabel != null && _titleQuitLabel.text == "Quit game")
+                    {
+                        // Keep the title button's localizer and the map picker's label ownership.
+                        var label = _titleQuitLabel.GetComponent<ModLabel>();
+                        if (label != null) label.Text = "Quit Game";
+                        else _titleQuitLabel.text = "Quit Game";
+                    }
+                    // Unity can rebuild the layout without changing the canvas size.
+                    // Check the real frame and Quit bounds just before rendering.
+                    if (_modsVisible && _quit.anchoredPosition != _quitWithMods) _quit.anchoredPosition = _quitWithMods;
+                    foreach (var element in _titleElements)
+                        if (element.Rect != null && element.Rect.anchoredPosition != element.Raised)
+                            element.Rect.anchoredPosition = element.Raised;
+                    var area = _canvas.rect;
+                    var bounds = MainMenuBounds();
+                    if (_fitArea != area || bounds.x < area.yMin + MainBottomMargin - 0.1f
+                        || bounds.y > area.yMax - Margin + 0.1f) FitMainMenu();
                 }
-                // Unity can rebuild the layout without changing the canvas size.
-                // Check the real frame and Quit bounds just before rendering.
-                if (_modsVisible && _quit.anchoredPosition != _quitWithMods) _quit.anchoredPosition = _quitWithMods;
-                foreach (var element in _titleElements)
-                    if (element.Rect != null && element.Rect.anchoredPosition != element.Raised)
-                        element.Rect.anchoredPosition = element.Raised;
-                var area = _canvas.rect;
-                var bounds = MainMenuBounds();
-                if (_fitArea != area || bounds.x < area.yMin + MainBottomMargin - 0.1f
-                    || bounds.y > area.yMax - Margin + 0.1f) FitMainMenu();
                 if (_panel != null && _panel.gameObject.activeInHierarchy) Layout();
             }
 
@@ -474,9 +551,34 @@ namespace Recharge.ModApi
 
         public static bool SetModsVisible(pauseMenuScript menu, bool visible)
         {
-            var root = MenuReflection.MainBit(menu)?.transform.Find("ModsPager");
-            var runtime = root != null ? root.GetComponent<Runtime>() : null;
+            var runtime = RuntimeFor(menu);
             return runtime != null && runtime.SetModsVisible(visible);
+        }
+
+        public static bool ShowList(pauseMenuScript menu, string owner, IReadOnlyList<PauseMenuHelper.SideListRow> rows)
+        {
+            var runtime = RuntimeFor(menu);
+            return runtime != null && runtime.ShowList(owner, rows);
+        }
+
+        public static bool IsListOpen(pauseMenuScript menu, string owner)
+        {
+            var runtime = RuntimeFor(menu);
+            return runtime != null && runtime.IsListOpen(owner);
+        }
+
+        public static bool CloseList(pauseMenuScript menu)
+        {
+            var runtime = RuntimeFor(menu);
+            return runtime != null && runtime.CloseList();
+        }
+
+        public static void Refresh(pauseMenuScript menu) => RuntimeFor(menu)?.Refresh();
+
+        private static Runtime RuntimeFor(pauseMenuScript menu)
+        {
+            var root = menu != null ? MenuReflection.MainBit(menu)?.transform.Find("ModsPager") : null;
+            return root != null ? root.GetComponent<Runtime>() : null;
         }
 
         public static GameObject EnsureBuilt(pauseMenuScript menu)

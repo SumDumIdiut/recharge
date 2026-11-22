@@ -31,7 +31,7 @@ projects=(
 )
 
 if [ "${1:-}" != "--check" ]; then
-  game="$GAME_MANAGED_DIR"
+  game="${GAME_MANAGED_DIR:-}"
   if [ -z "$game" ]; then
     game="$HOME/.local/share/Steam/steamapps/common/IGTAP an Incremental Game That's Also a Platformer/IGTAPfullGame_Data/Managed"
   fi
