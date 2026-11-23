@@ -12,13 +12,22 @@ namespace Recharge.Module.Maps;
 
 
 // "Start Game" (renamed from the real vanilla "Start Demo") and "Delete save
-// data" both switch the real main menu panel itself into "picker mode"
-// instead of acting directly. The picker shows up to four maps at a time
-// (Base Game, B-side or custom maps). A "Page n/m >" row swaps between
-// groups of four, and Quit acts as Back until the picker closes.
+// data" open the map picker instead of acting directly. The picker shows up
+// to four maps at a time (Base Game, B-side or custom maps). A "Page n/m >"
+// row swaps between groups of four, and Quit acts as Back until the picker
+// closes.
+//
+// An alternative Start Game menu keeps the main menu functional and draws the
+// map list beside it, in the same side panel as Mods. The Settings panel's
+// "Start Menu" row switches between the two (persisted in PlayerPrefs).
 internal static class MapMenuBuilder
 {
     private const int RowsPerPage = 4;
+    private const string StylePref = "RechargeStartMenuSidePanel";
+    private const string ListOwner = "maps";
+
+    private static bool SidePanelStyle => PlayerPrefs.GetInt(StylePref, 0) == 1;
+    private static string StyleLabel => SidePanelStyle ? "Start Menu: Side Panel" : "Start Menu: Picker";
 
     public static void Install(pauseMenuScript menu)
     {
@@ -27,6 +36,7 @@ internal static class MapMenuBuilder
 
         var marker = new GameObject("MapsInstalled");
         marker.transform.SetParent(PauseMenuHelper.MainBit(menu).transform, false);
+        var host = marker.AddComponent<MenuHost>();
 
         // The real B-side/hard-mode row (gated behind BsideEnabler, only
         // visible once snfDemoCompleted is set) now lives inside the map
@@ -49,19 +59,60 @@ internal static class MapMenuBuilder
         var settings = PauseMenuHelper.MainBit(menu).transform.Find("Settings") as RectTransform;
         if (startGame == null || settings == null) return;
 
-        var picker = BuildPicker(menu, startGame);
+        host.Picker = BuildPicker(menu, startGame);
+        AddStyleRow(menu, host);
 
         PauseMenuHelper.SetButtonLabel(startGame.gameObject, "Start Game");
         var startBtn = startGame.GetComponent<Button>();
         startBtn.onClick = new Button.ButtonClickedEvent();
-        startBtn.onClick.AddListener(() => picker.Open(deleteMode: false));
+        startBtn.onClick.AddListener(() => OpenStartMenu(menu, host, deleteMode: false));
 
         if (deleteSave != null)
         {
             var deleteBtn = deleteSave.GetComponent<Button>();
             deleteBtn.onClick = new Button.ButtonClickedEvent();
-            deleteBtn.onClick.AddListener(() => picker.Open(deleteMode: true));
+            deleteBtn.onClick.AddListener(() => OpenStartMenu(menu, host, deleteMode: true));
         }
+    }
+
+    /// <summary>Settings row that chooses which Start Game menu is used; sticks across sessions.</summary>
+    private static void AddStyleRow(pauseMenuScript menu, MenuHost host)
+    {
+        var settings = PauseMenuHelper.SettingsBit(menu)?.transform;
+        if (settings == null || settings.Find("StartMenuStyle") != null) return;
+        // A plain settings button in the right-hand column, under Controls.
+        // The main menu's own Settings row is the reliable button template here.
+        var template = PauseMenuHelper.MainBit(menu)?.transform.Find("Settings") as RectTransform;
+        if (template == null) return;
+
+        GameObject row = null;
+        row = PauseMenuHelper.CloneButton(template.gameObject, settings, "StartMenuStyle", StyleLabel,
+            new Vector2(175f, 140f), new Vector2(250f, 48f), () => ToggleStyle(menu, host, row));
+        if (row == null) return;
+        PanelWidgets.FitLabel(row.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>());
+    }
+
+    private static void ToggleStyle(pauseMenuScript menu, MenuHost host, GameObject row)
+    {
+        bool side = !SidePanelStyle;
+        PlayerPrefs.SetInt(StylePref, side ? 1 : 0);
+        PlayerPrefs.Save();
+
+        // Close whichever menu the old style had open, then relabel the row.
+        host?.Picker?.Close();
+        host?.Saves?.Hide();
+        PauseMenuHelper.CloseSideList(menu);
+        if (row != null)
+        {
+            PauseMenuHelper.SetButtonLabel(row, StyleLabel);
+            PanelWidgets.FitLabel(row.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>());
+        }
+    }
+
+    private static void OpenStartMenu(pauseMenuScript menu, MenuHost host, bool deleteMode)
+    {
+        if (!SidePanelStyle || host == null) { host?.Picker?.Open(deleteMode); return; }
+        OpenSidePanel(menu, host, deleteMode);
     }
 
     private enum MapPageKind { BaseGame, BSide, Custom }
@@ -73,6 +124,146 @@ internal static class MapMenuBuilder
         public string MapId; // only meaningful for Custom
         public Action Play;
     }
+
+    // The side-panel Start Game menu: the map list stays beside the menu (same
+    // frame, styling and paging as Mods) and the main menu keeps working.
+    private static void OpenSidePanel(pauseMenuScript menu, MenuHost host, bool deleteMode)
+    {
+        if (menu == null) return; // the save picker's Back callback can outlive a menu
+        if (!deleteMode && PauseMenuHelper.IsSideListOpen(menu, ListOwner))
+        {
+            PauseMenuHelper.CloseSideList(menu);
+            return;
+        }
+
+        var counters = new Dictionary<string, int>();
+        var rows = new List<PauseMenuHelper.SideListRow>();
+        foreach (var page in BuildPageList(menu))
+        {
+            var p = page; // local copy for the closure
+            var row = new PauseMenuHelper.SideListRow(deleteMode ? "Delete " + p.Label : p.Label);
+            row.OnClick = () => ActivateSide(menu, host, row, p, deleteMode, counters);
+            rows.Add(row);
+        }
+
+        if (!PauseMenuHelper.ShowSideList(menu, ListOwner, rows))
+        {
+            Debug.LogWarning("[RechargeMaps] the pause menu has no side panel for the map list");
+            host?.Picker?.Open(deleteMode);
+        }
+    }
+
+    private static void ActivateSide(pauseMenuScript menu, MenuHost host, PauseMenuHelper.SideListRow row,
+        MapPage page, bool deleteMode, Dictionary<string, int> counters)
+    {
+        if (page.Kind != MapPageKind.BSide && SaveSlots.Library != null)
+        {
+            OpenSavesSide(menu, host, page, deleteMode);
+            return;
+        }
+
+        if (deleteMode)
+        {
+            DeleteLegacy(menu, row, page, counters);
+            return;
+        }
+
+        page.Play();
+        if (menu.menuOpen) menu.menuButtonPressed();
+    }
+
+    private static void OpenSavesSide(pauseMenuScript menu, MenuHost host, MapPage page, bool deleteMode)
+    {
+        var main = PauseMenuHelper.MainBit(menu);
+        var startGame = main != null ? main.transform.Find("StartGame") as RectTransform : null;
+        if (host == null || main == null || startGame == null) return;
+        if (host.Saves == null)
+        {
+            var template = startGame.GetComponent<Button>();
+            if (template == null) return;
+            host.Saves = new SavePicker((RectTransform)main.transform, template);
+        }
+
+        bool custom = page.Kind == MapPageKind.Custom;
+        PauseMenuHelper.CloseSideList(menu);
+        host.Saves.Closed = () => OpenSidePanel(menu, host, deleteMode);
+        host.Saves.Open(
+            custom ? SaveLibrary.Custom : SaveLibrary.Vanilla,
+            custom ? SaveSlots.MapId(page.MapId) : SaveLibrary.BaseGame,
+            page.Label,
+            custom ? SaveSlots.Revision(page.MapId) : null,
+            deleteMode,
+            entry => PlaySaveSide(menu, page, entry, host));
+    }
+
+    private static void PlaySaveSide(pauseMenuScript menu, MapPage page, SaveEntry entry, MenuHost host)
+    {
+        if (DoorTransition.Busy) return;
+        var session = SaveSlots.Prepare(entry, page.MapId);
+        if (page.Kind == MapPageKind.Custom)
+            MapManager.Instance.PlayMap(page.MapId, menu, false, session);
+        else
+            MapManager.LeaveTo(menu, false, session);
+        host.Saves.Hide();
+        if (menu.menuOpen) menu.menuButtonPressed();
+    }
+
+    // B-side (and installs without save hooks) keeps the vanilla delete flow.
+    private static void DeleteLegacy(pauseMenuScript menu, PauseMenuHelper.SideListRow row, MapPage page,
+        Dictionary<string, int> counters)
+    {
+        if (page.Kind == MapPageKind.Custom)
+        {
+            var messages = GetDeleteMessages(menu);
+            counters.TryGetValue(page.MapId, out var counter);
+            counter++;
+            counters[page.MapId] = counter;
+            if (messages == null || counter >= 4)
+            {
+                var playing = MapManager.CurrentMapId == page.MapId;
+                MapSaves.Delete(page.MapId);
+                if (playing) MapManager.Instance.PlayMap(page.MapId, menu);
+                counters[page.MapId] = 0;
+                row.Label = "Delete " + page.Label;
+            }
+            else
+            {
+                row.Label = messages[counter].GetLocalizedString();
+            }
+        }
+        else
+        {
+            bool isHard = page.Kind == MapPageKind.BSide;
+            if (isHard) menu.DeleteSavePressedHard();
+            else menu.DeleteSavePressed();
+            row.Label = RealDeleteButtonText(menu, isHard);
+        }
+
+        PauseMenuHelper.RefreshSideList(menu);
+    }
+
+    /// <summary>Lives on the per-menu marker: owns the side menu's save picker and its layout/lifetime.</summary>
+    private sealed class MenuHost : MonoBehaviour
+    {
+        public PickerState Picker;
+        public SavePicker Saves;
+
+        private void Update()
+        {
+            if (Saves == null || !Saves.Visible) return;
+            var kb = Keyboard.current; // Escape backs out of saves to the map list
+            if (kb != null && kb.escapeKey.wasPressedThisFrame) Saves.Back();
+        }
+
+        private void LateUpdate()
+        {
+            if (Saves != null && Saves.Visible) Saves.Layout();
+        }
+
+        private void OnDisable() => Saves?.Hide();
+        private void OnDestroy() => Saves?.Destroy();
+    }
+
 
     private class PickerState : MonoBehaviour
     {

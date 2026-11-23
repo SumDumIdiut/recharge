@@ -201,9 +201,16 @@ internal sealed class SavePicker
 
     public void Back()
     {
-        if (_view == View.List) Hide();
+        if (_view == View.List)
+        {
+            Hide();
+            Closed?.Invoke();
+        }
         else SwitchView(View.List);
     }
+
+    /// <summary>Called when Back closes the list itself, so the owner can return to the map list.</summary>
+    public Action Closed;
 
     private void SwitchView(View view)
     {
