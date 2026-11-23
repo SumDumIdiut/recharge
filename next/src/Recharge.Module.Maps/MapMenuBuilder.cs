@@ -89,7 +89,31 @@ internal static class MapMenuBuilder
         row = PauseMenuHelper.CloneButton(template.gameObject, settings, "StartMenuStyle", StyleLabel,
             new Vector2(175f, 140f), new Vector2(250f, 48f), () => ToggleStyle(menu, host, row));
         if (row == null) return;
-        PanelWidgets.FitLabel(row.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>());
+        row.AddComponent<FittedLabel>();
+    }
+
+    /// <summary>Keeps the settings row's text (and any later relabel) inside its button.</summary>
+    private sealed class FittedLabel : MonoBehaviour
+    {
+        private TMP_Text _label;
+        private string _text;
+        private float _width;
+
+        private void LateUpdate()
+        {
+            if (_label == null)
+            {
+                var t = transform.Find("Text (TMP)");
+                _label = t != null ? t.GetComponent<TMP_Text>() : null;
+                if (_label == null) return;
+            }
+            string text = _label.text ?? "";
+            float width = _label.rectTransform.rect.width;
+            if (text == _text && width == _width) return;
+            _text = text;
+            _width = width;
+            PanelWidgets.FitLabel(_label);
+        }
     }
 
     private static void ToggleStyle(pauseMenuScript menu, MenuHost host, GameObject row)
@@ -103,10 +127,7 @@ internal static class MapMenuBuilder
         host?.Saves?.Hide();
         PauseMenuHelper.CloseSideList(menu);
         if (row != null)
-        {
             PauseMenuHelper.SetButtonLabel(row, StyleLabel);
-            PanelWidgets.FitLabel(row.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>());
-        }
     }
 
     private static void OpenStartMenu(pauseMenuScript menu, MenuHost host, bool deleteMode)
