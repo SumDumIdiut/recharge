@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Recharge.Loader.Core;
 using Recharge.Loader.Core.Maps;
 using Recharge.ModApi;
@@ -23,10 +24,15 @@ public sealed class RechargeMapsModule : IBuiltinModule, IRechargeMod
 
     public bool Handles(string modId) => string.Equals(modId, MapRules.ModuleId, StringComparison.OrdinalIgnoreCase);
 
+    public static string ResolveSavePath(string path) => SaveSlots.NativePath(path);
+    public static string ResolveSavePreference(string key) => SaveSlots.PreferenceKey(key);
+    public static void NativeSaveComplete() => SaveSlots.NativeSaveComplete();
+
     public void OnLoad(IRechargeHost host)
     {
         MapEvents.Host = host;
         MapSaves.Recover();
+        SaveSlots.Initialize();
         MapManager.GetOrCreate();
         MapMenuBuilder.Install(host.PauseMenu);
 
@@ -39,7 +45,13 @@ public sealed class RechargeMapsModule : IBuiltinModule, IRechargeMod
             var mapId = payload as string;
             if (string.IsNullOrEmpty(mapId)) return;
             var menu = PauseMenuHelper.FindMenu();
-            if (menu != null) MapManager.Instance.PlayMap(mapId, menu);
+            if (menu == null || DoorTransition.Busy) return;
+            var id = SaveSlots.MapId(mapId);
+            // App requests previously resumed the map's single save. Resume
+            // the most recently used matching slot after that save migrates.
+            var entry = SaveSlots.Library?.Scan().Where(e => e.Metadata?.Matches(SaveLibrary.Custom, id) == true)
+                .OrderByDescending(e => e.Metadata.Saved ?? e.Metadata.Created).FirstOrDefault();
+            MapManager.Instance.PlayMap(mapId, menu, false, entry == null ? null : SaveSlots.Prepare(entry, mapId));
         });
 
         PlayRequestedTestMap();
@@ -65,7 +77,11 @@ public sealed class RechargeMapsModule : IBuiltinModule, IRechargeMod
 
         var menu = PauseMenuHelper.FindMenu();
         // Always start the game first and load the map once gameplay's Player exists.
-        if (menu != null) MapManager.Instance.PlayMap(mapId, menu, asNewGame: true);
+        if (menu != null)
+        {
+            var session = SaveSlots.HasHooks ? SaveSlots.PrepareTest(mapId, MapDefinition.Read(mapId)?.Player != null) : null;
+            MapManager.Instance.PlayMap(mapId, menu, true, session);
+        }
         else Debug.LogWarning("[RechargeMaps] no menu to start test map '" + mapId + "' from");
     }
 

@@ -210,6 +210,8 @@ namespace Recharge.Patcher
                 else throw new PatcherException("io: no clean copy of Assembly-CSharp.dll to patch; verify the game files in Steam");
             }
 
+            // Verify the game's shape before deploying any loader DLLs.
+            byte[] patched = BuildPatched(original, LoaderHasSaveHooks(loaderSrc));
             // Loader files first (the hook is harmless without them only if they exist), then the hook.
             var record = new Dictionary<string, string>();
             foreach (string src in files)
@@ -222,7 +224,6 @@ namespace Recharge.Patcher
                 record[name] = Hash(src) + "|" + Hash(dest);
             }
 
-            byte[] patched = BuildPatched(original);
             if (!File.Exists(asm) || !File.ReadAllBytes(asm).AsSpan().SequenceEqual(patched)) AtomicWrite(asm, patched);
             WriteState(managed, record);
 
@@ -240,7 +241,7 @@ namespace Recharge.Patcher
             return status;
         }
 
-        private static byte[] BuildPatched(byte[] original)
+        private static byte[] BuildPatched(byte[] original, bool saveHooks)
         {
             using var input = new MemoryStream(original);
             using ModuleDefinition module = ModuleDefinition.ReadModule(input, new ReaderParameters { ReadingMode = ReadingMode.Deferred });
@@ -291,6 +292,7 @@ namespace Recharge.Patcher
             });
             if (body.MaxStackSize < 2) body.MaxStackSize = 2;
 
+            if (saveHooks) PatchSaveHooks(module, bootstrap);
             using var output = new MemoryStream();
             module.Write(output);
             return output.ToArray();
@@ -357,6 +359,9 @@ namespace Recharge.Patcher
                     else if (module.GetType(BootstrapType) != null) shape.Legacy = true;
                     continue;
                 }
+                if (owner.Name == BootstrapType && owner.Scope is AssemblyNameReference saveLoader && saveLoader.Name == LoaderAssembly
+                    && (target.Name == "ResolveSavePath" || target.Name == "ResolveSavePreference"))
+                    continue;
                 if (shape.Foreign == null && owner.Scope != module && owner.Scope is AssemblyNameReference r
                     && !r.Name.StartsWith("UnityEngine", StringComparison.Ordinal) && !r.Name.StartsWith("Unity.", StringComparison.Ordinal)
                     && ForeignCallTypeHints.Any(h => owner.Name.Contains(h, StringComparison.OrdinalIgnoreCase)))

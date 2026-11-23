@@ -26,6 +26,8 @@ namespace Recharge.ModApi
             private readonly Vector3[] _corners = new Vector3[4];
             private readonly Button[] _rows = new Button[RowsPerPage];
             private readonly RectTransform[] _listDividers = new RectTransform[RowsPerPage];
+            private readonly string[] _fitText = new string[RowsPerPage + 1];
+            private readonly float[] _fitWidth = new float[RowsPerPage + 1];
             private readonly List<(RectTransform Rect, Vector2 Original, Vector2 Raised)> _titleElements =
                 new List<(RectTransform Rect, Vector2 Original, Vector2 Raised)>();
             private RectTransform _main;
@@ -508,6 +510,24 @@ namespace Recharge.ModApi
                     PlaceRow(_listDividers[i], Padding + (i + 1) * rowHeight - lineHeight * 0.5f, lineHeight, dividerInset);
                 }
                 PlaceRow((RectTransform)_pageButton.transform, Padding + RowsPerPage * rowHeight, rowHeight);
+                for (int i = 0; i < _rows.Length; i++) FitRow(_rows[i], i);
+                FitRow(_pageButton, _rows.Length);
+            }
+
+            // Long mod or map names shrink to the row instead of being drawn over
+            // the panel border; only resized when the text or the row width changes.
+            private void FitRow(Button button, int index)
+            {
+                var label = button != null
+                    ? button.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>()
+                    : null;
+                if (label == null) return;
+                string text = label.text ?? "";
+                float width = label.rectTransform.rect.width;
+                if (_fitText[index] == text && _fitWidth[index] == width) return;
+                _fitText[index] = text;
+                _fitWidth[index] = width;
+                PanelWidgets.FitLabel(label);
             }
 
             private Button CreateButton(Transform parent, string name)

@@ -75,7 +75,7 @@ namespace Recharge.Patcher
                     // The game's file is the clean original; one that differs from the backup means Steam updated it, so it becomes the backup.
                     byte[] original = File.ReadAllBytes(asm);
                     if (!File.ReadAllBytes(backup).AsSpan().SequenceEqual(original)) AtomicWrite(backup, original);
-                    AtomicWrite(asm, BuildPatched(original));
+                    AtomicWrite(asm, BuildPatched(original, LoaderHasSaveHooks(Path.Combine(managed, LoaderAssembly + ".dll"))));
                     Shape after = Analyze(asm);
                     if (!after.HasHook || !after.WellFormed) throw new PatcherException("io: the modded build didn't verify");
                 }

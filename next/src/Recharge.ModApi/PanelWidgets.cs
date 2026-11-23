@@ -99,6 +99,33 @@ namespace Recharge.ModApi
             return tmp;
         }
 
+        /// <summary>
+        /// Keeps one line of text inside a label's own rect: it shrinks the font
+        /// (down to <see cref="MinFitFontSize"/>) until the text fits the rect's
+        /// width and ellipsizes whatever still doesn't. Measured here on the real
+        /// rect instead of relying on TMP auto-size, which is set when a label is
+        /// first taken over - usually before its row has its final size, which is
+        /// how a long map or mod name ends up drawn over the panel border.
+        /// </summary>
+        public static void FitLabel(TMP_Text label)
+        {
+            if (label == null) return;
+            float max = label.fontSizeMax > 0f ? label.fontSizeMax : label.fontSize;
+            if (max <= 0f) return;
+            var rect = label.rectTransform.rect;
+            if (rect.width <= 1f || rect.height <= 1f) return;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.enableAutoSizing = false;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+            label.fontSize = max;
+            float preferred = label.GetPreferredValues(label.text ?? "", 0f, 0f).x;
+            float available = rect.width - 1f;
+            if (preferred > available && preferred > 0f)
+                label.fontSize = Mathf.Max(MinFitFontSize, max * available / preferred);
+        }
+
+        public const float MinFitFontSize = 10f;
+
         public static GameObject CreateDivider(Transform parent, Vector2 pos, float width, Color? color = null)
         {
             var go = new GameObject("Divider", typeof(RectTransform));

@@ -65,23 +65,35 @@ internal class MapManager : MonoBehaviour
     }
 
     // asNewGame: start the map over (the map maker's test runs).
-    public void PlayMap(string mapId, pauseMenuScript menu, bool asNewGame = false)
+    public void PlayMap(string mapId, pauseMenuScript menu, bool asNewGame = false) =>
+        PlayMap(mapId, menu, asNewGame, null);
+
+    internal void PlayMap(string mapId, pauseMenuScript menu, bool asNewGame, SaveSession session)
     {
         if (menu == null) { Debug.LogWarning("[RechargeMaps] no pause menu to change scene with - can't play '" + mapId + "'"); return; }
         var def = MapDefinition.Read(mapId);
+        if (session != null && (def?.Groups == null || def.Groups.Count == 0))
+            throw new InvalidOperationException("The selected map could not be loaded.");
         // The doors close, the scene loads and the map is built behind them; the game's own
         // changeScene is the fallback. The save and pending map are set up before the scene goes.
         DoorTransition.Run(menu, false, () =>
         {
-            MapSaves.BeginMapScene(mapId, def?.Player, asNewGame);
+            MapSaves.BeginMapScene(mapId, def?.Player, asNewGame, session);
             _pendingMapId = mapId;
         });
     }
 
     // Back to Base Game / B-side from a map: the map is saved and released as the doors close.
-    public static void LeaveTo(pauseMenuScript menu, bool hard)
+    public static void LeaveTo(pauseMenuScript menu, bool hard) => LeaveTo(menu, hard, null);
+
+    internal static void LeaveTo(pauseMenuScript menu, bool hard, SaveSession session)
     {
-        Action prepare = () => { MapSaves.SaveForSceneChange(); MapSaves.LeaveMap(); };
+        Action prepare = () =>
+        {
+            MapSaves.SaveForSceneChange();
+            MapSaves.LeaveMap();
+            SaveSlots.Activate(session);
+        };
         if (SceneManager.GetActiveScene().name == "MainMenu")
         {
             // The title screen's own transition performs the normal Base Game/B-side load.
@@ -175,6 +187,7 @@ internal class MapManager : MonoBehaviour
             MapSpawn.Place(w, this);
             StartCoroutine(RefreshersNextFrame(w));
             if (newGame && w.Overlay) StartCoroutine(ShowTutorialGlyphs());
+            if (SaveSlots.Active?.RuntimeMap == mapId) SaveSlots.Active.CanCommit = true;
             MapEvents.Loaded(w);
             Debug.Log("[RechargeMaps] loaded " + (w.Overlay ? "overlay" : "custom") + " map '" + mapId + "' (" + built + "/" + w.Group.Objects.Count + " objects)" + (newGame ? " as a new game" : ""));
         }
@@ -211,6 +224,7 @@ internal class MapManager : MonoBehaviour
 
     private void Update()
     {
+        SaveSlots.Initialize();
         MapSaves.Tick();
         if (_world != null) MapRespawn.Tick(MapUpgrades.GamePlayer());
         if (_world != null) MapStages.Tick(_world);

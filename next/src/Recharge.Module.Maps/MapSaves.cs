@@ -28,8 +28,12 @@ public static class MapSaves
     // This scene started the active map as a brand-new game.
     public static bool StartedFresh { get; private set; }
 
-    public static string FolderFor(string mapId) => MapRules.SaveFolderFor(mapId);
-    public static string ActiveFolder => ActiveMapId != null ? FolderFor(ActiveMapId) : SaveSwap.Game;
+    public static string FolderFor(string mapId)
+    {
+        var session = SaveSlots.Active;
+        return session != null && session.RuntimeMap == mapId ? session.Folder : MapRules.SaveFolderFor(mapId);
+    }
+    public static string ActiveFolder => ActiveMapId != null ? FolderFor(ActiveMapId) : SaveSlots.Active?.Folder ?? SaveSwap.Game;
 
     private static string _pendingMapId;
     private static bool _pendingFresh;
@@ -70,10 +74,22 @@ public static class MapSaves
 
     // Before a scene change into mapId: saves where we are now, then swaps the
     // map's save (or a new game) in for the next scene to load.
-    public static void BeginMapScene(string mapId, JObject player, bool asNewGame = false)
+    public static void BeginMapScene(string mapId, JObject player, bool asNewGame = false) =>
+        BeginMapScene(mapId, player, asNewGame, null);
+
+    internal static void BeginMapScene(string mapId, JObject player, bool asNewGame, SaveSession session)
     {
         SaveCurrent();
         StopGameSaving();
+        SaveSlots.Activate(session);
+        if (session != null)
+        {
+            // Native Awake will read the selected working folder via the
+            // loader hook. Keep it active through both gameplay scene loads.
+            _pendingMapId = mapId;
+            _pendingFresh = session.Fresh;
+            return;
+        }
         var folder = FolderFor(mapId);
         if (asNewGame) Delete(mapId);
         var fresh = player != null && !MatchesStart(folder, player);
@@ -115,6 +131,15 @@ public static class MapSaves
             StopGameSaving();
             return;
         }
+        if (scene.name == "MainMenu" && scene == SceneManager.GetActiveScene() && SaveSlots.Active?.InGameplay == true)
+        {
+            StopGameSaving();
+            SaveSlots.EndSession();
+            ActiveMapId = null;
+            StartedFresh = false;
+            return;
+        }
+        if (scene.name != "MainMenu" && SaveSlots.Active != null) SaveSlots.Active.InGameplay = true;
         // A scene load with nothing pending is the gameplay scene loading a second
         // time on the way into a map. Leave the map alone - it is still the one
         // being set up, and dropping it here is what left the game running on Base
@@ -126,7 +151,7 @@ public static class MapSaves
                 StopGameSaving();
                 // Still swapped in (the map isn't built yet): this load's Saveloader read the
                 // map's own save, nothing to fix. Otherwise it read the real Base Game save.
-                if (!SaveSwap.IsSwapped) ReloadActiveSave();
+                if (!SaveSwap.IsSwapped && SaveSlots.Active == null) ReloadActiveSave();
             }
             return;
         }
@@ -171,7 +196,7 @@ public static class MapSaves
     public static void SaveCourseRun(courseScript course)
     {
         if (ActiveMapId == null || course == null || SaveSwap.IsSwapped) return;
-        try { SaveObject(course, FolderFor(ActiveMapId)); }
+        try { SaveObject(course, FolderFor(ActiveMapId)); SaveSlots.Commit(); }
         catch (Exception e) { Debug.LogWarning("[RechargeMaps] saving finished course " + course.courseNumber + " failed: " + e.Message); }
     }
 
@@ -368,6 +393,7 @@ public static class MapSaves
         {
             if (reset != Vector2.zero) player.courseResetPoint = Vector2.zero;
             SaveObject(player, FolderFor(ActiveMapId));
+            SaveSlots.Commit();
         }
         catch (Exception e) { Debug.LogWarning("[RechargeMaps] saving the player at the checkpoint failed: " + e.Message); }
         finally { player.courseResetPoint = reset; }
@@ -399,6 +425,8 @@ public static class MapSaves
     {
         if (ActiveMapId != null) SaveAll(FolderFor(ActiveMapId));
         SaveSwap.SwapOut();
+        // Other OnApplicationQuit handlers may still call native manualSave.
+        // Keep the route and library lock alive until the process exits.
     }
 
     // Deletes a map's whole save; the next play starts it over.
@@ -434,6 +462,7 @@ public static class MapSaves
         catch (Exception e) { Debug.LogWarning("[RechargeMaps] map save folder: " + e.Message); return; }
         MapUpgrades.Save(folder);
         var saved = new System.Collections.Generic.List<string>();
+        bool complete = true;
         var objects = new System.Collections.Generic.List<SaveableObject>(UnityEngine.Object.FindObjectsByType<SaveableObject>(FindObjectsSortMode.None));
         // The player is added by hand: the sweep above only sees active objects, and the game
         // switches the player off before a save on the way out, so they were never in it.
@@ -444,7 +473,11 @@ public static class MapSaves
             // The title scene can stay loaded beside the world with its own copies.
             if (obj == null || obj.gameObject.scene.name == "MainMenu") continue;
             try { SaveObject(obj, folder); saved.Add(obj.GetType().Name); }
-            catch (Exception e) { Debug.LogWarning("[RechargeMaps] saving " + obj.GetType().Name + " failed: " + e.Message); }
+            catch (Exception e)
+            {
+                complete = false;
+                Debug.LogWarning("[RechargeMaps] saving " + obj.GetType().Name + " failed: " + e.Message);
+            }
         }
         // Movement writes playerdata.txt, and HasSave() looks for exactly that file: without it
         // the map reads as never saved, so every play starts over and the folder is deleted.
@@ -453,6 +486,7 @@ public static class MapSaves
         if (!wrotePlayer)
             Debug.LogError("[RechargeMaps] NO playerdata.txt in '" + folder + "' after saving [" + string.Join(", ", saved) +
                            "] - this map's save will be treated as new next time");
+        else if (complete) SaveSlots.Commit();
     }
 
     // Saveloader's own saving: IsSaving gates manualSave, but its autosave() never checks
