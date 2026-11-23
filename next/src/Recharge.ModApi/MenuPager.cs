@@ -63,6 +63,7 @@ namespace Recharge.ModApi
             private int _shownFrame;
             private IReadOnlyList<PauseMenuHelper.SideListRow> _list;
             private string _listOwner;
+            private int _listShownFrame;
 
             /// <summary>The panel is showing an external list (e.g. the map picker) instead of the Mods rows.</summary>
             private bool ListOpen => _list != null;
@@ -221,6 +222,7 @@ namespace Recharge.ModApi
                 _listOwner = owner;
                 _pageIndex = 0;
                 _open = false;
+                _listShownFrame = Time.frameCount;
                 // A list needs the wider frame even when no mods are installed (and so no Mods row).
                 SetFrameExpanded(isActiveAndEnabled);
                 SetModsRowVisible(MenuRowRegistry.Visible().Count > 0);
@@ -441,7 +443,9 @@ namespace Recharge.ModApi
                 var kb = Keyboard.current;
                 if (kb == null || !kb.escapeKey.wasPressedThisFrame) return;
                 // Escape backs out of an external list first, then out of Mods.
-                if (ListOpen) { CloseList(); return; }
+                // (Skip the frame the list was opened on: the same Escape press
+                // that closed a save list reopens this one.)
+                if (ListOpen) { if (Time.frameCount != _listShownFrame) CloseList(); return; }
                 // An Escape that just closed a mod's settings also re-enables this menu.
                 if (_open && Time.frameCount != _shownFrame) Toggle();
             }

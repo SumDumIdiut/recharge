@@ -156,6 +156,8 @@ internal static class MapMenuBuilder
             PauseMenuHelper.CloseSideList(menu);
             return;
         }
+        // Start Game while a map's save list is up takes the panel back.
+        host?.Saves?.Hide();
 
         var counters = new Dictionary<string, int>();
         var rows = new List<PauseMenuHelper.SideListRow>();
