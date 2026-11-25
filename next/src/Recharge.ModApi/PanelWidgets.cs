@@ -102,7 +102,7 @@ namespace Recharge.ModApi
         /// <summary>
         /// Keeps one line of text inside a label's own rect: it shrinks the font
         /// (down to <see cref="MinFitFontSize"/>) until the text fits the rect's
-        /// width and ellipsizes whatever still doesn't. Measured here on the real
+        /// width and height, and ellipsizes whatever still doesn't. Measured here on the real
         /// rect instead of relying on TMP auto-size, which is set when a label is
         /// first taken over - usually before its row has its final size, which is
         /// how a long map or mod name ends up drawn over the panel border.
@@ -122,6 +122,31 @@ namespace Recharge.ModApi
             float available = rect.width - 1f;
             if (preferred > available && preferred > 0f)
                 label.fontSize = Mathf.Max(MinFitFontSize, max * available / preferred);
+            // GetPreferredValues leaves the label's own textInfo in a throwaway
+            // state on some TMP versions; without a rebuild the label can keep
+            // rendering nothing even though .text is set. Force one now, while
+            // the label definitely has its final font size.
+            label.ForceMeshUpdate();
+
+            // A width-only fit is not enough: an ellipsised label whose text is
+            // taller than its rect renders *nothing at all* (TMP 3.x finds an
+            // empty ellipsis candidate stack, resets the character count, and
+            // leaves textInfo empty), so the button keeps its text and stays
+            // clickable while showing a blank row. Keep shrinking until TMP
+            // actually lays the string out.
+            if (label.isActiveAndEnabled && !string.IsNullOrEmpty(label.text))
+            {
+                for (int i = 0; i < 24 && label.fontSize > MinFitFontSize && !Rendered(label); i++)
+                {
+                    label.fontSize = Mathf.Max(MinFitFontSize, label.fontSize * 0.94f);
+                    label.ForceMeshUpdate();
+                }
+            }
+        }
+
+        private static bool Rendered(TMP_Text label)
+        {
+            return label.textInfo.characterCount > 0 && !Reflect.TryGetField(label, "m_isTextTruncated", false);
         }
 
         public const float MinFitFontSize = 10f;
