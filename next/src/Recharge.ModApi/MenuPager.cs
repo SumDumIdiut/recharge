@@ -30,7 +30,7 @@ namespace Recharge.ModApi
             private readonly float[] _fitWidth = new float[RowsPerPage + 1];
             private readonly List<(RectTransform Rect, Vector2 Original, Vector2 Raised)> _titleElements =
                 new List<(RectTransform Rect, Vector2 Original, Vector2 Raised)>();
-            private RectTransform _main;
+            private Transform _main;
             private RectTransform _frame;
             private RectTransform _canvas;
             private RectTransform _settings;
@@ -68,7 +68,19 @@ namespace Recharge.ModApi
             /// <summary>The panel is showing an external list (e.g. the map picker) instead of the Mods rows.</summary>
             private bool ListOpen => _list != null;
 
-            public void Build(RectTransform main, RectTransform frame, RectTransform canvas,
+            // The title menu is a RectTransform. The in-game pause menu groups
+            // its buttons and frame under an ordinary Transform.
+            private Vector2 MainPosition
+            {
+                get => _main is RectTransform rect ? rect.anchoredPosition : (Vector2)_main.localPosition;
+                set
+                {
+                    if (_main is RectTransform rect) rect.anchoredPosition = value;
+                    else _main.localPosition = new Vector3(value.x, value.y, _main.localPosition.z);
+                }
+            }
+
+            public void Build(Transform main, RectTransform frame, RectTransform canvas,
                 RectTransform settings, RectTransform quit, TMP_FontAsset font)
             {
                 _main = main;
@@ -284,14 +296,14 @@ namespace Recharge.ModApi
                     }
                     if (_main != null)
                     {
-                        _main.anchoredPosition = _mainPosition;
+                        MainPosition = _mainPosition;
                         _main.localScale = _mainScale;
                     }
                     if (_fitter != null) _fitter.verticalFit = _verticalFit;
                     return;
                 }
 
-                _mainPosition = _main.anchoredPosition;
+                _mainPosition = MainPosition;
                 _mainScale = _main.localScale;
                 _framePosition = _frame.anchoredPosition;
                 _frameSize = _frame.sizeDelta;
@@ -317,7 +329,7 @@ namespace Recharge.ModApi
                 var parentGrowth = _frame.parent.InverseTransformVector(growth).y;
                 _frame.sizeDelta += new Vector2(0f, frameGrowth);
                 _frame.anchoredPosition -= Vector2.up * (parentGrowth * (1f - _frame.pivot.y));
-                _expandedPosition = _main.anchoredPosition;
+                _expandedPosition = MainPosition;
                 if (_divider != null)
                     _divider.anchoredPosition = new Vector2(_divider.anchoredPosition.x, _quitPosition.y - step * 0.5f);
                 SetModsRowVisible(true);
@@ -392,7 +404,7 @@ namespace Recharge.ModApi
                 if (height <= 0f) return;
 
                 // Start every fit from the expanded layout at native scale.
-                _main.anchoredPosition = _expandedPosition;
+                MainPosition = _expandedPosition;
                 _main.localScale = _mainScale;
                 var bounds = MainMenuBounds();
                 float fullHeight = bounds.y - bounds.x;
@@ -402,7 +414,7 @@ namespace Recharge.ModApi
                     bounds = MainMenuBounds();
                 }
                 float shift = Mathf.Clamp(_mainLift, _fitArea.yMin + MainBottomMargin - bounds.x, _fitArea.yMax - Margin - bounds.y);
-                _main.anchoredPosition += (Vector2)_main.parent.InverseTransformVector(_canvas.TransformVector(Vector3.up * shift));
+                MainPosition += (Vector2)_main.parent.InverseTransformVector(_canvas.TransformVector(Vector3.up * shift));
             }
 
             private void Toggle()
@@ -612,25 +624,26 @@ namespace Recharge.ModApi
 
         public static GameObject EnsureBuilt(pauseMenuScript menu)
         {
-            var main = MenuReflection.MainBit(menu);
-            var existing = main.transform.Find("ModsPager");
+            var main = MenuReflection.MainBit(menu)?.transform;
+            if (main == null) return null;
+            var existing = main.Find("ModsPager");
             if (existing != null)
             {
                 existing.GetComponent<Runtime>()?.Refresh();
                 return existing.gameObject;
             }
 
-            var mainRect = main.transform as RectTransform;
             var canvas = main.GetComponentInParent<Canvas>(true)?.rootCanvas;
-            var settings = main.transform.Find("Settings") as RectTransform;
-            var quit = FindQuit(main.transform);
+            var settings = main.Find("Settings") as RectTransform;
+            var quit = FindQuit(main);
             var font = settings != null ? settings.GetComponentInChildren<TMP_Text>(true)?.font : null;
-            if (mainRect == null || canvas == null || !(canvas.transform is RectTransform canvasRect) || quit == null || font == null) return null;
+            var frame = FindFrame(main);
+            if (frame == null || canvas == null || !(canvas.transform is RectTransform canvasRect) || quit == null || font == null) return null;
 
-            var root = CreateRect("ModsPager", main.transform);
+            var root = CreateRect("ModsPager", main);
             PanelLayoutHelper.IgnoreLayout(root.gameObject);
             var runtime = root.gameObject.AddComponent<Runtime>();
-            runtime.Build(mainRect, FindFrame(mainRect), canvasRect, settings, quit, font);
+            runtime.Build(main, frame, canvasRect, settings, quit, font);
             return root.gameObject;
         }
 
@@ -657,10 +670,10 @@ namespace Recharge.ModApi
 
         // At the title screen the panel itself is the image. The in-game menu
         // puts its backdrop on a child; use that frame as the docking reference.
-        private static RectTransform FindFrame(RectTransform main)
+        private static RectTransform FindFrame(Transform main)
         {
-            if (main.GetComponent<Graphic>() != null) return main;
-            var best = main;
+            var best = main as RectTransform;
+            if (best != null && main.GetComponent<Graphic>() != null) return best;
             float bestArea = 0f;
             foreach (Transform child in main)
             {
