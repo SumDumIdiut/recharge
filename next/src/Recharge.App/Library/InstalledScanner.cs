@@ -140,19 +140,20 @@ namespace Recharge.App.Library
                 }
             }
 
-            if (string.IsNullOrEmpty(name))
+            string? uid = null;
+            string mapPath = Path.Combine(dir, "map.json");
+            if (File.Exists(mapPath))
             {
-                string mapPath = Path.Combine(dir, "map.json");
-                if (File.Exists(mapPath))
+                try
                 {
-                    try
-                    {
-                        name = ReadTopLevelName(mapPath);
-                    }
-                    catch (IOException e)
-                    {
-                        Warn(warnings, "could not read " + folder + "/map.json: " + e.Message);
-                    }
+                    // The map's stable content id; it survives hub re-uploads, so it links an
+                    // installed folder to its hub entry when the recorded hub id is stale or absent.
+                    uid = ReadTopLevelString(mapPath, "uid");
+                    if (string.IsNullOrEmpty(name)) name = ReadTopLevelString(mapPath, "name");
+                }
+                catch (IOException e)
+                {
+                    Warn(warnings, "could not read " + folder + "/map.json: " + e.Message);
                 }
             }
 
@@ -161,6 +162,7 @@ namespace Recharge.App.Library
             row["name"] = new JsonString(string.IsNullOrEmpty(name) ? folder : name!);
             row["hubId"] = hubId is null ? JsonNull.Instance : new JsonString(hubId);
             row["revision"] = revision is null ? JsonNull.Instance : JsonNumber.From((long)revision.Value);
+            row["uid"] = string.IsNullOrEmpty(uid) ? JsonNull.Instance : new JsonString(uid);
             return row;
         }
 
@@ -181,11 +183,14 @@ namespace Recharge.App.Library
         /// Streams the file and returns the first top-level string "name" member, or null.
         /// It never builds the document, so huge maps cost one pass of chars, not memory.
         /// </summary>
-        public static string? ReadTopLevelName(string path)
+        public static string? ReadTopLevelName(string path) => ReadTopLevelString(path, "name");
+
+        /// <summary>The first top-level string member called <paramref name="key"/> in the file, or null, read in one streaming pass.</summary>
+        public static string? ReadTopLevelString(string path, string key)
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536);
             using var reader = new StreamReader(stream, Encoding.UTF8, true, 65536);
-            return ScanTopLevelString(reader, "name");
+            return ScanTopLevelString(reader, key);
         }
 
         /// <summary>The first top-level string member called <paramref name="key"/>, read in one streaming pass, or null.</summary>

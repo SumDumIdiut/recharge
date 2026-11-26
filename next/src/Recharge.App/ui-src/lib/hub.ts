@@ -224,6 +224,7 @@ export function normalizeInstalled(raw: unknown): InstalledData {
       folder: str(m.folder), name: str(m.name),
       hubId: typeof m.hubId === 'string' ? m.hubId : null,
       revision: typeof m.revision === 'number' ? m.revision : null,
+      uid: typeof m.uid === 'string' ? m.uid : null,
     })),
     skins: arr(r.skins).map(content),
     backgrounds: arr(r.backgrounds).map(content),

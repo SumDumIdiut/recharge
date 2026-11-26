@@ -53,8 +53,9 @@ namespace Recharge.App.Amp
             return Path.GetFileName(dir);
         }
 
-        /// <summary>Maps bigger than this are not drawn as a thumbnail (a whole level is megabytes).</summary>
-        public const int PreviewMaxBytes = 6 * 1024 * 1024;
+        /// <summary>Maps bigger than this are not drawn as a thumbnail. A big hand-built level (tens of thousands of
+        /// tile objects) is well over ten megabytes, so the cap is generous; only truly enormous maps are skipped.</summary>
+        public const int PreviewMaxBytes = 32 * 1024 * 1024;
 
         /// <summary>
         /// What the Library needs to draw a map's picture: a revision (size and write time) and the map.json text, or no text

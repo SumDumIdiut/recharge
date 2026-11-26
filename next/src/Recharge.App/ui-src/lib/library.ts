@@ -42,6 +42,8 @@ export interface Item {
   updatedAt: string;
   revision: number | null;
   modId: string | null;
+  /** A map's stable content id (shared across its hub re-uploads); null for non-maps or when unknown. */
+  mapUid: string | null;
   /** The mod's source code on GitHub (a clean https://github.com/owner/repo address), or null. */
   sourceUrl: string | null;
   /** True for installed items that have no hub row. */
@@ -53,7 +55,7 @@ export interface Item {
 }
 
 export interface InstalledMod { id: string; displayName: string; version: string; enabled: boolean; folder: string; hubId: string | null; revision: number | null }
-export interface InstalledMap { folder: string; name: string; hubId: string | null; revision: number | null }
+export interface InstalledMap { folder: string; name: string; hubId: string | null; revision: number | null; uid: string | null }
 export interface InstalledSkin { folder: string; name: string; hubId: string | null; revision: number | null }
 /** A background or playlist folder in the app's own data. */
 export interface InstalledContent { folder: string; name: string; hubId: string | null; revision: number | null }
@@ -120,6 +122,7 @@ export function rowToItem(kind: Kind, row: unknown): Item | null {
     updatedAt: str(r.updatedAt),
     revision,
     modId: r.modId === null || r.modId === undefined ? null : str(r.modId),
+    mapUid: typeof r.mapUid === 'string' ? r.mapUid : null,
     sourceUrl: githubRepoUrl(r.sourceUrl),
     local: false,
     status: null,
@@ -171,6 +174,16 @@ export function mapLinks(installed: InstalledData, hubMaps: Item[]): Map<Install
     if (link && row && map.name && !sameName(row.name, map.name)) {
       const owner = hubMaps.find((item) => item.id !== link && sameName(item.name, map.name) && !claimed.has(item.id));
       if (owner) { link = owner.id; claimed.add(owner.id); }
+    }
+    // When the recorded hub id links to no current entry (a local install, or an
+    // entry replaced by a hub re-upload), fall back to the map's stable content id:
+    // a hub entry with the same mapUid is the same map. Prefer the one with the
+    // matching name, else the newest.
+    if ((!link || !hubMaps.some((item) => item.id === link)) && map.uid) {
+      const byUid = hubMaps.filter((item) => item.mapUid && item.mapUid === map.uid);
+      const pick = byUid.find((item) => map.name && sameName(item.name, map.name))
+        || byUid.slice().sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0))[0];
+      if (pick) link = pick.id;
     }
     links.set(map, link);
   }
@@ -285,6 +298,7 @@ function localItem(kind: Kind, id: string, name: string, version: string, ref: I
     updatedAt: '',
     revision: ref.revision,
     modId: null,
+    mapUid: null,
     sourceUrl: null,
     local: true,
     status: 'installed',

@@ -145,6 +145,11 @@ export function itemMedia(item: Item): HTMLElement {
   if (item.gallery.length > 0 && !item.local) {
     if (item.kind === 'skins') media.appendChild(skinMedia(item, media));
     else media.appendChild(hubMedia(item, media));
+  } else if (wantsRenderedPreview(item)) {
+    // no uploaded picture: draw the map from its own data (an uploaded one always wins)
+    const box = h('div', { className: 'media-box card-img' });
+    media.appendChild(box);
+    attachRenderedPreview(item, box, () => media.classList.add('has-img'));
   }
   return media;
 }
