@@ -85,15 +85,27 @@ export function statusBadge(item: Item): HTMLElement | null {
  */
 function skinMedia(item: Item, media: HTMLElement): HTMLElement {
   const box = h('div', { className: 'media-box card-img' });
+  // No sheet parsed into a character frame (e.g. "Googly Eyed Dot"): show the
+  // raw first image so the skin's own art appears instead of a generic placeholder.
+  const rawFallback = () => {
+    if (box.querySelector('img, canvas') || item.gallery.length === 0) return;
+    imageBlobUrl(item.kind, item.id, item.gallery[0]).then((url) => {
+      const image = new Image();
+      image.decoding = 'async';
+      image.className = 'pixel';
+      image.onload = () => { box.appendChild(image); media.classList.add('has-img'); fitImage(image, box); };
+      image.src = url;
+    }, () => { /* the placeholder stays */ });
+  };
   const tryFile = (index: number) => {
-    if (index >= Math.min(item.gallery.length, 3)) return;
+    if (index >= Math.min(item.gallery.length, 3)) { rawFallback(); return; }
     imageBlobUrl(item.kind, item.id, item.gallery[index]).then((url) => {
       const image = new Image();
       image.decoding = 'async';
       image.onload = () => { if (showSkinFrame(box, image)) media.classList.add('has-img'); else tryFile(index + 1); };
       image.onerror = () => tryFile(index + 1);
       image.src = url;
-    }, () => { /* the placeholder stays */ });
+    }, () => { rawFallback(); });
   };
   const start = () => tryFile(0);
   if (typeof IntersectionObserver === 'undefined') { start(); return box; }

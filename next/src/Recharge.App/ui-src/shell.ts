@@ -16,7 +16,6 @@ export interface NavEntry {
 
 const NAV: NavEntry[] = [
   { id: 'home', label: 'Home', icon: 'home', hash: '#/home' },
-  { id: 'lobbies', label: 'Lobbies', icon: 'lobbies', hash: '#/lobbies' },
   { id: 'library', label: 'Library', icon: 'library', hash: '#/library' },
   { id: 'community', label: 'Community', icon: 'community', hash: '#/community' },
   { id: 'notebook', label: 'Notebook', icon: 'notebook', hash: '#/notebook' },

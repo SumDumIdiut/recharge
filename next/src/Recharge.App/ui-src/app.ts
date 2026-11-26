@@ -4,7 +4,6 @@ import { initShell, setActive } from './shell.js';
 import { homePage } from './pages/home.js';
 import { libraryPage } from './pages/library.js';
 import { communityPage } from './pages/community.js';
-import { lobbiesPage } from './pages/lobbies.js';
 import { notebookPage } from './pages/notebook.js';
 import { settingsPage } from './pages/settings.js';
 import './settings/boot.js';
@@ -20,7 +19,6 @@ const routes: PageRegistry = {
   home: homePage,
   library: libraryPage,
   community: communityPage,
-  lobbies: lobbiesPage,
   notebook: notebookPage,
   settings: settingsPage,
   amp: ampPage,

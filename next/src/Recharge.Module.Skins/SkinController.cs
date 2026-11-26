@@ -93,6 +93,28 @@ namespace Recharge.Module.Skins
         public string CurrentFolder => _currentIndex >= 0 && _currentIndex < _skins.Count ? _skins[_currentIndex].folderName : null;
         public string CurrentDisplayName => CurrentFolder == null ? "Vanilla" : DisplayName(CurrentFolder);
 
+        /// <summary>True when the named skin folder is present locally.</summary>
+        public bool HasSkin(string folder) => !string.IsNullOrEmpty(folder) && _skins.FindIndex(s => s.folderName == folder) >= 0;
+
+        /// <summary>
+        /// Maps a vanilla animation frame into another player's skin so the
+        /// multiplayer module can skin that player's ghost. Returns null when the
+        /// skin isn't present locally or the frame doesn't map, so the caller keeps
+        /// the vanilla sprite (the default look). Safe to call every frame; runtimes
+        /// are cached per folder.
+        /// </summary>
+        public Sprite ResolveFor(string folder, Sprite vanillaSprite)
+        {
+            if (string.IsNullOrEmpty(folder) || vanillaSprite == null) return null;
+            int i = _skins.FindIndex(s => s.folderName == folder);
+            if (i < 0) return null;
+            var runtime = EnsureRuntime(i);
+            if (runtime == null) return null;
+            if (runtime.IsSheet)
+                return TryGetVanillaRowFrame(vanillaSprite, out var m) ? GetCustomCellSprite(runtime, m.row, m.frame) : null;
+            return runtime.FlatSprite;
+        }
+
         /// <summary>The skin.apply intent: switches live by folder name (null or empty for vanilla). False when there is no such skin.</summary>
         public bool ApplyFolder(string folder)
         {
@@ -102,6 +124,31 @@ namespace Recharge.Module.Skins
             if (i < 0) return false;
             SelectDisplayIndex(i + 1);
             return true;
+        }
+
+        /// <summary>
+        /// Applies the currently selected entry right away - used by the in-game
+        /// Skinmod panel so a click is visible without waiting for the next frame.
+        /// Vanilla clears the clone overlays; LateUpdate keeps applying the same
+        /// selection every frame, so an uncached runtime (grid layout still being
+        /// computed) simply resolves on a later frame.
+        /// </summary>
+        public void ApplySelectedNow()
+        {
+            if (_currentIndex < 0 || _currentIndex >= _skins.Count)
+            {
+                CloneSkinApplier.RestoreVanilla();
+                return;
+            }
+            try
+            {
+                var runtime = EnsureRuntime(_currentIndex);
+                if (runtime != null) CloneSkinApplier.Apply(this, runtime);
+            }
+            catch (System.Exception e)
+            {
+                _host?.LogWarning("[CustomSkins] couldn't apply the selected skin: " + e.Message);
+            }
         }
 
         // Re-reads the skins folder so a skin dropped in (or downloaded by the

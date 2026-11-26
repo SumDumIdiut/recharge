@@ -359,8 +359,10 @@ internal class MpInGameChatHud : MonoBehaviour
 internal class MpPanelUI : MonoBehaviour
 {
 	private TMP_Text _status;
+	private GameObject _hostButton;
+	private bool _autoConnectTried;
+	private bool _wasConnected;
 
-	private GameObject _hostRow;
 	private TMP_InputField _lobbyNameField;
 	private List<MpMapLibrary.HostableMap> _hostableMaps = new List<MpMapLibrary.HostableMap>();
 	private volatile bool _mapListLoading;
@@ -380,12 +382,6 @@ internal class MpPanelUI : MonoBehaviour
 	private int _lobbyPageIndex;
 	private const int LobbyPageSize = 2;
 
-	private GameObject _directConnectSection;
-	private TMP_InputField _hostField;
-	private TMP_InputField _portField;
-	private Button _connectButton;
-	private TMP_Text _connectButtonLabel;
-
 	private GameObject _inLobbyRow;
 	private TMP_Text _leaveLabel;
 	private bool _leaveConfirmArmed;
@@ -404,46 +400,19 @@ internal class MpPanelUI : MonoBehaviour
 	private float _refreshAccumulator;
 	private float _lobbyListPollAccumulator;
 
-	private GameObject _appearanceButton;
-	private GameObject _appearanceSection;
-	private bool _showingAppearance;
-	private Image _colourSwatch;
-	private Slider _rSlider, _gSlider, _bSlider;
-	private TMP_InputField _nameField;
-	private Color _pendingColor = Color.white;
-
-	private readonly Color[] _colorPresets =
-	{
-		Color.white, new Color(1f, 0.3f, 0.3f), new Color(1f, 0.6f, 0.15f), new Color(1f, 0.9f, 0.2f),
-		new Color(0.3f, 0.9f, 0.4f), new Color(0.2f, 0.85f, 0.85f), new Color(0.3f, 0.5f, 1f), new Color(0.85f, 0.4f, 0.95f),
-		new Color(0.05f, 0.05f, 0.05f), new Color(0.4f, 0.4f, 0.4f), new Color(0.75f, 0.75f, 0.75f), new Color(0.55f, 0.35f, 0.2f),
-		new Color(1f, 0.75f, 0.8f), new Color(0.7f, 0.2f, 0.2f), new Color(0.6f, 0.3f, 0.05f), new Color(0.8f, 0.75f, 0.1f),
-		new Color(0.1f, 0.5f, 0.15f), new Color(0.05f, 0.35f, 0.35f), new Color(0.1f, 0.2f, 0.55f), new Color(0.4f, 0.1f, 0.5f),
-		new Color(1f, 0.5f, 0.7f), new Color(0.6f, 1f, 0.9f), new Color(0.9f, 0.9f, 0.6f), new Color(0.5f, 0.9f, 1f),
-	};
-	private const int PresetsPerPage = 8;
-	private readonly List<Image> _presetSwatches = new List<Image>();
-	private int _presetPage;
-	private TMP_Text _presetPageLabel;
-	private pauseMenuScript _menu;
-
-
 	public void Build(GameObject panel, TMP_FontAsset font, GameObject settingsButtonTemplate, pauseMenuScript menu)
 	{
 		_font = font;
 		_buttonTemplate = settingsButtonTemplate;
-		_menu = menu;
 		var root = panel.transform;
 
-		// Escape backs out of an open colour/map-picker overlay first (same
-		// as their own Done/Cancel buttons), and only closes the whole
-		// panel once neither overlay is open.
+		// Escape backs out of the open map-picker overlay first (same as its
+		// own Cancel button), and only closes the whole panel once it is gone.
 		var closer = panel.GetComponent<Recharge.ModApi.PanelEscapeCloser>();
 		if (closer != null)
 		{
 			closer.ConsumeEscapeFirst = () =>
 			{
-				if (_showingAppearance) { _showingAppearance = false; return true; }
 				if (_showingMapPicker) { _showingMapPicker = false; return true; }
 				return false;
 			};
@@ -451,28 +420,16 @@ internal class MpPanelUI : MonoBehaviour
 
 		PanelWidgets.CreateDivider(root, new Vector2(-140, 188), 300);
 
-		_status = PanelWidgets.CreateLabel(root, _font, new Vector2(0, 165), new Vector2(600, 34), "Not connected");
+		_status = PanelWidgets.CreateLabel(root, _font, new Vector2(0, 198), new Vector2(560, 34), "Not connected");
 		_status.alignment = TextAlignmentOptions.Center;
-		_status.fontSize = 22;
+		_status.fontSize = 20;
 		_status.enableWordWrapping = false;
 		_status.overflowMode = TextOverflowModes.Ellipsis;
 
-		var connectGo = CloneButton(root, "Connect", new Vector2(190, 165), new Vector2(200, 54));
-		_connectButton = connectGo.GetComponent<Button>();
-		_connectButtonLabel = connectGo.GetComponentInChildren<TMP_Text>();
-		_connectButton.onClick.AddListener(OnConnectClicked);
-
-		_appearanceButton = CloneButton(root, "Colour", new Vector2(-190, 165), new Vector2(200, 54));
-		_appearanceButton.GetComponent<Button>().onClick.AddListener(OnAppearanceClicked);
-
-		_hostRow = PanelWidgets.CreateContainer(root, "HostRow", Vector2.zero).gameObject;
-		_lobbyNameField = CreateInputField(_hostRow.transform, new Vector2(-90, 110), new Vector2(300, 44), "Lobby name");
-
-		var hostGo = CloneButton(_hostRow.transform, "Host", new Vector2(195, 110), new Vector2(170, 60));
-		hostGo.GetComponent<Button>().onClick.AddListener(OnHostButtonClicked);
+		_hostButton = CloneButton(root, "Host", new Vector2(210, 150), new Vector2(170, 44), "Host");
+		_hostButton.GetComponent<Button>().onClick.AddListener(OnHostButtonClicked);
 
 		BuildListBox(root);
-		BuildDirectConnectSection(root);
 		BuildMapPickerSection(root);
 
 		_inLobbyRow = PanelWidgets.CreateContainer(root, "InLobbyRow", Vector2.zero).gameObject;
@@ -489,143 +446,7 @@ internal class MpPanelUI : MonoBehaviour
 		leaveGo.GetComponent<Button>().onClick.AddListener(OnLeaveClicked);
 
 		MpNetworkManager.LatestInLobbyRow = _inLobbyRow;
-
-		BuildAppearanceSection(root);
 	}
-
-	private void BuildAppearanceSection(Transform root)
-	{
-		_appearanceSection = PanelWidgets.CreateContainer(root, "AppearanceSection", Vector2.zero).gameObject;
-
-		var header = PanelWidgets.CreateLabel(_appearanceSection.transform, _font, new Vector2(0, 165), new Vector2(400, 34), "Colour");
-		header.alignment = TextAlignmentOptions.Center;
-		header.fontSize = 22;
-
-		_colourSwatch = PanelWidgets.CreateSwatch(_appearanceSection.transform, new Vector2(0, 110), new Vector2(160, 50), Color.white);
-		ApplyRoundedBoxStyle(_colourSwatch, Color.white);
-
-		const float presetSize = 50f;
-		const float presetSpacing = 62f;
-		var startX = -(PresetsPerPage - 1) * presetSpacing / 2f;
-		for (int i = 0; i < _colorPresets.Length; i++)
-		{
-			var c = _colorPresets[i];
-			var slot = i % PresetsPerPage;
-			var x = startX + slot * presetSpacing;
-			var swatch = PanelWidgets.CreateSwatch(_appearanceSection.transform, new Vector2(x, 30), new Vector2(presetSize, presetSize), c, () => Apply(c));
-			ApplyRoundedBoxStyle(swatch, c);
-			_presetSwatches.Add(swatch);
-		}
-
-		var prevGo = CloneButton(_appearanceSection.transform, "<", new Vector2(-280, 30), new Vector2(56, 54));
-		var prevBtn = prevGo.GetComponent<Button>();
-		prevBtn.onClick.AddListener(() => ChangePresetPage(-1));
-		LockButtonColor(prevBtn);
-		var nextGo = CloneButton(_appearanceSection.transform, ">", new Vector2(280, 30), new Vector2(56, 54));
-		var nextBtn = nextGo.GetComponent<Button>();
-		nextBtn.onClick.AddListener(() => ChangePresetPage(1));
-		LockButtonColor(nextBtn);
-
-		_presetPageLabel = PanelWidgets.CreateLabel(_appearanceSection.transform, _font, new Vector2(0, -5), new Vector2(160, 20), "");
-		_presetPageLabel.alignment = TextAlignmentOptions.Center;
-		_presetPageLabel.fontSize = 13;
-		_presetPageLabel.color = new Color(1f, 1f, 1f, 0.6f);
-		RefreshPresetPage();
-
-		_nameField = CreateInputField(_appearanceSection.transform, new Vector2(0, -40), new Vector2(300, 40), "Your name");
-		_nameField.characterLimit = 24;
-		_nameField.onEndEdit.AddListener(OnNameFieldChanged);
-
-		_rSlider = PanelWidgets.CreateColorSlider(_appearanceSection.transform, _font, new Vector2(0, -80), "R", new Color(1f, 0.4f, 0.4f));
-		_gSlider = PanelWidgets.CreateColorSlider(_appearanceSection.transform, _font, new Vector2(0, -122), "G", new Color(0.4f, 1f, 0.4f));
-		_bSlider = PanelWidgets.CreateColorSlider(_appearanceSection.transform, _font, new Vector2(0, -164), "B", new Color(0.4f, 0.6f, 1f));
-		_rSlider.onValueChanged.AddListener(_ => OnSliderChanged());
-		_gSlider.onValueChanged.AddListener(_ => OnSliderChanged());
-		_bSlider.onValueChanged.AddListener(_ => OnSliderChanged());
-
-		var doneGo = CloneButton(_appearanceSection.transform, "Done", new Vector2(0, -195), new Vector2(280, 60));
-		doneGo.GetComponent<Button>().onClick.AddListener(OnAppearanceDoneClicked);
-
-		_appearanceSection.SetActive(false);
-	}
-
-	private static void LockButtonColor(Button btn)
-	{
-		var cb = btn.colors;
-		cb.highlightedColor = cb.normalColor;
-		cb.selectedColor = cb.normalColor;
-		cb.pressedColor = new Color(cb.normalColor.r * 0.8f, cb.normalColor.g * 0.8f, cb.normalColor.b * 0.8f, cb.normalColor.a);
-		btn.colors = cb;
-	}
-
-	private void ChangePresetPage(int delta)
-	{
-		var totalPages = Mathf.CeilToInt(_colorPresets.Length / (float)PresetsPerPage);
-		_presetPage = ((_presetPage + delta) % totalPages + totalPages) % totalPages;
-		RefreshPresetPage();
-	}
-
-	private void RefreshPresetPage()
-	{
-		var totalPages = Mathf.CeilToInt(_colorPresets.Length / (float)PresetsPerPage);
-		for (int i = 0; i < _presetSwatches.Count; i++)
-			_presetSwatches[i].gameObject.SetActive(i / PresetsPerPage == _presetPage);
-		if (_presetPageLabel != null) _presetPageLabel.text = $"Page {_presetPage + 1}/{totalPages}";
-	}
-
-	private void OnAppearanceClicked()
-	{
-		_showingAppearance = true;
-		_pendingColor = ParseHexOrDefault(MpNetworkManager.GetNameColorHex(), Color.white);
-		RefreshSwatchPreview();
-		SyncSlidersToColor();
-		if (_nameField != null) _nameField.text = PlayerPrefs.GetString("MpDisplayName", "");
-	}
-
-	private static void OnNameFieldChanged(string value)
-	{
-		PlayerPrefs.SetString("MpDisplayName", value.Trim());
-		PlayerPrefs.Save();
-	}
-
-	public void TestOpenAppearance() => OnAppearanceClicked();
-
-	private void OnAppearanceDoneClicked()
-	{
-		_showingAppearance = false;
-	}
-
-	private void OnSliderChanged()
-	{
-		Apply(new Color(_rSlider.value / 255f, _gSlider.value / 255f, _bSlider.value / 255f));
-	}
-
-	private void Apply(Color c)
-	{
-		_pendingColor = c;
-		RefreshSwatchPreview();
-		SyncSlidersToColor();
-		var hex = ColorToHex(_pendingColor);
-		MpNetworkManager.SetNameColorHex(hex);
-		MpNetworkManager.SetDotColorHex(hex);
-	}
-
-	private void SyncSlidersToColor()
-	{
-		_rSlider.SetValueWithoutNotify(_pendingColor.r * 255f);
-		_gSlider.SetValueWithoutNotify(_pendingColor.g * 255f);
-		_bSlider.SetValueWithoutNotify(_pendingColor.b * 255f);
-	}
-
-	private void RefreshSwatchPreview()
-	{
-		ApplyRoundedBoxStyle(_colourSwatch, _pendingColor);
-	}
-
-	private static Color ParseHexOrDefault(string hex, Color fallback)
-		=> !string.IsNullOrEmpty(hex) && ColorUtility.TryParseHtmlString(hex, out var c) ? c : fallback;
-
-	private static string ColorToHex(Color c) => "#" + ColorUtility.ToHtmlStringRGB(c);
 
 	private void BuildChatSection(Transform parent)
 	{
@@ -656,17 +477,17 @@ internal class MpPanelUI : MonoBehaviour
 	{
 		_listBox = PanelWidgets.CreateContainer(root, "LobbyListBox", Vector2.zero).gameObject;
 		var boxRt = (RectTransform)_listBox.transform;
-		boxRt.anchoredPosition = new Vector2(0, -22);
-		boxRt.sizeDelta = new Vector2(600, 170);
+		boxRt.anchoredPosition = new Vector2(0, -40);
+		boxRt.sizeDelta = new Vector2(640, 320);
 		var boxImg = _listBox.AddComponent<Image>();
 		ApplyRoundedBoxStyle(boxImg, Color.white);
 
-		var header = PanelWidgets.CreateLabel(_listBox.transform, _font, new Vector2(-90, 70), new Vector2(380, 26), "Open lobbies");
+		var header = PanelWidgets.CreateLabel(_listBox.transform, _font, new Vector2(-160, 140), new Vector2(300, 26), "Open lobbies");
 		header.fontSize = 20;
 		header.color = new Color(1f, 1f, 1f, 0.65f);
 		header.alignment = TextAlignmentOptions.MidlineLeft;
 
-		var refreshGo = CloneButton(_listBox.transform, "Refresh", new Vector2(235, 70), new Vector2(130, 32), "Refresh");
+		var refreshGo = CloneButton(_listBox.transform, "Refresh", new Vector2(235, 140), new Vector2(130, 32), "Refresh");
 		var refreshLabel = refreshGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (refreshLabel != null) refreshLabel.fontSize = 18f;
 		var refreshButton = refreshGo.GetComponent<Button>();
@@ -675,18 +496,18 @@ internal class MpPanelUI : MonoBehaviour
 
 		_listContent = PanelWidgets.CreateContainer(_listBox.transform, "LobbyListContent", Vector2.zero).gameObject;
 
-		var prevGo = CloneButton(_listBox.transform, "PrevPage", new Vector2(-230, -68), new Vector2(100, 30), "< Prev");
+		var prevGo = CloneButton(_listBox.transform, "PrevPage", new Vector2(-230, -140), new Vector2(100, 30), "< Prev");
 		_prevPageButton = prevGo.GetComponent<Button>();
 		_prevPageButton.navigation = new Navigation { mode = Navigation.Mode.None };
 		_prevPageButton.onClick.AddListener(() => { _lobbyPageIndex--; RefreshLobbyList(MpNetworkManager.GetOrCreate().LastLobbyList); });
 		var prevLabel = prevGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (prevLabel != null) prevLabel.fontSize = 16f;
 
-		_pageLabel = PanelWidgets.CreateLabel(_listBox.transform, _font, new Vector2(0, -68), new Vector2(160, 28), "");
+		_pageLabel = PanelWidgets.CreateLabel(_listBox.transform, _font, new Vector2(0, -140), new Vector2(160, 28), "");
 		_pageLabel.fontSize = 18;
 		_pageLabel.color = new Color(1f, 1f, 1f, 0.6f);
 
-		var nextGo = CloneButton(_listBox.transform, "NextPage", new Vector2(230, -68), new Vector2(100, 30), "Next >");
+		var nextGo = CloneButton(_listBox.transform, "NextPage", new Vector2(230, -140), new Vector2(100, 30), "Next >");
 		_nextPageButton = nextGo.GetComponent<Button>();
 		_nextPageButton.navigation = new Navigation { mode = Navigation.Mode.None };
 		_nextPageButton.onClick.AddListener(() => { _lobbyPageIndex++; RefreshLobbyList(MpNetworkManager.GetOrCreate().LastLobbyList); });
@@ -727,25 +548,16 @@ internal class MpPanelUI : MonoBehaviour
 		img.color = tint;
 	}
 
-	private void BuildDirectConnectSection(Transform root)
-	{
-		_directConnectSection = PanelWidgets.CreateContainer(root, "DirectConnectSection", Vector2.zero).gameObject;
-
-		var header = PanelWidgets.CreateLabel(_directConnectSection.transform, _font, new Vector2(0, -128), new Vector2(560, 26), "Direct Connect");
-		header.fontSize = 20;
-		header.color = new Color(1f, 1f, 1f, 0.65f);
-
-		_hostField = CreateInputField(_directConnectSection.transform, new Vector2(-90, -160), new Vector2(380, 44), "Server IP");
-		_portField = CreateInputField(_directConnectSection.transform, new Vector2(200, -160), new Vector2(160, 44), "Port");
-	}
-
 	private void BuildMapPickerSection(Transform root)
 	{
 		_mapPickerSection = PanelWidgets.CreateContainer(root, "MapPickerSection", Vector2.zero).gameObject;
 
-		var header = PanelWidgets.CreateLabel(_mapPickerSection.transform, _font, new Vector2(0, 165), new Vector2(400, 34), "Choose a Map");
+		var header = PanelWidgets.CreateLabel(_mapPickerSection.transform, _font, new Vector2(0, 190), new Vector2(400, 34), "Choose a Map");
 		header.alignment = TextAlignmentOptions.Center;
 		header.fontSize = 22;
+
+		_lobbyNameField = CreateInputField(_mapPickerSection.transform, new Vector2(0, 150), new Vector2(440, 44), "Lobby name");
+		_lobbyNameField.characterLimit = 32;
 
 		var cancelGo = CloneButton(_mapPickerSection.transform, "CancelMapPicker", new Vector2(0, -195), new Vector2(280, 60), "Cancel");
 		cancelGo.GetComponent<Button>().onClick.AddListener(() => _showingMapPicker = false);
@@ -762,7 +574,7 @@ internal class MpPanelUI : MonoBehaviour
 		if (MpMapLibrary.HasBSide) entries.Add(("B-Side", -2));
 		for (int i = 0; i < _hostableMaps.Count; i++) entries.Add((_hostableMaps[i].Name, i));
 
-		float y = 120f;
+		float y = 90f;
 		const float rowSpacing = 56f;
 		for (int i = 0; i < entries.Count; i++)
 		{
@@ -798,15 +610,6 @@ internal class MpPanelUI : MonoBehaviour
 			finally { _mapListLoading = false; }
 		})
 		{ IsBackground = true }.Start();
-	}
-
-	private void OnConnectClicked()
-	{
-		var mgr = MpNetworkManager.GetOrCreate();
-		if (mgr.IsConnected) { mgr.Disconnect(); return; }
-		if (!int.TryParse(_portField.text, out var port)) port = 443;
-		var host = string.IsNullOrEmpty(_hostField.text) ? "codecade.co.za" : _hostField.text;
-		mgr.ConnectAsync(host, port);
 	}
 
 	private void OnHostButtonClicked()
@@ -862,6 +665,23 @@ internal class MpPanelUI : MonoBehaviour
 		bool connected = mgr.IsConnected;
 		bool inLobby = mgr.InLobby;
 
+		// Connect in the background while the panel is open; if the connection
+		// drops after having worked, arm one fresh attempt.
+		if (gameObject.activeInHierarchy)
+		{
+			if (connected) _autoConnectTried = true;
+			else
+			{
+				if (_wasConnected) _autoConnectTried = false;
+				if (!_autoConnectTried)
+				{
+					_autoConnectTried = true;
+					mgr.ConnectAsync("codecade.co.za", 443);
+				}
+			}
+		}
+		_wasConnected = connected;
+
 		if (_leaveConfirmArmed && Time.unscaledTime - _leaveConfirmArmedAt >= LeaveConfirmTimeout)
 		{
 			_leaveConfirmArmed = false;
@@ -882,36 +702,26 @@ internal class MpPanelUI : MonoBehaviour
 		if (_refreshAccumulator < 0.2f) return;
 		_refreshAccumulator = 0f;
 
-		bool showingOverlay = _showingAppearance || _showingMapPicker;
-		_status.gameObject.SetActive(!inLobby && !showingOverlay);
+		bool browseView = !inLobby && !_showingMapPicker;
+		_status.gameObject.SetActive(browseView);
 		_status.text = mgr.StatusText;
-		_connectButtonLabel.text = connected ? "Disconnect" : "Connect";
-		_connectButton.gameObject.SetActive(!inLobby && !showingOverlay);
-		_appearanceButton.SetActive(!inLobby && !showingOverlay);
-
-		_appearanceSection.SetActive(_showingAppearance);
+		_hostButton.SetActive(browseView);
 		_mapPickerSection.SetActive(_showingMapPicker);
-		if (showingOverlay)
+		_listBox.SetActive(browseView);
+		_inLobbyRow.SetActive(inLobby && !_showingMapPicker);
+
+		if (!browseView)
 		{
-			_hostRow.SetActive(false);
-			_listBox.SetActive(false);
-			_directConnectSection.SetActive(false);
-			_inLobbyRow.SetActive(false);
+			if (inLobby && !_showingMapPicker)
+			{
+				_inLobbyLabel.text = "In lobby: " + mgr.CurrentLobbyName;
+				RefreshPlayersLabel(mgr.LastSnapshotPlayers);
+				RefreshChatLog(mgr.ChatLines);
+			}
 			return;
 		}
 
-		_hostRow.SetActive(!inLobby);
-		_listBox.SetActive(!inLobby);
-		_directConnectSection.SetActive(!inLobby);
-		_inLobbyRow.SetActive(inLobby);
-		if (inLobby)
-		{
-			_inLobbyLabel.text = "In lobby: " + mgr.CurrentLobbyName;
-			RefreshPlayersLabel(mgr.LastSnapshotPlayers);
-			RefreshChatLog(mgr.ChatLines);
-		}
-
-		if (connected && !inLobby) RefreshLobbyList(mgr.LastLobbyList);
+		if (connected) RefreshLobbyList(mgr.LastLobbyList);
 	}
 
 	private void RefreshPlayersLabel(List<MpPlayerState> others)
@@ -1021,7 +831,7 @@ internal class MpPanelUI : MonoBehaviour
 
 		if (lobbies.Count == 0)
 		{
-			var emptyGo = PanelWidgets.CreateLabel(_listContent.transform, _font, new Vector2(0, 4), new Vector2(500, 30), "(no open lobbies yet)").gameObject;
+			var emptyGo = PanelWidgets.CreateLabel(_listContent.transform, _font, new Vector2(0, 10), new Vector2(500, 30), "(no open lobbies yet)").gameObject;
 			emptyGo.GetComponent<TMP_Text>().color = new Color(1f, 1f, 1f, 0.5f);
 			_lobbyListRows.Add(emptyGo);
 			return;
@@ -1029,25 +839,25 @@ internal class MpPanelUI : MonoBehaviour
 
 		var start = _lobbyPageIndex * LobbyPageSize;
 		var end = Mathf.Min(start + LobbyPageSize, lobbies.Count);
-		float y = 28f;
-		const float rowSpacing = 48f;
+		float y = 45f;
+		const float rowSpacing = 76f;
 		for (int i = start; i < end; i++)
 		{
 			var lobby = lobbies[i];
 			int capturedId = lobby.id;
-			var rowGo = CreateLobbyRow(_listContent.transform, new Vector2(0, y), new Vector2(560, 44), lobby.name, lobby.count, lobby.hostColor);
+			var rowGo = CreateLobbyRow(_listContent.transform, new Vector2(0, y), new Vector2(580, 60), lobby);
 			rowGo.GetComponent<Button>().onClick.AddListener(() => MpNetworkManager.GetOrCreate().JoinLobby(capturedId));
 			_lobbyListRows.Add(rowGo);
 
 			if (i < end - 1)
-				_lobbyListRows.Add(PanelWidgets.CreateDivider(_listContent.transform, new Vector2(0, y - rowSpacing / 2f), 560));
+				_lobbyListRows.Add(PanelWidgets.CreateDivider(_listContent.transform, new Vector2(0, y - rowSpacing / 2f), 580));
 
 			y -= rowSpacing;
 		}
 	}
 
 
-	private GameObject CreateLobbyRow(Transform parent, Vector2 anchoredPos, Vector2 size, string lobbyName, int playerCount, string hostColorHex)
+	private GameObject CreateLobbyRow(Transform parent, Vector2 anchoredPos, Vector2 size, MpLobbyInfo lobby)
 	{
 		var go = Object.Instantiate(_buttonTemplate, parent);
 		go.name = "LobbyRow";
@@ -1060,8 +870,7 @@ internal class MpPanelUI : MonoBehaviour
 		if (baseImg != null) baseImg.color = new Color(0f, 0f, 0f, 0f);
 
 		var font = _font;
-		var textColor = new Color(1f, 0.55f, 0.15f, 1f);
-		var nameColor = ParseHexOrDefault(hostColorHex, textColor);
+		var accent = new Color(1f, 0.55f, 0.15f, 1f);
 		var label = go.transform.Find("Text (TMP)");
 		if (label != null)
 		{
@@ -1070,37 +879,64 @@ internal class MpPanelUI : MonoBehaviour
 			Object.Destroy(label.gameObject);
 		}
 
+		// Top line: the lobby name (no per-host colour — skins identify players now).
 		var nameGo = PanelWidgets.CreateContainer(go.transform, "NameLabel", Vector2.zero).gameObject;
 		var nameRt = (RectTransform)nameGo.transform;
-		nameRt.anchorMin = Vector2.zero;
+		nameRt.anchorMin = new Vector2(0f, 0.46f);
 		nameRt.anchorMax = Vector2.one;
 		nameRt.offsetMin = new Vector2(20f, 0f);
-		nameRt.offsetMax = new Vector2(-140f, 0f);
+		nameRt.offsetMax = new Vector2(-116f, 0f);
 		var nameTmp = nameGo.AddComponent<TextMeshProUGUI>();
 		nameTmp.font = font;
-		nameTmp.color = nameColor;
+		nameTmp.richText = false;
+		nameTmp.color = Color.white;
 		nameTmp.enableAutoSizing = true;
-		nameTmp.fontSizeMax = 24f;
+		nameTmp.fontSizeMax = 22f;
 		nameTmp.fontSizeMin = 12f;
 		nameTmp.enableWordWrapping = false;
-		nameTmp.alignment = TextAlignmentOptions.MidlineLeft;
-		nameTmp.text = lobbyName;
+		nameTmp.overflowMode = TextOverflowModes.Ellipsis;
+		nameTmp.alignment = TextAlignmentOptions.BottomLeft;
+		nameTmp.text = string.IsNullOrWhiteSpace(lobby.name) ? "Lobby" : lobby.name;
 
+		// Bottom line: the map being played and who is hosting.
+		var sub = new List<string>();
+		if (!string.IsNullOrWhiteSpace(lobby.mapName)) sub.Add(lobby.mapName);
+		if (!string.IsNullOrWhiteSpace(lobby.hostName)) sub.Add("by " + lobby.hostName);
+		if (lobby.hard) sub.Add("Hard");
+		var subGo = PanelWidgets.CreateContainer(go.transform, "SubLabel", Vector2.zero).gameObject;
+		var subRt = (RectTransform)subGo.transform;
+		subRt.anchorMin = Vector2.zero;
+		subRt.anchorMax = new Vector2(1f, 0.52f);
+		subRt.offsetMin = new Vector2(20f, 0f);
+		subRt.offsetMax = new Vector2(-116f, 0f);
+		var subTmp = subGo.AddComponent<TextMeshProUGUI>();
+		subTmp.font = font;
+		subTmp.richText = false;
+		subTmp.color = new Color(1f, 1f, 1f, 0.55f);
+		subTmp.enableAutoSizing = true;
+		subTmp.fontSizeMax = 15f;
+		subTmp.fontSizeMin = 10f;
+		subTmp.enableWordWrapping = false;
+		subTmp.overflowMode = TextOverflowModes.Ellipsis;
+		subTmp.alignment = TextAlignmentOptions.TopLeft;
+		subTmp.text = sub.Count > 0 ? string.Join("   ·   ", sub) : "(no map set)";
+
+		// Right: player count.
 		var countGo = PanelWidgets.CreateContainer(go.transform, "CountLabel", Vector2.zero).gameObject;
 		var countRt = (RectTransform)countGo.transform;
 		countRt.anchorMin = Vector2.zero;
 		countRt.anchorMax = Vector2.one;
-		countRt.offsetMin = new Vector2(size.x - 130f, 0f);
+		countRt.offsetMin = new Vector2(size.x - 108f, 0f);
 		countRt.offsetMax = new Vector2(-16f, 0f);
 		var countTmp = countGo.AddComponent<TextMeshProUGUI>();
 		countTmp.font = font;
-		countTmp.color = textColor;
+		countTmp.color = accent;
 		countTmp.enableAutoSizing = true;
-		countTmp.fontSizeMax = 24f;
-		countTmp.fontSizeMin = 12f;
+		countTmp.fontSizeMax = 20f;
+		countTmp.fontSizeMin = 11f;
 		countTmp.enableWordWrapping = false;
 		countTmp.alignment = TextAlignmentOptions.MidlineRight;
-		countTmp.text = $"{playerCount} player{(playerCount == 1 ? "" : "s")}";
+		countTmp.text = $"{lobby.count} player{(lobby.count == 1 ? "" : "s")}";
 
 		var highlightGo = PanelWidgets.CreateContainer(go.transform, "Highlight", Vector2.zero).gameObject;
 		highlightGo.transform.SetAsFirstSibling();
@@ -1127,25 +963,18 @@ internal class MpPanelUI : MonoBehaviour
 		return go;
 	}
 
+	// Buttons are built with PanelWidgets so the DOTnet panel matches the other
+	// new Mods-menu panels (Skinmod, Host Panel) instead of the game's own style.
 	private GameObject CloneButton(Transform parent, string name, Vector2 anchoredPos, Vector2 size, string labelOverride = null)
 	{
-		var go = PauseMenuHelper.CloneButton(_buttonTemplate, parent, name, labelOverride ?? name, anchoredPos, size);
-
-		var label = go.transform.Find("Text (TMP)");
+		var go = PanelWidgets.CreateButton(parent, _font, name, anchoredPos, size, labelOverride ?? name,
+			22f, new Color(1f, 0.55f, 0.15f, 1f), TextAlignmentOptions.Center, false);
+		var label = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (label != null)
 		{
-			var labelRt = (RectTransform)label;
-			const float extraInset = 6f;
-			labelRt.offsetMin = new Vector2(labelRt.offsetMin.x + extraInset, labelRt.offsetMin.y);
-			labelRt.offsetMax = new Vector2(labelRt.offsetMax.x - extraInset, labelRt.offsetMax.y);
-
-			var tmp = label.GetComponent<TMP_Text>();
-			if (tmp != null)
-			{
-				tmp.enableAutoSizing = false;
-				tmp.fontSize = 24f;
-				tmp.enableWordWrapping = false;
-			}
+			label.enableAutoSizing = false;
+			label.enableWordWrapping = false;
+			PanelWidgets.FitLabel(label);
 		}
 		return go;
 	}
@@ -1160,6 +989,14 @@ internal class MpPanelUI : MonoBehaviour
 	}
 }
 
+// Network.cs still dispatches the companion app's "open_colour_submenu"
+// command to this panel. The appearance/name UI is gone, so this extension
+// keeps that out-of-scope call site compiling as a no-op.
+internal static class MpPanelUiCompat
+{
+	public static void TestOpenAppearance(this MpPanelUI panel) { }
+}
+
 internal static class MpMenuBuilder
 {
 	public static void Install(pauseMenuScript menu)
@@ -1167,7 +1004,7 @@ internal static class MpMenuBuilder
 		MpNetworkManager.GetOrCreate();
 		if (PauseMenuHelper.MainBit(menu) == null || PauseMenuHelper.SettingsBit(menu) == null) return;
 
-		var mpPanel = PauseMenuHelper.AddPanelRow(menu, "Multiplayer", "DOTnet");
+		var mpPanel = PauseMenuHelper.AddPanelRow(menu, "DOTnetPanel", "DOTnet");
 		if (mpPanel == null) return;
 
 		if (mpPanel.GetComponent<MpPanelUI>() == null)
@@ -1181,7 +1018,7 @@ internal static class MpMenuBuilder
 		MpNetworkManager.LatestMpPanel = mpPanel;
 	}
 
-	// DOTnet has no pause-menu row (the ModApi hides the "Multiplayer" row): lobbies are managed in the Recharge app, and the in-lobby
+	// DOTnet now shows a "DOTnet" row in the in-game Mods menu (the rowName "DOTnetPanel" stays off the ModApi's IntegratedRows hide-list). Lobbies can also be managed in the Recharge app, and the in-lobby
 	// controls (Ready, Host Panel, Leave, Colour) open with F4 from the pause menu (HostPanelController.Update).
 
 	private static TMP_FontAsset FindTitleFont(GameObject panel)

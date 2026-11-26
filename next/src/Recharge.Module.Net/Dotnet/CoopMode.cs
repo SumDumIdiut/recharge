@@ -19,6 +19,13 @@ internal class CoopManager
 	private Movement _localMovement;
 	private readonly List<courseScript> _courses = new List<courseScript>();
 	private readonly List<clonesScript> _disabledClones = new List<clonesScript>();
+	private bool _isHost;
+	// Zip movers (PlatformMover): the host drives their positions, guests follow.
+	// Sorted by initial position so the index matches on every client that built
+	// the same map. Experimental and host-authoritative; needs 2-client tuning.
+	private readonly List<(Transform tf, Vector3 initial)> _movers = new List<(Transform, Vector3)>();
+	private readonly Dictionary<int, Vector3> _moverTargets = new Dictionary<int, Vector3>();
+	private readonly Dictionary<int, Vector3> _lastSentMover = new Dictionary<int, Vector3>();
 	private readonly List<(courseScript course, int originalBaseReward)> _scaledRewards = new List<(courseScript, int)>();
 	private readonly List<(upgradeBox box, double originalBaseCost)> _scaledUpgradeCosts = new List<(upgradeBox, double)>();
 
@@ -56,8 +63,10 @@ internal class CoopManager
 		if (saveloader != null) saveloader.CancelInvoke("autosave");
 		_realSaveloader = saveloader;
 
+		_isHost = isHost;
 		_courses.Clear();
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+		RebuildMovers();
 
 		DisableClones();
 
@@ -98,6 +107,7 @@ internal class CoopManager
 		if (_realSaveloader != null) _realSaveloader.CancelInvoke("autosave");
 		_courses.Clear();
 		_courses.AddRange(UnityEngine.Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+		RebuildMovers();
 		ModeSaveFile.Restore(ModeSaveFile.RealSaveFolder(), _localMovement, _courses);
 		_localMovement.dashUnlocked = _lastDash;
 		_localMovement.wallJumpUnlocked = _lastWallJump;
@@ -221,6 +231,8 @@ private void CaptureBaseline()
 	public void Tick(float unscaledDt, bool isHost, Action<JObject> sendGameMessage)
 	{
 		if (!Active) return;
+
+		if (!isHost) ApplyMoverLerp(unscaledDt);
 
 		_realSaveloader?.CancelInvoke("manualSave");
 
@@ -386,15 +398,29 @@ private void CaptureBaseline()
 
 	private JObject BuildDelta()
 	{
-		JObject currencies = null;
-		foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
+		// Currency is host-authoritative (it can go down when spending, so additive
+		// peer-to-peer drifts): the host broadcasts absolute values that guests
+		// mirror, while guests forward only their own earn/spend as a one-time delta
+		// over the reliable relay channel for the host to bank.
+		JObject currencies = null;    // guest -> host: this client's earn/spend since last forward
+		JObject currencyAbs = null;   // host -> guests: the authoritative absolute totals
+		if (_isHost)
 		{
-			var now = globalStats.currencyLookup[c];
-			var prev = _lastCurrency.TryGetValue(c, out var p) ? p : now;
-			if (Math.Abs(now - prev) > 0.0001)
+			currencyAbs = new JObject();
+			foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
+				currencyAbs[c.ToString()] = globalStats.currencyLookup[c];
+		}
+		else
+		{
+			foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
 			{
-				(currencies ??= new JObject())[c.ToString()] = now - prev;
-				_lastCurrency[c] = now;
+				var now = globalStats.currencyLookup[c];
+				var prev = _lastCurrency.TryGetValue(c, out var p) ? p : now;
+				if (Math.Abs(now - prev) > 0.0001)
+				{
+					(currencies ??= new JObject())[c.ToString()] = now - prev;
+					_lastCurrency[c] = now;
+				}
 			}
 		}
 		JObject upgrades = null;
@@ -417,13 +443,16 @@ private void CaptureBaseline()
 			if (_localMovement.blockSwapUnlocked != _lastBlockSwap) { (abilities ??= new JObject())["blockSwap"] = _localMovement.blockSwapUnlocked; _lastBlockSwap = _localMovement.blockSwapUnlocked; }
 		}
 		var courses = BuildCoursesDelta();
+		var movers = _isHost ? BuildMoversDelta() : null;
 
-		if (currencies == null && upgrades == null && abilities == null && courses == null) return null;
+		if (currencies == null && currencyAbs == null && upgrades == null && abilities == null && courses == null && movers == null) return null;
 		var msg = new JObject { ["k"] = "coopDelta" };
 		if (currencies != null) msg["currencies"] = currencies;
+		if (currencyAbs != null) msg["currencyAbs"] = currencyAbs;
 		if (upgrades != null) msg["upgrades"] = upgrades;
 		if (abilities != null) msg["abilities"] = abilities;
 		if (courses != null) msg["courses"] = courses;
+		if (movers != null) msg["movers"] = movers;
 		return msg;
 	}
 
@@ -443,7 +472,15 @@ private void CaptureBaseline()
 		}
 		var courses = BuildCoursesFullSync();
 		CaptureBaseline();
-		return new JObject { ["k"] = "coopSync", ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
+		var snap = new JObject { ["k"] = "coopSync", ["upgrades"] = upgrades, ["abilities"] = abilities, ["courses"] = courses };
+		if (_isHost)
+		{
+			var currencyAbs = new JObject();
+			foreach (globalStats.Currencies c in Enum.GetValues(typeof(globalStats.Currencies)))
+				currencyAbs[c.ToString()] = globalStats.currencyLookup[c];
+			snap["currencyAbs"] = currencyAbs;
+		}
+		return snap;
 	}
 
 	// Applying a peer's contribution must also move our own delta-baseline to
@@ -453,13 +490,24 @@ private void CaptureBaseline()
 	// additional additive income, which we then see reflected back etc.
 	private void ApplyCurrenciesAndUpgrades(JObject payload, bool additive)
 	{
-		if (payload["currencies"] is JObject currencies)
-			foreach (var kv in currencies)
+		// Host banks each guest's earn/spend (reliable channel -> applied once).
+		if (_isHost && payload["currencies"] is JObject guestCurrencies)
+			foreach (var kv in guestCurrencies)
+				if (Enum.TryParse<globalStats.Currencies>(kv.Key, out var c))
+					globalStats.currencyLookup[c] = Math.Max(0, globalStats.currencyLookup[c] + kv.Value.Value<double>());
+		// Guests reconcile to the host's authoritative absolute totals, but keep any
+		// earn/spend not yet banked by the host (currency - baseline) so a broadcast
+		// that predates the host banking it never loses it; that pending amount is
+		// forwarded on the next delta and then shows up in the host's totals.
+		if (!_isHost && payload["currencyAbs"] is JObject hostCurrencies)
+			foreach (var kv in hostCurrencies)
 				if (Enum.TryParse<globalStats.Currencies>(kv.Key, out var c))
 				{
-					var updated = Math.Max(0, globalStats.currencyLookup[c] + kv.Value.Value<double>());
-					globalStats.currencyLookup[c] = updated;
-					_lastCurrency[c] = updated;
+					var hostAbs = kv.Value.Value<double>();
+					var baseline = _lastCurrency.TryGetValue(c, out var b) ? b : globalStats.currencyLookup[c];
+					var pending = globalStats.currencyLookup[c] - baseline; // our un-banked earn/spend
+					globalStats.currencyLookup[c] = Math.Max(0, hostAbs + pending);
+					_lastCurrency[c] = hostAbs;
 				}
 		if (payload["upgrades"] is JObject upgrades)
 			foreach (var kv in upgrades)
@@ -495,6 +543,7 @@ private void CaptureBaseline()
 		ApplyCurrenciesAndUpgrades(payload, additive: true);
 		ApplyAbilities(payload);
 		ApplyCoursesPayload(payload, additive: true);
+		ApplyMoversPayload(payload);
 	}
 
 	private void ApplySnapshot(JObject payload)
@@ -505,7 +554,64 @@ private void CaptureBaseline()
 		CaptureBaseline();
 	}
 
-	private void PersistSave() { if (_saveFolder != null) ModeSaveFile.Save(_saveFolder, _localMovement, _courses); }
+	// Only the host owns the shared co-op save; guests mirror the host's state and
+	// must never write to the shared folder (two writers corrupt it).
+	private void PersistSave() { if (_isHost && _saveFolder != null) ModeSaveFile.Save(_saveFolder, _localMovement, _courses); }
+
+	// --- Zip-mover (PlatformMover) sync: host broadcasts positions, guests follow ---
+
+	private void RebuildMovers()
+	{
+		_movers.Clear();
+		_moverTargets.Clear();
+		_lastSentMover.Clear();
+		var found = UnityEngine.Object.FindObjectsByType<PlatformMover>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+		var tfs = new List<Transform>(found.Length);
+		foreach (var m in found) if (m != null) tfs.Add(m.transform);
+		// Deterministic order so index i is the same mover on every client building this map.
+		tfs.Sort((a, b) => { int c = a.position.x.CompareTo(b.position.x); return c != 0 ? c : a.position.y.CompareTo(b.position.y); });
+		foreach (var tf in tfs) _movers.Add((tf, tf.localPosition));
+	}
+
+	private JObject BuildMoversDelta()
+	{
+		JObject movers = null;
+		for (int i = 0; i < _movers.Count; i++)
+		{
+			var tf = _movers[i].tf;
+			if (tf == null) continue;
+			var off = tf.localPosition - _movers[i].initial;
+			var last = _lastSentMover.TryGetValue(i, out var l) ? l : new Vector3(float.PositiveInfinity, 0f, 0f);
+			if ((off - last).sqrMagnitude < 0.0001f) continue; // unchanged since last sent (also covers at-rest)
+			_lastSentMover[i] = off;
+			(movers ??= new JObject())[i.ToString()] = new JArray { (double)off.x, (double)off.y };
+		}
+		return movers;
+	}
+
+	private void ApplyMoversPayload(JObject payload)
+	{
+		if (!(payload["movers"] is JObject movers)) return;
+		foreach (var kv in movers)
+			if (int.TryParse(kv.Key, out int idx) && kv.Value is JArray a && a.Count >= 2)
+				_moverTargets[idx] = new Vector3(a[0].Value<float>(), a[1].Value<float>(), 0f);
+	}
+
+	// Guest side, per frame: ease each mover toward the host's position. The local
+	// PlatformMover keeps running (so riders still inherit its velocity); this just
+	// corrects the position toward the host, who is authoritative.
+	private void ApplyMoverLerp(float dt)
+	{
+		if (_moverTargets.Count == 0) return;
+		float t = 1f - Mathf.Exp(-12f * dt);
+		foreach (var kv in _moverTargets)
+		{
+			if (kv.Key < 0 || kv.Key >= _movers.Count) continue;
+			var tf = _movers[kv.Key].tf;
+			if (tf == null) continue;
+			tf.localPosition = Vector3.Lerp(tf.localPosition, _movers[kv.Key].initial + kv.Value, t);
+		}
+	}
 
 	private static bool IsCloneUpgrade(localUpgrades.localUpgradeSet upgrade) => upgrade switch
 	{

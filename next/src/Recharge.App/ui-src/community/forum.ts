@@ -9,7 +9,6 @@ import { modal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { describeError } from '../bridge.js';
 import { relativeTime } from '../create/format.js';
-import { icon } from '../icons.js';
 import { currentUser } from '../account/session.js';
 import { openAuthModal } from '../account/index.js';
 import { hubForm, hubImage, hubJson } from './api.js';
@@ -60,10 +59,6 @@ function threadRow(thread: ThreadRow): HTMLElement {
     thumb.appendChild(image);
     row.appendChild(thumb);
   }
-  const replies = h('span', { className: 'thread-replies', title: thread.replyCount + (thread.replyCount === 1 ? ' reply' : ' replies') });
-  replies.appendChild(icon('forum', 18));
-  replies.appendChild(h('span', { text: String(thread.replyCount) }));
-  row.appendChild(replies);
   return row;
 }
 

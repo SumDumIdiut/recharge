@@ -13,6 +13,7 @@ internal class HostPanelController : MonoBehaviour
 {
 	private IRechargeHost _host;
 	private pauseMenuScript _menu;
+	private TMP_FontAsset _font;
 	private GameObject _hostPanel;
 	private Button _toggleButton;
 	private bool _autoReadyTried;
@@ -22,16 +23,15 @@ internal class HostPanelController : MonoBehaviour
 	private Button _modeButton;
 	private Button _mapButton;
 	private Button _saveButton;
-	private GameObject _rosterGo;
+	private TMP_Text _rosterText;
 	private Button _startButton;
-	private GameObject _statusGo;
+	private TMP_Text _statusText;
 
 	private GameObject _mainContent;
 	private enum PickerKind { None, Map, Save }
 	private PickerKind _activePicker = PickerKind.None;
 	private GameObject _pickerSection;
 	private TMP_Text _pickerHeader;
-	private GameObject _pickerTemplate;
 	private readonly List<GameObject> _pickerRows = new List<GameObject>();
 	private int _pickerPage;
 	private TMP_Text _pickerPageLabel;
@@ -101,118 +101,71 @@ internal class HostPanelController : MonoBehaviour
 
 		if (MpNetworkManager.LatestInLobbyRow.transform.Find("HostPanelToggle") == null)
 		{
-			var toggleTemplate = PauseMenuHelper.MainBit(menu).transform.Find("Settings")?.gameObject;
-			if (toggleTemplate != null)
-			{
-				var toggleGo = Object.Instantiate(toggleTemplate, MpNetworkManager.LatestInLobbyRow.transform);
-				toggleGo.name = "HostPanelToggle";
-				toggleGo.SetActive(true);
-				var toggleRt = (RectTransform)toggleGo.transform;
-				toggleRt.anchoredPosition = new Vector2(150, -160);
-				toggleRt.sizeDelta = new Vector2(270, 60);
-				PauseMenuHelper.SetButtonLabel(toggleGo, "Host Panel");
-				_toggleButton = toggleGo.GetComponent<Button>();
-				_toggleButton.onClick = new Button.ButtonClickedEvent();
-				_toggleButton.onClick.AddListener(OnToggleOrReadyClicked);
-			}
+			_font = FindFont(MpNetworkManager.LatestMpPanel) ?? FindFont(PauseMenuHelper.MainBit(menu));
+			var toggleGo = AddButton(MpNetworkManager.LatestInLobbyRow.transform, "HostPanelToggle",
+				new Vector2(150, -160), new Vector2(270, 60), "Host Panel", 18f,
+				PanelWidgets.DefaultAccentColor, TextAlignmentOptions.Center, OnToggleOrReadyClicked);
+			_toggleButton = toggleGo.GetComponent<Button>();
 		}
 
-		if (PauseMenuHelper.SettingsBit(menu).transform.parent.Find("HostPanelBit") != null) return;
+		var settingsBit = PauseMenuHelper.SettingsBit(menu);
+		if (settingsBit == null || settingsBit.transform.parent.Find("HostPanelBit") != null) return;
 
 		var panel = BuildStandalonePanel(menu);
 		if (panel == null) return;
+		_font = FindFont(panel) ?? _font;
+		BuildPanelContent(panel);
+		RefreshMapList();
+	}
 
-		var template = PauseMenuHelper.MainBit(menu).transform.Find("Settings")?.gameObject;
-		if (template == null) return;
+	/// <summary>All panel chrome is built from PanelWidgets so this panel reads as a sibling of the Map/Mods panels.</summary>
+	private void BuildPanelContent(GameObject panel)
+	{
+		var root = panel.transform;
+		PauseMenuHelper.NormalizePanelLayout(panel);
+		var panelRt = panel.GetComponent<RectTransform>();
+		if (panelRt != null) panelRt.sizeDelta = new Vector2(620f, 640f);
 
-		_modeButton = BuildActionButton(panel.transform, template, "Mode: Normal", new Vector2(-152, 170), OnCycleModeClicked, width: 148, height: 60, fontSize: 16f);
-		_mapButton = BuildActionButton(panel.transform, template, "Map: Current Map", new Vector2(0, 170), OnOpenMapPickerClicked, width: 148, height: 60, fontSize: 16f);
-		_saveButton = BuildActionButton(panel.transform, template, "Save: New Save", new Vector2(152, 170), OnOpenSavePickerClicked, width: 148, height: 60, fontSize: 16f);
-		MakeAutoSizeLabel(_modeButton, 10f, 20f);
-		MakeAutoSizeLabel(_mapButton, 10f, 20f);
-		MakeAutoSizeLabel(_saveButton, 10f, 20f);
+		PanelWidgets.CreateDivider(root, new Vector2(0, 225), 580);
+		AddLabel(root, "HostPanel_Heading", new Vector2(0, 200), new Vector2(560, 36), "Host Panel",
+			24f, PanelWidgets.DefaultAccentColor, TextAlignmentOptions.Center);
 
-		BuildPickerSection(panel.transform, template);
+		_modeButton = AddButton(root, "HostPanel_Mode", new Vector2(-152, 150), new Vector2(148, 60), "Mode: Normal",
+			16f, Color.white, TextAlignmentOptions.Center, OnCycleModeClicked).GetComponent<Button>();
+		_mapButton = AddButton(root, "HostPanel_Map", new Vector2(0, 150), new Vector2(148, 60), "Map: Current Map",
+			16f, Color.white, TextAlignmentOptions.Center, OnOpenMapPickerClicked).GetComponent<Button>();
+		_saveButton = AddButton(root, "HostPanel_Save", new Vector2(152, 150), new Vector2(148, 60), "Save: New Save",
+			16f, Color.white, TextAlignmentOptions.Center, OnOpenSavePickerClicked).GetComponent<Button>();
 
-		_mainContent = PanelWidgets.CreateContainer(panel.transform, "HostPanel_MainContent", Vector2.zero).gameObject;
+		BuildPickerSection(root);
 
-		PanelWidgets.CreateDivider(_mainContent.transform, new Vector2(0, 125), 420);
+		_mainContent = PanelWidgets.CreateContainer(root, "HostPanel_MainContent", Vector2.zero).gameObject;
+		var content = _mainContent.transform;
 
-		var abilityCaptionGo = Object.Instantiate(template, _mainContent.transform);
-		abilityCaptionGo.name = "HostPanel_AbilityCaption";
-		abilityCaptionGo.SetActive(true);
-		var abilityCaptionBtn = abilityCaptionGo.GetComponent<Button>();
-		if (abilityCaptionBtn != null) abilityCaptionBtn.enabled = false;
-		var abilityCaptionRt = (RectTransform)abilityCaptionGo.transform;
-		abilityCaptionRt.anchoredPosition = new Vector2(0, 100);
-		abilityCaptionRt.sizeDelta = new Vector2(380, 26);
-		var abilityCaptionText = abilityCaptionGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-		if (abilityCaptionText != null)
-		{
-			abilityCaptionText.enableAutoSizing = false;
-			abilityCaptionText.fontSize = 15;
-			abilityCaptionText.color = new Color(1f, 1f, 1f, 0.6f);
-			abilityCaptionText.textWrappingMode = TextWrappingModes.NoWrap;
-			abilityCaptionText.overflowMode = TextOverflowModes.Overflow;
-		}
-		PauseMenuHelper.SetButtonLabel(abilityCaptionGo, "Abilities (tap to toggle)");
+		PanelWidgets.CreateDivider(content, new Vector2(0, 110), 420);
+		AddLabel(content, "HostPanel_AbilityCaption", new Vector2(0, 85), new Vector2(380, 26), "Abilities (tap to toggle)",
+			15f, new Color(1f, 1f, 1f, 0.65f), TextAlignmentOptions.Center);
 
 		float[] xs = { -174, -58, 58, 174 };
 		for (int i = 0; i < _abilityDefs.Length; i++)
 		{
 			var key = _abilityDefs[i].Key;
-			var go = PauseMenuHelper.CloneButton(template, _mainContent.transform, "HostPanel_Ability_" + key, _abilityDefs[i].Label, new Vector2(xs[i], 55), new Vector2(110, 44), () => _abilityEnabled[key] = !_abilityEnabled[key]);
-			var abilityText = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-			if (abilityText != null)
-			{
-				var textRt = (RectTransform)abilityText.transform;
-				textRt.anchorMin = Vector2.zero;
-				textRt.anchorMax = Vector2.one;
-				textRt.offsetMin = new Vector2(4, textRt.offsetMin.y);
-				textRt.offsetMax = new Vector2(-4, textRt.offsetMax.y);
-				abilityText.alignment = TextAlignmentOptions.Center;
-				abilityText.enableAutoSizing = true;
-				abilityText.fontSizeMin = 8f;
-				abilityText.fontSizeMax = 16f;
-				abilityText.textWrappingMode = TextWrappingModes.NoWrap;
-				abilityText.overflowMode = TextOverflowModes.Overflow;
-			}
+			var go = AddButton(content, "HostPanel_Ability_" + key, new Vector2(xs[i], 45), new Vector2(110, 44),
+				_abilityDefs[i].Label, 14f, Color.white, TextAlignmentOptions.Center,
+				() => _abilityEnabled[key] = !_abilityEnabled[key]);
 			_abilityButtons.Add((key, go.GetComponent<Button>()));
 		}
 
-		PanelWidgets.CreateDivider(_mainContent.transform, new Vector2(0, 15), 420);
+		PanelWidgets.CreateDivider(content, new Vector2(0, 5), 420);
+		var boxSprite = PanelWidgets.FindPanelSprite(root, out var boxType);
+		PanelWidgets.CreateBox(content, new Vector2(0, -40), new Vector2(420, 80), boxSprite, boxType, 2.5f);
+		_rosterText = AddLabel(content, "HostPanelRoster", new Vector2(0, -40), new Vector2(400, 72), "",
+			14f, Color.white, TextAlignmentOptions.TopLeft);
 
-		PanelWidgets.CreateBox(_mainContent.transform, new Vector2(0, -35), new Vector2(420, 80));
-
-		_rosterGo = Object.Instantiate(template, _mainContent.transform);
-		_rosterGo.name = "HostPanelRoster";
-		_rosterGo.SetActive(true);
-		PauseMenuHelper.SetButtonLabel(_rosterGo, "");
-		var rosterBtn = _rosterGo.GetComponent<Button>();
-		if (rosterBtn != null) rosterBtn.enabled = false;
-		var rosterImg = _rosterGo.GetComponent<Image>();
-		if (rosterImg != null) rosterImg.color = new Color(0f, 0f, 0f, 0f);
-		var rosterRt = (RectTransform)_rosterGo.transform;
-		rosterRt.anchoredPosition = new Vector2(0, -35);
-		rosterRt.sizeDelta = new Vector2(400, 72);
-		var rosterText = _rosterGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-		if (rosterText != null) { rosterText.enableAutoSizing = false; rosterText.fontSize = 14; rosterText.textWrappingMode = TextWrappingModes.Normal; }
-
-		_startButton = BuildActionButton(_mainContent.transform, template, "Start Playing", new Vector2(0, -110), OnStartOrStopClicked);
-
-		_statusGo = Object.Instantiate(template, _mainContent.transform);
-		_statusGo.name = "HostPanelStatus";
-		_statusGo.SetActive(true);
-		PauseMenuHelper.SetButtonLabel(_statusGo, "");
-		var statusBtn = _statusGo.GetComponent<Button>();
-		if (statusBtn != null) statusBtn.enabled = false;
-		var statusRt = (RectTransform)_statusGo.transform;
-		statusRt.anchoredPosition = new Vector2(0, -170);
-		statusRt.sizeDelta = new Vector2(560, 40);
-		var statusText = _statusGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-		if (statusText != null) { statusText.enableAutoSizing = false; statusText.fontSize = 16; statusText.textWrappingMode = TextWrappingModes.Normal; }
-
-		RefreshMapList();
+		_startButton = AddButton(content, "HostPanel_Start", new Vector2(0, -125), new Vector2(260, 60), "Start Playing",
+			22f, PanelWidgets.DefaultAccentColor, TextAlignmentOptions.Center, OnStartOrStopClicked).GetComponent<Button>();
+		_statusText = AddLabel(content, "HostPanelStatus", new Vector2(0, -185), new Vector2(560, 40), "",
+			16f, new Color(1f, 1f, 1f, 0.8f), TextAlignmentOptions.Center);
 	}
 
 	private void OnToggleOrReadyClicked()
@@ -266,63 +219,22 @@ internal class HostPanelController : MonoBehaviour
 		_selectedSaveName = null;
 	}
 
-	private static void MakeAutoSizeLabel(Button btn, float min, float max)
+	private void BuildPickerSection(Transform panel)
 	{
-		var tmp = btn.GetComponentInChildren<TMP_Text>();
-		if (tmp == null) return;
-		tmp.enableAutoSizing = true;
-		tmp.fontSizeMin = min;
-		tmp.fontSizeMax = max;
-		tmp.textWrappingMode = TextWrappingModes.Normal;
-		tmp.overflowMode = TextOverflowModes.Overflow;
-	}
-
-	private void BuildPickerSection(Transform panel, GameObject template)
-	{
-		_pickerTemplate = template;
 		_pickerSection = PanelWidgets.CreateContainer(panel, "HostPanel_PickerSection", Vector2.zero).gameObject;
+		PanelWidgets.CreateDivider(_pickerSection.transform, new Vector2(0, 190), 420);
+		_pickerHeader = AddLabel(_pickerSection.transform, "HostPanel_PickerHeader", new Vector2(0, 165),
+			new Vector2(400, 34), "", 22f, PanelWidgets.DefaultAccentColor, TextAlignmentOptions.Center);
 
-		var headerGo = Object.Instantiate(template, _pickerSection.transform);
-		headerGo.name = "HostPanel_PickerHeader";
-		headerGo.SetActive(true);
-		var headerBtn = headerGo.GetComponent<Button>();
-		if (headerBtn != null) headerBtn.enabled = false;
-		var headerRt = (RectTransform)headerGo.transform;
-		headerRt.anchoredPosition = new Vector2(0, 165);
-		headerRt.sizeDelta = new Vector2(400, 34);
-		_pickerHeader = headerGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-		if (_pickerHeader != null)
-		{
-			ModLabel.Attach(_pickerHeader, "");
-			_pickerHeader.enableAutoSizing = false;
-			_pickerHeader.fontSize = 22;
-			_pickerHeader.textWrappingMode = TextWrappingModes.NoWrap;
-			_pickerHeader.overflowMode = TextOverflowModes.Overflow;
-		}
+		_pickerPrevButton = AddButton(_pickerSection.transform, "HostPanel_PickerPrev", new Vector2(-150, -160),
+			new Vector2(56, 40), "<", 18f, PanelWidgets.DefaultAccentColor, TextAlignmentOptions.Center, () => ChangePickerPage(-1)).GetComponent<Button>();
+		_pickerNextButton = AddButton(_pickerSection.transform, "HostPanel_PickerNext", new Vector2(150, -160),
+			new Vector2(56, 40), ">", 18f, PanelWidgets.DefaultAccentColor, TextAlignmentOptions.Center, () => ChangePickerPage(1)).GetComponent<Button>();
+		_pickerPageLabel = AddLabel(_pickerSection.transform, "HostPanel_PickerPageLabel", new Vector2(0, -160),
+			new Vector2(180, 30), "", 14f, new Color(1f, 1f, 1f, 0.6f), TextAlignmentOptions.Center);
 
-		_pickerPrevButton = BuildActionButton(_pickerSection.transform, template, "<", new Vector2(-150, -142), () => ChangePickerPage(-1), width: 56, height: 40, fontSize: 18f);
-		_pickerNextButton = BuildActionButton(_pickerSection.transform, template, ">", new Vector2(150, -142), () => ChangePickerPage(1), width: 56, height: 40, fontSize: 18f);
-
-		var pageLabelGo = Object.Instantiate(template, _pickerSection.transform);
-		pageLabelGo.name = "HostPanel_PickerPageLabel";
-		pageLabelGo.SetActive(true);
-		var pageLabelBtn = pageLabelGo.GetComponent<Button>();
-		if (pageLabelBtn != null) pageLabelBtn.enabled = false;
-		var pageLabelRt = (RectTransform)pageLabelGo.transform;
-		pageLabelRt.anchoredPosition = new Vector2(0, -142);
-		pageLabelRt.sizeDelta = new Vector2(180, 30);
-		_pickerPageLabel = pageLabelGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-		if (_pickerPageLabel != null)
-		{
-			ModLabel.Attach(_pickerPageLabel, "");
-			_pickerPageLabel.enableAutoSizing = false;
-			_pickerPageLabel.fontSize = 14;
-			_pickerPageLabel.color = new Color(1f, 1f, 1f, 0.6f);
-			_pickerPageLabel.textWrappingMode = TextWrappingModes.NoWrap;
-			_pickerPageLabel.overflowMode = TextOverflowModes.Overflow;
-		}
-
-		var cancelGo = BuildActionButton(_pickerSection.transform, template, "Cancel", new Vector2(0, -195), () => _activePicker = PickerKind.None);
+		AddButton(_pickerSection.transform, "HostPanel_PickerCancel", new Vector2(0, -215), new Vector2(260, 50),
+			"Cancel", 20f, Color.white, TextAlignmentOptions.Center, () => _activePicker = PickerKind.None);
 		_pickerSection.SetActive(false);
 	}
 
@@ -361,7 +273,7 @@ internal class HostPanelController : MonoBehaviour
 		var entries = new List<(string Label, System.Action OnClick)>();
 		if (_activePicker == PickerKind.Map)
 		{
-			if (_pickerHeader != null) _pickerHeader.text = "Choose a Map";
+			SetText(_pickerHeader, "Choose a Map");
 			entries.Add(("Base Game", () => { _selectedMapIndex = -2; _activePicker = PickerKind.None; Debug.Log("[HostPanel] map picker: selected Base Game (-2)"); }));
 			if (MpMapLibrary.HasBSide) entries.Add(("B-Side", () => { _selectedMapIndex = -3; _activePicker = PickerKind.None; Debug.Log("[HostPanel] map picker: selected B-Side (-3)"); }));
 			for (int i = 0; i < _hostableMaps.Count; i++)
@@ -372,7 +284,7 @@ internal class HostPanelController : MonoBehaviour
 		}
 		else if (_activePicker == PickerKind.Save)
 		{
-			if (_pickerHeader != null) _pickerHeader.text = "Choose a Save";
+			SetText(_pickerHeader, "Choose a Save");
 			entries.Add(("New Save", () => { _selectedSaveName = null; _activePicker = PickerKind.None; }));
 			foreach (var name in ListSavesForCurrentMode())
 			{
@@ -384,8 +296,8 @@ internal class HostPanelController : MonoBehaviour
 		var totalPages = Mathf.Max(1, Mathf.CeilToInt(entries.Count / (float)PickerRowsPerPage));
 		_pickerPage = Mathf.Clamp(_pickerPage, 0, totalPages - 1);
 
-		float y = 110f;
-		const float spacing = 54f;
+		float y = 115f;
+		const float spacing = 52f;
 		var start = _pickerPage * PickerRowsPerPage;
 		var end = Mathf.Min(start + PickerRowsPerPage, entries.Count);
 		for (int i = start; i < end; i++)
@@ -395,9 +307,9 @@ internal class HostPanelController : MonoBehaviour
 			y -= spacing;
 		}
 
-		if (_pickerPageLabel != null) _pickerPageLabel.text = totalPages > 1 ? $"Page {_pickerPage + 1}/{totalPages}" : "";
-		if (_pickerPrevButton != null) _pickerPrevButton.gameObject.SetActive(totalPages > 1);
-		if (_pickerNextButton != null) _pickerNextButton.gameObject.SetActive(totalPages > 1);
+		SetText(_pickerPageLabel, totalPages > 1 ? $"Page {_pickerPage + 1}/{totalPages}" : "");
+		if (_pickerPrevButton != null) _pickerPrevButton.interactable = _pickerPage > 0;
+		if (_pickerNextButton != null) _pickerNextButton.interactable = _pickerPage < totalPages - 1;
 	}
 
 	private void ChangePickerPage(int delta)
@@ -408,26 +320,73 @@ internal class HostPanelController : MonoBehaviour
 
 	private GameObject CreatePickerRow(string label, float y, System.Action onClick)
 	{
-		var go = PauseMenuHelper.CloneButton(_pickerTemplate, _pickerSection.transform, "HostPanel_PickerRow", label, new Vector2(0, y), new Vector2(380, 44), onClick);
-		var tmp = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		return AddButton(_pickerSection.transform, "HostPanel_PickerRow", new Vector2(0, y), new Vector2(380, 44),
+			label, 18f, Color.white, TextAlignmentOptions.MidlineLeft, onClick);
+	}
+
+	// ---- PanelWidgets helpers: one look for the whole panel, with Juke's FitLabel on every label ----
+	private TMP_Text AddLabel(Transform parent, string name, Vector2 pos, Vector2 size, string text,
+		float fontSize, Color color, TextAlignmentOptions align)
+	{
+		var tmp = PanelWidgets.CreateLabel(parent, _font, pos, size, text, fontSize, color, align);
+		tmp.name = name;
+		tmp.fontSizeMin = PanelWidgets.MinFitFontSize;
+		tmp.fontSizeMax = fontSize;
+		SetText(tmp, text);
+		return tmp;
+	}
+
+	private GameObject AddButton(Transform parent, string name, Vector2 pos, Vector2 size, string label,
+		float fontSize, Color textColor, TextAlignmentOptions align, System.Action onClick)
+	{
+		var go = PanelWidgets.CreateButton(parent, _font, name, pos, size, label, fontSize, textColor, align);
+		var tmp = LabelOf(go);
 		if (tmp != null)
 		{
-			tmp.enableAutoSizing = true;
-			tmp.fontSizeMin = 10f;
-			tmp.fontSizeMax = 20f;
-			tmp.textWrappingMode = TextWrappingModes.NoWrap;
-			tmp.overflowMode = TextOverflowModes.Overflow;
-			tmp.alignment = TextAlignmentOptions.MidlineLeft;
+			tmp.fontSizeMin = PanelWidgets.MinFitFontSize;
+			tmp.fontSizeMax = fontSize;
+			PanelWidgets.FitLabel(tmp);
 		}
+		var button = go.GetComponent<Button>();
+		if (button != null && onClick != null)
+			button.onClick.AddListener(() => { try { onClick(); } catch (System.Exception e) { Debug.LogWarning("[HostPanel] click failed: " + e.Message); } });
 		return go;
 	}
 
-	private static Button BuildActionButton(Transform parent, GameObject template, string label, Vector2 pos, System.Action onClick, float width = 260, float height = 60, float fontSize = 24f)
+	private static void SetText(TMP_Text tmp, string text, Color? color = null)
 	{
-		var go = PauseMenuHelper.CloneButton(template, parent, "HostPanel_" + label, label, pos, new Vector2(width, height), onClick);
-		var text = go.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
-		if (text != null) { text.enableAutoSizing = false; text.fontSize = fontSize; text.textWrappingMode = TextWrappingModes.NoWrap; text.overflowMode = TextOverflowModes.Overflow; }
-		return go.GetComponent<Button>();
+		if (tmp == null) return;
+		string value = text ?? "";
+		bool sameColor = !color.HasValue || (tmp.color == color.Value && tmp.faceColor == color.Value);
+		if (tmp.text == value && sameColor) return; // FitLabel forces a mesh rebuild; skip it when nothing changed
+		tmp.richText = false;
+		tmp.text = value;
+		if (color.HasValue) { tmp.color = color.Value; tmp.faceColor = color.Value; }
+		PanelWidgets.FitLabel(tmp);
+	}
+
+	private static void SetButtonText(GameObject go, string text, Color? color = null) => SetText(LabelOf(go), text, color);
+
+	private static TMP_Text LabelOf(GameObject go)
+	{
+		if (go == null) return null;
+		var label = go.transform.Find("Text (TMP)");
+		return label != null ? label.GetComponent<TMP_Text>() : null;
+	}
+
+	private static TMP_FontAsset FindFont(GameObject panel)
+	{
+		try
+		{
+			var title = panel != null ? panel.transform.Find("Settings") : null;
+			if (title == null && panel != null && panel.transform.childCount > 0) title = panel.transform.GetChild(0);
+			var tmp = title != null ? title.GetComponentInChildren<TMP_Text>(true) : null;
+			return tmp != null && tmp.font != null ? tmp.font : TMP_Settings.defaultFontAsset;
+		}
+		catch (System.Exception)
+		{
+			return null; // TMP falls back to its own default asset
+		}
 	}
 
 	private void RefreshMapList()
@@ -491,11 +450,11 @@ internal class HostPanelController : MonoBehaviour
 
 		if (_toggleButton != null)
 		{
-			if (isHost) PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, "Host Panel");
+			if (isHost) SetButtonText(_toggleButton.gameObject, "Host Panel", PanelWidgets.DefaultAccentColor);
 			else
 			{
 				bool ready = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var tr) && tr;
-				PauseMenuHelper.SetButtonLabel(_toggleButton.gameObject, ready ? "Unready" : "Ready");
+				SetButtonText(_toggleButton.gameObject, ready ? "Unready" : "Ready", PanelWidgets.DefaultAccentColor);
 			}
 		}
 
@@ -505,7 +464,7 @@ internal class HostPanelController : MonoBehaviour
 		{
 			_modeButton.interactable = canConfigure;
 			var modeLabel = _mode == Mode.Coop ? "Co-op" : "Normal";
-			PauseMenuHelper.SetButtonLabel(_modeButton.gameObject, "Mode:\n" + modeLabel);
+			SetButtonText(_modeButton.gameObject, "Mode:\n" + modeLabel);
 		}
 		if (_mapButton != null)
 		{
@@ -519,7 +478,7 @@ internal class HostPanelController : MonoBehaviour
 				_lastLoggedMapLabel = mapLabel;
 				Debug.Log($"[HostPanel] map label changed to '{mapLabel}' (_selectedMapIndex={_selectedMapIndex})");
 			}
-			PauseMenuHelper.SetButtonLabel(_mapButton.gameObject, "Map:\n" + mapLabel);
+			SetButtonText(_mapButton.gameObject, "Map:\n" + mapLabel);
 		}
 		if (_saveButton != null)
 		{
@@ -527,7 +486,7 @@ internal class HostPanelController : MonoBehaviour
 			_saveButton.interactable = canPickSave;
 			var saveLabel = _selectedSaveName ?? "New Save";
 			if (saveLabel.Length > 14) saveLabel = saveLabel.Substring(0, 12) + "..";
-			PauseMenuHelper.SetButtonLabel(_saveButton.gameObject, "Save:\n" + saveLabel);
+			SetButtonText(_saveButton.gameObject, "Save:\n" + saveLabel);
 		}
 
 		bool showingPicker = _activePicker != PickerKind.None;
@@ -545,14 +504,13 @@ internal class HostPanelController : MonoBehaviour
 			bool enabled = _abilityEnabled[key];
 			btn.interactable = canConfigureAbilities;
 			var label = _abilityDefs.First(d => d.Key == key).Label;
-			PauseMenuHelper.SetButtonLabel(btn.gameObject, label + "\n" + (enabled ? "On" : "Off"));
-			var img = btn.GetComponent<Image>();
-			if (img != null) img.color = enabled ? new Color(0.2f, 0.55f, 0.28f) : new Color(0.55f, 0.22f, 0.2f);
+			SetButtonText(btn.gameObject, label + "\n" + (enabled ? "On" : "Off"),
+				enabled ? PanelWidgets.DefaultAccentColor : new Color(1f, 1f, 1f, 0.55f));
 		}
 
-		if (_rosterGo != null)
+		if (_rosterText != null)
 		{
-			if (mgr == null || !inLobby) PauseMenuHelper.SetButtonLabel(_rosterGo, "");
+			if (mgr == null || !inLobby) SetText(_rosterText, "");
 			else
 			{
 				var sb = new System.Text.StringBuilder();
@@ -563,7 +521,7 @@ internal class HostPanelController : MonoBehaviour
 					bool ready = _readyStates.TryGetValue(p.id, out var rr) && rr;
 					sb.Append('\n').Append(p.name ?? ("Player " + p.id)).Append(": ").Append(ready ? "Ready" : "Waiting");
 				}
-				PauseMenuHelper.SetButtonLabel(_rosterGo, sb.ToString());
+				SetText(_rosterText, sb.ToString());
 			}
 		}
 
@@ -574,30 +532,32 @@ internal class HostPanelController : MonoBehaviour
 			{
 				_startButton.interactable = mgr != null && inLobby;
 				bool selfReady = mgr != null && _readyStates.TryGetValue(mgr.LocalPlayerId, out var sready) && sready;
-				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, selfReady ? "Unready" : "Ready");
+				SetButtonText(_startButton.gameObject, selfReady ? "Unready" : "Ready", PanelWidgets.DefaultAccentColor);
 			}
 			else if (roundActiveAsHost)
 			{
 				_startButton.interactable = true;
-				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, "Stop Playing");
+				SetButtonText(_startButton.gameObject, "Stop Playing", PanelWidgets.DefaultAccentColor);
 			}
 			else
 			{
-				_startButton.interactable = mgr != null && inLobby && isHost && !_roundActive && AllReady(mgr);
-				PauseMenuHelper.SetButtonLabel(_startButton.gameObject, "Start Playing");
+				_startButton.interactable = mgr != null && inLobby && isHost && !_roundActive && (_mode != Mode.Coop || AllReady(mgr));
+				SetButtonText(_startButton.gameObject, "Start Playing", PanelWidgets.DefaultAccentColor);
 			}
 		}
 
-		if (_statusGo == null) return;
+		if (_statusText == null) return;
 		string statusText;
 		if (mgr == null || !inLobby) statusText = "Host or join a lobby to play.";
 		else if (roundActiveAsHost) statusText = "Playing - click Stop Playing to end.";
 		else if (_roundActive) statusText = "Playing.";
 		else if (!isHost) statusText = "Waiting for the host to start.";
 		else if (!string.IsNullOrEmpty(_statusMessage)) statusText = _statusMessage;
-		else if (!AllReady(mgr)) statusText = "Waiting for everyone to ready up...";
-		else statusText = "Everyone's ready - click Start Playing!";
-		PauseMenuHelper.SetButtonLabel(_statusGo, statusText);
+		else if (_mode == Mode.Coop && !AllReady(mgr)) statusText = "Waiting for everyone to ready up...";
+		else statusText = "Ready - click Start Playing!";
+		SetText(_statusText, statusText, roundActiveAsHost || (mgr != null && inLobby && isHost && (_mode != Mode.Coop || AllReady(mgr)))
+			? PanelWidgets.DefaultAccentColor
+			: new Color(1f, 1f, 1f, 0.8f));
 	}
 
 	private enum Mode { Normal, Coop }
@@ -621,6 +581,10 @@ internal class HostPanelController : MonoBehaviour
 	private string _roundMapKind = "current";
 	private volatile bool _mapDownloading;
 	private string _statusMessage = "";
+	// The host's position captured when the round starts: everyone teleports
+	// here on start, and late joiners spawn here too (the host's first spawn).
+	private double _roundSpawnX, _roundSpawnY;
+	private bool _hasRoundSpawn;
 
 	private Movement _localMovement;
 
@@ -744,6 +708,13 @@ internal class HostPanelController : MonoBehaviour
 			_roundMapKind = payload["mapKind"]?.Value<string>() ?? "current";
 			_selectedSaveName = payload["saveName"]?.Value<string>();
 			_roundPlayerCount = payload["playerCount"]?.Value<int>() ?? (MpNetworkManager.Instance?.LastSnapshotPlayers.Count + 1 ?? 1);
+			if (payload["spawnX"] != null && payload["spawnY"] != null)
+			{
+				_roundSpawnX = payload["spawnX"].Value<double>();
+				_roundSpawnY = payload["spawnY"].Value<double>();
+				_hasRoundSpawn = true;
+			}
+			else _hasRoundSpawn = false;
 			_pendingAbilities = _mode != Mode.Coop ? payload["abilities"] as JObject : null;
 			_lastAppliedAbilities = _pendingAbilities;
 			_pendingModeStart = _mode == Mode.Coop;
@@ -871,16 +842,25 @@ internal class HostPanelController : MonoBehaviour
 	private void TeleportLocalPlayerToStartSpawn()
 	{
 		if (_localMovement == null) return;
-		courseScript firstCourse = null;
-		foreach (var c in Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-			if (c != null && (firstCourse == null || c.courseNumber < firstCourse.courseNumber)) firstCourse = c;
-		if (firstCourse == null) return;
-		var gate = firstCourse.GetComponentInChildren<startGate>(true);
-		if (gate == null) return;
-		var resetPointGo = StartGateResetPointField?.GetValue(gate) as GameObject;
-		if (resetPointGo == null) return;
-
-		Vector2 pos = resetPointGo.transform.position;
+		Vector2 pos;
+		if (_hasRoundSpawn)
+		{
+			// The host's first-spawn coordinate (world space -> this client's local space).
+			pos = (Vector2)MpOrigin.ToLocal(_roundSpawnX, _roundSpawnY);
+		}
+		else
+		{
+			// No host spawn (older host, or base game): fall back to the map's start gate.
+			courseScript firstCourse = null;
+			foreach (var c in Object.FindObjectsByType<courseScript>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+				if (c != null && (firstCourse == null || c.courseNumber < firstCourse.courseNumber)) firstCourse = c;
+			if (firstCourse == null) return;
+			var gate = firstCourse.GetComponentInChildren<startGate>(true);
+			if (gate == null) return;
+			var resetPointGo = StartGateResetPointField?.GetValue(gate) as GameObject;
+			if (resetPointGo == null) return;
+			pos = resetPointGo.transform.position;
+		}
 		_localMovement.transform.position = pos;
 		// respawnPoint is world space: the game adds FloatingOrigin.currentOrigin back on respawn.
 		_localMovement.respawnPoint = pos - (Vector2)MpOrigin.Current;
@@ -937,9 +917,15 @@ internal class HostPanelController : MonoBehaviour
 	{
 		var mgr = MpNetworkManager.Instance;
 		if (mgr == null || !mgr.InLobby || !mgr.IsHost || _roundActive) return;
-		if (!AllReady(mgr)) { _statusMessage = "Waiting for everyone to be ready."; return; }
+		// Co-op waits for everyone to ready up; normal mode starts on demand.
+		if (_mode == Mode.Coop && !AllReady(mgr)) { _statusMessage = "Waiting for everyone to be ready."; return; }
 
 		TryConsumePendingMapLoad();
+
+		// The host's current position becomes the round's spawn: everyone lands
+		// here on start, and late joiners spawn here too (the host's first spawn).
+		if (_localMovement != null) { MpOrigin.ToWorld(_localMovement.transform.position, out _roundSpawnX, out _roundSpawnY); _hasRoundSpawn = true; }
+		else _hasRoundSpawn = false;
 
 		var others = mgr.LastSnapshotPlayers.Select(p => p.id).ToList();
 		var everyone = new List<int>(others) { mgr.LocalPlayerId };
@@ -960,7 +946,7 @@ internal class HostPanelController : MonoBehaviour
 		_roundResendAccumulator = 0f;
 		_roundPlayerCount = everyone.Count;
 		Debug.Log($"[HostPanel] sending start: roundId={_sentRoundId} mode={_mode} everyone=[{string.Join(",", everyone)}] localId={mgr.LocalPlayerId}");
-		mgr.SendGameMessage(new JObject
+		var startMsg = new JObject
 		{
 			["k"] = "start",
 			["mode"] = _mode == Mode.Coop ? "coop" : "normal",
@@ -971,7 +957,9 @@ internal class HostPanelController : MonoBehaviour
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
 			["playerCount"] = _roundPlayerCount,
-		});
+		};
+		if (_hasRoundSpawn) { startMsg["spawnX"] = _roundSpawnX; startMsg["spawnY"] = _roundSpawnY; }
+		mgr.SendGameMessage(startMsg);
 	}
 
 	private void ResendCurrentRoundState()
@@ -980,7 +968,7 @@ internal class HostPanelController : MonoBehaviour
 		if (mgr == null) return;
 		var abilities = new JObject();
 		foreach (var kv in _abilityEnabled) abilities[kv.Key] = kv.Value;
-		mgr.SendGameMessage(new JObject
+		var resend = new JObject
 		{
 			["k"] = "start",
 			["mode"] = _mode == Mode.Coop ? "coop" : "normal",
@@ -991,7 +979,10 @@ internal class HostPanelController : MonoBehaviour
 			["saveName"] = _selectedSaveName,
 			["roundId"] = _sentRoundId,
 			["playerCount"] = _roundPlayerCount,
-		});
+		};
+		// Late joiners get the host's first-spawn coordinate, unchanged.
+		if (_hasRoundSpawn) { resend["spawnX"] = _roundSpawnX; resend["spawnY"] = _roundSpawnY; }
+		mgr.SendGameMessage(resend);
 	}
 
 }

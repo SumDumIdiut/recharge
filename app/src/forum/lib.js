@@ -37,7 +37,6 @@ export function postRowHtml(p) {
     </div>
     ${categoryTag(p.category)}
     ${statusBadge(p.status) || '<span class="fm-status"></span>'}
-    <span class="fm-replies" title="Replies">${escapeHtml(p.reply_count ?? 0)}</span>
   </div>`;
 }
 

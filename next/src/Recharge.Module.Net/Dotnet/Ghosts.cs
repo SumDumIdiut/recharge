@@ -1,8 +1,10 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using Recharge.Net;
 using UnityEngine;
+using UnityEngine.Networking;
 using Object = UnityEngine.Object;
 
 public class MpPlayerState
@@ -18,6 +20,33 @@ public class MpPlayerState
 	public string nameColor;
 	public string dotColor;
 	public string nameGradient; // packed "#rrggbb,#rrggbb,..." or null/empty for solid
+	public string skin; // the player's skin folder, shown on their ghost; null/empty = vanilla
+	public string avatar; // hub avatar path (/api/avatars/..) for the ghost's nameplate; null/empty = none
+	public string banner; // hub banner path (/api/banners/..) behind the nameplate; null/empty = none
+	public string bannerColor; // "#rrggbb" tint behind the nameplate; null/empty = none
+}
+
+// Re-skins a ghost's body each frame to show the peer's skin. The ghost's
+// Animator sets vanilla sprites in Update; this maps each one into the peer's
+// skin in LateUpdate. When the skin isn't available locally the vanilla frame
+// is kept, so that peer simply shows the default look.
+internal sealed class MpGhostSkinner : MonoBehaviour
+{
+	public SpriteRenderer[] Body;
+	public string Folder;
+
+	private void LateUpdate()
+	{
+		var bridge = Recharge.ModApi.SkinGhostBridge.Current;
+		if (bridge == null || Body == null || string.IsNullOrEmpty(Folder) || !bridge.HasSkin(Folder)) return;
+		for (int i = 0; i < Body.Length; i++)
+		{
+			var sr = Body[i];
+			if (sr == null) continue;
+			var skinned = bridge.ResolveSprite(Folder, sr.sprite);
+			if (skinned != null) sr.sprite = skinned;
+		}
+	}
 }
 
 public class MpLobbyInfo
@@ -92,6 +121,8 @@ internal static class MpDisplay
 		System.IO.Path.GetDirectoryName(Application.dataPath) ?? ".", "Recharge", "Mods", "recharge.multiplayer", "display.json");
 	public static float NameAlpha = 0.9f;
 	public static float PlayerAlpha = 0.9f;
+	public static float PfpAlpha = 0.9f;
+	public static float BannerAlpha = 0.7f;
 	private static long _stamp = long.MinValue;
 	private static float _nextCheck;
 
@@ -109,6 +140,8 @@ internal static class MpDisplay
 			var jo = JObject.Parse(System.IO.File.ReadAllText(Path));
 			NameAlpha = Clamp01(jo["nameOpacity"], NameAlpha);
 			PlayerAlpha = Clamp01(jo["playerOpacity"], PlayerAlpha);
+			PfpAlpha = Clamp01(jo["pfpOpacity"], PfpAlpha);
+			BannerAlpha = Clamp01(jo["bannerOpacity"], BannerAlpha);
 		}
 		catch { }
 	}
@@ -117,6 +150,57 @@ internal static class MpDisplay
 	{
 		if (tok == null) return fallback;
 		try { return Mathf.Clamp01((float)tok); } catch { return fallback; }
+	}
+}
+
+internal sealed class MpCoroutineRunner : MonoBehaviour { }
+
+// Fetches and caches hub avatar/banner images for ghost nameplates. Only the
+// hub's own /api/avatars and /api/banners paths are ever requested (validated
+// before they reach the wire), and a failed fetch is cached as null so a ghost
+// doesn't hammer the server.
+internal static class MpImageCache
+{
+	private const string HubBase = "https://codecade.co.za/recharge";
+	private static readonly Dictionary<string, Sprite> _cache = new Dictionary<string, Sprite>();
+	private static readonly HashSet<string> _loading = new HashSet<string>();
+	private static MpCoroutineRunner _runner;
+
+	public static Sprite Get(string path) => !string.IsNullOrEmpty(path) && _cache.TryGetValue(path, out var s) ? s : null;
+
+	// Starts a fetch for a path if it isn't cached or in flight. Cheap to call every frame.
+	public static void Request(string path)
+	{
+		if (string.IsNullOrEmpty(path) || _cache.ContainsKey(path) || _loading.Contains(path)) return;
+		if (!(path.StartsWith("/api/avatars/") || path.StartsWith("/api/banners/"))) { _cache[path] = null; return; }
+		_loading.Add(path);
+		EnsureRunner().StartCoroutine(Load(path));
+	}
+
+	private static MpCoroutineRunner EnsureRunner()
+	{
+		if (_runner == null)
+		{
+			var go = new GameObject("MpImageCache");
+			Object.DontDestroyOnLoad(go);
+			_runner = go.AddComponent<MpCoroutineRunner>();
+		}
+		return _runner;
+	}
+
+	private static IEnumerator Load(string path)
+	{
+		using var req = UnityWebRequestTexture.GetTexture(HubBase + path);
+		yield return req.SendWebRequest();
+		try
+		{
+			if (req.result == UnityWebRequest.Result.Success && DownloadHandlerTexture.GetContent(req) is Texture2D tex && tex != null)
+				_cache[path] = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+			else
+				_cache[path] = null;
+		}
+		catch { _cache[path] = null; }
+		finally { _loading.Remove(path); }
 	}
 }
 
@@ -135,9 +219,16 @@ internal static class MpGhostManager
 		public string LabelText = "?";
 		public string[] NameStops; // gradient stops, null = solid
 		public GameObject PausedIndicator;
-		public readonly List<SpriteRenderer> Body = new List<SpriteRenderer>(); // tinted with the player's colour
+		public readonly List<SpriteRenderer> Body = new List<SpriteRenderer>(); // the player body renderers
 		public Transform[] Dash = new Transform[0];
 		public Transform[] Jump = new Transform[0];
+		public string SkinFolder; // the peer's skin folder, shown on this ghost
+		public MpGhostSkinner Skinner;
+		public SpriteRenderer PfpSr; // profile picture above the name
+		public SpriteRenderer BannerSr; // banner behind the name
+		public string AvatarPath; // hub path, requested from MpImageCache
+		public string BannerPath;
+		public Color BannerTint = Color.white; // bannerColor; white when none
 	}
 
 	// Copied from the local player: Sprite (which carries the dash indicators
@@ -187,12 +278,11 @@ internal static class MpGhostManager
 			if (doLog) Debug.Log($"[MpGhost] snapshot id={p.id} name={p.name} pos=({p.x:F1},{p.y:F1}) paused={p.isPaused}");
 			seen.Add(p.id);
 			var pos = MpOrigin.ToLocal(p.x, p.y);
-			var dotColor = ParseColorOr(p.dotColor, new Color(0.4f, 0.6f, 1f, MpDisplay.PlayerAlpha));
 			var nameColor = ParseColorOr(p.nameColor, new Color(1f, 1f, 1f, MpDisplay.NameAlpha));
 			var stops = ParseStops(p.nameGradient);
 			if (!_ghosts.TryGetValue(p.id, out var g))
 			{
-				g = Spawn(p.name, pos, dotColor, nameColor, stops);
+				g = Spawn(p.name, pos, nameColor, stops, p.skin);
 				_ghosts[p.id] = g;
 				var counts = _indicatorCounts.TryGetValue(p.id, out var c) ? c : (0, 0);
 				ApplyIndicators(g, counts.Item1, counts.Item2);
@@ -201,8 +291,16 @@ internal static class MpGhostManager
 			{
 				g.LabelText = string.IsNullOrEmpty(p.name) ? "?" : p.name;
 				g.NameStops = stops;
-				ApplyColors(g, dotColor, nameColor);
+				ApplyColors(g, nameColor);
+				if (g.SkinFolder != p.skin)
+				{
+					g.SkinFolder = p.skin;
+					if (g.Skinner != null) g.Skinner.Folder = p.skin;
+				}
 			}
+			g.AvatarPath = string.IsNullOrEmpty(p.avatar) ? null : p.avatar;
+			g.BannerPath = string.IsNullOrEmpty(p.banner) ? null : p.banner;
+			g.BannerTint = ParseColorOr(p.bannerColor, Color.white);
 			g.TargetWorldX = p.x;
 			g.TargetWorldY = p.y;
 			g.TargetFacingRight = p.facingRight;
@@ -262,6 +360,7 @@ internal static class MpGhostManager
 				scale.x = Mathf.Abs(scale.x) * sign;
 				g.SpriteTransform.localScale = scale;
 			}
+			UpdateNameplate(g);
 		}
 		foreach (var id in stale) Remove(id);
 	}
@@ -276,10 +375,52 @@ internal static class MpGhostManager
 		return fallback;
 	}
 
-	private static void ApplyColors(GhostEntry g, Color dotColor, Color nameColor)
+	private static SpriteRenderer CreateNameplatePart(Transform parent, string name, Vector3 localPos, Shader unlitShader, SpriteRenderer reference, int sortOffset)
+	{
+		var go = new GameObject(name);
+		go.transform.SetParent(parent, false);
+		go.transform.localPosition = localPos;
+		var s = go.AddComponent<SpriteRenderer>();
+		if (unlitShader != null) s.material = new Material(unlitShader);
+		if (reference != null) { s.sortingLayerID = reference.sortingLayerID; s.sortingOrder = reference.sortingOrder + sortOffset; }
+		go.SetActive(false);
+		return s;
+	}
+
+	// Each frame: request the peer's avatar/banner, show them once fetched, and apply the opacity prefs.
+	private static void UpdateNameplate(GhostEntry g)
+	{
+		ApplyNameplatePart(g.PfpSr, g.AvatarPath, 46f, Color.white, MpDisplay.PfpAlpha);
+		ApplyNameplatePart(g.BannerSr, g.BannerPath, 54f, g.BannerTint, MpDisplay.BannerAlpha);
+	}
+
+	private static void ApplyNameplatePart(SpriteRenderer sr, string path, float desiredHeight, Color tint, float alpha)
+	{
+		if (sr == null) return;
+		if (string.IsNullOrEmpty(path) || alpha <= 0.01f) { if (sr.gameObject.activeSelf) sr.gameObject.SetActive(false); return; }
+		MpImageCache.Request(path);
+		var sprite = MpImageCache.Get(path);
+		if (sprite == null) { if (sr.gameObject.activeSelf) sr.gameObject.SetActive(false); return; }
+		if (sr.sprite != sprite) FitSprite(sr, sprite, desiredHeight);
+		tint.a = alpha;
+		sr.color = tint;
+		if (!sr.gameObject.activeSelf) sr.gameObject.SetActive(true);
+	}
+
+	private static void FitSprite(SpriteRenderer sr, Sprite sprite, float desiredHeight)
+	{
+		sr.sprite = sprite;
+		var h = sprite.bounds.size.y;
+		float scale = h > 0.0001f ? desiredHeight / h : 1f;
+		sr.transform.localScale = new Vector3(scale, scale, 1f);
+	}
+
+	// Bodies are drawn untinted (white) now that a player's skin identifies them
+	// rather than a colour; the alpha keeps the ghost translucent.
+	private static void ApplyColors(GhostEntry g, Color nameColor)
 	{
 		foreach (var partSr in g.Body)
-			if (partSr != null) partSr.color = dotColor;
+			if (partSr != null) partSr.color = new Color(1f, 1f, 1f, MpDisplay.PlayerAlpha);
 		UpdateLabel(g, nameColor);
 	}
 
@@ -312,13 +453,13 @@ internal static class MpGhostManager
 		}
 	}
 
-	private static GhostEntry Spawn(string name, Vector3 spawnPos, Color dotColor, Color nameColor, string[] stops)
+	private static GhostEntry Spawn(string name, Vector3 spawnPos, Color nameColor, string[] stops, string skinFolder)
 	{
 		var root = new GameObject("MPGhost_" + (string.IsNullOrEmpty(name) ? "?" : name));
 		Object.DontDestroyOnLoad(root);
 		root.transform.position = spawnPos;
 
-		var entry = new GhostEntry { Root = root, LastSeenTime = Time.unscaledTime, LabelText = string.IsNullOrEmpty(name) ? "?" : name, NameStops = stops };
+		var entry = new GhostEntry { Root = root, LastSeenTime = Time.unscaledTime, LabelText = string.IsNullOrEmpty(name) ? "?" : name, NameStops = stops, SkinFolder = skinFolder };
 		SpriteRenderer sr = null;
 		Animator anim = null;
 		Transform spriteTransform = null;
@@ -350,9 +491,15 @@ internal static class MpGhostManager
 		{
 			if (indicators != null && partSr.transform.IsChildOf(indicators)) continue;
 			if (unlitShader != null) partSr.material = new Material(unlitShader);
-			partSr.color = dotColor;
+			partSr.color = new Color(1f, 1f, 1f, MpDisplay.PlayerAlpha);
 			entry.Body.Add(partSr);
 		}
+
+		// Drive the ghost's skin each frame from the peer's skin folder.
+		var skinner = root.AddComponent<MpGhostSkinner>();
+		skinner.Body = entry.Body.ToArray();
+		skinner.Folder = skinFolder;
+		entry.Skinner = skinner;
 
 		// The clone carries whatever the local player's indicators showed at
 		// copy time - reset them so only the peer's counts drive them.
@@ -397,6 +544,16 @@ internal static class MpGhostManager
 		tm.alignment = TextAlignment.Center;
 		entry.Label = tm;
 		UpdateLabel(entry, nameColor);
+		var labelRenderer = labelGo.GetComponent<MeshRenderer>();
+		if (labelRenderer != null && sr != null)
+		{
+			labelRenderer.sortingLayerID = sr.sortingLayerID;
+			labelRenderer.sortingOrder = sr.sortingOrder + 10;
+		}
+
+		// Nameplate: a banner behind the name and the profile picture above it.
+		entry.BannerSr = CreateNameplatePart(root.transform, "Banner", new Vector3(0f, 75f, 0f), unlitShader, sr, 9);
+		entry.PfpSr = CreateNameplatePart(root.transform, "Pfp", new Vector3(0f, 128f, 0f), unlitShader, sr, 11);
 
 		var pausedGo = new GameObject("PausedIndicator");
 		pausedGo.transform.SetParent(root.transform, false);

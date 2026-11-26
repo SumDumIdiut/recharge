@@ -109,10 +109,20 @@ function multiplayerPanel(): HTMLElement {
   );
   const bodies = row(
     'Other player opacity',
-    "How solid other players' characters look in-game.",
+    "How solid other players' characters (and their skins) look in-game.",
     sliderControl(current.playerOpacity, (v) => setMpDisplay({ playerOpacity: v }))
   );
-  return panel('Multiplayer', names, bodies);
+  const pfps = row(
+    'Profile picture opacity',
+    "How solid other players' profile pictures look above their characters.",
+    sliderControl(current.pfpOpacity, (v) => setMpDisplay({ pfpOpacity: v }))
+  );
+  const banners = row(
+    'Banner opacity',
+    "How solid other players' banners look behind their names.",
+    sliderControl(current.bannerOpacity, (v) => setMpDisplay({ bannerOpacity: v }))
+  );
+  return panel('Multiplayer', names, bodies, pfps, banners);
 }
 
 export function gameSection(): Section {

@@ -114,8 +114,8 @@ function cardNode(card: Card): HTMLElement {
   const node = h('div', { className: 'msg-card' });
   node.appendChild(icon(card.type === 'lobby' ? 'lobbies' : card.type === 'skin' ? 'user' : 'map', 22));
   node.appendChild(h('div', { className: 'msg-card-text' }, h('div', { className: 'msg-card-kind dim', text: kind }), h('div', { className: 'msg-card-name', text: card.name || card.id })));
-  const href = card.type === 'lobby' ? '#/lobbies' : libraryRoute(card.type === 'skin' ? 'skin' : 'map', card.id);
-  if (href) node.appendChild(button(card.type === 'lobby' ? 'Join' : 'Open', { kind: 'secondary', onClick: () => go(href) }));
+  const href = card.type === 'lobby' ? null : libraryRoute(card.type === 'skin' ? 'skin' : 'map', card.id);
+  if (href) node.appendChild(button('Open', { kind: 'secondary', onClick: () => go(href) }));
   return node;
 }
 

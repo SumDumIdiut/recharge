@@ -9,7 +9,6 @@ import { gunSettingsSection } from './gunSettings.js';
 import { sourceBadge, sourceCodeLink } from './sourceLink.js';
 import { authorName, fitImage, kindPlaceholder, statusBadge } from './itemCard.js';
 import { skinCanvas } from '../lib/skinThumb.js';
-import { skinApplyButton } from '../lib/skinApply.js';
 import { backgroundApplyButton } from '../backgrounds/applyButton.js';
 import { imageBlobUrl } from '../lib/hub.js';
 import { actionsOf, itemWebUrl, KIND_LABEL, type Item } from '../lib/library.js';
@@ -361,10 +360,6 @@ function actionButtons(item: Item, options: DetailOptions): HTMLElement {
   actions.appendChild(remove);
   const toggle = modSwitch(item, () => options.onChanged?.(item));
   if (toggle) actions.appendChild(toggle);
-  // an installed skin can be worn straight from its page
-  if (item.kind === 'skins' && item.installed && item.installed.folder) {
-    actions.appendChild(skinApplyButton(item.installed.folder, item.name));
-  }
   if (item.kind === 'maps' && item.installed && item.installed.folder) actions.appendChild(amplifierButton(item.installed.folder));
   // an installed background or playlist can be shown behind the app straight from its page
   if ((item.kind === 'backgrounds' || item.kind === 'playlists') && item.installed && item.installed.folder) {

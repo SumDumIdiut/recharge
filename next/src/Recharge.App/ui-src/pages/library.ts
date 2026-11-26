@@ -18,7 +18,6 @@ import { uploadsView } from '../account/uploads.js';
 import { openUploadForm } from '../account/uploadForm.js';
 import { currentUser, sessionReady } from '../account/session.js';
 import { openAuthModal } from '../account/index.js';
-import { skinPicker } from '../skins/picker.js';
 import { buildDetail, loadingDetail, notFoundDetail, type Detail, type DetailOptions } from '../components/detail.js';
 import { clearCache, loadInstalled, loadKind, onHubChange, peekInstalled, peekKind } from '../lib/hub.js';
 import { perfRouteData } from '../perf.js';
@@ -51,7 +50,6 @@ const SHOW_CHIPS: Array<{ value: string; label: string }> = [
 ];
 
 let uploads: { element: HTMLElement; ready: Promise<void>; filter(query: string): void; reload(): void } | null = null;
-let picker: { element: HTMLElement; update(items: Item[], loading: boolean): void; dispose(): void } | null = null;
 
 const DEFAULT_STATE: State = { kind: 'maps', view: null, show: 'all', sort: 'new', q: '' };
 
@@ -448,13 +446,6 @@ function render(): void {
     nodes.push(errorState('Your installed items could not be read (' + installedError + ').', () => void fetchInstalled(true)));
   }
 
-  if (state.kind === 'skins' && state.view === 'installed' && !installedError) {
-    // The skin picker: what you wear now, and every skin you have, one click to wear.
-    if (!picker) picker = skinPicker();
-    picker.update(items, loading);
-    host.replaceChildren(...nodes, picker.element);
-    return;
-  }
   if (items.length > 0) {
     nodes.push(cardGrid(items, (item) => {
       const key = itemKey(item);
@@ -580,7 +571,6 @@ export const libraryPage: PageModule = {
     const token = generation;
     setItemBase('#/library');
     uploads = null;
-    picker = null;
     painted.clear();
     state = readState(route, lastList);
     // #/library?view=uploads&upload=1 (or upload=<repo url>) opens the Upload form: used by tools/snap.sh to photograph it.
@@ -651,8 +641,6 @@ export const libraryPage: PageModule = {
     renderTimer = 0;
     if (detail) detail.dispose();
     detail = null;
-    picker?.dispose();
-    picker = null;
     uploads = null;
     setItemBase('#/library');
     painted.clear();

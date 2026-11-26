@@ -50,6 +50,8 @@ namespace Recharge.App.Bridge
             var model = new JsonObject();
             model["nameOpacity"] = JsonNumber.From(Clamp01(args, "nameOpacity", 0.9));
             model["playerOpacity"] = JsonNumber.From(Clamp01(args, "playerOpacity", 0.9));
+            model["pfpOpacity"] = JsonNumber.From(Clamp01(args, "pfpOpacity", 0.9));
+            model["bannerOpacity"] = JsonNumber.From(Clamp01(args, "bannerOpacity", 0.7));
 
             try
             {
@@ -112,6 +114,14 @@ namespace Recharge.App.Bridge
                 model["gradient"] = arr;
             }
 
+            // The player's profile picture and banner, shown on their ghost in multiplayer.
+            string? avatar = ReadApiPath(args, "avatar");
+            if (avatar != null) model["avatar"] = new JsonString(avatar);
+            string? banner = ReadApiPath(args, "banner");
+            if (banner != null) model["banner"] = new JsonString(banner);
+            string? bannerColor = NormalizeHex(ReadString(args, "bannerColor"));
+            if (bannerColor != null) model["bannerColor"] = new JsonString(bannerColor);
+
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -131,6 +141,13 @@ namespace Recharge.App.Bridge
 
         private static string? ReadString(JsonObject args, string key) =>
             args.TryGetValue(key, out JsonNode node) && node is JsonString value ? value.Value : null;
+
+        /// <summary>A hub avatar/banner path (/api/avatars/.. or /api/banners/..), or null. The Net module trusts this file, so only clean hub paths are stored.</summary>
+        private static string? ReadApiPath(JsonObject args, string key)
+        {
+            string? p = ReadString(args, key)?.Trim();
+            return !string.IsNullOrEmpty(p) && p.Length <= 160 && (p.StartsWith("/api/avatars/") || p.StartsWith("/api/banners/")) ? p : null;
+        }
 
         /// <summary>A validated #rrggbb (upper-case), or null. The Net module trusts this file, so only clean hex is stored.</summary>
         private static string? NormalizeHex(string? raw)

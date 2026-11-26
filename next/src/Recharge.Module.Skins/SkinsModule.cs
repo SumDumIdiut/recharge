@@ -11,8 +11,8 @@ using UnityEngine;
 namespace Recharge.Module.Skins
 {
     /// <summary>
-    /// SkinMod built into RechargeLoader 2: custom player sprites, dash / double-jump indicators, sounds (chosen in the Recharge app,
-    /// applied live over the link; no in-game menu row). It replaces the hub mod <c>recharge.customskins</c> but keeps that mod's data folder, so installed skins
+    /// SkinMod built into RechargeLoader 2: custom player sprites, dash / double-jump indicators, sounds (chosen in the Recharge app
+    /// or from the in-game "Skinmod" row, applied live). It replaces the hub mod <c>recharge.customskins</c> but keeps that mod's data folder, so installed skins
     /// and the chosen skin carry over. Over the app link it answers the <c>skin.apply</c> intent and reports state <c>skin</c>.
     /// </summary>
     public sealed class SkinsModule : IRechargeMod, IBuiltinModule
@@ -34,6 +34,7 @@ namespace Recharge.Module.Skins
             new ConcurrentQueue<(string, TaskCompletionSource<bool>)>();
 
         private SkinController _controller;
+        private SkinPanelController _panel;
         private IRechargeHost _host;
         private LinkClient _link;
         private bool _ownsLink;
@@ -55,7 +56,28 @@ namespace Recharge.Module.Skins
             _controller = go.AddComponent<SkinController>();
             _controller.Init(host);
 
+            var panelGo = new GameObject("SkinPanelController");
+            UnityEngine.Object.DontDestroyOnLoad(panelGo);
+            _panel = panelGo.AddComponent<SkinPanelController>();
+            _panel.Init(host, _controller);
+            PauseMenuHelper.OnMenuReady(host, menu => _panel.InstallMenuRow(menu));
+
+            // Let the multiplayer module show each player's skin on their ghost.
+            SkinGhostBridge.Current = new GhostBridge(_controller);
+
             ConnectLink(host);
+        }
+
+        // Exposes the local skin and per-folder sprite resolution to the Net
+        // module through Recharge.ModApi, with no cross-module reference.
+        private sealed class GhostBridge : ISkinGhostBridge
+        {
+            private readonly SkinController _controller;
+            public GhostBridge(SkinController controller) => _controller = controller;
+            public string LocalSkinFolder => _controller != null ? _controller.CurrentFolder : null;
+            public bool HasSkin(string folder) => _controller != null && _controller.HasSkin(folder);
+            public Sprite ResolveSprite(string folder, Sprite vanillaSprite)
+                => _controller != null ? _controller.ResolveFor(folder, vanillaSprite) : null;
         }
 
         private void ConnectLink(IRechargeHost host)
@@ -112,6 +134,7 @@ namespace Recharge.Module.Skins
 
         public void OnUnload()
         {
+            if (SkinGhostBridge.Current is GhostBridge) SkinGhostBridge.Current = null;
             if (_host != null) _host.OnUpdate -= DrainApplyQueue;
             if (_controller != null) _controller.StateChanged -= PublishState;
             if (_ownsLink && _link != null) _link.Dispose();

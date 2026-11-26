@@ -49,6 +49,7 @@ internal sealed class SaveLibrary : IDisposable
 
     private sealed class SaveJournal
     {
+        public string Map; // map folder under SaveFiles; null for a flat save
         public string Name;
         public string SaveId;
         public bool RequiresPlayer;
@@ -77,6 +78,10 @@ internal sealed class SaveLibrary : IDisposable
         _lock = File.Open(Path.Combine(state, "Library.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         try { RecoverTransactions(); }
         catch { _lock.Dispose(); throw; }
+        // Saves live under SaveFiles/<Map Name>/<save name>. Fold any older
+        // flat saves (SaveFiles/<save name>) into their map folder on open.
+        try { MigrateToNested(); }
+        catch { RecoveryMessage = "Some saves couldn't be sorted into map folders."; }
     }
 
     public void Dispose() => _lock.Dispose();
@@ -84,11 +89,23 @@ internal sealed class SaveLibrary : IDisposable
     public List<SaveEntry> Scan()
     {
         var entries = new List<SaveEntry>();
-        foreach (var path in Directory.GetDirectories(_root).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+        foreach (var top in Directory.GetDirectories(_root).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
             // Links can escape the save library, including during a later archive.
-            if (IsLink(path)) continue;
-            entries.Add(new SaveEntry { Path = path, Metadata = ReadMetadata(path) });
+            if (IsLink(top)) continue;
+            if (LooksLikeSave(top))
+            {
+                // A save sitting directly under SaveFiles (dropped in to import,
+                // or not yet migrated into its map folder).
+                entries.Add(new SaveEntry { Path = top, Metadata = ReadMetadata(top) });
+                continue;
+            }
+            // Otherwise it is a map folder: its children are the saves.
+            foreach (var path in Directory.GetDirectories(top).OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                if (IsLink(path)) continue;
+                entries.Add(new SaveEntry { Path = path, Metadata = ReadMetadata(path) });
+            }
         }
         // A copied folder may carry the same Metadata ID. We can't tell which
         // folder was the original, so ask the player to assign one of them.
@@ -100,8 +117,9 @@ internal sealed class SaveLibrary : IDisposable
     public SaveEntry Create(string kind, string mapId, string name, string revision, string primary = null,
         string backup = null, Dictionary<string, int> flags = null, string legacy = null)
     {
-        var entry = new SaveEntry { Path = NextFolder(), Metadata = NewMetadata(kind, mapId, name, revision, flags) };
-        entry.Metadata.LegacyFolder = legacy;
+        var metadata = NewMetadata(kind, mapId, name, revision, flags);
+        metadata.LegacyFolder = legacy;
+        var entry = new SaveEntry { Path = NextFolder(metadata), Metadata = metadata };
         WriteSnapshot(entry, primary, backup);
         return entry;
     }
@@ -203,12 +221,14 @@ internal sealed class SaveLibrary : IDisposable
             WriteJson(Path.Combine(staged, MetadataFile), entry.Metadata);
             var journal = new SaveJournal
             {
-                Name = entry.Label, SaveId = entry.Metadata.Id, RequiresPlayer = requiresPlayer,
-                RequiresPrimary = requiresPrimary, Files = Fingerprint(staged),
+                Map = MapFolderOf(entry.Path), Name = entry.Label, SaveId = entry.Metadata.Id,
+                RequiresPlayer = requiresPlayer, RequiresPrimary = requiresPrimary, Files = Fingerprint(staged),
             };
             // The journal must be durable before the first rename. A restart
             // can verify a published directory even when Next no longer exists.
             WriteJson(Path.Combine(transaction, JournalFile), journal);
+            // The map folder must exist before the staged save is renamed into it.
+            Directory.CreateDirectory(Path.GetDirectoryName(entry.Path));
             if (Directory.Exists(entry.Path)) Directory.Move(entry.Path, previous);
             Directory.Move(staged, entry.Path);
             if (!MatchesPublished(entry.Path, journal))
@@ -226,8 +246,49 @@ internal sealed class SaveLibrary : IDisposable
     public void Archive(SaveEntry entry)
     {
         RequireCurrent(entry);
+        var mapDir = Path.GetDirectoryName(entry.Path);
         var archive = NewRecoveryFolder(Recovery, entry.Label);
         Directory.Move(entry.Path, Path.Combine(archive, "Save"));
+        PruneEmptyMapFolder(mapDir);
+    }
+
+    // Drop a now-empty map folder so the list doesn't keep stale groupings.
+    private void PruneEmptyMapFolder(string mapDir)
+    {
+        try
+        {
+            if (mapDir != null && !string.Equals(mapDir, _root, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(Path.GetDirectoryName(mapDir), _root, StringComparison.OrdinalIgnoreCase)
+                && Directory.Exists(mapDir) && !IsLink(mapDir)
+                && Directory.GetFileSystemEntries(mapDir).Length == 0)
+                Directory.Delete(mapDir);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    // A save's folder name is its label (see note at the top of the file), so a
+    // rename is a validated directory move. The metadata and save id are kept.
+    public void Rename(SaveEntry entry, string newName)
+    {
+        RequireCurrent(entry);
+        newName = newName?.Trim();
+        if (!IsName(newName)) throw new IOException("Use a name without / \\ : * ? \" < > |");
+        if (string.Equals(newName, entry.Label, StringComparison.Ordinal)) return;
+        var parent = Path.GetDirectoryName(entry.Path); // the save stays in its map folder
+        var target = Path.Combine(parent, newName);
+        var caseOnly = string.Equals(newName, entry.Label, StringComparison.OrdinalIgnoreCase);
+        if (!caseOnly && (Directory.Exists(target) || File.Exists(target)))
+            throw new IOException("A save named \"" + newName + "\" already exists.");
+        if (caseOnly)
+        {
+            // A case-only rename on a case-insensitive volume needs a hop.
+            var temp = Path.Combine(parent, "Savegame-rename-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.Move(entry.Path, temp);
+            Directory.Move(temp, target);
+        }
+        else Directory.Move(entry.Path, target);
+        entry.Path = target;
     }
 
     public static string NewRecoveryFolder(string root, string label)
@@ -262,12 +323,14 @@ internal sealed class SaveLibrary : IDisposable
         // Preview builds before the manifest used a plain folder name.
         // Recover them conservatively and keep any unverified replacement.
         var name = journal?.Name ?? ReadLegacyDestination(transaction);
-        if (!IsName(name))
+        var map = journal?.Map;
+        if (!IsName(name) || (map != null && !IsName(map)))
         {
             PreserveTransaction(transaction);
             return;
         }
-        var destination = Path.Combine(_root, name);
+        // A save published before this version has no map folder; recover it flat.
+        var destination = map != null ? Path.Combine(_root, map, name) : Path.Combine(_root, name);
         if (!Directory.Exists(staged) && MatchesPublished(destination, journal))
         {
             Directory.Delete(transaction, true);
@@ -289,6 +352,7 @@ internal sealed class SaveLibrary : IDisposable
         }
         if (hasPrevious && CanRestorePrevious(previous))
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(destination));
             Directory.Move(previous, destination);
             RecoveryMessage = "Recovered the previous save for " + name + ".";
             Directory.Delete(transaction, true);
@@ -342,17 +406,90 @@ internal sealed class SaveLibrary : IDisposable
         HasPlayer(primary, backup) || (metadata != null && metadata.Saved == null
             && !Directory.Exists(primary) && !Directory.Exists(backup));
 
-    private string NextFolder()
+    // A new save's default folder: SaveFiles/<Map Name>/Savegame-N, numbered
+    // within that map folder.
+    private string NextFolder(SaveMetadata metadata)
     {
+        var mapDir = Path.Combine(_root, MapFolderName(metadata));
+        Directory.CreateDirectory(mapDir);
+        RequireDirectory(mapDir);
         long last = 0;
-        foreach (string path in Directory.EnumerateFileSystemEntries(_root))
+        foreach (string path in Directory.EnumerateFileSystemEntries(mapDir))
         {
             var name = Path.GetFileName(path);
             if (name.StartsWith("Savegame-", StringComparison.OrdinalIgnoreCase) && long.TryParse(name.Substring(9), out long n))
                 last = Math.Max(last, n);
         }
         if (last == long.MaxValue) throw new IOException("Rename the highest-numbered save to create another one.");
-        return Path.Combine(_root, "Savegame-" + (last + 1));
+        return Path.Combine(mapDir, "Savegame-" + (last + 1));
+    }
+
+    // The map folder a nested save sits in, or null if it is directly under
+    // SaveFiles (a flat/legacy or just-dropped save).
+    private string MapFolderOf(string savePath)
+    {
+        var parent = Path.GetDirectoryName(savePath);
+        return parent != null && !string.Equals(parent, _root, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetDirectoryName(parent), _root, StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileName(parent) : null;
+    }
+
+    // A human folder name for a map, used to group its saves under SaveFiles.
+    private static string MapFolderName(SaveMetadata metadata)
+    {
+        if (metadata == null) return "Unsorted";
+        if (metadata.Matches(Vanilla, BaseGame)) return "Base Game";
+        var name = SafeName(metadata.MapName);
+        if (name.Length == 0) name = SafeName(metadata.MapId);
+        return name.Length == 0 ? "Map" : name;
+    }
+
+    private static readonly char[] UnsafeNameChars = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
+
+    // Fold a map's display name into a safe, tidy single-line folder name that
+    // is valid on Windows too (the save drive may be shared).
+    private static string SafeName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(value.Length);
+        bool lastSpace = false;
+        foreach (var ch in value.Trim())
+        {
+            var c = ch;
+            if (c < ' ' || Array.IndexOf(invalid, c) >= 0 || Array.IndexOf(UnsafeNameChars, c) >= 0) c = ' ';
+            if (c == ' ') { if (lastSpace) continue; lastSpace = true; }
+            else lastSpace = false;
+            sb.Append(c);
+        }
+        var cleaned = sb.ToString().Trim().TrimEnd('.').Trim();
+        if (cleaned.Length > 64) cleaned = cleaned.Substring(0, 64).Trim();
+        return cleaned == "." || cleaned == ".." ? "" : cleaned;
+    }
+
+    // A folder directly under SaveFiles that holds a save (has metadata or the
+    // game's save subfolders), as opposed to a map folder that holds saves.
+    private static bool LooksLikeSave(string dir)
+        => File.Exists(Path.Combine(dir, MetadataFile))
+           || Directory.Exists(Path.Combine(dir, Primary))
+           || Directory.Exists(Path.Combine(dir, Backup));
+
+    // Move any save still sitting flat under SaveFiles into its map folder.
+    private void MigrateToNested()
+    {
+        foreach (var dir in Directory.GetDirectories(_root))
+        {
+            if (IsLink(dir) || !LooksLikeSave(dir)) continue;
+            var mapDir = Path.Combine(_root, MapFolderName(ReadMetadata(dir)));
+            if (string.Equals(mapDir, dir, StringComparison.OrdinalIgnoreCase)) continue;
+            Directory.CreateDirectory(mapDir);
+            RequireDirectory(mapDir);
+            var baseName = Path.GetFileName(dir);
+            var target = Path.Combine(mapDir, baseName);
+            for (int n = 2; Directory.Exists(target) || File.Exists(target); n++)
+                target = Path.Combine(mapDir, baseName + "-" + n);
+            Directory.Move(dir, target);
+        }
     }
 
     private static SaveMetadata ReadMetadata(string path)
@@ -373,7 +510,13 @@ internal sealed class SaveLibrary : IDisposable
 
     private void RequireEntry(SaveEntry entry)
     {
-        if (!IsName(entry.Label) || !string.Equals(Path.GetDirectoryName(entry.Path), _root, StringComparison.OrdinalIgnoreCase))
+        var parent = Path.GetDirectoryName(entry.Path);
+        // A save is either SaveFiles/<Map>/<save> or SaveFiles/<save> (flat
+        // legacy or a just-dropped import); both parents live under SaveFiles.
+        bool flat = parent != null && string.Equals(parent, _root, StringComparison.OrdinalIgnoreCase);
+        bool nested = parent != null && IsName(Path.GetFileName(parent))
+            && string.Equals(Path.GetDirectoryName(parent), _root, StringComparison.OrdinalIgnoreCase);
+        if (!IsName(entry.Label) || !(flat || nested))
             throw new IOException("Invalid save folder.");
         if (Directory.Exists(entry.Path)) RequireDirectory(entry.Path);
     }

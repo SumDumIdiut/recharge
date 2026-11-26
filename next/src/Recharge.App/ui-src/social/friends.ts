@@ -78,7 +78,7 @@ export function friendsView(): View {
     item.appendChild(text);
     const actions = h('div', { className: 'social-actions' });
     if (isJoinable(friend.state, friend.join)) {
-      actions.appendChild(button('Join', { kind: 'primary', icon: 'play', onClick: () => go(friend.state === 'lobby' ? '#/lobbies' : '#/maps') }));
+      actions.appendChild(button('Join', { kind: 'primary', icon: 'play', onClick: () => go('#/maps') }));
     }
     actions.appendChild(button('Message', { icon: 'forum', onClick: () => go(messagesRoute(friend.username)) }));
     actions.appendChild(button('Remove', { kind: 'ghost', onClick: () => confirmThen('Remove ' + friend.username + '?', friend.username + ' will no longer see when you are online.', 'Remove', () => act('Could not remove', () => socialJson('DELETE', '/api/friends/' + userPath(friend.username)), 'Removed ' + friend.username)) }));

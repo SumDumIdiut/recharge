@@ -325,8 +325,8 @@ namespace Recharge.Net
             return true;
         }
 
-        public bool SendState(double x, double y, bool facingRight, int animState, double animSpeed, bool isPaused, string name, string nameColor, string dotColor, string nameGradient = "")
-            => SendState(new StateMsg { X = x, Y = y, FacingRight = facingRight, AnimState = animState, AnimSpeed = animSpeed, IsPaused = isPaused, Name = name, NameColor = nameColor, DotColor = dotColor, NameGradient = nameGradient });
+        public bool SendState(double x, double y, bool facingRight, int animState, double animSpeed, bool isPaused, string name, string nameColor, string dotColor, string nameGradient = "", string skin = "", string avatar = "", string banner = "", string bannerColor = "")
+            => SendState(new StateMsg { X = x, Y = y, FacingRight = facingRight, AnimState = animState, AnimSpeed = animSpeed, IsPaused = isPaused, Name = name, NameColor = nameColor, DotColor = dotColor, NameGradient = nameGradient, Skin = skin, Avatar = avatar, Banner = banner, BannerColor = bannerColor });
 
         public void SendChat(string text)
         {

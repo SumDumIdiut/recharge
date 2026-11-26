@@ -35,8 +35,11 @@ internal sealed class SavePicker
     private bool _delete;
     private Action<SaveEntry> _play;
     private string _confirm;
-    private enum View { List, Assign }
+    private enum View { List, Assign, Details, Rename, Name }
     private View _view;
+    private SaveEntry _selected;
+    private readonly TMP_InputField _input;
+    private readonly TMP_FontAsset _font;
     public bool Visible => _panel.gameObject.activeSelf;
 
     public SavePicker(RectTransform frame, Button template)
@@ -48,6 +51,7 @@ internal sealed class SavePicker
         _statusPanel.GetComponent<Image>().raycastTarget = false;
 
         var font = template.GetComponentInChildren<TMP_Text>(true).font;
+        _font = font;
         for (int i = 0; i < _buttons.Length; i++)
             _buttons[i] = CreateRow(template, i);
         for (int i = 0; i < _lines.Length; i++)
@@ -63,6 +67,13 @@ internal sealed class SavePicker
         _status.raycastTarget = false;
         _status.textWrappingMode = TextWrappingModes.Normal;
         _status.overflowMode = TextOverflowModes.Ellipsis;
+
+        _input = PanelWidgets.CreateInputField(_panel, font, Vector2.zero, new Vector2(200f, 40f), "Save name", 20f);
+        _input.gameObject.layer = _panel.gameObject.layer;
+        _input.richText = false;
+        _input.characterLimit = 48;
+        _input.onSubmit.AddListener(_ => CommitInput());
+        _input.gameObject.SetActive(false);
         Hide();
     }
 
@@ -119,6 +130,7 @@ internal sealed class SavePicker
         _delete = delete;
         _play = play;
         _view = View.List;
+        _selected = null;
         _confirm = null;
         _page = 0;
         _panel.SetAsLastSibling();
@@ -141,6 +153,9 @@ internal sealed class SavePicker
 
     private void Refresh(string status = null)
     {
+        if (_view == View.Details) { RefreshDetails(); return; }
+        if (_view == View.Rename || _view == View.Name) { RefreshInput(); return; }
+        _input.gameObject.SetActive(false);
         _entries.Clear();
         var entries = SaveSlots.Library.Scan();
         var legacy = _kind == SaveLibrary.Custom ? SaveSlots.UnassignedLegacy(entries).ToArray() : Array.Empty<string>();
@@ -166,7 +181,7 @@ internal sealed class SavePicker
                     _entries.Add((entry.Label, () => Confirm("delete:" + entry.Metadata.Id, "Move " + entry.Label + " to recovery?",
                         () => { SaveSlots.Library.Archive(entry); Refresh("Moved to recovery."); })));
                 else
-                    _entries.Add((entry.Label, () => Continue(entry)));
+                    _entries.Add((entry.Label, () => OpenDetails(entry)));
             }
             if (_view == View.List && !_delete)
             {
@@ -181,7 +196,7 @@ internal sealed class SavePicker
         _page = Math.Min(_page, pages - 1);
         if (_view == View.Assign) Bind(0, "Assign to " + _mapName, null);
         else if (_delete) Bind(0, "Delete " + _mapName, null);
-        else Bind(0, "New Game", () => _play(SaveSlots.Library.Create(_kind, _mapId, _mapName, _revision)));
+        else Bind(0, "New Game", BeginName);
         for (int i = 0; i < RowsPerPage; i++)
         {
             var index = _page * RowsPerPage + i;
@@ -201,12 +216,14 @@ internal sealed class SavePicker
 
     public void Back()
     {
-        if (_view == View.List)
+        switch (_view)
         {
-            Hide();
-            Closed?.Invoke();
+            case View.List: Hide(); Closed?.Invoke(); break;
+            case View.Details: _selected = null; SwitchView(View.List); break;
+            case View.Rename: SwitchView(View.Details); break;
+            case View.Name: SwitchView(View.List); break;
+            default: SwitchView(View.List); break; // Assign
         }
-        else SwitchView(View.List);
     }
 
     /// <summary>Called when Back closes the list itself, so the owner can return to the map list.</summary>
@@ -225,6 +242,103 @@ internal sealed class SavePicker
         if (_revision != null && entry.Metadata.Revision != null && _revision != entry.Metadata.Revision)
             Confirm("play:" + entry.Metadata.Id, "Map version changed. Click again to continue.", () => _play(entry));
         else _play(entry);
+    }
+
+    private void OpenDetails(SaveEntry entry)
+    {
+        _selected = entry;
+        _view = View.Details;
+        _confirm = null;
+        Refresh();
+    }
+
+    // The details view shows the save's stats in the message panel and its
+    // actions in the rows, so Play/Rename/Delete all live behind one click.
+    private void RefreshDetails()
+    {
+        _input.gameObject.SetActive(false);
+        var e = _selected;
+        Bind(0, e?.Label ?? "Save", null);
+        Bind(1, "Play", e == null ? (Action)null : () => Continue(e));
+        Bind(2, "Rename", e == null ? (Action)null : BeginRename);
+        Bind(3, "Delete", e == null ? (Action)null : () => Confirm("delete:" + e.Metadata.Id,
+            "Move " + e.Label + " to recovery?",
+            () => { SaveSlots.Library.Archive(e); _selected = null; SwitchView(View.List); }));
+        Bind(4, "< Back", () => { _selected = null; SwitchView(View.List); });
+        Bind(5, "", null);
+        Bind(6, "", null);
+        Bind(RowsPerPage + 1, "", null);
+        SetStatus(e == null ? null : string.Join("\n", SaveStats.Read(e)));
+    }
+
+    private void BeginName()
+    {
+        _selected = null;
+        _input.text = "";
+        _view = View.Name;
+        _confirm = null;
+        Refresh();
+        _input.ActivateInputField();
+    }
+
+    private void BeginRename()
+    {
+        if (_selected == null) return;
+        _input.text = _selected.Label;
+        _view = View.Rename;
+        _confirm = null;
+        Refresh();
+        _input.ActivateInputField();
+    }
+
+    // Shared by the rename and new-save-name views: a title, the input (placed
+    // in Layout), a commit button and a cancel.
+    private void RefreshInput()
+    {
+        bool rename = _view == View.Rename;
+        Bind(0, rename ? "Rename save" : "New Game", null);
+        Bind(1, "", null); // the input field overlays this row (positioned in Layout)
+        Bind(2, "", null);
+        Bind(3, rename ? "Save name" : "Create", CommitInput);
+        Bind(4, "Cancel", () => SwitchView(rename ? View.Details : View.List));
+        Bind(5, "", null);
+        Bind(6, "", null);
+        Bind(RowsPerPage + 1, "", null);
+        _input.gameObject.SetActive(true);
+        _input.transform.SetAsLastSibling();
+        SetStatus(rename ? null : "Name it, or leave blank for a default.");
+    }
+
+    private void CommitInput()
+    {
+        var text = _input.text?.Trim() ?? "";
+        try
+        {
+            if (_view == View.Rename)
+            {
+                if (_selected == null) { SwitchView(View.List); return; }
+                if (!string.IsNullOrEmpty(text)) SaveSlots.Library.Rename(_selected, text);
+                SwitchView(View.Details);
+            }
+            else if (_view == View.Name)
+            {
+                var entry = SaveSlots.Library.Create(_kind, _mapId, _mapName, _revision);
+                if (!string.IsNullOrEmpty(text))
+                {
+                    // A fresh save has no player data, so undo it cleanly if the
+                    // chosen name is taken or invalid and let the player retry.
+                    try { SaveSlots.Library.Rename(entry, text); }
+                    catch { try { SaveSlots.Library.Archive(entry); } catch { } throw; }
+                }
+                _play(entry);
+            }
+        }
+        catch (Exception ex)
+        {
+            _confirm = null;
+            SetStatus(ex.Message);
+            Debug.LogWarning("[RechargeMaps] save name: " + ex.Message);
+        }
     }
 
     private void Confirm(string key, string message, Action action)
@@ -282,6 +396,10 @@ internal sealed class SavePicker
         }
         for (int i = 0; i < _lines.Length; i++)
             Place(_lines[i], width * .84f, 2, Padding + (i + 1) * step);
+        if (_input.gameObject.activeSelf)
+            // Match the dividers' inset (width * .84) so the field sits inside the
+            // panel's rounded border instead of overhanging it.
+            Place((RectTransform)_input.transform, width * 0.84f, Mathf.Min(step * 0.9f, 44f), Padding + 1.5f * step);
         if (_statusPanel.gameObject.activeSelf) LayoutStatus(area, x + width + Margin, y, width, height);
     }
 
@@ -307,7 +425,10 @@ internal sealed class SavePicker
         var textWidth = messageWidth - 2 * Padding;
         if (_statusTextSize.x != textWidth)
             _statusTextSize = new Vector2(textWidth, _status.GetPreferredValues(textWidth, float.PositiveInfinity).y);
-        var maxHeight = Mathf.Min(pickerHeight, Mathf.Max(4 * Padding, pickerHeight / 3));
+        // The details view is a block of stats, so let it use the picker's full
+        // height; transient feedback elsewhere stays to a third.
+        var cap = _view == View.Details ? pickerHeight : Mathf.Max(4 * Padding, pickerHeight / 3);
+        var maxHeight = Mathf.Min(pickerHeight, cap);
         var messageHeight = Mathf.Min(_statusTextSize.y + 4 * Padding, maxHeight);
         // On narrow windows the title has room for feedback above the map rows.
         var x = beside ? rightOfPicker : area.xMin + Margin;

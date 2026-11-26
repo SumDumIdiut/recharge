@@ -75,6 +75,10 @@ namespace Recharge.Relay
         public string NameColor = "#FFFFFF";
         public string DotColor = "#3399FF";
         public string NameGradient = ""; // comma-separated #rrggbb stops, empty = solid
+        public string Skin = ""; // the player's skin folder, shown on their ghost; empty = vanilla
+        public string Avatar = ""; // hub avatar path for the ghost's nameplate; empty = none
+        public string Banner = ""; // hub banner path behind the nameplate; empty = none
+        public string BannerColor = ""; // "#rrggbb" tint behind the nameplate; empty = none
         public int? LobbyId;
         public long MsgWindowStart;
         public int MsgCount;
@@ -420,6 +424,22 @@ namespace Recharge.Relay
                         {
                             c.NameGradient = SanitizeGradient(ngs.Value);
                         }
+                        if (msg.TryGetValue("skin", out var sk) && sk is JsonString sks)
+                        {
+                            c.Skin = sks.Value.Length <= 80 ? sks.Value : "";
+                        }
+                        if (msg.TryGetValue("avatar", out var av) && av is JsonString avs)
+                        {
+                            c.Avatar = avs.Value.Length <= 160 ? avs.Value : "";
+                        }
+                        if (msg.TryGetValue("banner", out var bn) && bn is JsonString bns)
+                        {
+                            c.Banner = bns.Value.Length <= 160 ? bns.Value : "";
+                        }
+                        if (msg.TryGetValue("bannerColor", out var bc) && bc is JsonString bcs && HexColor.IsMatch(bcs.Value))
+                        {
+                            c.BannerColor = bcs.Value;
+                        }
                         var st = new ClientState();
                         if (TryFinite(msg, "x", out var xraw)) st.X = ClampNum(xraw, 0, -1e9, 1e9); else st.X = 0;
                         if (TryFinite(msg, "y", out var yraw)) st.Y = ClampNum(yraw, 0, -1e9, 1e9); else st.Y = 0;
@@ -678,6 +698,10 @@ namespace Recharge.Relay
                         po["nameColor"] = new JsonString(mc.NameColor);
                         po["dotColor"] = new JsonString(mc.DotColor);
                         if (mc.NameGradient.Length > 0) po["nameGradient"] = new JsonString(mc.NameGradient);
+                        if (mc.Skin.Length > 0) po["skin"] = new JsonString(mc.Skin);
+                        if (mc.Avatar.Length > 0) po["avatar"] = new JsonString(mc.Avatar);
+                        if (mc.Banner.Length > 0) po["banner"] = new JsonString(mc.Banner);
+                        if (mc.BannerColor.Length > 0) po["bannerColor"] = new JsonString(mc.BannerColor);
                         po["x"] = JsonNumber.From(st.X);
                         po["y"] = JsonNumber.From(st.Y);
                         po["facingRight"] = st.FacingRight ? JsonBool.True : JsonBool.False;

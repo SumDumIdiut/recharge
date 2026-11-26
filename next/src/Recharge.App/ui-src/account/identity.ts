@@ -34,6 +34,11 @@ function push(me: Me | null): void {
   const nameColor = solidHex(raw) || stops[0] || '#FFFFFF';
   const payload: Record<string, unknown> = { name: me.username, nameColor };
   if (stops.length >= 2) payload.gradient = stops;
+  // The profile picture and banner show on the player's ghost in multiplayer.
+  if (typeof me.avatar_url === 'string' && me.avatar_url) payload.avatar = me.avatar_url;
+  if (typeof me.banner_url === 'string' && me.banner_url) payload.banner = me.banner_url;
+  const bannerColor = solidHex(me.banner_color);
+  if (bannerColor) payload.bannerColor = bannerColor;
   void call('mp.identity', payload).catch(() => {});
 }
 

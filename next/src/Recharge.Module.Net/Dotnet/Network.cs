@@ -173,7 +173,7 @@ public class MpNetworkManager : MonoBehaviour
 		{
 			var list = new List<MpPlayerState>(players.Count);
 			foreach (var p in players)
-				list.Add(new MpPlayerState { id = p.Id, x = p.X, y = p.Y, facingRight = p.FacingRight, animState = p.AnimState, animSpeed = (float)p.AnimSpeed, isPaused = p.IsPaused, name = p.Name, nameColor = p.NameColor, dotColor = p.DotColor, nameGradient = p.NameGradient });
+				list.Add(new MpPlayerState { id = p.Id, x = p.X, y = p.Y, facingRight = p.FacingRight, animState = p.AnimState, animSpeed = (float)p.AnimSpeed, isPaused = p.IsPaused, name = p.Name, nameColor = p.NameColor, dotColor = p.DotColor, nameGradient = p.NameGradient, skin = p.Skin, avatar = p.Avatar, banner = p.Banner, bannerColor = p.BannerColor });
 			LastSnapshotPlayers = list;
 			MpGhostManager.ApplySnapshot(list);
 		});
@@ -355,6 +355,9 @@ public class MpNetworkManager : MonoBehaviour
 	private static string _idName;
 	private static string _idColor;
 	private static string[] _idGradient;
+	private static string _idAvatar;
+	private static string _idBanner;
+	private static string _idBannerColor;
 	private static long _idStamp = long.MinValue;
 	private static bool _idChecked;
 	private static float _idNextCheck;
@@ -369,7 +372,7 @@ public class MpNetworkManager : MonoBehaviour
 		{
 			if (!File.Exists(IdentityPath))
 			{
-				_idName = null; _idColor = null; _idGradient = null; _idStamp = 0;
+				_idName = null; _idColor = null; _idGradient = null; _idAvatar = null; _idBanner = null; _idBannerColor = null; _idStamp = 0;
 				return;
 			}
 			long stamp = File.GetLastWriteTimeUtc(IdentityPath).Ticks;
@@ -386,9 +389,21 @@ public class MpNetworkManager : MonoBehaviour
 				foreach (var tok in arr) { var h = (string)tok; if (IsHexColor(h)) stops.Add(h); }
 				if (stops.Count >= 2) _idGradient = stops.ToArray();
 			}
+			_idAvatar = NonEmptyPath((string)jo["avatar"]);
+			_idBanner = NonEmptyPath((string)jo["banner"]);
+			var bannerCol = (string)jo["bannerColor"];
+			_idBannerColor = IsHexColor(bannerCol) ? bannerCol : null;
 		}
 		catch { /* keep whatever we last read */ }
 	}
+
+	// Accepts only the hub's own avatar/banner paths so a ghost never fetches an arbitrary URL.
+	private static string NonEmptyPath(string p)
+		=> !string.IsNullOrEmpty(p) && p.Length <= 160 && (p.StartsWith("/api/avatars/") || p.StartsWith("/api/banners/")) ? p : null;
+
+	public static string GetAvatarPath() { EnsureIdentity(); return _idAvatar ?? ""; }
+	public static string GetBannerPath() { EnsureIdentity(); return _idBanner ?? ""; }
+	public static string GetBannerColorHex() { EnsureIdentity(); return _idBannerColor ?? ""; }
 
 	private static bool IsHexColor(string c)
 	{
@@ -594,7 +609,8 @@ public class MpNetworkManager : MonoBehaviour
 			Debug.Log($"[MpNet] send state localId={LocalPlayerId} world=({worldX:F1},{worldY:F1}) paused={isPaused} lobby={CurrentLobbyId}");
 		}
 
-		_net.SendState(worldX, worldY, _localPlayer.facingRight, animState, animSpeed, isPaused, GetDisplayName(), GetNameColorHex(), GetDotColorHex(), GetNameGradientPacked());
+		var skin = Recharge.ModApi.SkinGhostBridge.Current?.LocalSkinFolder ?? "";
+		_net.SendState(worldX, worldY, _localPlayer.facingRight, animState, animSpeed, isPaused, GetDisplayName(), GetNameColorHex(), GetDotColorHex(), GetNameGradientPacked(), skin, GetAvatarPath(), GetBannerPath(), GetBannerColorHex());
 	}
 
 	// Air dashes/jumps left go out through the relay's generic game_msg
