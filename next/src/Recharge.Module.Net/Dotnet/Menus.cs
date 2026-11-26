@@ -358,8 +358,9 @@ internal class MpInGameChatHud : MonoBehaviour
 
 internal class MpPanelUI : MonoBehaviour
 {
-	private TMP_Text _status;
+	private Image _connectDot;
 	private GameObject _hostButton;
+	private GameObject _refreshButton;
 	private bool _autoConnectTried;
 	private bool _wasConnected;
 
@@ -420,13 +421,9 @@ internal class MpPanelUI : MonoBehaviour
 
 		PanelWidgets.CreateDivider(root, new Vector2(-140, 188), 300);
 
-		_status = PanelWidgets.CreateLabel(root, _font, new Vector2(0, 198), new Vector2(560, 34), "Not connected");
-		_status.alignment = TextAlignmentOptions.Center;
-		_status.fontSize = 20;
-		_status.enableWordWrapping = false;
-		_status.overflowMode = TextOverflowModes.Ellipsis;
+		_connectDot = CreateConnectDot(root, new Vector2(300, 196), 16f);
 
-		_hostButton = CloneButton(root, "Host", new Vector2(210, 150), new Vector2(170, 44), "Host");
+		_hostButton = CloneButton(root, "Host", new Vector2(238, 150), new Vector2(150, 44), "Host");
 		_hostButton.GetComponent<Button>().onClick.AddListener(OnHostButtonClicked);
 
 		BuildListBox(root);
@@ -446,6 +443,38 @@ internal class MpPanelUI : MonoBehaviour
 		leaveGo.GetComponent<Button>().onClick.AddListener(OnLeaveClicked);
 
 		MpNetworkManager.LatestInLobbyRow = _inLobbyRow;
+
+		// Keep the panel's Back button drawn above the lobby content: raise its
+		// top-level ancestor (the title bar) to the last sibling so the content
+		// boxes added above never cover it.
+		if (closer != null && closer.CloseButton != null)
+		{
+			var top = closer.CloseButton.transform;
+			while (top.parent != null && top.parent != root) top = top.parent;
+			if (top.parent == root) top.SetAsLastSibling();
+
+			// Match the Host/Refresh buttons to the Back button's orange.
+			var backLabel = closer.CloseButton.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+			if (backLabel != null)
+			{
+				Color c = backLabel.color;
+				// A cloned button can report white in .color with the real
+				// colour carried in faceColor instead.
+				if (c.r > 0.95f && c.g > 0.95f && c.b > 0.95f) c = backLabel.faceColor;
+				ApplyLabelColor(_hostButton, c);
+				ApplyLabelColor(_refreshButton, c);
+			}
+		}
+	}
+
+	private static void ApplyLabelColor(GameObject buttonGo, Color color)
+	{
+		if (buttonGo == null) return;
+		var tmp = buttonGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
+		if (tmp == null) return;
+		tmp.enableVertexGradient = false;
+		tmp.color = color;
+		tmp.faceColor = color;
 	}
 
 	private void BuildChatSection(Transform parent)
@@ -488,6 +517,7 @@ internal class MpPanelUI : MonoBehaviour
 		header.alignment = TextAlignmentOptions.MidlineLeft;
 
 		var refreshGo = CloneButton(_listBox.transform, "Refresh", new Vector2(235, 140), new Vector2(130, 32), "Refresh");
+		_refreshButton = refreshGo;
 		var refreshLabel = refreshGo.transform.Find("Text (TMP)")?.GetComponent<TMP_Text>();
 		if (refreshLabel != null) refreshLabel.fontSize = 18f;
 		var refreshButton = refreshGo.GetComponent<Button>();
@@ -534,6 +564,20 @@ internal class MpPanelUI : MonoBehaviour
 			}
 		}
 		return _cachedBoxSprite;
+	}
+
+	// A small rounded square in a panel corner that reads as a status dot:
+	// green when connected to the relay, red when not.
+	private Image CreateConnectDot(Transform parent, Vector2 anchoredPos, float diameter)
+	{
+		var go = PanelWidgets.CreateContainer(parent, "ConnectDot", Vector2.zero).gameObject;
+		var rt = (RectTransform)go.transform;
+		rt.anchoredPosition = anchoredPos;
+		rt.sizeDelta = new Vector2(diameter, diameter);
+		var img = go.AddComponent<Image>();
+		ApplyRoundedBoxStyle(img, new Color(0.86f, 0.28f, 0.28f));
+		img.pixelsPerUnitMultiplier = 6f; // high radius so the tiny box looks round
+		return img;
 	}
 
 	private void ApplyRoundedBoxStyle(Image img, Color tint)
@@ -703,8 +747,10 @@ internal class MpPanelUI : MonoBehaviour
 		_refreshAccumulator = 0f;
 
 		bool browseView = !inLobby && !_showingMapPicker;
-		_status.gameObject.SetActive(browseView);
-		_status.text = mgr.StatusText;
+		if (_connectDot != null)
+			_connectDot.color = connected
+				? new Color(0.27f, 0.80f, 0.35f)
+				: new Color(0.86f, 0.28f, 0.28f);
 		_hostButton.SetActive(browseView);
 		_mapPickerSection.SetActive(_showingMapPicker);
 		_listBox.SetActive(browseView);
