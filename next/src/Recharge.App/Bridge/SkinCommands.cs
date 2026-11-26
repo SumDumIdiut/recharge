@@ -4,12 +4,14 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using Recharge.App.Create;
+using Recharge.App.Library;
+using Recharge.App.Settings;
 using Recharge.Core.Json;
 
 namespace Recharge.App.Bridge
 {
     /// <summary>
-    /// Bridge commands for choosing a skin while the game is not running: <c>skin.applyNext</c> writes the Skins module's
+    /// Bridge commands for exporting the starter template and choosing a skin while the game is not running. <c>skin.applyNext</c> writes the Skins module's
     /// <c>data/config.json</c> so the skin is worn from the next launch, and <c>skin.current</c> reads it back. When the
     /// game is running the page sends the <c>skin.apply</c> intent through <c>game.intent</c> instead.
     ///
@@ -27,6 +29,12 @@ namespace Recharge.App.Bridge
         {
             registry.Register("skin.applyNext", args => Task.FromResult<JsonNode>(ApplyNext(game(), args)));
             registry.Register("skin.current", args => Task.FromResult<JsonNode>(Current(game())));
+            registry.Register("skin.exportTemplate", async args =>
+            {
+                string? folder = await FolderPicker.PickAsync("Export Skin Template to…", null).ConfigureAwait(false);
+                string? path = folder == null ? null : await SkinTemplateExporter.ExportAsync(folder).ConfigureAwait(false);
+                return SettingsCommands.Obj(new { path });
+            });
         }
 
         public static string ConfigPath(string gameDir) =>

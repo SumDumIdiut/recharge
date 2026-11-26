@@ -5,7 +5,7 @@ using Recharge.App.Native;
 
 namespace Recharge.App.Settings
 {
-    /// <summary>A GTK folder chooser (GtkFileChooserNative, so it uses the desktop portal when there is one).</summary>
+    /// <summary>The Windows folder dialog or the GTK folder chooser, which uses the desktop portal when available.</summary>
     internal static class FolderPicker
     {
         private const string GtkLib = "libgtk-3.so.0";
@@ -41,9 +41,10 @@ namespace Recharge.App.Settings
             public TaskCompletionSource<string?> Done = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        /// <summary>Shows the chooser on the GTK main thread; completes with the chosen folder, or null when cancelled.</summary>
+        /// <summary>Shows the chooser; completes with the chosen folder, or null when cancelled.</summary>
         public static Task<string?> PickAsync(string title, string? startFolder)
         {
+            if (OperatingSystem.IsWindows()) return Windows.WindowsFilePicker.PickFolderAsync(title, startFolder);
             var request = new Request { Title = title, Start = startFolder };
             GCHandle handle = GCHandle.Alloc(request);
             if (GLib.g_idle_add(RunOnMain, GCHandle.ToIntPtr(handle)) == 0)

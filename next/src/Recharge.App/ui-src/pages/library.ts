@@ -68,6 +68,7 @@ let installedError = '';
 let kindHost: HTMLElement | null = null;
 let filtersHost: HTMLElement | null = null;
 let actionsHost: HTMLElement | null = null;
+let exportingSkinTemplate = false;
 let summary: HTMLElement | null = null;
 let listHost: HTMLElement | null = null;
 let detail: Detail | null = null;
@@ -222,6 +223,21 @@ function startUpload(preset: { repo?: string } = {}): void {
   }, preset);
 }
 
+async function exportSkinTemplate(trigger: HTMLButtonElement): Promise<void> {
+  if (exportingSkinTemplate) return;
+  exportingSkinTemplate = true;
+  trigger.disabled = true;
+  try {
+    const { path } = await call<{ path: string | null }>('skin.exportTemplate');
+    if (path) toast('Skin template exported to ' + path, 'success');
+  } catch (error) {
+    toast('Could not export the skin template. ' + describeError(error), 'error');
+  } finally {
+    trigger.disabled = false;
+    exportingSkinTemplate = false;
+  }
+}
+
 /** How many items the hub offers for a group (summed over its kinds); -1 until every kind's list has loaded. */
 export function availableCount(group: Group, loaded: Lists): number {
   let total = 0;
@@ -248,6 +264,14 @@ function renderBar(shown: number): void {
   paintInto(actionsHost, 'a' + uploadsOn + state.kind, () => [
     ...(state.kind === 'maps' && !uploadsOn
       ? [button('New map', { kind: 'ghost', icon: 'plus', title: 'Make a new map in the Amplifier', onClick: () => go('#/amp/new') })]
+      : []),
+    ...(state.kind === 'skins' && !uploadsOn
+      ? [button('Download template', {
+          kind: 'ghost',
+          icon: 'download',
+          title: 'Export the default skin template to a folder',
+          onClick: (event) => void exportSkinTemplate(event.currentTarget as HTMLButtonElement),
+        })]
       : []),
     button('Upload', {
       kind: 'primary',
