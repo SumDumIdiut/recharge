@@ -2,13 +2,14 @@
 import { call, type AppInfo } from './bridge.js';
 import { append, h } from './dom.js';
 import { modal } from './components/modal.js';
+import type { UpdateStatus } from './settings/api.js';
 import {
   bulletText,
   isBulletLine,
   noteLines,
-  readSeenVersion,
+  readSeenBuild,
   shouldShowChangelog,
-  writeSeenVersion,
+  writeSeenBuild,
 } from './lib/changelog.js';
 
 interface ReleaseNotes {
@@ -51,24 +52,25 @@ function notesBody(notes: string): HTMLElement {
 }
 
 /**
- * First-ever boot just records the version. A boot with a different previous version fetches the release notes and shows them once.
- * No bridge (plain browser), no version or no published notes: stay quiet and try again on a later boot.
+ * The tracker is the installed build number: beta builds bump the manifest build while the version string stays put.
+ * First-ever boot just records the build. A boot with a different previous build fetches that build's release notes and shows them once.
+ * No bridge (plain browser), no build or no published notes: stay quiet and try again on a later boot.
  */
 export async function initChangelog(): Promise<void> {
   if (started) return;
   started = true;
 
-  let version = '';
+  let build = 0;
   try {
-    version = ((await call<AppInfo>('app.info')).version || '').trim();
+    build = (await call<UpdateStatus>('updates.status')).build;
   } catch {
     return;
   }
-  if (!version) return;
+  if (!Number.isInteger(build) || build <= 0) return;
 
-  const seen = readSeenVersion();
-  if (!shouldShowChangelog(seen, version)) {
-    if (seen === null) writeSeenVersion(version);
+  const seen = readSeenBuild();
+  if (!shouldShowChangelog(seen, build)) {
+    if (seen === null) writeSeenBuild(build);
     return;
   }
 
@@ -81,9 +83,17 @@ export async function initChangelog(): Promise<void> {
   if (!notes) return;
 
   // Mark it seen before opening: closing, Esc, backdrop click or a reload must never reshow this update.
-  writeSeenVersion(version);
+  writeSeenBuild(build);
+
+  // The title is cosmetic only; the version string does not change between beta builds.
+  let version = '';
+  try {
+    version = ((await call<AppInfo>('app.info')).version || '').trim();
+  } catch {
+    /* The popup still works without a display version. */
+  }
   modal({
-    title: "What's new in v" + version,
+    title: version ? "What's new in v" + version : "What's new",
     body: notesBody(notes),
     actions: [{ label: 'Close', kind: 'primary' }],
   });

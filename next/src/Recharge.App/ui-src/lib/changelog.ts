@@ -1,6 +1,6 @@
 /** Pure helpers for the what's-new popup (no DOM, so tools/ui-tests can run them). */
 
-export const SEEN_VERSION_KEY = 'recharge:changelogSeenVersion';
+export const SEEN_BUILD_KEY = 'recharge:changelogSeenBuild';
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -15,31 +15,32 @@ function browserStorage(): StorageLike | null {
   }
 }
 
-/** The version the user last booted with, or null on a first run / blocked storage. */
-export function readSeenVersion(store?: StorageLike | null): string | null {
+/** The installed build the user last booted with, or null on a first run / blocked storage / bad value. */
+export function readSeenBuild(store?: StorageLike | null): number | null {
   try {
     const target = store === undefined ? browserStorage() : store;
-    const value = target && target.getItem(SEEN_VERSION_KEY);
-    return value && value.trim() ? value.trim() : null;
+    const value = target && target.getItem(SEEN_BUILD_KEY);
+    const build = Number(value);
+    return Number.isInteger(build) && build > 0 ? build : null;
   } catch {
     return null;
   }
 }
 
-/** Remembers the current version; storage failures are harmless (private mode, embedded browser). */
-export function writeSeenVersion(version: string, store?: StorageLike | null): void {
-  if (!version) return;
+/** Remembers the current build; storage failures are harmless (private mode, embedded browser). */
+export function writeSeenBuild(build: number, store?: StorageLike | null): void {
+  if (!Number.isInteger(build) || build <= 0) return;
   try {
     const target = store === undefined ? browserStorage() : store;
-    if (target) target.setItem(SEEN_VERSION_KEY, version);
+    if (target) target.setItem(SEEN_BUILD_KEY, String(build));
   } catch {
     /* Nothing to do: the popup is best effort. */
   }
 }
 
-/** Only a previous, different version means this boot followed an update. */
-export function shouldShowChangelog(lastSeen: string | null, version: string): boolean {
-  return !!lastSeen && !!version && lastSeen !== version;
+/** Only a previous, different build means this boot followed an update (the version string can stay the same). */
+export function shouldShowChangelog(lastSeen: number | null, build: number): boolean {
+  return lastSeen !== null && Number.isInteger(build) && build > 0 && lastSeen !== build;
 }
 
 /** Split notes into lines, keeping indentation and flattening CRLF/CR to LF. */
