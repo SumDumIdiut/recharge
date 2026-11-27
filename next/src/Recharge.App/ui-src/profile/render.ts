@@ -78,7 +78,9 @@ export function nameDesc(n: NameStyle, options: { compact?: boolean; fallback?: 
     classes.push('pn-clip');
   }
   for (const e of effects) classes.push('pn-fx-' + e);
-  vars['--pn-glow'] = color(n.effectColor, base ?? stops[0]);
+  // A default name with no colour has no brand-green glow either: effects fall back to the inherited text colour in CSS.
+  const glow = validHex(n.effectColor) ?? base ?? (n.mode === 'default' ? null : stops[0]);
+  if (glow) vars['--pn-glow'] = glow;
   vars['--pn-edge'] = color(n.effectColor, '#0c1a10');
   return { classes, vars };
 }

@@ -100,9 +100,12 @@ export class BackgroundLayer {
   /** Shows the items with this config. An empty list (or source none) clears the layer. */
   apply(config: BgConfig, items: LayerItem[]): void {
     const sameItems = this.items.length === items.length && this.items.every((it, i) => it.url === items[i].url);
+    // A shuffle toggle changes how the NEXT item is picked even when the items themselves are unchanged.
+    // Keep the fast path only when the rotation is still valid for the new config.
+    const sameRotation = this.config !== null && this.config.shuffle === config.shuffle;
     this.config = config;
     this.paintStyle();
-    if (sameItems && this.slots.length > 0) {
+    if (sameItems && sameRotation && this.slots.length > 0) {
       // only the look changed: keep what is playing
       this.restartTimer();
       this.syncPlayback();
@@ -278,7 +281,8 @@ export class BackgroundLayer {
       if (play) void el.play().catch(() => undefined);
       else el.pause();
     }
-    if (!this.plan().play && this.doc.hidden) this.clearTimer();
+    // Rotation follows the same rule as the videos: suspended while hidden, unfocused or in low-power mode.
+    if (!play) this.clearTimer();
     else if (this.timer === 0 && this.items.length > 1 && this.slots.length > 0) this.restartTimer();
   }
 
@@ -290,10 +294,10 @@ export class BackgroundLayer {
   private restartTimer(): void {
     this.clearTimer();
     const c = this.config;
-    if (!c || this.items.length < 2 || this.doc.hidden) return;
+    if (!c || this.items.length < 2 || !this.plan().play) return;
     this.timer = this.win.setTimeout(() => {
       this.timer = 0;
-      if (this.doc.hidden || !this.rotation) { this.restartTimer(); return; }
+      if (!this.plan().play || !this.rotation) { this.syncPlayback(); return; }
       this.showIndex(this.rotation.next());
     }, c.interval * 1000);
   }

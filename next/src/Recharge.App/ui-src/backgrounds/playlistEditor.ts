@@ -4,7 +4,7 @@ import { button } from '../components/button.js';
 import { selectControl } from '../components/select.js';
 import { toast } from '../components/toast.js';
 import {
-  addFileToPlaylist, addInstalledToPlaylist, createPlaylist, deletePlaylist, pickMediaFile, renamePlaylist, savePlaylistOrder,
+  addFileToPlaylist, addInstalledToPlaylist, createPlaylist, deletePlaylist, listBackgrounds, pickMediaFile, renamePlaylist, savePlaylistOrder,
   type BackgroundList, type PlaylistRow,
 } from './api.js';
 import { moveItem } from './model.js';
@@ -26,13 +26,20 @@ export function playlistEditor(list: BackgroundList, hooks: EditorHooks): HTMLEl
   if (selected && !own.some((p) => p.folder === selected)) selected = null;
   if (!selected && own.length > 0) selected = own[0].folder;
 
-  const run = async (work: () => Promise<unknown>): Promise<void> => {
-    try {
-      await work();
-      await hooks.changed();
-    } catch (e) {
-      toast(describeError(e), 'error');
-    }
+  // Actions are queued: a second click before the first refresh has completed must not write an order
+  // computed from the old snapshot (that could resurrect a removed item or lose a move).
+  let queue: Promise<void> = Promise.resolve();
+  const run = (work: () => Promise<unknown>): Promise<void> => {
+    const job = queue.then(async () => {
+      try {
+        await work();
+        await hooks.changed();
+      } catch (e) {
+        toast(describeError(e), 'error');
+      }
+    });
+    queue = job;
+    return job;
   };
 
   // choose / create
@@ -64,6 +71,13 @@ export function playlistEditor(list: BackgroundList, hooks: EditorHooks): HTMLEl
   }
   root.appendChild(editorFor(current, list, hooks, run));
   return root;
+}
+
+/** Reads the order from disk just before a mutation, so queued clicks act on the latest playlist. */
+async function currentFiles(folder: string, fallback: string[]): Promise<string[]> {
+  const fresh = await listBackgrounds();
+  const row = fresh.playlists.find((p) => p.folder === folder);
+  return row ? row.items.map((i) => i.file) : fallback;
 }
 
 function editorFor(p: PlaylistRow, list: BackgroundList, hooks: EditorHooks, run: (w: () => Promise<unknown>) => Promise<void>): HTMLElement {
@@ -98,9 +112,20 @@ function editorFor(p: PlaylistRow, list: BackgroundList, hooks: EditorHooks, run
     row.appendChild(mediaThumb('playlists', p.folder, item));
     row.appendChild(h('span', { className: 'pl-name', text: item.file, title: item.file }));
     row.appendChild(h('span', { className: 'pl-kind', text: item.kind === 'video' ? 'Video' : 'Picture' }));
-    const up = button('Up', { kind: 'ghost', disabled: index === 0, title: 'Move earlier', onClick: () => void run(() => savePlaylistOrder(p.folder, moveItem(files, index, index - 1))) });
-    const down = button('Down', { kind: 'ghost', disabled: index === files.length - 1, title: 'Move later', onClick: () => void run(() => savePlaylistOrder(p.folder, moveItem(files, index, index + 1))) });
-    const remove = button('Remove', { kind: 'danger', title: 'Remove it from the playlist (the copy in the playlist is deleted)', onClick: () => void run(() => savePlaylistOrder(p.folder, files.filter((_, i) => i !== index))) });
+    const up = button('Up', { kind: 'ghost', disabled: index === 0, title: 'Move earlier', onClick: () => void run(async () => {
+      const order = await currentFiles(p.folder, files);
+      const at = order.indexOf(item.file);
+      if (at > 0) await savePlaylistOrder(p.folder, moveItem(order, at, at - 1));
+    }) });
+    const down = button('Down', { kind: 'ghost', disabled: index === files.length - 1, title: 'Move later', onClick: () => void run(async () => {
+      const order = await currentFiles(p.folder, files);
+      const at = order.indexOf(item.file);
+      if (at >= 0 && at < order.length - 1) await savePlaylistOrder(p.folder, moveItem(order, at, at + 1));
+    }) });
+    const remove = button('Remove', { kind: 'danger', title: 'Remove it from the playlist (the copy in the playlist is deleted)', onClick: () => void run(async () => {
+      const order = await currentFiles(p.folder, files);
+      await savePlaylistOrder(p.folder, order.filter((f) => f !== item.file));
+    }) });
     row.append(up, down, remove);
     items.appendChild(row);
   });

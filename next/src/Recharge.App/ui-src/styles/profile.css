@@ -16,7 +16,7 @@
 .pn-sp-wide { letter-spacing: .06em; }
 .pn-sp-wider { letter-spacing: .14em; }
 .pn-clip { background-image: var(--pn-fill); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
-.pn-fx-glow { --pn-f1: drop-shadow(0 0 6px var(--pn-glow)); }
+.pn-fx-glow { --pn-f1: drop-shadow(0 0 6px var(--pn-glow, currentColor)); }
 .pn-fx-pixel { --pn-f2: drop-shadow(2px 2px 0 var(--pn-edge)); }
 .pn-fx-glow, .pn-fx-pixel { filter: var(--pn-f1,) var(--pn-f2,); }
 .pn-fx-outline { -webkit-text-stroke: 1px var(--pn-edge); paint-order: stroke fill; }

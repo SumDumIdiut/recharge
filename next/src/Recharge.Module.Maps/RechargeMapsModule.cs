@@ -35,10 +35,12 @@ public sealed class RechargeMapsModule : IBuiltinModule, IRechargeMod
         SaveSlots.Initialize();
         MapManager.GetOrCreate();
         MapMenuBuilder.Install(host.PauseMenu);
+        RechargeSettingsPanel.Install(host.PauseMenu);
 
         // host.PauseMenu is a one-time snapshot; every later scene load creates a new pauseMenuScript,
         // so re-install against whatever instance is live each time a scene loads.
         PauseMenuHelper.OnMenuReady(host, MapMenuBuilder.Install);
+        PauseMenuHelper.OnMenuReady(host, RechargeSettingsPanel.Install);
 
         host.Events.On(MapRules.LoadRequestedEvent, payload =>
         {

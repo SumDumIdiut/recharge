@@ -158,6 +158,9 @@ export function parseRoute(hash: string): ParsedRoute {
         sidebar: 'library',
         params: { kind: third, id: fourth },
         isPanel: true,
+        // Select the library tab for the item's own kind (from the path), so
+        // opening an item/update doesn't fall back to the default Maps tab.
+        query: { kind: third, ...query },
       };
     }
     return base;

@@ -58,15 +58,20 @@ export function backgroundSection(): { nodes: HTMLElement[]; dispose: () => void
   const listPanel = panel('Your playlists', listHost);
   listPanel.classList.add('bg-panel');
 
-  async function show(): Promise<void> {
+  async function show(): Promise<string | null> {
+    if (!alive) return null;
     try {
       const n = await applyConfig(config, list);
       note.textContent = n || '';
+      return n;
     } catch (e) {
-      note.textContent = describeError(e);
+      const message = describeError(e);
+      note.textContent = message;
+      return message;
     }
   }
   function persist(): void {
+    if (!alive) return;
     window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       saveTimer = 0;
@@ -195,16 +200,26 @@ export function backgroundSection(): { nodes: HTMLElement[]; dispose: () => void
   function paintList(): void {
     listHost.replaceChildren(playlistEditor(list, {
       changed: async () => {
+        if (!alive) return;
         list = await listBackgrounds();
+        if (!alive) return;
+        // A deleted playlist must not stay selected in the saved settings (or keep a dead layer alive).
+        if (config.source === 'playlist' && config.playlist && !list.playlists.some((p) => p.folder === config.playlist)) {
+          config = { ...config, source: 'none', playlist: null };
+          persist();
+        }
         paintAll();
-        if (config.source === 'playlist') void show();
+        void show();
       },
       use: async (folder) => {
+        if (!alive) return;
         config = { ...config, source: 'playlist', playlist: folder };
-        await show();
+        const problem = await show();
+        if (!alive) return;
         persist();
         paintTiles();
-        toast('Playlist is now your background', 'success');
+        if (problem) toast(problem, 'error');
+        else toast('Playlist is now your background', 'success');
       },
     }));
   }
@@ -216,10 +231,15 @@ export function backgroundSection(): { nodes: HTMLElement[]; dispose: () => void
   }
 
   void (async () => {
+    // Load independently: a failed list must not throw away already-read settings (or vice versa),
+    // otherwise the next edit would save DEFAULTS over the user's real background choice.
     try {
-      const [saved, found] = await Promise.all([getSettings(), listBackgrounds()]);
-      config = configFromSettings(saved);
-      list = found;
+      config = configFromSettings(await getSettings());
+    } catch (e) {
+      note.textContent = 'Settings unavailable (' + describeError(e) + ')';
+    }
+    try {
+      list = await listBackgrounds();
     } catch (e) {
       note.textContent = 'Backgrounds unavailable (' + describeError(e) + ')';
     }

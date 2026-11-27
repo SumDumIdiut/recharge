@@ -2,8 +2,17 @@ import { getSettings, saveSettings } from '../settings/api.js';
 import { applyConfig } from './index.js';
 import { configFromSettings, configToPatch } from './model.js';
 
+/** Serialises apply requests so a quick second click cannot be overwritten by an older read/apply/save finishing later. */
+let queue: Promise<unknown> = Promise.resolve();
+
 /** Makes an installed background or playlist the app's background (saved and shown at once). */
 export async function useAsBackground(kind: 'backgrounds' | 'playlists', folder: string): Promise<string | null> {
+  const job = queue.then(() => doUse(kind, folder));
+  queue = job.catch(() => undefined);
+  return job;
+}
+
+async function doUse(kind: 'backgrounds' | 'playlists', folder: string): Promise<string | null> {
   const config = configFromSettings(await getSettings());
   if (kind === 'backgrounds') {
     config.source = 'background';

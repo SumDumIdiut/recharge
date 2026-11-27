@@ -23,11 +23,11 @@ namespace Recharge.Module.Maps;
 internal static class MapMenuBuilder
 {
     private const int RowsPerPage = 4;
-    private const string StylePref = "RechargeStartMenuSidePanel";
     private const string ListOwner = "maps";
 
-    private static bool SidePanelStyle => PlayerPrefs.GetInt(StylePref, 0) == 1;
-    private static string StyleLabel => SidePanelStyle ? "Start Menu: Side Panel" : "Start Menu: Picker";
+    // The Start Game menu always uses the Picker now; the old Side Panel style and
+    // its Settings toggle ("Start Menu: Picker/Side Panel") were removed.
+    private static bool SidePanelStyle => false;
 
     public static void Install(pauseMenuScript menu)
     {
@@ -60,7 +60,6 @@ internal static class MapMenuBuilder
         if (startGame == null || settings == null) return;
 
         host.Picker = BuildPicker(menu, startGame);
-        AddStyleRow(menu, host);
 
         PauseMenuHelper.SetButtonLabel(startGame.gameObject, "Start Game");
         var startBtn = startGame.GetComponent<Button>();
@@ -73,61 +72,6 @@ internal static class MapMenuBuilder
             deleteBtn.onClick = new Button.ButtonClickedEvent();
             deleteBtn.onClick.AddListener(() => OpenStartMenu(menu, host, deleteMode: true));
         }
-    }
-
-    /// <summary>Settings row that chooses which Start Game menu is used; sticks across sessions.</summary>
-    private static void AddStyleRow(pauseMenuScript menu, MenuHost host)
-    {
-        var settings = PauseMenuHelper.SettingsBit(menu)?.transform;
-        if (settings == null || settings.Find("StartMenuStyle") != null) return;
-        // A plain settings button in the right-hand column, under Controls.
-        // The main menu's own Settings row is the reliable button template here.
-        var template = PauseMenuHelper.MainBit(menu)?.transform.Find("Settings") as RectTransform;
-        if (template == null) return;
-
-        GameObject row = null;
-        row = PauseMenuHelper.CloneButton(template.gameObject, settings, "StartMenuStyle", StyleLabel,
-            new Vector2(175f, 140f), new Vector2(250f, 48f), () => ToggleStyle(menu, host, row));
-        if (row == null) return;
-        row.AddComponent<FittedLabel>();
-    }
-
-    /// <summary>Keeps the settings row's text (and any later relabel) inside its button.</summary>
-    private sealed class FittedLabel : MonoBehaviour
-    {
-        private TMP_Text _label;
-        private string _text;
-        private float _width;
-
-        private void LateUpdate()
-        {
-            if (_label == null)
-            {
-                var t = transform.Find("Text (TMP)");
-                _label = t != null ? t.GetComponent<TMP_Text>() : null;
-                if (_label == null) return;
-            }
-            string text = _label.text ?? "";
-            float width = _label.rectTransform.rect.width;
-            if (text == _text && width == _width) return;
-            _text = text;
-            _width = width;
-            PanelWidgets.FitLabel(_label);
-        }
-    }
-
-    private static void ToggleStyle(pauseMenuScript menu, MenuHost host, GameObject row)
-    {
-        bool side = !SidePanelStyle;
-        PlayerPrefs.SetInt(StylePref, side ? 1 : 0);
-        PlayerPrefs.Save();
-
-        // Close whichever menu the old style had open, then relabel the row.
-        host?.Picker?.Close();
-        host?.Saves?.Hide();
-        PauseMenuHelper.CloseSideList(menu);
-        if (row != null)
-            PauseMenuHelper.SetButtonLabel(row, StyleLabel);
     }
 
     private static void OpenStartMenu(pauseMenuScript menu, MenuHost host, bool deleteMode)

@@ -39,16 +39,18 @@ export async function applyBackgroundSettings(raw: unknown, preloaded?: Backgrou
 
 /** Applies an already-validated config (the settings page does this on every change, before saving). */
 export async function applyConfig(config: BgConfig, preloaded?: BackgroundList): Promise<string | null> {
-  current = config;
   const mine = ++generation;
   if (!layer && typeof document !== 'undefined' && document.body) layer = new BackgroundLayer();
   if (!layer) return null;
   if (config.source === 'none') {
+    current = config;
     layer.apply(config, []);
     return null;
   }
   const list = preloaded || (await listBackgrounds());
+  // A newer apply won while this one waited for the list: don't publish stale config either.
   if (mine !== generation) return null;
+  current = config;
   const { items, note } = resolveItems(config, list);
   layer.apply(config, items);
   return note;

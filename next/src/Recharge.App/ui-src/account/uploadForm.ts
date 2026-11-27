@@ -8,6 +8,7 @@ import { toast } from '../components/toast.js';
 import { field, textInput, textArea, counter, formError } from '../community/forms.js';
 import { hubJson, HubError } from '../community/api.js';
 import { githubRepoUrl } from '../lib/sourceUrl.js';
+import { HUB_BASE } from '../lib/library.js';
 import { currentUser } from './session.js';
 import {
   addGallery, BACKGROUND_EXTENSIONS, baseName, buildFields, derivesGallery, DESCRIPTION_MAX, IMAGE_EXTENSIONS, MAX_GALLERY, NAME_MAX,
@@ -99,6 +100,18 @@ export function openUploadForm(onDone: () => void, preset: UploadPreset = {}): v
     });
     const picked = h('span', { className: 'upload-file dim', text: fileName });
     if (state.kind !== 'mod') {
+      // Skins are drawn onto a fixed sprite sheet, so offer the blank template for the creator to edit before uploading.
+      if (state.kind === 'skin') {
+        const exportTemplate = button('Export template', {
+          kind: 'secondary', icon: 'download', title: 'Download the blank skin sheet to edit',
+          onClick: () => {
+            call('open.url', { url: HUB_BASE + '/api/skin-template' }).catch((error) => toast(describeError(error), 'error'));
+          },
+        });
+        fileBox.appendChild(h('div', { className: 'upload-template' },
+          h('span', { className: 'form-hint dim', text: 'New skin? Download the blank template sheet, edit it, then upload the zip.' }),
+          exportTemplate));
+      }
       fileBox.appendChild(h('div', { className: 'upload-line' }, chooser, picked));
       return;
     }

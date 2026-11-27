@@ -393,7 +393,7 @@
 
 .home-card .empty-state { padding: 16px 10px; }
 .hub-tile-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.hub-tile { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.hub-tile { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); }
 .hub-tile .card-media { border-radius: 0; border-bottom: 1px solid var(--line); }
 .hub-tile-body { display: flex; flex-direction: column; gap: 1px; padding: 6px 9px 9px; min-width: 0; }
 .hub-tile-name { font-size: 15px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

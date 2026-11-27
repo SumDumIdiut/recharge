@@ -25,6 +25,9 @@
 .upload-radio.is-disabled { opacity: .5; cursor: default; }
 .upload-inline, .upload-line { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .upload-file { overflow-wrap: anywhere; }
+.upload-template { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.upload-template .form-hint { flex: 1; min-width: 200px; }
+.upload-template .btn { flex: none; }
 .upload-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .upload-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); }
 .upload-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
