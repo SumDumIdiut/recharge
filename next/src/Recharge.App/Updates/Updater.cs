@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using Recharge.Core.Json;
 using Recharge.Core.Models;
 
 namespace Recharge.App.Updates
@@ -167,14 +168,99 @@ namespace Recharge.App.Updates
         /// <summary>Fetches and validates one manifest. A 404 or 410 means nothing is published (null); other failures throw.</summary>
         private async Task<ManifestInfo?> FetchAsync(string url, CancellationToken ct)
         {
-            using HttpResponseMessage response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.Gone) return null;
-            if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException("The update server answered " + (int)response.StatusCode + ".");
-            if (response.Content.Headers.ContentLength > 16 * 1024 * 1024) throw new InvalidOperationException("The update manifest is too big.");
-            string text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            string text = await GetTextAsync(Http, url, ct).ConfigureAwait(false);
+            if (text.Length == 0) return null;
             try { return ManifestInfo.Parse(text, _o.Platform); }
             catch (UpdateFormatException e) { throw new InvalidOperationException("The update manifest isn't usable: " + e.Message); }
+        }
+
+        /// <summary>The channel manifest beside a changelog.json: .../update/&lt;channel&gt;/changelog.json.</summary>
+        public static string ChangelogUrlFor(string manifestUrl)
+        {
+            var u = new Uri(manifestUrl);
+            string path = u.AbsolutePath;
+            int last = path.LastIndexOf('/');
+            return u.GetLeftPart(UriPartial.Authority) + (last < 0 ? "/" : path.Substring(0, last + 1)) + "changelog.json";
+        }
+
+        /// <summary>
+        /// Release notes for the installed version: the manifest's "notes" field first, then the hub's changelog.json entry for
+        /// this version/build (publish sends "changes", which the hub keeps in changelog.json). Empty when nothing was published.
+        /// </summary>
+        public static async Task<string> FetchReleaseNotesAsync(string manifestUrl, string? altManifestUrl, string version, int build, CancellationToken ct = default)
+        {
+            string notes = await NotesFromManifestAsync(manifestUrl, ct).ConfigureAwait(false);
+            if (notes.Length == 0 && !string.IsNullOrEmpty(altManifestUrl))
+                notes = await NotesFromManifestAsync(altManifestUrl!, ct).ConfigureAwait(false);
+            if (notes.Length == 0)
+                notes = await NotesFromChangelogAsync(ChangelogUrlFor(manifestUrl), version, build, ct).ConfigureAwait(false);
+            return notes;
+        }
+
+        private static async Task<string> NotesFromManifestAsync(string url, CancellationToken ct)
+        {
+            string text = await GetTextAsync(SharedHttp, url, ct).ConfigureAwait(false);
+            if (text.Length == 0) return "";
+            try
+            {
+                JsonObject root = JsonFile.Parse(text).Root;
+                return root.TryGetValue("notes", out JsonNode notes) ? NoteText(notes) : "";
+            }
+            catch (Exception e) when (e is JsonParseException || e is FormatException || e is ArgumentException) { return ""; }
+        }
+
+        private static async Task<string> NotesFromChangelogAsync(string url, string version, int build, CancellationToken ct)
+        {
+            string text = await GetTextAsync(SharedHttp, url, ct).ConfigureAwait(false);
+            if (text.Length == 0) return "";
+            try
+            {
+                JsonObject root = JsonFile.Parse(text).Root;
+                if (!root.TryGetValue("entries", out JsonNode entries) || entries is not JsonArray list) return "";
+                JsonObject? match = null;
+                foreach (JsonNode item in list)
+                {
+                    if (item is not JsonObject entry) continue;
+                    if (build > 0 && EntryInt(entry, "build") == build) { match = entry; break; }
+                    if (match == null && version.Length > 0 && EntryString(entry, "version") == version) match = entry;
+                }
+                if (match == null || !match.TryGetValue("changes", out JsonNode changes) || changes is not JsonArray lines) return "";
+                var result = new List<string>();
+                foreach (JsonNode line in lines)
+                    if (line is JsonString s && !string.IsNullOrWhiteSpace(s.Value)) result.Add("- " + s.Value.Trim());
+                return string.Join("\n", result);
+            }
+            catch (Exception e) when (e is JsonParseException || e is FormatException || e is ArgumentException) { return ""; }
+        }
+
+        private static string EntryString(JsonObject entry, string key) =>
+            entry.TryGetValue(key, out JsonNode node) && node is JsonString s ? s.Value : "";
+
+        private static int EntryInt(JsonObject entry, string key) =>
+            entry.TryGetValue(key, out JsonNode node) && node is JsonNumber n ? n.AsInt32() : 0;
+
+        private static string NoteText(JsonNode node)
+        {
+            if (node is JsonString s) return s.Value.Trim();
+            if (node is JsonArray lines)
+            {
+                var result = new List<string>();
+                foreach (JsonNode line in lines)
+                    if (line is JsonString s2 && !string.IsNullOrWhiteSpace(s2.Value)) result.Add(s2.Value.Trim());
+                return string.Join("\n", result);
+            }
+            return "";
+        }
+
+        /// <summary>One small JSON read with the same limits as a manifest fetch; 404 or 410 means nothing published.</summary>
+        private static async Task<string> GetTextAsync(HttpClient http, string url, CancellationToken ct)
+        {
+            using HttpResponseMessage response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.Gone) return "";
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException("The update server answered " + (int)response.StatusCode + ".");
+            if (response.Content.Headers.ContentLength > 16 * 1024 * 1024) throw new InvalidOperationException("The update response is too big.");
+            return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         }
 
         private bool HasInstalled(UpdateManifest.UpdateFile f)

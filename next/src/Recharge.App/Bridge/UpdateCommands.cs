@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Recharge.App.Settings;
 using Recharge.App.Updates;
@@ -7,7 +9,7 @@ using Recharge.Core.Json;
 
 namespace Recharge.App.Bridge
 {
-    /// <summary>updates.status / begin / check / download / restart / setChannel for Recharge's own updater. Also registers the settings.* commands.</summary>
+    /// <summary>updates.status / begin / check / releaseNotes / download / restart / setChannel for Recharge's own updater. Also registers the settings.* commands.</summary>
     public static class UpdateCommands
     {
         public static void Register(CommandRegistry registry)
@@ -25,6 +27,32 @@ namespace Recharge.App.Bridge
                 // Check now: a managed install's check already downloads (the launcher stages the build); a standalone one only looks.
                 UpdateOutcome r = await UpdateService.RunAsync(download: false).ConfigureAwait(false);
                 return Outcome(r);
+            });
+            registry.Register("updates.releaseNotes", async args =>
+            {
+                // Notes for the installed build come from the current channel's manifest, or the hub's changelog entry.
+                SettingsService settings = SettingsService.Default();
+                AppSettings s = settings.Get();
+                UpdateState st = UpdateState.Load(settings.DataDir);
+                string channel = UpdateService.Mode.Managed ? UpdateService.Mode.Channel : s.UpdateChannel;
+                string version = UpdateService.Mode.Managed && UpdateService.Mode.Version.Length > 0
+                    ? UpdateService.Mode.Version
+                    : string.IsNullOrEmpty(st.InstalledVersion) ? AppVersion.Value : st.InstalledVersion;
+                int build = UpdateService.Mode.Managed ? UpdateService.Mode.Build : st.InstalledBuild;
+                string notes = "";
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    notes = await Updater.FetchReleaseNotesAsync(
+                        Updater.ManifestUrlFor(channel, s.UpdateUrl),
+                        Updater.AltManifestUrlFor(channel, s.UpdateUrl),
+                        version, build, timeout.Token).ConfigureAwait(false);
+                }
+                catch (Exception e) when (e is HttpRequestException || e is InvalidOperationException || e is OperationCanceledException || e is UriFormatException)
+                {
+                    // No hub or no manifest: the UI shows no popup rather than waiting on the network.
+                }
+                return SettingsCommands.Obj(new { version, notes });
             });
             registry.Register("updates.download", async args =>
             {

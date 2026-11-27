@@ -14,6 +14,7 @@ import { initUnread } from './social/unread.js';
 import { initMessageAlerts } from './social/messageAlerts.js';
 import { initCallAlerts } from './social/callAlert.js';
 import { themeAllSelects } from './components/dropdown.js';
+import { initChangelog } from './changelog.js';
 
 const routes: PageRegistry = {
   home: homePage,
@@ -35,7 +36,11 @@ const router = new Router({
 themeAllSelects();
 bindRouter(router);
 initShell({ onSearch: (query) => router.filter(query) });
-void router.start();
+// The popup waits for the first page to mount, then does its bridge calls in the background.
+void router.start().then(
+  () => { void initChangelog(); },
+  () => { void initChangelog(); }
+);
 void initPerf();
 initUnread();
 initMessageAlerts();
